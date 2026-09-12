@@ -832,7 +832,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         race = block_mod.race_odds(node.view.chain, node.own_vdf_median())
         chart = _race_chart(race) if race else None
         return render_template("odds.html", title="Race Odds", race=race,
-                               chart=chart, reorgs=node.reorg_stats())
+                               chart=chart, reorgs=node.reorg_stats(),
+                               own_is_estimate=node.own_vdf_is_estimate())
 
     # ---- JSON API (read-only) --------------------------------------------
 
@@ -844,6 +845,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return jsonify({
             "median": race["median"],
             "own_seconds": race["own_seconds"], "odds_pct": race["odds_pct"],
+            "own_is_estimate": node.own_vdf_is_estimate(),
             "window_len": len(race["window"]), "chart": _race_chart(race),
             "reorgs": node.reorg_stats(),
         })

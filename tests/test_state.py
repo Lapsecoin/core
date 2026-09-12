@@ -308,6 +308,18 @@ class TestZeroBalancesAreNotHolders:
         s.debit("alice", 499)
         assert s.all_balances() == {"alice": 1}
 
+    def test_a_restart_does_not_bring_a_spent_out_address_back(self):
+        # The row on disk is real and has to stay: it carries the nonce.
+        # What it must not do is come back as a balance, which would undo
+        # the invariant above on the first restart and nowhere else, so
+        # only a node that had run for a while would ever show it.
+        restored = state_mod.State.from_snapshot(
+            {"alice": 0, "bob": 10}, {"alice": 7, "bob": 0}, 0)
+        assert restored.all_balances() == {"bob": 10}
+        assert restored.get_all_balances() == [10]
+        assert restored.get_balance("alice") == 0
+        assert restored.get_nonce("alice") == 7
+
 
 class TestDirtyTracking:
     """Only what moved is written to disk; see storage._save_state_delta_inner."""

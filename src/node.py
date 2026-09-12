@@ -411,8 +411,11 @@ class Node:
 
     def own_vdf_is_estimate(self):
         """True while own_vdf_median() is a calibration estimate rather
-        than measured from real completed builds."""
-        return not self._own_build_seconds and self._vdf_seconds_per_iteration
+        than measured from real completed builds. The odds page says which
+        of the two it is showing: a node slower than the field never
+        finishes an evaluation, so on exactly the node whose figure comes
+        from calibration, the figure never stops being an estimate."""
+        return not self._own_build_seconds and bool(self._vdf_seconds_per_iteration)
 
     def _estimated_build_seconds(self):
         """What a full evaluation should take here, from the calibration

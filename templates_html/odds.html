@@ -15,6 +15,7 @@
   <div class="stat">
     <div class="stat-label">Self median build</div>
     <div class="stat-value" id="own-median-val">{{ ("%.1f"|format(race.own_seconds) ~ "s") if race.own_seconds is not none else "--" }}</div>
+    <div class="stat-sub" id="own-median-sub">{{ "estimated, no build finished yet" if own_is_estimate else "from completed builds" }}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Window median</div>
@@ -366,6 +367,8 @@
         data.odds_pct !== null ? "of recent blocks self would beat" : "no self builds yet";
       document.getElementById("own-median-val").textContent =
         data.own_seconds !== null ? fmt1(data.own_seconds) + "s" : "--";
+      document.getElementById("own-median-sub").textContent =
+        data.own_is_estimate ? "estimated, no build finished yet" : "from completed builds";
       document.getElementById("window-median-val").textContent = fmt1(data.median) + "s";
       document.getElementById("window-count").textContent = data.window_len + " blocks";
 

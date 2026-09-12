@@ -6,6 +6,7 @@ Covers: fee_estimate (the send UI's fee-market summary).
 
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -115,6 +116,54 @@ class TestFeeEstimate:
         expected = min(t.get("fee", 0) / max(block_mod.tx_mod.tx_size(t), 1)
                         for t in candidate["transactions"])
         assert fees["next_block"] == expected
+
+
+class TestOddsPage:
+    """The self-build figure on /odds is sometimes measured and sometimes a
+    calibration estimate, and the page has to say which. A node slower than
+    the field never finishes an evaluation, so on exactly the node whose
+    number comes from calibration, that number never becomes a measurement:
+    presenting it as one would be permanently wrong there."""
+
+    class _OddsNode:
+        """The surface /odds and /api/odds touch, and nothing else."""
+
+        def __init__(self, is_estimate):
+            self.view = SimpleNamespace(chain=[
+                {"height": 0, "timestamp": 1000, "vdf_iterations": 100},
+                {"height": 1, "timestamp": 1120, "vdf_iterations": 100,
+                 "builder": address(1)},
+            ])
+            self._is_estimate = is_estimate
+
+        def own_vdf_median(self):
+            return 90.0
+
+        def own_vdf_is_estimate(self):
+            return self._is_estimate
+
+        def reorg_stats(self):
+            return {"deepest": 0, "count": 0}
+
+    def _client(self, is_estimate):
+        return api.create_private_app(self._OddsNode(is_estimate),
+                                      peerpool_mod.PeerPool()).test_client()
+
+    def test_page_marks_a_calibrated_figure_as_an_estimate(self):
+        html = self._client(True).get("/odds").get_data(as_text=True)
+        assert ('<div class="stat-sub" id="own-median-sub">'
+                'estimated, no build finished yet') in html
+
+    def test_page_marks_a_measured_figure_as_measured(self):
+        html = self._client(False).get("/odds").get_data(as_text=True)
+        # The rendered element, not a loose substring: the page also ships
+        # the refresh script, which carries both labels as literals.
+        assert '<div class="stat-sub" id="own-median-sub">from completed builds' in html
+        assert '<div class="stat-sub" id="own-median-sub">estimated' not in html
+
+    def test_the_json_carries_the_same_distinction(self):
+        assert self._client(True).get("/api/odds").get_json()["own_is_estimate"] is True
+        assert self._client(False).get("/api/odds").get_json()["own_is_estimate"] is False
 
 
 class TestPeersPage:

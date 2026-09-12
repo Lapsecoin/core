@@ -31,7 +31,6 @@ except ImportError:
 log = logging.getLogger("ec.discovery.dht")
 
 DHT_STATE_FILE       = "lapsecoin_lt_dht.dat"
-PUT_DELAY            = 30
 PUT_REFRESH_INTERVAL = 3600
 
 

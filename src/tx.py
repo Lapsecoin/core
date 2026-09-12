@@ -188,12 +188,6 @@ def _check_signature(tx_dict):
     return True, None
 
 
-def clear_signature_cache():
-    """Empty the verification cache. For tests that need a cold path."""
-    with _sig_cache_lock:
-        _sig_cache.clear()
-
-
 def _check_nonce(tx_dict, state):
     current = state.get_nonce(tx_dict["from"])
     if tx_dict["nonce"] != current + 1:

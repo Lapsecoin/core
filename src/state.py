@@ -152,9 +152,18 @@ class State:
     @classmethod
     def from_snapshot(cls, balances: dict, nonces: dict,
                       total_minted: int) -> "State":
-        """Restore a State from persisted data. Replaces direct field assignment."""
+        """Restore a State from persisted data. Replaces direct field assignment.
+
+        Zero balances are dropped on the way in, because the table on disk
+        legitimately holds them: an address that spent its last tick keeps
+        its row for the nonce that stops it replaying old transactions (see
+        Storage._save_state_delta_inner), and that row carries a balance of
+        0. Loading it as a balance would put a non-holder back into
+        _balances and quietly undo debit()'s invariant on the first
+        restart, which is the only place it could ever have come back.
+        """
         s = cls()
-        s._balances    = balances
+        s._balances    = {addr: bal for addr, bal in balances.items() if bal}
         s._nonces      = nonces
         s.total_minted = total_minted
         return s

@@ -418,6 +418,22 @@ class TestIncrementalStateWrites:
         assert balances["alice"] == 0
         assert nonces["alice"] == 4
 
+    def test_that_kept_row_does_not_come_back_as_a_holder(self, store):
+        # The row above is right, and reading it straight back into
+        # _balances would not be: a spent-out address would count as a
+        # holder again after a restart, and only after a restart.
+        st = state_mod.State()
+        st.credit("alice", 100)
+        st.set_nonce("alice", 4)
+        st.credit("bob", 100)
+        store.save_state(st)
+        st.debit("alice", 100)
+        store.save_block_and_state(make_block(1, genesis()["hash"], [], 0), st)
+
+        restored = state_mod.State.from_snapshot(*store.load_state())
+        assert restored.get_all_balances() == [100]
+        assert restored.get_nonce("alice") == 4
+
     def test_a_reorg_rewrites_the_whole_table(self, store):
         # replace_chain_and_state takes a state that may have been resumed
         # from a cached snapshot at some other height, so what differs from
