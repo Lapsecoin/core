@@ -51,12 +51,19 @@ WORD_BITS          = 11
 # benchmarked for the testnet.
 VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 
+# Iterations timed once at startup to learn how fast this particular
+# machine is (see Node._calibrate_vdf). Long enough that OS scheduling
+# jitter does not dominate, short enough to be a few seconds rather than
+# two minutes. Not a consensus value: nothing derived from it leaves this
+# node.
+VDF_CALIBRATION_ITERATIONS = 500_000
+
 # VDF difficulty adjustment. The iteration count can only increase over time
 # as hardware gets faster. Adjustment happens every VDF_ADJUST_INTERVAL blocks
 # using the median real block-to-block timestamp delta across that window
 # (not a self-reported figure. Every node computes this identically from
 # chain data alone). If median < VDF_ADJUST_MIN_SECONDS, iterations increase
-# by VDF_ADJUST_FACTOR. Iterations never decrease; faster hardware means
+# by VDF_ADJUST_NUMERATOR/DENOMINATOR. Iterations never decrease; faster hardware means
 # shorter block times until the next upward adjustment, never a security
 # regression.
 #
@@ -109,15 +116,16 @@ TIMESTAMP_SKEW_SECONDS = 30
 # manipulate the retarget window, which is derived from exactly these
 # deltas (see block.get_vdf_iterations).
 #
-# It is also a hard floor on block time. Blocks target ~120s, so a builder
-# whose hardware is four times the calibration target would finish in 30s
-# and have every node reject the result as too soon after its parent,
-# while the retarget only ratchets 2% per two weeks and so would take
-# years to absorb the difference. Nothing breaks (the fast builder simply
-# loses the height), but it is a ceiling on how fast this chain can ever
-# run, and while it shared a name with the skew tolerance it was a ceiling
-# nobody was looking at. Whether 30 is the right number for it is now a
-# question that can be asked on its own terms.
+# It is also a floor on block time, though a mild one. The rule is
+# "at least this far after the parent", so a builder that finishes early
+# stamps parent+30 and its block is perfectly valid; it forfeits the
+# surplus speed, it does not lose the block. Reaching the floor at all
+# takes hardware four times the calibration target, and if anyone did, the
+# retarget absorbs it in about eight months rather than the years a
+# two-week cadence suggests, because blocks at the floor complete each
+# retarget window four times faster too. 30 is a reasonable number for
+# this; it now just has its own name, so changing the skew tolerance for
+# clock reasons no longer moves it by accident.
 MIN_BLOCK_SPACING_SECONDS = 30
 
 # Genesis timestamp: unix time when the chain was launched, and part of the

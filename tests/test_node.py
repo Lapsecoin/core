@@ -1828,3 +1828,62 @@ class TestOurOwnTipIsStillRelayed:
         gossip.relay.reset_mock()
         self._inbound(node, stranger)
         gossip.relay.assert_not_called()
+
+
+class TestBuildTimeEstimate:
+    """A node slower than the field never finishes an evaluation: its tip
+    moves first, the cycle cancels, nothing is recorded. own_vdf_median
+    stayed None for the life of the process however long it ran, which
+    emptied the odds page and, worse, made _should_abandon decline to
+    abandon, so the node that most needed to stop early never did."""
+
+    def test_the_estimate_fills_in_before_any_real_build(self, node_env):
+        node, *_ = node_env
+        assert node.own_vdf_median() is None      # nothing measured, nothing calibrated
+        node._vdf_seconds_per_iteration = 1e-5
+        expected = 1e-5 * block_mod.get_vdf_iterations(node.view.chain)
+        assert node.own_vdf_median() == pytest.approx(expected)
+        assert node.own_vdf_is_estimate()
+
+    def test_a_real_build_supersedes_the_estimate(self, node_env):
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = 1e-5
+        node._own_build_seconds.append(42.0)
+        assert node.own_vdf_median() == 42.0
+        assert not node.own_vdf_is_estimate()
+
+    def test_the_estimate_scales_with_the_required_iterations(self, node_env):
+        # It is a per-iteration rate, so a chain that has retargeted upward
+        # gets a correspondingly longer estimate.
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = 1e-5
+        base = node.own_vdf_median()
+        import block as blk_mod
+        original = blk_mod.get_vdf_iterations
+        try:
+            blk_mod.get_vdf_iterations = lambda chain: original(chain) * 2
+            assert node.own_vdf_median() == pytest.approx(base * 2)
+        finally:
+            blk_mod.get_vdf_iterations = original
+
+    def test_the_rate_survives_a_restart(self, node_env):
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = 2.5e-6
+        node.storage.set_meta(node._VDF_RATE_META_KEY, repr(2.5e-6))
+        assert node._load_vdf_rate() == pytest.approx(2.5e-6)
+
+    def test_an_unreadable_stored_rate_is_ignored(self, node_env):
+        node, *_ = node_env
+        node.storage.set_meta(node._VDF_RATE_META_KEY, "not a number")
+        assert node._load_vdf_rate() is None
+
+    def test_a_slow_node_can_now_abandon(self, node_env):
+        # The point of the estimate: with no median at all _should_abandon
+        # returned False every time, so the slowest node on the network was
+        # the only one that never gave up on a hopeless height.
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = 1e-3        # very slow machine
+        node._draw_height = node.cs.height + 1
+        node._draw_closes = time.monotonic() + 0.5    # window nearly shut
+        assert node._should_abandon(node.cs, [{"any": "candidate"}],
+                                    time.monotonic()) is True

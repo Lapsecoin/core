@@ -50,7 +50,7 @@ import tx as tx_mod
 import vdf as vdf_mod
 from cachetools import LRUCache
 from chainstate import ChainState
-from params import DB_PATH
+from params import DB_PATH, VDF_CALIBRATION_ITERATIONS
 from storage import Storage
 
 log = logging.getLogger("ec.node")
@@ -297,6 +297,10 @@ class Node:
         self._own_build_seconds = collections.deque(maxlen=30)
         self._load_own_build_seconds()
 
+        # Seconds per VDF iteration on this machine, measured once by
+        # _calibrate_vdf and used until real builds supersede it.
+        self._vdf_seconds_per_iteration = self._load_vdf_rate()
+
         self.cs   = self._load_cs()
         self.view = NodeView(self.cs)
 
@@ -434,12 +438,73 @@ class Node:
         return self.gossip.mark_seen(tx_hash)
 
     def own_vdf_median(self):
-        """This node's own median real VDF build time, over its last 30
-        actual attempts (own_build_seconds, see that field's docstring).
-        None until this node has completed at least one build."""
-        if not self._own_build_seconds:
+        """How long a full evaluation takes on this machine, in seconds.
+
+        The median of this node's last 30 real attempts once it has any,
+        and a calibrated estimate before that (see _calibrate_vdf).
+
+        The estimate is not a nicety. A node slower than the field never
+        finishes an evaluation at all: its tip moves before it is done, the
+        cycle cancels, and nothing is recorded, so this stayed None for the
+        life of the process however long it ran. That took the odds page
+        with it, and worse, _should_abandon reads this and gives up on
+        abandoning when it is None, so the one node that most needs to stop
+        early and start the next height was the one node that never did.
+        It burned a whole evaluation every cycle and learned nothing from
+        any of them.
+        """
+        if self._own_build_seconds:
+            return statistics.median(self._own_build_seconds)
+        return self._estimated_build_seconds()
+
+    def own_vdf_is_estimate(self):
+        """True while own_vdf_median() is a calibration estimate rather
+        than measured from real completed builds."""
+        return not self._own_build_seconds and self._vdf_seconds_per_iteration
+
+    def _estimated_build_seconds(self):
+        """What a full evaluation should take here, from the calibration
+        sample, scaled to the iteration count the chain currently wants.
+        None until the sample exists."""
+        rate = self._vdf_seconds_per_iteration
+        if not rate:
             return None
-        return statistics.median(self._own_build_seconds)
+        return rate * block_mod.get_vdf_iterations(self.view.chain)
+
+    _VDF_RATE_META_KEY = "vdf_seconds_per_iteration"
+
+    def _load_vdf_rate(self):
+        raw = self.storage.get_meta(self._VDF_RATE_META_KEY)
+        try:
+            return float(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
+
+    def _calibrate_vdf(self):
+        """Time a short evaluation and record the per-iteration rate.
+
+        Sequential squaring is linear in the iteration count, which is the
+        whole basis of the VDF, so a short sample scales to a long one
+        honestly. It is also exactly how VDF_ITERATIONS itself was
+        calibrated; see that constant's derivation in params.py.
+
+        Runs once, on its own thread, and is superseded by the first real
+        completed build. Persisted, so a restart does not pay for it again
+        or sit blind until it finishes.
+        """
+        try:
+            challenge = crypto.sha256(b"lapsecoin-vdf-calibration")
+            _out, _proof, seconds = vdf_mod.evaluate(
+                challenge, VDF_CALIBRATION_ITERATIONS)
+            rate = seconds / VDF_CALIBRATION_ITERATIONS
+            self._vdf_seconds_per_iteration = rate
+            self.storage.set_meta(self._VDF_RATE_META_KEY, repr(rate))
+            log.info("[vdf] this machine runs about %.0f thousand iterations "
+                     "a second, so a full block should take it about %.0fs",
+                     1 / rate / 1000, self._estimated_build_seconds() or 0)
+        except Exception:
+            log.debug("[vdf] calibration failed, "
+                      "build-time estimates unavailable", exc_info=True)
 
     def own_block_time_ratio(self):
         """This node's own median VDF build time as a ratio of the chain's
@@ -478,6 +543,11 @@ class Node:
         self.running      = True
         self._loop_thread = threading.current_thread()
         log.info("[startup] node ready, our address is %s", self.addr)
+        if not self._vdf_seconds_per_iteration:
+            # Off the loop thread: it is a few seconds of real work and the
+            # cycle should not wait on it.
+            threading.Thread(target=self._calibrate_vdf, daemon=True,
+                             name="vdf-calibrate").start()
         try:
             while self.running:
                 try:
