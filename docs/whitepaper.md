@@ -60,7 +60,7 @@ The halflife is about 5,000,000 blocks, roughly 20 years at 2 minutes per block.
 
 Transactions and blocks both propagate through Dandelion routing, so no observer can reliably tell which peer first broadcast a given item. A block's builder address is public by construction, since that is who gets paid, but which machine produced it need not be. The originator re-sends anything that never comes back, so handing an item to one peer is not a gamble.
 
-A node can also advertise a different address than the one it builds with. That has to be a second real key its operator holds, since peers pay advertised addresses. It hides the link between a node and a wallet, not the wallet.
+A node tells its peers nothing about which address it holds. It used to, so that peers could pay it, and that made every peer table a directory mapping an address to the machine that reported it. Where to pay a node now travels as a small note relayed on the same path as everything else, so the peer handing it over is almost never its author and no address is attributable to a machine.
 
 Signatures use FALCON-512, a lattice-based scheme designed to resist quantum computers. Addresses are twelve-word phrases derived from the public key.
 

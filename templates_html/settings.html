@@ -46,20 +46,7 @@
 
 <div class="card">
   <div class="card-title">Node settings</div>
-  {% for s in settings if s.key == "private_address" %}
-  <div class="form-row">
-    <label for="{{ s.key }}">
-      <input type="checkbox" id="{{ s.key }}" name="{{ s.key }}"
-             {% if s.value %}checked{% endif %} {% if s.forced %}disabled{% endif %}>
-      {{ s.label }}
-    </label>
-    <span class="stat-sub">
-      {{ s.help }}
-      {% if s.forced %}<strong>Set by {{ s.env_name }}.</strong>{% endif %}
-    </span>
-  </div>
-  {% endfor %}
-  {% for s in settings if s.key != "private_address" %}
+  {% for s in settings %}
   <div class="form-row">
     <label for="{{ s.key }}">{{ s.label }}</label>
     <input type="text" id="{{ s.key }}" name="{{ s.key }}"

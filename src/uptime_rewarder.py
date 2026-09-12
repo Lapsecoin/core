@@ -140,7 +140,7 @@ class UptimeRewarder:
             if win_counts.get(addr, 0) > self_wins:
                 continue  # won more than us over the window: can mine fine on its own
             if not crypto_mod.is_valid_address(addr):
-                log.debug("[rewarder] skipping malformed peer-reported wallet: %r", addr)
+                log.debug("[rewarder] skipping a malformed announced address: %r", addr)
                 continue
             balance = self.node.view.state.get_balance(addr)
             if balance < remaining_ticks:

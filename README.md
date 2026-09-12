@@ -111,11 +111,9 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LAPSECOIN_PRIVATE_ADDRESS` | `false` | Advertise a separate address to peers instead of the one this node builds blocks with |
-| `LAPSECOIN_ADVERTISED_ADDRESS` | *(generated)* | Advertise this specific address instead of the generated one |
 | `LAPSECOIN_DRAW_WINDOW_SECONDS` | `10` | How long a height keeps accepting a better same-height block. Anything finishing inside it is treated as a tie and decided on proof rather than speed, so this is also how much of a speed advantage it takes to win a height outright. Work on the next height continues throughout, so this is not a pause |
 
-**Back up `lapsecoin_key.json.privacy` along with your main key file.** It's a second real keypair, created next to the main one at first start and encrypted with the same passphrase (independently, so it opens on its own). It's what the privacy setting advertises, and since peers pay advertised addresses, it can hold funds. Losing it loses those funds.
+**Upgrading from 0.6.2 or earlier with the privacy setting on?** That version created a second key file, `lapsecoin_key.json.privacy`, and advertised its address for peers to pay. Nodes no longer advertise an address at all, so nothing creates or uses that file any more, but yours still exists and may hold what peers already sent it. **Keep it, and back it up.** It is an ordinary key file with its own salt, so the same passphrase opens it on its own whenever you want those funds.
 </details>
 
 <details>
