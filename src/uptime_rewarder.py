@@ -110,9 +110,17 @@ class UptimeRewarder:
                 log.exception("[rewarder] cycle failed")
 
     def run_once(self):
-        """One full cycle: resolve last cycle's pending tx, then (if budget
-        remains) pay eligible peers. Safe to call directly, e.g. for
-        testing. Not gated on the thread being alive."""
+        """One full cycle: say we are here, resolve last cycle's pending tx,
+        then (if budget remains) pay eligible peers. Safe to call directly,
+        e.g. for testing. Not gated on the thread being alive."""
+        # Announced on every cycle regardless of budget. Being payable and
+        # choosing to pay are separate: a node with no budget still wants
+        # other operators to be able to reach it.
+        try:
+            self.node.announce_alive()
+        except Exception:
+            log.debug("[rewarder] could not announce liveness", exc_info=True)
+
         self._resolve_pending()
 
         with self._lock:
@@ -128,7 +136,7 @@ class UptimeRewarder:
         self_wins = win_counts.get(reward_addr, 0)
 
         eligible = []
-        for addr in self._active_peer_wallets() - {reward_addr}:
+        for addr in self._active_addresses() - {reward_addr}:
             if win_counts.get(addr, 0) > self_wins:
                 continue  # won more than us over the window: can mine fine on its own
             if not crypto_mod.is_valid_address(addr):
@@ -197,15 +205,21 @@ class UptimeRewarder:
             self._state["pending"] = None
             self._save_state()
 
-    def _active_peer_wallets(self):
-        now = time.time()
-        wallets = set()
-        for addr, last_seen, active, height, wallet, version, http_reachable \
-                in self.pool.snapshot():
-            w = wallet
-            if w and now - last_seen <= ACTIVE_WINDOW_S:
-                wallets.add(w)
-        return wallets
+    def _active_addresses(self):
+        """Addresses that announced themselves active within the window.
+
+        Read from the liveness notes that travel the network (see
+        Node._handle_inbound_alive), not from what each peer told us about
+        itself over GETINFO. The old source tied every address to the IP
+        that reported it and published the pairing, which is a directory of
+        who is who; a note that has been relayed says nothing about where
+        it came from.
+
+        It also means this no longer only reaches direct peers. A note
+        propagates, so a node several hops away is just as payable as one
+        we happen to be connected to.
+        """
+        return self.node.active_addresses(ACTIVE_WINDOW_S)
 
     def _recent_block_win_counts(self):
         chain = self.node.view.chain

@@ -60,15 +60,15 @@ def test_dispatch_dedups_by_msg_id():
 
 
 # ---------------------------------------------------------------------------
-# MT_GETINFO / MT_INFO wallet/version fields, must stay wire-compatible
+# MT_GETINFO / MT_INFO version field, must stay wire-compatible
 # with peers not carrying them yet.
 # ---------------------------------------------------------------------------
 
-def test_getinfo_response_includes_wallet_and_version():
-    """Responding to MT_GETINFO must include our wallet and version
+def test_getinfo_response_includes_version():
+    """Responding to MT_GETINFO must include our version
     alongside height/tip."""
     udp = _make_transport(MagicMock())
-    udp.set_tip_provider(lambda: (42, "deadbeef", "some.wallet.address", "0.1.1", 4242))
+    udp.set_tip_provider(lambda: (42, "deadbeef", "0.1.1", 4242))
     sent = []
     udp._send_one = lambda msg_type, msg_id, data, target: sent.append((msg_type, data, target))
 
@@ -78,38 +78,42 @@ def test_getinfo_response_includes_wallet_and_version():
     msg_type, data, target = sent[0]
     assert msg_type == MT_INFO
     assert data == {"genesis": udp.genesis_hash, "height": 42, "work": 4242,
-                    "tip_hash": "deadbeef", "wallet": "some.wallet.address",
-                    "version": "0.1.1"}
+                    "tip_hash": "deadbeef", "version": "0.1.1"}
+    assert "wallet" not in data, \
+        "a payout address must not be answerable from an IP; see MT_ALIVE"
 
 
-def test_info_reply_captures_wallet_and_version():
-    """A well-formed MT_INFO reply's wallet/version fields land in the
-    pending result."""
+def test_info_reply_captures_version():
+    """A well-formed MT_INFO reply's version field lands in the pending
+    result."""
     udp = _make_transport(MagicMock())
     ev = threading.Event()
     with udp._info_lock:
         udp._info_events[7] = ev
 
     udp._dispatch(MT_INFO, 7, {"height": 10, "tip_hash": "abc",
-                              "wallet": "peer.wallet", "version": "0.2.0"},
+                              "version": "0.2.0"},
                   ("1.2.3.4", 5000))
 
     assert udp._info_results[7] == {"height": 10, "tip_hash": "abc", "work": None,
-                                    "wallet": "peer.wallet", "version": "0.2.0"}
+                                    "version": "0.2.0"}
 
 
-def test_info_reply_from_older_peer_without_wallet_or_version_field():
-    """An old peer's MT_INFO reply (no wallet/version keys at all) must not
-    break. Both just come back empty instead of missing/erroring."""
+def test_info_reply_from_older_peer_without_version_field():
+    """An old peer's MT_INFO reply (no version key at all) must not break.
+    It comes back empty instead of missing or erroring. Such a peer also
+    still sends a wallet, which is simply ignored now."""
     udp = _make_transport(MagicMock())
     ev = threading.Event()
     with udp._info_lock:
         udp._info_events[9] = ev
 
-    udp._dispatch(MT_INFO, 9, {"height": 10, "tip_hash": "abc"}, ("1.2.3.4", 5000))
+    udp._dispatch(MT_INFO, 9, {"height": 10, "tip_hash": "abc",
+                               "wallet": "an.old.peer.still.sends.this"},
+                  ("1.2.3.4", 5000))
 
     assert udp._info_results[9] == {"height": 10, "tip_hash": "abc", "work": None,
-                                    "wallet": "", "version": ""}
+                                    "version": ""}
 
 
 # ---------------------------------------------------------------------------

@@ -34,22 +34,19 @@ class _MemoryMeta:
 
 class _FakeNode:
     """Just enough of Node's public surface for the routes under test:
-    .mempool, .view (chain/tip), .addr, and the settings the private
-    settings page reads and writes."""
+    .mempool, .view (chain/tip), .addr, the liveness notes the peers and
+    send pages read, and the settings the private settings page reads and
+    writes."""
 
-    def __init__(self, cs, addr=None):
+    def __init__(self, cs, addr=None, alive=()):
         self.mempool = mempool_mod.Mempool()
         self.view = NodeView(cs)
         self.addr = addr or address(0)
         self.settings = settings_mod.Settings(_MemoryMeta())
+        self._alive = set(alive)
 
-    @property
-    def advertised_addr(self):
-        return self.addr
-
-    @property
-    def privacy_addr(self):
-        return ""
+    def active_addresses(self, window_seconds):
+        return set(self._alive)
 
 
 def fresh():
@@ -122,15 +119,17 @@ class TestFeeEstimate:
 
 class TestPeersPage:
     """Smoke test the /peers route end to end: real PeerPool.snapshot()
-    shape, self-row wiring, and the height/wallet columns all render
-    without a template/route mismatch."""
+    shape, self-row wiring, and the height/version columns all render
+    without a template/route mismatch. There is deliberately no wallet
+    column: a payout address is not something a peer tells us, and not
+    something this node publishes (see Node._handle_inbound_alive)."""
 
     def _client(self):
         node, cs = fresh()
         pool = peerpool_mod.PeerPool()
         pool.add("1.2.3.4:9000")
-        pool.update_info("1.2.3.4:9000", height=5, wallet="peer.wallet.addr", version="0.2.0")
-        pool.add("5.6.7.8:9000")  # no update_info, height/wallet/version unknown
+        pool.update_info("1.2.3.4:9000", height=5, version="0.2.0")
+        pool.add("5.6.7.8:9000")  # no update_info, height/version unknown
         pool.add("9.9.9.9:9000")
         app = api.create_private_app(node, pool)
         return app.test_client()
@@ -143,12 +142,13 @@ class TestPeersPage:
         html = self._client().get("/peers").get_data(as_text=True)
         assert ">self<" in html  # falls back to "self" when own external addr is unknown
         assert "1.2.3.4:9000" in html
-        assert "peer.wallet.addr" in html
         assert "5.6.7.8:9000" in html
-        assert "unknown" in html  # peer with no cached wallet yet
+        assert "unknown" in html  # peer with no cached version yet
         assert "?" in html        # peer with no cached height yet
         assert "9.9.9.9:9000" in html
         assert "0.2.0" in html  # peer's confirmed version
+        assert "Wallet" not in html, \
+            "the peers page must not publish a payout address per IP"
 
 
 class TestUpdateNav:
@@ -276,3 +276,40 @@ class TestPeersForDownload:
         known = ["1.2.3.4:8333"]
         api._peers_for_download(known, "5.6.7.8:8333")
         assert known == ["1.2.3.4:8333"]
+
+
+class TestLivenessOnThePeersPage:
+    """What replaced the wallet column. A count, not a list: the addresses
+    are payable and deliberately not attributable to any IP, and listing
+    them beside a peer table is how the directory this replaced came
+    about."""
+
+    def _client(self, alive):
+        cs = ChainState.from_genesis()
+        seed_balance(cs.state, 0, 1000.0)
+        node = _FakeNode(cs, alive=alive)
+        pool = peerpool_mod.PeerPool()
+        pool.add("1.2.3.4:9000")
+        return api.create_private_app(node, pool).test_client()
+
+    def test_the_count_is_shown(self):
+        html = self._client({address(1), address(2)}).get("/peers").get_data(as_text=True)
+        assert "2 nodes announced active" in html
+
+    def test_it_reads_singular_for_one(self):
+        html = self._client({address(1)}).get("/peers").get_data(as_text=True)
+        assert "1 node announced active" in html
+
+    def test_the_api_reports_a_count_and_never_the_addresses(self):
+        resp = self._client({address(1), address(2)}).get("/api/peers")
+        data = resp.get_json()
+        assert data["alive_count"] == 2
+        body = resp.get_data(as_text=True)
+        assert address(1) not in body and address(2) not in body, \
+            "announced addresses must not be published next to peer IPs"
+
+    def test_no_peer_row_carries_a_payout_address(self):
+        data = self._client({address(1)}).get("/api/peers").get_json()
+        for peer in data["peers"]:
+            assert "wallet" not in peer
+        assert "wallet" not in data["self"]

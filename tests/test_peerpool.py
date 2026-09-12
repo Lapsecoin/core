@@ -204,12 +204,12 @@ class TestEvictStale:
 
     def test_evict_stale_clears_cached_info(self):
         """Mirrors remove()/the strike-ban path: a peer's cached
-        height/wallet must not survive it leaving the pool, or a later
+        height/version must not survive it leaving the pool, or a later
         re-add would show stale info before any fresh GETINFO exchange."""
         p = make_pool()
         peer = "1.2.3.4:9000"
         p.add(peer)
-        p.update_info(peer, height=1, wallet="x")
+        p.update_info(peer, height=1)
         p._peers[peer] = time.time() - STALE_SECONDS - 1
         p.evict_stale()
         p.add(peer)
@@ -305,12 +305,11 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active, height, wallet, version, http_reachable = rows[0]
+        addr, last_seen, active, height, version, http_reachable = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
         assert height is None
-        assert wallet == ""
         assert version == ""
         assert http_reachable is None
 
@@ -328,37 +327,36 @@ class TestSnapshot:
         p = make_pool()
         peer = "1.2.3.4:9000"
         p.add(peer)
-        p.update_info(peer, height=42, wallet="a.b.c")
+        p.update_info(peer, height=42)
         rows = p.snapshot()
         assert rows[0][3] == 42
-        assert rows[0][4] == "a.b.c"
 
     def test_snapshot_includes_version(self):
         p = make_pool()
         peer = "1.2.3.4:9000"
         p.add(peer)
-        p.update_info(peer, height=1, wallet="a", version="0.1.1")
+        p.update_info(peer, height=1, version="0.1.1")
         rows = p.snapshot()
-        assert rows[0][5] == "0.1.1"
+        assert rows[0][4] == "0.1.1"
 
     def test_http_reachable_defaults_to_none(self):
         p = make_pool()
         p.add("1.2.3.4:9000")
-        assert p.snapshot()[0][6] is None
+        assert p.snapshot()[0][5] is None
 
     def test_http_reachable_true(self):
         p = make_pool()
         peer = "1.2.3.4:9000"
         p.add(peer)
         p.set_http_reachable(peer, True)
-        assert p.snapshot()[0][6] is True
+        assert p.snapshot()[0][5] is True
 
     def test_http_reachable_false(self):
         p = make_pool()
         peer = "1.2.3.4:9000"
         p.add(peer)
         p.set_http_reachable(peer, False)
-        assert p.snapshot()[0][6] is False
+        assert p.snapshot()[0][5] is False
 
     def test_http_reachable_stale_result_reads_as_none(self):
         """A probe result older than HTTP_REACHABLE_TTL is treated as
@@ -368,7 +366,7 @@ class TestSnapshot:
         peer = "1.2.3.4:9000"
         p.add(peer)
         p.set_http_reachable(peer, True, checked_at=time.time() - HTTP_REACHABLE_TTL - 1)
-        assert p.snapshot()[0][6] is None
+        assert p.snapshot()[0][5] is None
 
     def test_http_reachable_noop_for_unknown_peer(self):
         p = make_pool()
@@ -382,20 +380,20 @@ class TestSnapshot:
         p.set_http_reachable(peer, True)
         p.remove(peer)
         p.add(peer)
-        assert p.snapshot()[0][6] is None
+        assert p.snapshot()[0][5] is None
 
 
 class TestNoteRelayedBuilder:
     def test_update_info_noop_for_unknown_peer(self):
         p = make_pool()
-        p.update_info("1.2.3.4:9000", height=1, wallet="x")
+        p.update_info("1.2.3.4:9000", height=1)
         assert p.snapshot() == []
 
     def test_update_info_cleared_on_remove(self):
         p = make_pool()
         peer = "1.2.3.4:9000"
         p.add(peer)
-        p.update_info(peer, height=1, wallet="x")
+        p.update_info(peer, height=1)
         p.remove(peer)
         p.add(peer)
         rows = p.snapshot()

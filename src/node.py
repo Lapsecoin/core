@@ -43,6 +43,7 @@ import time
 
 import block as block_mod
 import crypto
+from crypto import canonical_json
 import gossip as gossip_mod
 import mempool as mempool_mod
 import settings as settings_mod
@@ -146,6 +147,11 @@ RECENT_STATE_CACHE_SIZE = 20
 # handful of real candidates plus whatever noise arrives alongside them.
 JUDGED_CACHE_SIZE = 10_000
 
+# How many announced addresses to remember at once. Well above any
+# plausible network, and bounded so a flood of invented addresses costs
+# memory that stops growing rather than memory that does not.
+ALIVE_MAX_TRACKED = 50_000
+
 
 # ---------------------------------------------------------------------------
 # Tail validation (pure, no node state touched)
@@ -205,7 +211,6 @@ class Node:
         self.mempool      = mempool_mod.Mempool()
         self.storage      = Storage(db_path or DB_PATH)
         self.settings     = settings_mod.Settings(self.storage)
-        self._privacy_key_lock = threading.Lock()
 
         # The height whose draw is still open, and when it closes. A draw
         # is the whole point of the vdf_output tie-break: among candidates
@@ -294,6 +299,10 @@ class Node:
         # drop every attempt that lost a race and skew toward other builders'
         # numbers entirely. This is local, in-memory, per-node knowledge,
         # nothing else has it, so it can't be reconstructed from chain data.
+        # address -> wall clock when it last announced itself alive. See
+        # _handle_inbound_alive. Bounded, oldest dropped first.
+        self._alive_seen = collections.OrderedDict()
+
         self._own_build_seconds = collections.deque(maxlen=30)
         self._load_own_build_seconds()
 
@@ -360,80 +369,6 @@ class Node:
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
-
-    @property
-    def advertised_addr(self):
-        """The address this node tells peers about, which is not
-        necessarily the one it builds with.
-
-        The builder address inside a block is public by construction, it
-        has to be, or the block can't be paid, so nothing here hides a
-        wallet, and peers have other ways to infer the link anyway. What it
-        does is stop handing that link to every peer that asks for our tip.
-
-        Whatever is advertised must be an address this operator can
-        actually receive at: peers pay advertised addresses (see
-        uptime_rewarder), so advertising something unspendable would burn
-        other people's coins, not protect ours. So privacy mode uses a real
-        second keypair, generated once and encrypted to disk beside the
-        main one, never a throwaway. Until that key exists we advertise
-        nothing rather than something nobody can pay.
-
-        This is also why there is no way to type an address in here any
-        more. An environment variable used to override the generated one,
-        unvalidated, and that is the one case where the promise above could
-        not be kept: this node writes and can open the key behind the
-        generated address, and has no key at all for an address somebody
-        typed.
-        """
-        if not self.settings.get(settings_mod.PRIVATE_ADDRESS):
-            return self.addr
-        return self.storage.get_meta(self._PRIVACY_ADDR_META) or ""
-
-    _PRIVACY_ADDR_META = "privacy_address"
-
-    @property
-    def privacy_addr(self):
-        """The generated privacy address, if it exists yet, regardless of
-        whether the privacy switch is currently on. ensure_privacy_key runs
-        unconditionally at startup, so this is normally always set; the
-        settings page uses it to show what flipping the switch will start
-        using, without the operator having to turn it on first to see it."""
-        return self.storage.get_meta(self._PRIVACY_ADDR_META) or ""
-
-    @property
-    def privacy_keyfile(self):
-        return self.keyfile + ".privacy"
-
-    def ensure_privacy_key(self, passphrase):
-        """Create the privacy keypair if it doesn't exist yet.
-
-        Created at startup, where the passphrase is still in hand, and
-        written by the ordinary save_key with its own salt, so it is a
-        standalone key file, openable with the passphrase alone and not
-        chained to the main one. An earlier version encrypted it under the
-        main key file's KEK purely because that was what a *running* node
-        had resident; that coupled the two files for no reason, and the
-        answer was to create it at the moment the passphrase exists rather
-        than to invent a way around not having it.
-
-        Made unconditionally, not only when privacy is on, so the switch
-        works the instant it is flipped instead of waiting for a restart to
-        have an address to advertise. One small file, written once.
-        """
-        with self._privacy_key_lock:
-            existing = self.storage.get_meta(self._PRIVACY_ADDR_META)
-            if existing and os.path.exists(self.privacy_keyfile):
-                return existing
-            sk, pk = crypto.generate_keypair()
-            crypto.save_key(self.privacy_keyfile, sk, pk, passphrase)
-            del sk
-            addr = crypto.public_key_to_address(pk)
-            self.storage.set_meta(self._PRIVACY_ADDR_META, addr)
-            log.info("[privacy] created a separate address to advertise, "
-                 "saved in %s -> %s",
-                     self.privacy_keyfile, addr[:24])
-            return addr
 
     def is_signing_active(self):
         return self._kek is not None
@@ -1143,6 +1078,8 @@ class Node:
             msg["reply"].put(self.submit_tx(msg["tx"]))
         elif t == "tx":
             self._handle_inbound_tx(msg)
+        elif t == "alive":
+            self._handle_inbound_alive(msg)
 
     def _spread(self, item, kind, item_hash):
         """Originate an item and remember it until we see it come back from
@@ -1437,6 +1374,62 @@ class Node:
             if height > self._sync_hint_height:
                 self._sync_hint = sender
                 self._sync_hint_height = height
+
+    def _handle_inbound_alive(self, msg):
+        """Record a liveness note and pass it on.
+
+        The note says "a node is active and its payout address is X". It
+        carries nothing else, and deliberately nothing about who sent it:
+        it travels like any other item here, so the peer handing it over is
+        almost never its author, and an address is never tied to an IP by
+        receiving one. That is the whole reason this exists rather than
+        each node telling its peers a wallet over GETINFO, which made
+        exactly that link and published it.
+
+        Cheap to forge, and that is understood. A liar can claim any
+        address and any number of them; what that buys is a share of
+        whatever budget individual operators have voluntarily set aside,
+        which is capped, opt-in and mints nothing. The previous mechanism
+        was equally forgeable and leaked as well.
+        """
+        note     = msg["note"]
+        sender   = msg.get("sender")
+        stemming = msg.get("stemming", False)
+
+        addr = note.get("address")
+        if not crypto.is_valid_address(addr):
+            log.debug("[alive] ignoring a note with a malformed address")
+            return
+        item_hash = crypto.sha256_hex(canonical_json({"address": addr}))
+        self._note_echo(item_hash, sender)
+        self._record_alive(addr)
+        self.gossip.relay(note, gossip_mod.KIND_ALIVE, item_hash,
+                          sender, stemming=stemming)
+
+    def _record_alive(self, addr):
+        """Remember that this address was announced, and when."""
+        self._alive_seen[addr] = time.time()
+        while len(self._alive_seen) > ALIVE_MAX_TRACKED:
+            self._alive_seen.popitem(last=False)
+
+    def active_addresses(self, window_seconds):
+        """Addresses announced within the window. What the uptime rewarder
+        pays; see _handle_inbound_alive."""
+        cutoff = time.time() - window_seconds
+        return {a for a, seen in self._alive_seen.items() if seen >= cutoff}
+
+    def announce_alive(self):
+        """Tell the network this node is active and where to pay it.
+
+        Sent on the same cadence rewards are paid on, so one note per
+        window is all anyone needs, and dedup by item hash means a note
+        already in flight costs nothing to re-announce.
+        """
+        note = {"address": self.addr}
+        item_hash = crypto.sha256_hex(canonical_json(note))
+        self._record_alive(self.addr)
+        self._spread(note, gossip_mod.KIND_ALIVE, item_hash)
+        log.debug("[alive] announced this node as active")
 
     def _handle_inbound_tx(self, msg):
         """Route an inbound tx: validate, admit to the mempool, propagate.

@@ -63,7 +63,7 @@ class PeerPool:
         self._max_peers = max_peers if max_peers is not None else MAX_PEERS
         self._peers     = {}          # addr -> last_seen (wall clock)
         self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
-        self._info      = {}          # addr -> {"height": int|None, "wallet": str}
+        self._info      = {}          # addr -> {"height": int|None, "version": str}
         # Held peers per /24 or /64, kept in step with _peers so the
         # diversity cap is a lookup rather than a scan. See add().
         self._subnets   = {}          # subnet key -> count
@@ -115,16 +115,21 @@ class PeerPool:
         log.debug("[peer] added  addr=%s", addr)
         return True
 
-    def update_info(self, addr, height=None, wallet="", version=""):
-        """Cache a peer's last-known height/confirmed wallet address/version,
-        learned directly from a GETINFO/INFO exchange. No-op for an address
-        that isn't a currently tracked peer (mirrors touch()'s same guard)."""
+    def update_info(self, addr, height=None, version=""):
+        """Cache a peer's last-known height and version, learned directly
+        from a GETINFO/INFO exchange. No-op for an address that isn't a
+        currently tracked peer (mirrors touch()'s same guard).
+
+        No wallet. A peer's payout address used to be carried here, which
+        made this a directory of IP to wallet and, through /api/peers, a
+        public one. Where to pay a node now arrives as a relayed liveness
+        note that says nothing about where it came from (see
+        Node._handle_inbound_alive)."""
         with self._lock:
             if addr not in self._peers:
                 return
             rec = self._info.setdefault(addr, {})
             rec["height"]  = height
-            rec["wallet"]  = wallet or ""
             rec["version"] = version or ""
 
     def set_http_reachable(self, addr, ok, checked_at=None):
@@ -207,16 +212,16 @@ class PeerPool:
             return list(self._peers.keys())
 
     def snapshot(self):
-        """Return [(addr, last_seen, active, height, wallet, version,
+        """Return [(addr, last_seen, active, height, version,
         http_reachable)] for display. active is False while a peer
-        is in cooldown after repeated failures. height/wallet/version are the
+        is in cooldown after repeated failures. height/version are the
         last-known confirmed values from a GETINFO exchange (see
-        update_info), or (None, "", "") if none has completed yet.
-        There is deliberately no guess at a peer's wallet from blocks it
-        relays: under the stem phase the peer handing us a block is
-        specifically not meant to be its builder (see gossip.py), so such a
-        guess would be both wrong and a re-leak of exactly what the stem
-        exists to hide. http_reachable is
+        update_info), or (None, "") if none has completed yet.
+
+        No wallet, by design and no longer by omission. A peer's payout
+        address is not this node's business to know or to publish: it
+        arrives as a relayed liveness note whose sender is not its author.
+        http_reachable is
         True/False from the most recent HTTP probe (see set_http_reachable)
         if one completed within the last HTTP_REACHABLE_TTL seconds,
         otherwise None, stale or never-checked, treated the same as
@@ -238,7 +243,6 @@ class PeerPool:
                     addr, last_seen,
                     now_mono >= self._fails.get(addr, {}).get("cooldown_until", 0.0),
                     info.get("height"),
-                    info.get("wallet", ""),
                     info.get("version", ""),
                     http_reachable,
                 ))

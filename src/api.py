@@ -109,6 +109,11 @@ BLOCKS_PER_PAGE  = 8
 PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
 
+# How far back the send page looks for nodes that announced themselves
+# active, when prefilling a row per known node. Matches the rewarder's own
+# window (uptime_rewarder.ACTIVE_WINDOW_S).
+ALIVE_WINDOW_SECONDS = 3600
+
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -563,17 +568,17 @@ def _peers_for_download(known_addrs, self_addr):
     return list(known_addrs)
 
 
-def _default_send_outputs(pool):
-    """One 'wallet,0' line per known peer with a confirmed wallet address,
-    so the sender can just change the one 0 they actually want to send
-    and leave the rest, _parse_csv_outputs drops any line still at 0."""
-    seen, lines = set(), []
-    for row in sorted(pool.snapshot(), key=lambda r: r[1], reverse=True):
-        wallet = row[4]
-        if wallet and wallet not in seen:
-            seen.add(wallet)
-            lines.append(f"{wallet},0")
-    return "\n".join(lines)
+def _default_send_outputs(node):
+    """One 'address,0' line per node seen announcing itself active, so the
+    sender can change the one 0 they actually want to send and leave the
+    rest; _parse_csv_outputs drops any line still at 0.
+
+    Read from liveness notes rather than from peers' advertised wallets,
+    which no longer exist. That also widens it usefully: a note travels, so
+    this lists nodes across the network rather than only the handful this
+    one happens to be connected to."""
+    return "\n".join(f"{addr},0"
+                      for addr in sorted(node.active_addresses(ALIVE_WINDOW_SECONDS)))
 
 
 def _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=""):
@@ -794,14 +799,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def _peer_dicts(rows):
         return [
             {"address": addr, "last_seen": int(last_seen), "active": active,
-             "height": height, "wallet": wallet,
-             "version": version,
+             "height": height, "version": version,
              "http_reachable": http_reachable}
-            for addr, last_seen, active, height, wallet, version, http_reachable in rows
+            for addr, last_seen, active, height, version, http_reachable in rows
         ]
 
     def _self_info():
-        return {"wallet": node.advertised_addr, "height": node.view.chain[-1].get("height", 0),
+        return {"height": node.view.chain[-1].get("height", 0),
                 "version": LOCAL_VERSION, "addr": _self_external_addr()}
 
     @app.route("/peers", endpoint=pfx+"peers")
@@ -813,10 +817,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
         end   = start + PEERS_PER_PAGE
         self_height = node.view.chain[-1].get("height", 0)
         return render_template("peers.html", title="Peers", rows=all_rows[start:end],
-                               peer_count=len(all_rows), page=page, total_pages=total_pages,
+                               peer_count=len(all_rows),
+                               alive_count=len(node.active_addresses(ALIVE_WINDOW_SECONDS)),
+                               page=page, total_pages=total_pages,
                                page_window=_pagination_window(page, total_pages),
                                has_prev=page > 1, has_next=end < len(all_rows),
-                               self_height=self_height, self_wallet=node.advertised_addr,
+                               self_height=self_height,
                                self_version=LOCAL_VERSION, self_addr=_self_external_addr())
 
     @app.route("/odds", endpoint=pfx+"odds")
@@ -850,6 +856,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return jsonify({
             "self": _self_info(),
             "peer_count": len(all_rows),
+            # How many nodes announced themselves active recently. A count,
+            # not a list: the addresses are payable and deliberately not
+            # attributable to any IP, and publishing them next to a peer
+            # table is how the directory this replaced came about.
+            "alive_count": len(node.active_addresses(ALIVE_WINDOW_SECONDS)),
             "peers": _peer_dicts(all_rows[start:end]),
         })
 
@@ -992,7 +1003,7 @@ def _close_db_after_request(app):
     Registered per app rather than inside a route, so it also covers any
     route added later that touches storage, and covers the ones that do so
     indirectly: reading a setting is a database read, which is easy to
-    forget when it looks like a plain attribute (Node.advertised_addr).
+    forget when it looks like a plain attribute (Node.settings.get).
 
     Only ever closes the calling thread's own connection, which is why
     this cannot disturb the node loop's.
@@ -1157,9 +1168,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
              "env_name": s_.env_name}
             for s_ in settings_mod.ALL
         ]
-        ctx["advertised_addr"] = node.advertised_addr
         ctx["own_addr"] = node.addr
-        ctx["privacy_addr"] = node.privacy_addr
         return render_template("settings.html", **ctx)
 
     @app.route("/send", methods=["GET", "POST"])
@@ -1168,7 +1177,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         ctx = dict(title="Send", from_addr=node.addr,
                    balance=v.state.get_balance(node.addr),
                    fees=fee_estimate(node), csrf_token=csrf_token,
-                   outputs_value=_default_send_outputs(pool),
+                   outputs_value=_default_send_outputs(node),
                    memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
                    alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
         if request.method == "POST":

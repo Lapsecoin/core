@@ -246,10 +246,9 @@ def _resolve_passphrase(prompt):
 
 
 def _load_or_create_key(keyfile):
-    """Returns (pk, kek, passphrase). The passphrase is handed back, not
-    deleted here, because ensure_privacy_key (called once, right after
-    Node exists) needs it once more to create a standalone second key file.
-    The caller deletes it immediately after that single use."""
+    """Returns (pk, kek, passphrase). The passphrase is handed back for
+    symmetry with the GUI path; main discards it immediately, since nothing
+    past startup needs it. There is one key file and one address."""
     if not os.path.exists(keyfile):
         print("No key file found. Creating new FALCON-512 keypair.")
         passphrase = _resolve_passphrase("New passphrase: ")
@@ -452,6 +451,10 @@ def main():
         _offer({"type": "tx", "tx": tx,
                 "sender": sender_addr, "stemming": stemming}, "tx")
 
+    def on_alive(note, sender_addr, stemming=False):
+        _offer({"type": "alive", "note": note,
+                "sender": sender_addr, "stemming": stemming}, "alive")
+
     def on_peers(peer_list, sender_addr):
         for p in peer_list:
             if isinstance(p, str) and ":" in p:
@@ -501,12 +504,7 @@ def main():
     syncer    = Syncer(pool, udp)
     discovery = Discovery(udp, pool, genesis["hash"], port, pk_hex)
     node      = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
-    # This is the one remaining use of the passphrase, so it's the last
-    # place that needs it: the privacy key is a standalone key file with
-    # its own salt, not chained to the main one, created here while the
-    # passphrase is still in hand and discarded right after.
-    node.ensure_privacy_key(passphrase)
-    del passphrase
+    del passphrase   # nothing past startup needs it; the kek is what signs
 
     def _chain_provider(from_h, to_h):
         chain = node.view.chain
@@ -517,9 +515,9 @@ def main():
         chain = node.view.chain
         tip   = chain[-1]
         return (tip.get("height", 0), tip.get("hash", ""),
-                node.advertised_addr, LOCAL_VERSION,
-                node.cs.cumulative_iterations)
+                LOCAL_VERSION, node.cs.cumulative_iterations)
 
+    udp.set_alive_callback(on_alive)
     udp.set_chain_provider(_chain_provider)
     udp.set_tip_provider(_tip_provider)
 

@@ -52,16 +52,6 @@ class Setting:
         return value
 
 
-# Privacy is off by default deliberately. A node that advertises nothing is
-# harder to pay and harder to reach, and most operators want to be findable;
-# the ones who don't should have to say so.
-PRIVATE_ADDRESS = Setting(
-    "private_address", False, bool,
-    label="Hide wallet address from peers",
-    help="Advertises a separate, already-generated address instead of "
-         "the one this node builds blocks with.",
-)
-
 # How long a height keeps accepting a better same-height block. See
 # Node._reorg_to_sibling for what the draw is and Node.open_draw for what
 # the window is anchored to.
@@ -111,20 +101,15 @@ DRAW_WINDOW_SECONDS = Setting(
          "height continues throughout.",
 )
 
-# There used to be a third setting here, an env-only override letting an
-# operator advertise any address they liked instead of the generated one.
-# It was removed. Nothing validated it, so a malformed value silently
-# meant rewards never arrived (payers skip an address that fails
-# is_valid_address), and a well-formed but wrong one meant other
-# operators' reward budgets were paid into an address nobody holds a key
-# for. Unlike the generated privacy address, whose key this node writes
-# and can open, an address typed into an environment variable is one this
-# node can never spend from.
-#
-# What it was for, pointing many nodes' rewards at one wallet, is better
-# served by being able to spend the generated address and send onward,
-# which keeps the key in the one place that already knows how to open it.
-ALL = [PRIVATE_ADDRESS, DRAW_WINDOW_SECONDS]
+# Two settings used to live here alongside this one: a switch to advertise
+# a separate address instead of this node's own, and an env-only override
+# naming any address at all. Both existed because a node had to tell its
+# peers where to pay it, which tied an address to an IP and published the
+# pairing. Nothing tells peers that any more (see
+# Node._handle_inbound_alive), so neither has anything left to do: there
+# is no advertised address to make private, and no second key to hold the
+# proceeds.
+ALL = [DRAW_WINDOW_SECONDS]
 
 
 # How long a value read from storage is reused before going back to the
@@ -132,9 +117,8 @@ ALL = [PRIVATE_ADDRESS, DRAW_WINDOW_SECONDS]
 #
 # Reading a setting looks like an attribute access and is a SQLite query,
 # about a quarter of a millisecond, and the callers are not occasional:
-# Node.open_draw reads the draw window once per candidate entering a draw,
-# and Node.advertised_addr (up to three reads) runs on every inbound
-# GETINFO, from a UDP worker thread. A second of staleness is
+# Node.open_draw reads the draw window once per candidate entering a draw.
+# A second of staleness is
 # indistinguishable from none for a value a person edits by hand on a
 # settings page, and set() invalidates immediately anyway, so the page
 # still reflects a change on the very next read.

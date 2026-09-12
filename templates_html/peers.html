@@ -15,37 +15,32 @@
 <div class="card">
   <div class="card-title" style="display:flex;justify-content:space-between;align-items:baseline;gap:.75rem">
     <span id="peers-count">{{ peer_count }} known peer{{ "s" if peer_count != 1 }}</span>
+    <span class="stat-sub" id="alive-count" title="Nodes that announced themselves active in the last hour. These notes travel the network, so they cover nodes this one is not directly connected to, and carry no address of the node that sent them.">{{ alive_count }} node{{ "s" if alive_count != 1 }} announced active</span>
     <a class="btn-sm" href="/api/peers/download" download="lapsecoin_peers.json">Download JSON</a>
   </div>
   <div class="table-wrap">
   <table class="stacked-wide">
     <colgroup>
-      <col style="width:22%"><col style="width:19%"><col style="width:11%">
-      <col style="width:11%"><col style="width:19%"><col style="width:18%">
+      <col style="width:30%"><col style="width:13%">
+      <col style="width:15%"><col style="width:22%"><col style="width:20%">
     </colgroup>
-    <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
+    <thead><tr><th>Address</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
         <td data-label="Address" class="hash-short" style="color:var(--live)">{{ self_addr or "self" }}</td>
-        <td data-label="Wallet" class="hash-short" title="{{ self_wallet }}"><a href="/address?addr={{ self_wallet | urlencode }}">{{ self_wallet[:14] }}&hellip;</a></td>
         <td data-label="Height">{{ self_height }}</td>
         <td data-label="Version">{{ self_version }}</td>
         <td data-label="Last seen">just now</td>
         <td data-label="Status" style="color:var(--green)">active</td>
       </tr>
     {% if rows %}
-      {% for addr, last_seen, active, height, wallet, version, http_reachable in rows %}
+      {% for addr, last_seen, active, height, version, http_reachable in rows %}
       <tr>
         {% if http_reachable %}
         <td data-label="Address" class="hash-short"><a class="peer-link" href="http://{{ addr }}" target="_blank" rel="noopener"
             title="This peer's web UI answered an HTTP check within the last 10 minutes">{{ addr }}</a></td>
         {% else %}
         <td data-label="Address" class="hash-short">{{ addr }}</td>
-        {% endif %}
-        {% if wallet %}
-        <td data-label="Wallet" class="hash-short" title="{{ wallet }}"><a href="/address?addr={{ wallet | urlencode }}">{{ wallet[:14] }}&hellip;</a></td>
-        {% else %}
-        <td data-label="Wallet" class="hash-short" style="color:var(--muted)">unknown</td>
         {% endif %}
         <td data-label="Height">{{ height if height is not none else "?" }}</td>
         <td data-label="Version" style="color:{{ 'var(--muted)' if not version }}">{{ version if version else "unknown" }}</td>
@@ -120,36 +115,9 @@
     return td;
   }
 
-  function walletCell(addr, opts) {
-    opts = opts || {};
-    const td = document.createElement("td");
-    td.dataset.label = "Wallet";
-    td.className = "hash-short";
-    if (opts.color) td.style.color = opts.color;
-    if (opts.italic) td.style.fontStyle = "italic";
-    if (addr) td.title = opts.title || addr;
-    if (addr) {
-      const a = document.createElement("a");
-      a.href = "/address?addr=" + encodeURIComponent(addr);
-      a.style.color = "inherit";
-      a.textContent = addr.slice(0, 14) + "…";
-      td.appendChild(a);
-    } else {
-      td.textContent = "unknown";
-      td.style.color = "var(--muted)";
-    }
-    return td;
-  }
-
   function buildRow(p) {
     const tr = document.createElement("tr");
     tr.appendChild(addressCell(p));
-
-    if (p.wallet) {
-      tr.appendChild(walletCell(p.wallet));
-    } else {
-      tr.appendChild(walletCell(null));
-    }
 
     tr.appendChild(cell("Height", p.height === null || p.height === undefined ? "?" : p.height));
     tr.appendChild(cell("Version", p.version || "unknown", {color: p.version ? null : "var(--muted)"}));
@@ -164,7 +132,6 @@
     const tr = document.createElement("tr");
     tr.style.fontWeight = "600";
     tr.appendChild(cell("Address", self.addr || "self", {cls: "hash-short", color: "var(--live)"}));
-    tr.appendChild(walletCell(self.wallet));
     tr.appendChild(cell("Height", self.height));
     tr.appendChild(cell("Version", self.version));
     tr.appendChild(cell("Last seen", "just now"));

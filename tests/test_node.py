@@ -1164,63 +1164,6 @@ class TestLyingPeers:
 # 20. Privacy switch
 # ---------------------------------------------------------------------------
 
-class TestAdvertisedAddress:
-    def test_off_by_default_advertises_the_real_address(self, node_env):
-        node, *_ = node_env
-        assert node.advertised_addr == node.addr
-
-    def test_on_advertises_a_real_key_we_hold(self, node_env, monkeypatch):
-        """Peers pay advertised addresses (uptime_rewarder), so whatever we
-        advertise has to be spendable by this operator. It's a real keypair,
-        encrypted to disk beside the main one. Never a throwaway, which
-        would burn the coins of anyone who paid it."""
-        node, *_ = node_env
-        monkeypatch.setenv("LAPSECOIN_PRIVATE_ADDRESS", "1")
-        addr = node.ensure_privacy_key("testpass")
-
-        assert addr and addr != node.addr
-        assert node.advertised_addr == addr
-        assert os.path.exists(node.privacy_keyfile)
-        # and the operator can actually open it with their own passphrase
-        # standalone: openable with the passphrase alone, not chained to
-        # the main key file
-        recovered = crypto.decrypt_secret_key(node.privacy_keyfile,
-                                              passphrase="testpass")
-        assert recovered
-
-    def test_advertises_nothing_until_that_key_exists(self, node_env, monkeypatch):
-        """Better to advertise nothing than an address nobody can be paid
-        at."""
-        node, *_ = node_env
-        monkeypatch.setenv("LAPSECOIN_PRIVATE_ADDRESS", "1")
-        assert node.advertised_addr == ""
-
-    def test_generated_key_is_created_once(self, node_env, monkeypatch):
-        node, *_ = node_env
-        monkeypatch.setenv("LAPSECOIN_PRIVATE_ADDRESS", "1")
-        first = node.ensure_privacy_key("testpass")
-        assert node.ensure_privacy_key("testpass") == first
-        assert node.advertised_addr == first
-
-    def test_an_address_cannot_be_forced_in_from_the_environment(self, node_env, monkeypatch):
-        """The override this replaces was unvalidated, so it could advertise
-        an address this node holds no key for and could never spend. The
-        generated address is the only thing privacy mode advertises now."""
-        node, *_ = node_env
-        monkeypatch.setenv("LAPSECOIN_PRIVATE_ADDRESS", "1")
-        monkeypatch.setenv("LAPSECOIN_ADVERTISED_ADDRESS", "chosen.addr")
-        generated = node.ensure_privacy_key("testpass")
-        assert node.advertised_addr == generated
-
-    def test_env_overrides_stored_value_and_is_marked_forced(self, node_env, monkeypatch):
-        import settings as settings_mod
-        node, *_ = node_env
-        node.settings.set(settings_mod.PRIVATE_ADDRESS, False)
-        monkeypatch.setenv("LAPSECOIN_PRIVATE_ADDRESS", "1")
-        assert node.settings.get(settings_mod.PRIVATE_ADDRESS) is True
-        assert node.settings.forced_by_env(settings_mod.PRIVATE_ADDRESS) is True
-
-
 # ---------------------------------------------------------------------------
 # 21. Background probe: blocks arriving is not proof we're on the best chain
 # ---------------------------------------------------------------------------
@@ -1891,3 +1834,75 @@ class TestBuildTimeEstimate:
         node._draw_closes = time.monotonic() + 0.5    # window nearly shut
         assert node._should_abandon(node.cs, [{"any": "candidate"}],
                                     time.monotonic()) is True
+
+
+class TestLivenessNotes:
+    """A node says "I am active, pay me here" and the note travels the
+    network like any other item. The address is therefore never tied to
+    the IP it came from, which is what the advertised-wallet mechanism
+    could not avoid doing."""
+
+    def test_announcing_records_ourselves_and_spreads(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        node.announce_alive()
+        assert node.addr in node.active_addresses(3600)
+        gossip.spread.assert_called_once()
+        assert gossip.spread.call_args.args[1] == "alive"
+
+    def test_a_received_note_is_recorded_and_passed_on(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        other = address(3)
+        node._handle_inbound_alive({"note": {"address": other},
+                                    "sender": "1.2.3.4:1", "stemming": False})
+        assert other in node.active_addresses(3600)
+        gossip.relay.assert_called_once()
+        assert gossip.relay.call_args.args[1] == "alive"
+
+    def test_a_malformed_address_is_ignored_entirely(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        node._handle_inbound_alive({"note": {"address": "not an address"},
+                                    "sender": "1.2.3.4:1", "stemming": False})
+        assert node.active_addresses(3600) == set()
+        gossip.relay.assert_not_called()
+
+    def test_a_missing_address_is_ignored(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        node._handle_inbound_alive({"note": {}, "sender": "1.2.3.4:1",
+                                    "stemming": False})
+        gossip.relay.assert_not_called()
+
+    def test_notes_age_out_of_the_window(self, node_env):
+        node, *_ = node_env
+        other = address(3)
+        node._record_alive(other)
+        node._alive_seen[other] = time.time() - 7200      # two hours ago
+        assert other not in node.active_addresses(3600)
+        assert other in node.active_addresses(10800)
+
+    def test_what_is_tracked_is_bounded(self, node_env):
+        node, *_ = node_env
+        import node as node_mod
+        original = node_mod.ALIVE_MAX_TRACKED
+        try:
+            node_mod.ALIVE_MAX_TRACKED = 10
+            for i in range(50):
+                node._record_alive(f"addr{i}")
+            assert len(node._alive_seen) <= 10
+        finally:
+            node_mod.ALIVE_MAX_TRACKED = original
+
+    def test_the_same_address_announcing_again_just_refreshes_it(self, node_env):
+        node, *_ = node_env
+        other = address(3)
+        node._record_alive(other)
+        node._alive_seen[other] = time.time() - 1000
+        node._record_alive(other)
+        assert len(node._alive_seen) == 1
+        assert other in node.active_addresses(60)
+
+    def test_a_note_routes_through_the_queue_like_any_other_message(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        other = address(4)
+        node._handle({"type": "alive", "note": {"address": other},
+                      "sender": "1.2.3.4:1", "stemming": False}, [])
+        assert other in node.active_addresses(3600)

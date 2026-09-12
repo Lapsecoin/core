@@ -93,13 +93,19 @@ MT_ACK       = 0x08
 MT_PUNCH_REQ = 0x09
 MT_PUNCH_GO  = 0x0A
 MT_GETINFO   = 0x0B   # request peer tip info (height + hash)
-MT_INFO      = 0x0C   # response: {"height": N, "tip_hash": "...", "wallet": "..."}
+MT_INFO      = 0x0C   # response: {"height": N, "tip_hash": "...", "version": "..."}
 # Blocks, zlib'd. 0x04 was the uncompressed form and is retired rather
 # than kept alongside: a datagram still carrying it matches no branch and
 # is ignored, which is the point. Supporting both indefinitely is how a
 # codebase accumulates a path per format change forever, and the protocol
 # floor below is what makes retiring one safe instead of silent.
 MT_BLOCK     = 0x0D
+# "I am an active node, pay me here." Relayed like any other item, so the
+# peer handing it to you is not its author and no address is ever tied to
+# an IP. See UDPTransport.send_alive. A node too old to know this type
+# falls through _dispatch's chain of elifs and ignores it, so this needs
+# no protocol floor bump.
+MT_ALIVE     = 0x0E
 
 # Level 1 rather than 6: on the wire this competes with pacing, not disk.
 # It reaches within about a point of the ratio at a third of the CPU, and
@@ -716,6 +722,7 @@ class UDPTransport:
         self._routable: dict[str, float] = {}
         self._routable_pending: set = set()
         self._routable_lock = threading.Lock()
+        self._on_alive      = None  # set by main; liveness notes from the network
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -892,6 +899,12 @@ class UDPTransport:
                                     payload, target)
             except RuntimeError:
                 self._fanout_slots.release()   # pool already shut down
+
+    def send_alive(self, note: dict, peers=None, stemming: bool = False):
+        """Put a liveness note on the wire. Same propagation as everything
+        else here, which is the point: it travels, so the address in it is
+        never linkable to the node it came from."""
+        self._broadcast(MT_ALIVE, {"alive": note}, peers, stemming, "liveness note")
 
     def send_peers(self, addr: str, peers: list[str]):
         """Send peer list to addr."""
@@ -1147,7 +1160,7 @@ class UDPTransport:
         if complete is None:
             return
 
-        if msg_type in (MT_BLOCK, MT_TX):
+        if msg_type in (MT_BLOCK, MT_TX, MT_ALIVE):
             complete = _inflate(complete)
             if complete is None:
                 return
@@ -1250,6 +1263,14 @@ class UDPTransport:
                     self._on_tx(tx, sender_addr,
                                 bool(data.get("stemming", False)))
 
+        elif msg_type == MT_ALIVE:
+            if self._is_new(msg_id):
+                self._pool.touch(sender_addr)
+                note = data.get("alive")
+                if isinstance(note, dict) and self._on_alive:
+                    self._on_alive(note, sender_addr,
+                                   bool(data.get("stemming", False)))
+
         elif msg_type == MT_GETSYNC:
             self._handle_getsync(msg_id, data, sender)
 
@@ -1267,17 +1288,16 @@ class UDPTransport:
                     self._on_punch_go(target)
 
         elif msg_type == MT_GETINFO:
-            # Peer requesting our tip info; respond with height + tip hash
-            # (+ our wallet address and software version, purely
-            # informational, see set_tip_provider).
+            # Peer requesting our tip info; respond with height, tip hash
+            # and our software version, purely informational; see
+            # set_tip_provider.
             self._pool.touch(sender_addr)
             if self._get_tip_fn:
-                height, tip_hash, wallet, version, work = self._get_tip_fn()
+                height, tip_hash, version, work = self._get_tip_fn()
                 self._send_one(MT_INFO, msg_id,
                                {"genesis": self.genesis_hash,
                                 "height":   height,
                                 "tip_hash": tip_hash,
-                                "wallet":   wallet,
                                 "version":  version,
                                 # Cumulative proven VDF iterations. Height is
                                 # not what fork choice compares (see
@@ -1294,10 +1314,11 @@ class UDPTransport:
                     self._info_results[msg_id] = {
                         "height":   data.get("height"),
                         "tip_hash": data.get("tip_hash", ""),
-                        # Older peers won't send these fields; defaults keep
+                        # Older peers won't send this; the default keeps
                         # readers (Syncer, PeerPool.update_info) working
-                        # unchanged against them.
-                        "wallet":   data.get("wallet", ""),
+                        # unchanged against them. A wallet used to travel
+                        # here too and no longer does: see
+                        # Node._handle_inbound_alive for what replaced it.
                         "version":  data.get("version", ""),
                         # Absent from peers too old to send it; None means
                         # "unknown", never "zero", see Syncer.
@@ -1535,18 +1556,21 @@ class UDPTransport:
     # Utilities
     # ------------------------------------------------------------------
 
+    def set_alive_callback(self, fn):
+        """fn(note, sender_addr, stemming). Set by main after Node init."""
+        self._on_alive = fn
+
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""
         self._get_chain_fn = fn
 
     def set_tip_provider(self, fn):
-        """fn() -> (height, tip_hash, wallet, version, cumulative_iterations).
-        Used for lightweight
-        MT_GETINFO responses. wallet is our own address, shared here purely
-        so peers can display/use it (e.g. for gifting). It's already
-        public the moment we build a block, this just makes it available
-        without needing to wait for or find one. version is our own
-        software version, so peers can flag when we're outdated."""
+        """fn() -> (height, tip_hash, version, cumulative_iterations).
+        Used for lightweight MT_GETINFO responses. version is our own
+        software version, so peers can flag when we're outdated.
+
+        No wallet. Answering "which address does this IP pay to" on demand
+        is precisely the link a relayed liveness note avoids making."""
         self._get_tip_fn = fn
 
     def set_punch_go_callback(self, fn):

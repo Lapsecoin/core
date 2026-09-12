@@ -8,7 +8,8 @@ only exist at the real entry point; no mock ever calls it. This launches
 the actual process and checks it reaches a known-good log line with no
 traceback, covering the two branches _load_or_create_key has (create a
 new key, then reload the same key on a second start) and the one line
-that actually crashed in production (node.ensure_privacy_key(passphrase)).
+that actually crashed in production, where a startup call was reached
+with a name that did not exist.
 
 Bounded and hermetic: each run gets its own tmp_path, so LOG_FILE,
 LOCK_FILE, keyfile and db all land there rather than the repo or a real
@@ -24,7 +25,7 @@ from pathlib import Path
 
 MAIN_PY = str(Path(__file__).resolve().parent.parent / "main.py")
 STARTUP_TIMEOUT = 15.0
-# Must be a line logged after node.ensure_privacy_key(passphrase), the call
+# Must be a line logged late in startup, after the call
 # that actually crashed in production, or a broken build there would still
 # read as "ready". "UDP transport on port" logs before that call and gave a
 # false pass; "private API" is the last startup line and comes after it.
@@ -91,7 +92,7 @@ def run_headless(tmp_path, keyfile, extra_env=None, ready_check=None):
 
 
 class TestMainStartupSmoke:
-    """Would have caught the NameError in 024f711 (node.ensure_privacy_key
+    """Would have caught the NameError in 024f711 (a startup call
     called with a `passphrase` that didn't exist in main()'s scope): that
     bug lived entirely in main()'s own wiring, which no mocked unit test
     ever executes. See test_would_have_caught_the_real_bug below for a
@@ -116,24 +117,6 @@ class TestMainStartupSmoke:
         assert ready2, f"reload failed (exit={code2}):\n{output2}"
         assert "Traceback" not in output2
         assert "key loaded" in output2
-
-    def test_privacy_setting_creates_a_standalone_key_file(self, tmp_path):
-        """Exercises node.ensure_privacy_key(passphrase) specifically,
-        the exact call that crashed: the passphrase has to actually reach
-        it, and a second, independently-encrypted key file has to exist
-        by the time the node is up."""
-        keyfile = tmp_path / "node.key"
-        privacy_keyfile = Path(str(keyfile) + ".privacy")
-
-        ready, code, output = run_headless(
-            tmp_path, keyfile,
-            extra_env={"LAPSECOIN_PRIVATE_ADDRESS": "1"},
-            ready_check=lambda out: privacy_keyfile.exists(),
-        )
-        assert ready, f"privacy key never appeared (exit={code}):\n{output}"
-        assert "Traceback" not in output
-        assert privacy_keyfile.exists()
-        assert privacy_keyfile.read_bytes() != keyfile.read_bytes()
 
 
 def _main_module():

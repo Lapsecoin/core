@@ -54,11 +54,7 @@
       {{ s.label }}
     </label>
     <span class="stat-sub">
-      {% if privacy_addr %}
-      Advertising <code>{{ advertised_addr[:24] }}&hellip;</code>{% if advertised_addr == privacy_addr %} (privacy address){% endif %}.
-      {% else %}
       {{ s.help }}
-      {% endif %}
       {% if s.forced %}<strong>Set by {{ s.env_name }}.</strong>{% endif %}
     </span>
   </div>

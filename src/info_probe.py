@@ -1,10 +1,11 @@
 """Background tip-info prober for known peers.
 
-The peers page shows each peer's height, wallet address and version. Those
-three come from one place, PeerPool.update_info, fed by a GETINFO/INFO
-exchange. Nothing else can supply them: a block tells us nothing about the
-wallet of the peer that relayed it (see peerpool's own note on not guessing
-one from blocks), and a peer's height is a claim it has to make itself.
+The peers page shows each peer's height and version. Both come from one
+place, PeerPool.update_info, fed by a GETINFO/INFO exchange, and a peer's
+height is a claim it has to make itself. Where to pay a node is no longer
+among them: that arrives as a relayed liveness note instead, which is what
+keeps a payout address from being tied to an IP (see
+Node._handle_inbound_alive).
 
 Until this module existed, that exchange only ever happened as a side
 effect of syncing, so the columns filled at whatever rate syncing happened
@@ -81,7 +82,6 @@ def _probe_with(pool, udp, addrs, timeout, executor):
         answered += 1
         pool.update_info(futures[future],
                          height=info.get("height"),
-                         wallet=info.get("wallet", ""),
                          version=info.get("version", ""))
     log.debug("[info_probe] asked %d peers, %d answered", len(addrs), answered)
     return answered
