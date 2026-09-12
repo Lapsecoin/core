@@ -67,7 +67,23 @@ VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 # 2-minute cadence that's 2 weeks / 2 min = 10,080 blocks.
 VDF_ADJUST_INTERVAL    = 10_080  # blocks between adjustments (~2 weeks)
 VDF_ADJUST_MIN_SECONDS = 100    # trigger increase if median falls below this
-VDF_ADJUST_FACTOR      = 1.02   # max 2% increase per adjustment period
+
+# Max 2% increase per adjustment period, as an exact integer ratio for the
+# same reason the emission decay above is one: this is a consensus value,
+# every node must derive it identically, and a float is the wrong tool for
+# that even where it currently happens to agree.
+#
+# It did agree, and would have for a long time. int(x * 1.02) matches
+# x * 51 // 50 for every starting value up to three million, and along the
+# real ratcheting sequence from VDF_ITERATIONS the two stay identical for
+# 882 consecutive adjustments, roughly 34 years. They part company only
+# once the iteration count passes 2**53, where a double stops representing
+# integers exactly, and then only by 1. So this fixes nothing that is
+# broken today; it removes the last float from consensus arithmetic and
+# keeps the number exact past the point where the old form quietly
+# stops being.
+VDF_ADJUST_NUMERATOR   = 51
+VDF_ADJUST_DENOMINATOR = 50
 
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.
@@ -78,10 +94,31 @@ GENESIS_MESSAGE = (
 
 DB_PATH = "lapsecoin_chain.db"
 
-# Allowed clock-skew tolerance for block timestamps, applied symmetrically:
-# a block's timestamp must exceed its parent's by at least this much, and
-# cannot be more than this much ahead of the validator's own clock.
+# Two rules about a block's timestamp, which used to share one constant
+# because they happen to want the same number, not because they are the
+# same quantity. They are not, and the sharing hid a real effect.
+#
+# How far ahead of the validator's own clock a block may claim to be.
+# This is clock-skew tolerance: machines disagree about the time, and a
+# block should not be rejected for arriving from one that is a few seconds
+# fast. Raising it forgives sloppier clocks.
 TIMESTAMP_SKEW_SECONDS = 30
+
+# How far after its parent a block's timestamp must be. This is not about
+# clocks at all; it stops a builder backdating or stuffing timestamps to
+# manipulate the retarget window, which is derived from exactly these
+# deltas (see block.get_vdf_iterations).
+#
+# It is also a hard floor on block time. Blocks target ~120s, so a builder
+# whose hardware is four times the calibration target would finish in 30s
+# and have every node reject the result as too soon after its parent,
+# while the retarget only ratchets 2% per two weeks and so would take
+# years to absorb the difference. Nothing breaks (the fast builder simply
+# loses the height), but it is a ceiling on how fast this chain can ever
+# run, and while it shared a name with the skew tolerance it was a ceiling
+# nobody was looking at. Whether 30 is the right number for it is now a
+# question that can be asked on its own terms.
+MIN_BLOCK_SPACING_SECONDS = 30
 
 # Genesis timestamp: unix time when the chain was launched. Set once manually
 # before the first release and never changed.

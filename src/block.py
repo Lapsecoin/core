@@ -14,8 +14,10 @@ from params import (
     VDF_ITERATIONS,
     VDF_ADJUST_INTERVAL,
     VDF_ADJUST_MIN_SECONDS,
-    VDF_ADJUST_FACTOR,
+    VDF_ADJUST_NUMERATOR,
+    VDF_ADJUST_DENOMINATOR,
     TIMESTAMP_SKEW_SECONDS,
+    MIN_BLOCK_SPACING_SECONDS,
 )
 
 
@@ -52,7 +54,8 @@ def get_vdf_iterations(chain) -> int:
         for h in range(max(window_start, 1), last_boundary)
     ]
     if deltas and statistics.median(deltas) < VDF_ADJUST_MIN_SECONDS:
-        return int(prior_iterations * VDF_ADJUST_FACTOR)
+        # Integer ratio, not a float multiply. See VDF_ADJUST_NUMERATOR.
+        return prior_iterations * VDF_ADJUST_NUMERATOR // VDF_ADJUST_DENOMINATOR
     return prior_iterations
 
 
@@ -253,9 +256,9 @@ def _check_timestamp(blk, chain):
         return False, f"block timestamp {ts} is too far in the future"
     if chain:
         parent_ts = chain[-1]["timestamp"]
-        if ts < parent_ts + TIMESTAMP_SKEW_SECONDS:
+        if ts < parent_ts + MIN_BLOCK_SPACING_SECONDS:
             return False, (f"block timestamp {ts} must be at least "
-                           f"{TIMESTAMP_SKEW_SECONDS}s after parent timestamp {parent_ts}")
+                           f"{MIN_BLOCK_SPACING_SECONDS}s after parent timestamp {parent_ts}")
     return True, None
 
 

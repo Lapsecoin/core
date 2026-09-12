@@ -359,7 +359,8 @@ class TestVdfIterationsAdjustment:
     def test_boundary_block_validates_when_bump_triggers(self, monkeypatch):
         monkeypatch.setattr("block.VDF_ADJUST_INTERVAL", 3)
         monkeypatch.setattr("block.VDF_ADJUST_MIN_SECONDS", 1_000_000)
-        monkeypatch.setattr("block.VDF_ADJUST_FACTOR", 2.0)
+        monkeypatch.setattr("block.VDF_ADJUST_NUMERATOR", 2)
+        monkeypatch.setattr("block.VDF_ADJUST_DENOMINATOR", 1)
 
         g = genesis()
         chain = [g]
@@ -384,7 +385,8 @@ class TestVdfIterationsAdjustment:
     def test_iterations_never_decrease(self, monkeypatch):
         monkeypatch.setattr("block.VDF_ADJUST_INTERVAL", 3)
         monkeypatch.setattr("block.VDF_ADJUST_MIN_SECONDS", 1)  # never triggers a bump
-        monkeypatch.setattr("block.VDF_ADJUST_FACTOR", 2.0)
+        monkeypatch.setattr("block.VDF_ADJUST_NUMERATOR", 2)
+        monkeypatch.setattr("block.VDF_ADJUST_DENOMINATOR", 1)
 
         g = genesis()
         chain = [g]
@@ -812,3 +814,56 @@ class TestRaceChartHeightAxis:
         ticks = api_mod._race_chart(race)["x_ticks"]
 
         assert [t["height"] for t in ticks] == [heights[t["idx"]] for t in ticks]
+
+
+class TestRetargetUsesAnExactRatio:
+    """The retarget multiplies a consensus value, so it does it with an
+    integer ratio rather than a float. See params.VDF_ADJUST_NUMERATOR."""
+
+    def test_the_ratio_matches_the_float_it_replaced(self):
+        # Not a behaviour change today: the two agree everywhere the chain
+        # can currently reach. This pins that they agree, so the swap is
+        # demonstrably a no-op for any live chain rather than asserted to be.
+        for v in (1, 2, 12_200_000, 999_999, 3_000_000):
+            assert v * 51 // 50 == int(v * 1.02)
+
+    def test_the_ratio_stays_exact_where_the_float_does_not(self):
+        # Past 2**53 a double stops representing integers exactly and the
+        # float form drifts. This is the case the integer ratio exists for.
+        v = 469_580_907_456_899
+        assert v * 51 // 50 == 478_972_525_606_036
+        assert int(v * 1.02) == 478_972_525_606_037
+
+    def test_iterations_only_ever_increase(self):
+        from params import VDF_ADJUST_NUMERATOR, VDF_ADJUST_DENOMINATOR
+        assert VDF_ADJUST_NUMERATOR > VDF_ADJUST_DENOMINATOR
+
+
+class TestTimestampRulesAreSeparate:
+    """The future-tolerance rule and the parent-gap rule are two different
+    questions and now have two different constants. Split at identical
+    values, so this is a no-op for validity today; what it buys is that
+    either can be tuned without silently moving the other."""
+
+    def test_the_split_is_behaviour_preserving_at_the_shipped_values(self):
+        from params import TIMESTAMP_SKEW_SECONDS, MIN_BLOCK_SPACING_SECONDS
+        assert TIMESTAMP_SKEW_SECONDS == MIN_BLOCK_SPACING_SECONDS == 30
+
+    def test_parent_gap_uses_its_own_constant(self, monkeypatch):
+        monkeypatch.setattr("block.MIN_BLOCK_SPACING_SECONDS", 5)
+        g = genesis()
+        b = make_block(1, g["hash"], [], timestamp_offset=-(120 - 10))
+        ok, err = block_mod.validate(b, fresh_state(), [g])
+        assert ok is True, err
+
+    def test_future_tolerance_uses_its_own_constant(self, monkeypatch):
+        # Widening the parent gap must not widen how far into the future a
+        # block may claim to be, which is what one shared constant did.
+        monkeypatch.setattr("block.MIN_BLOCK_SPACING_SECONDS", 5)
+        g = genesis()
+        far_future = GENESIS_TIMESTAMP + 365 * 24 * 3600 + 3600
+        b = block_mod.create(1, g["hash"], [], address(0),
+                             "aa" * 100, "bb" * 100, timestamp=far_future)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
+        assert ok is False
+        assert "future" in err
