@@ -1202,11 +1202,15 @@ class TestAdvertisedAddress:
         assert node.ensure_privacy_key("testpass") == first
         assert node.advertised_addr == first
 
-    def test_an_explicitly_configured_address_is_used(self, node_env, monkeypatch):
+    def test_an_address_cannot_be_forced_in_from_the_environment(self, node_env, monkeypatch):
+        """The override this replaces was unvalidated, so it could advertise
+        an address this node holds no key for and could never spend. The
+        generated address is the only thing privacy mode advertises now."""
         node, *_ = node_env
         monkeypatch.setenv("LAPSECOIN_PRIVATE_ADDRESS", "1")
         monkeypatch.setenv("LAPSECOIN_ADVERTISED_ADDRESS", "chosen.addr")
-        assert node.advertised_addr == "chosen.addr"
+        generated = node.ensure_privacy_key("testpass")
+        assert node.advertised_addr == generated
 
     def test_env_overrides_stored_value_and_is_marked_forced(self, node_env, monkeypatch):
         import settings as settings_mod

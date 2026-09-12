@@ -378,12 +378,16 @@ class Node:
         second keypair, generated once and encrypted to disk beside the
         main one, never a throwaway. Until that key exists we advertise
         nothing rather than something nobody can pay.
+
+        This is also why there is no way to type an address in here any
+        more. An environment variable used to override the generated one,
+        unvalidated, and that is the one case where the promise above could
+        not be kept: this node writes and can open the key behind the
+        generated address, and has no key at all for an address somebody
+        typed.
         """
         if not self.settings.get(settings_mod.PRIVATE_ADDRESS):
             return self.addr
-        configured = self.settings.get(settings_mod.ADVERTISED_ADDRESS)
-        if configured:
-            return configured
         return self.storage.get_meta(self._PRIVACY_ADDR_META) or ""
 
     _PRIVACY_ADDR_META = "privacy_address"

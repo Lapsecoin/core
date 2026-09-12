@@ -62,13 +62,6 @@ PRIVATE_ADDRESS = Setting(
          "the one this node builds blocks with.",
 )
 
-ADVERTISED_ADDRESS = Setting(
-    "advertised_address", "", str,
-    label="Address to advertise",
-    help="Overrides the generated privacy address. Operator/deployment "
-         "use only, set via environment; not shown on the settings page.",
-)
-
 # How long a height keeps accepting a better same-height block. See
 # Node._reorg_to_sibling for what the draw is and Node.open_draw for what
 # the window is anchored to.
@@ -118,10 +111,19 @@ DRAW_WINDOW_SECONDS = Setting(
          "height continues throughout.",
 )
 
-# ADVERTISED_ADDRESS is deliberately not in ALL: it's an env-only escape
-# hatch for operators, not a page field. The page shows the generated
-# privacy address (always already there, see Node.ensure_privacy_key)
-# and lets the operator flip whether it's used, nothing to type in.
+# There used to be a third setting here, an env-only override letting an
+# operator advertise any address they liked instead of the generated one.
+# It was removed. Nothing validated it, so a malformed value silently
+# meant rewards never arrived (payers skip an address that fails
+# is_valid_address), and a well-formed but wrong one meant other
+# operators' reward budgets were paid into an address nobody holds a key
+# for. Unlike the generated privacy address, whose key this node writes
+# and can open, an address typed into an environment variable is one this
+# node can never spend from.
+#
+# What it was for, pointing many nodes' rewards at one wallet, is better
+# served by being able to spend the generated address and send onward,
+# which keeps the key in the one place that already knows how to open it.
 ALL = [PRIVATE_ADDRESS, DRAW_WINDOW_SECONDS]
 
 
