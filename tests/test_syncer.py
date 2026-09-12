@@ -205,13 +205,19 @@ class TestFindForkPoint:
         fp = syncer._find_fork_point("1.2.3.4:9000", local)
         assert fp == 1
 
-    def test_request_fails_syncs_from_genesis(self):
-        # When peer returns nothing for every probe, treat as shorter chain.
-        # Binary search converges to 0, returning sync-from-genesis (0).
+    def test_unanswered_probe_gives_up_rather_than_guessing_genesis(self):
+        # A peer that answers nothing at all has told us nothing at all,
+        # which is a different event from answering "I don't have that
+        # height" (covered by the next test, which does converge to 0).
+        # This used to take the same branch as the empty answer, so a few
+        # dropped datagrams walked the search down to genesis and reported
+        # a fork point of 0 on no evidence, sending the node off to refetch
+        # the whole chain from a peer that had gone quiet. None means "ask
+        # someone else", and costs one pass instead of a full resync.
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.request_sync.return_value = None
         fp = syncer._find_fork_point("1.2.3.4:9000", chain_of(3))
-        assert fp == 0
+        assert fp is None
 
     def test_empty_chain_in_response_syncs_from_genesis(self):
         # Empty chain in every response means peer has no matching history;

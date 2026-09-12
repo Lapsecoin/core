@@ -181,8 +181,11 @@ class UptimeRewarder:
             pending = self._state.get("pending")
         if not pending:
             return
-        confirmed = (self.node.mempool.get(pending["tx_hash"]) is not None
-                    or self.node.storage.get_tx_height(pending["tx_hash"]) is not None)
+        # Confirmed means "in a block", and only the chain index says that.
+        # Sitting in the mempool used to count too, which is the definition
+        # of not confirmed: a payout still pending was recorded as having
+        # gone through and its budget never refunded.
+        confirmed = self.node.storage.get_tx_height(pending["tx_hash"]) is not None
         with self._lock:
             if confirmed:
                 log.info("[rewarder] previous payout %s confirmed, debit of %.4f LAPSE stands",

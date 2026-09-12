@@ -44,6 +44,11 @@ SYNC_REQUEST_RETRIES = 2
 FORK_SEARCH_WINDOW = 20
 
 
+class _Unanswered(Exception):
+    """A peer stopped answering during the fork-point search. Distinct from
+    any answer it could have given, including an empty one."""
+
+
 def _expired(deadline):
     return deadline is not None and time.monotonic() >= deadline
 
@@ -238,21 +243,37 @@ class Syncer:
         just stops being the price of the common one.
         """
         window_lo = max(0, len(local_chain) - 1 - FORK_SEARCH_WINDOW)
-        if window_lo > 0:
-            match = self._highest_common(peer, local_chain, window_lo, deadline)
-            if match is not None:
-                return match + 1
-            if _expired(deadline):
-                return None
-            log.debug("[sync] fork older than recent window, widening  peer=%s", peer)
-        match = self._highest_common(peer, local_chain, 0, deadline)
+        try:
+            if window_lo > 0:
+                match = self._highest_common(peer, local_chain, window_lo, deadline)
+                if match is not None:
+                    return match + 1
+                if _expired(deadline):
+                    return None
+                log.debug("[sync] fork older than recent window, widening  peer=%s", peer)
+            match = self._highest_common(peer, local_chain, 0, deadline)
+        except _Unanswered:
+            # Give up on this peer rather than guess. Returning 0 here is
+            # the expensive wrong answer: it claims the fork is at genesis
+            # on no evidence and starts refetching the entire chain.
+            return None
         if match is None and _expired(deadline):
             return None
         return (match + 1) if match is not None else 0
 
     def _highest_common(self, peer, local_chain, lo, deadline=None):
         """Highest height in [lo, tip] where our block and the peer's match,
-        or None if even `lo` differs (or the peer never answered)."""
+        or None if even `lo` differs.
+
+        Raises _Unanswered if the peer stopped answering. That is not the
+        same event as an empty answer and must not be read as one: an empty
+        answer means "I do not have that height", which is real information
+        and narrows the search downward, while silence means we learned
+        nothing at all. Treating the two alike walked the search down to
+        nothing on a peer that had simply gone quiet, reported a fork point
+        of 0, and sent the node off to refetch the chain from genesis over
+        a few dropped datagrams.
+        """
         hi = len(local_chain) - 1
         result = None
 
@@ -264,6 +285,9 @@ class Syncer:
             local_hash = local_chain[mid]["hash"]
 
             resp = self._request_sync_with_retry(peer, from_h=mid, to_h=mid, timeout=10)
+            if resp is None:
+                log.debug("[sync] peer stopped answering mid fork search  peer=%s", peer)
+                raise _Unanswered()
             page = resp.get("chain") if isinstance(resp, dict) else None
             if not isinstance(page, list) or not page:
                 # Peer doesn't have this height; their chain is shorter, search lower.
