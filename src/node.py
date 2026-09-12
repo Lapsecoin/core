@@ -865,6 +865,31 @@ class Node:
         own_median = self.own_vdf_median()
         if own_median is None:
             return False   # never finished one; no basis to predict this one
+        if not self._is_competitive(own_median):
+            # Abandoning buys exactly one thing: a head start on the next
+            # height. That is worth having only if the next height is
+            # winnable, and for a node slower than the chain's own pace it
+            # never is. It will be late for that height too, and the one
+            # after, however early it starts, so the head start is a head
+            # start in a race it cannot finish.
+            #
+            # What abandoning costs such a node is not nothing. A
+            # competitor finishing does not move our tip (see
+            # _handle_inbound_block: an inbound block at our height+1 is
+            # validated, relayed and set aside, not committed), so nothing
+            # was stopping this evaluation from completing. Finishing
+            # produces a real block with a real proof. It loses the draw,
+            # but losing the draw is not the same as being worthless: it is
+            # this node's only evidence that it did the work at all, and
+            # the only thing that would let the rest of the network see it
+            # participating. Abandoning converts a slow participant into a
+            # silent one.
+            #
+            # And it forfeits the one way a slow node ever wins, which is
+            # the field having a bad round. That case costs nothing to keep
+            # available, because the alternative use of the time was a head
+            # start that was never going to pay.
+            return False
         if self._draw_height != cs.height + 1:
             return False   # no draw anchored for the height we're building
         now = time.monotonic()
@@ -879,6 +904,26 @@ class Node:
             # closed. That is the exact waste this check exists to stop.
             return True
         return remaining > window_left
+
+    def _is_competitive(self, own_median):
+        """Whether this node builds fast enough that winning a height is a
+        real possibility, measured against the pace the chain is actually
+        running at rather than against the target it was calibrated for.
+
+        The line is the chain's own recent median block interval. Above it,
+        this node finishes after the field does, every time, and no amount
+        of starting earlier changes that. Below it, a head start is worth
+        having and abandoning a lost height to take one makes sense.
+
+        Unknown counts as competitive: a node with too little chain to
+        measure should behave like the fast case, since that is the one
+        where giving up early is the careful choice.
+        """
+        chain = self.cs.chain
+        stats = block_mod.block_time_stats(chain, len(chain) - 1)
+        if stats is None or not stats["median"]:
+            return True
+        return own_median < stats["median"]
 
     def open_draw(self, height):
         """Open the draw for `height`: until it closes, a better candidate
