@@ -1325,15 +1325,33 @@ class Node:
             self.gossip.relay(blk, gossip_mod.KIND_BLOCK, blk["hash"],
                               sender, stemming=stemming)
         elif height == cs.height:
-            # A sibling of our own tip. Not late, not lost: if it is the
-            # better chain we take it right now, locally, no round trip.
-            # Passing on the ones that win: a node that already committed
-            # this height does not relay through the branch above, so
-            # without this a winning sibling only ever reaches whoever the
-            # builder reached directly. Bounded by the same check that let
-            # it win, only a strictly lower output gets this far, so at
-            # most a handful per height however many arrive.
-            if self._reorg_to_sibling(blk, cs):
+            if blk.get("hash") == cs.tip["hash"]:
+                # Our own tip, come back to us. Relayed, and this is not the
+                # no-op it looks like: the branch above only fires while a
+                # block is still ahead of us, so once we commit a height we
+                # stop passing that block on. For a block we built ourselves
+                # that is fatal to its spread. The builder stems its
+                # candidate to a single peer and commits it moments later,
+                # so by the time the walk fluffs and comes back, the one
+                # node that produced the block is the one node that will
+                # never put it on the public wire, and every peer reachable
+                # only through the builder never hears of it. That is the
+                # same defect the transaction path had at its originator,
+                # and blocks run on this identical mechanism (see
+                # gossip.py): fixing it there and not here fixed half of it.
+                # gossip._fluff floods an item once per hash, so passing
+                # everything through cannot loop.
+                self.gossip.relay(blk, gossip_mod.KIND_BLOCK, blk["hash"],
+                                  sender, stemming=stemming)
+            # Otherwise a sibling of our own tip. Not late, not lost: if it
+            # is the better chain we take it right now, locally, no round
+            # trip. Passing on the ones that win, since a node that already
+            # committed this height does not relay through the branch
+            # above, so without this a winning sibling only ever reaches
+            # whoever the builder reached directly. Bounded by the same
+            # check that let it win, only a strictly lower output gets this
+            # far, so at most a handful per height however many arrive.
+            elif self._reorg_to_sibling(blk, cs):
                 self.gossip.relay(blk, gossip_mod.KIND_BLOCK, blk["hash"],
                                   sender, stemming=stemming)
         elif height > cs.height and sender:

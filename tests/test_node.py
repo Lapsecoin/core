@@ -1777,3 +1777,54 @@ class TestTheFluffingNodeKeepsTheTransaction:
             node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
             gossip.relay.assert_called_once()
             assert gossip.relay.call_args.kwargs["stemming"] is True
+
+
+class TestOurOwnTipIsStillRelayed:
+    """Blocks ride the same Dandelion stem/fluff as transactions (see
+    gossip.py), so they had the same defect at the originator, and it bites
+    harder here.
+
+    The builder stems its candidate to one peer and commits it moments
+    later. When the walk fluffs and a copy comes back, its height is no
+    longer tip+1, it IS our tip, and that branch used to relay only a
+    *sibling*. So the one node that produced the block was the one node
+    that never put it on the public wire, and any peer reachable only
+    through the builder never heard of it. Simulated over the real Gossip
+    objects, a builder at the centre of a 5-node star reached everyone 17%
+    of the time; on a 50-node random graph, 47%."""
+
+    def _inbound(self, node, blk, sender="1.2.3.4:1", stemming=False):
+        node._handle_inbound_block(
+            {"block": blk, "sender": sender, "stemming": stemming}, [])
+
+    def test_a_copy_of_our_own_tip_is_passed_on(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        tip = node.cs.tip
+        gossip.relay.reset_mock()
+        self._inbound(node, tip)
+        gossip.relay.assert_called_once()
+        assert gossip.relay.call_args.args[1] == "block"
+
+    def test_it_is_passed_on_in_the_phase_it_arrived_in(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        for stemming in (True, False):
+            gossip.relay.reset_mock()
+            self._inbound(node, node.cs.tip, stemming=stemming)
+            assert gossip.relay.call_args.kwargs["stemming"] is stemming
+
+    def test_the_chain_is_not_disturbed_by_it(self, node_env):
+        # Relaying our own tip must not look like a reorg or move anything.
+        node, _, __, gossip, *_ = node_env
+        before_hash, before_height = node.cs.tip["hash"], node.cs.height
+        self._inbound(node, node.cs.tip)
+        assert node.cs.tip["hash"] == before_hash
+        assert node.cs.height == before_height
+
+    def test_an_unrelated_block_at_our_height_is_not_relayed_blindly(self, node_env):
+        # Only our own tip takes the new path; anything else at this height
+        # is a sibling and still has to win its draw first.
+        node, _, __, gossip, *_ = node_env
+        stranger = dict(node.cs.tip, hash="ff" * 32)
+        gossip.relay.reset_mock()
+        self._inbound(node, stranger)
+        gossip.relay.assert_not_called()
