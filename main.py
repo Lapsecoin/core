@@ -72,6 +72,13 @@ LOG_TAIL_LINES = 300
 # above still writes straight through, see _NewestFirstTailHandler.
 LOG_TAIL_FLUSH_SECONDS = 1.0
 
+# WSGI server sizing (see _serve). Both apps are read-mostly and their
+# handlers are short; the dashboard polls /api/info on a timer and every
+# peer's reachability prober hits it too, so this is about absorbing many
+# small concurrent requests rather than long ones.
+WSGI_THREADS = 8
+WSGI_CHANNEL_TIMEOUT = 30
+
 # The Windows build is console=False (no console window for the default GUI
 # double-click experience). That leaves two things to handle before any
 # logging or output happens: sys.stdout/stderr can be None for a windowed
@@ -203,6 +210,32 @@ def _env_port(name, fallback):
     if not 1 <= port <= 65535:
         raise SystemExit(f"{name} must be between 1 and 65535, got {port}")
     return port
+
+
+def _serve(app, host, port):
+    """Serve a Flask app on its own daemon thread.
+
+    waitress rather than app.run(), which starts Werkzeug's development
+    server. Flask's own documentation says not to put that on a network
+    others can reach, and one of these two apps is bound to whatever
+    interface the operator gave and is the externally reachable port.
+    waitress is pure Python with no build step, so it bundles under
+    PyInstaller the same as everything else here (see lapsecoin.spec).
+
+    Threads rather than processes because both apps read node.view, the
+    snapshot the node loop publishes in-process; there is nothing to serve
+    from another one.
+    """
+    from waitress import serve
+
+    threading.Thread(
+        target=lambda: serve(app, host=host, port=port,
+                             threads=WSGI_THREADS, ident=None,
+                             # An unresponsive or slow client should not be
+                             # able to hold a worker indefinitely.
+                             channel_timeout=WSGI_CHANNEL_TIMEOUT),
+        daemon=True,
+    ).start()
 
 
 def _resolve_passphrase(prompt):
@@ -524,19 +557,13 @@ def main():
     app = create_app(node, pool, private_port=private_port,
                      public_port=port, update_checker=update_checker,
                      rewarder=rewarder)
-    threading.Thread(
-        target=lambda: app.run(host=args.host, port=port, threaded=True),
-        daemon=True,
-    ).start()
+    _serve(app, args.host, port)
     log.info("[startup] public API on http://%s:%d", args.host, port)
 
     private_app = create_private_app(node, pool, private_port=private_port,
                                      public_port=port, update_checker=update_checker,
                                      rewarder=rewarder)
-    threading.Thread(
-        target=lambda: private_app.run(host="127.0.0.1", port=private_port, threaded=True),
-        daemon=True,
-    ).start()
+    _serve(private_app, "127.0.0.1", private_port)
     log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
     log.info("[startup] genesis=%s", genesis["hash"][:12])
 

@@ -92,13 +92,16 @@ _all_hiddenimports = [
     *oqs_hiddenimports, *chiavdf_hiddenimports,
     "oqs", "_cffi_backend", "libtorrent", "miniupnpc",
     "flask", "werkzeug", "werkzeug.serving", "werkzeug.debug",
+    # waitress serves both HTTP ports (see main.py _serve); its
+    # concurrency modules are reached dynamically.
+    "waitress", "waitress.server", "waitress.task", "waitress.channel",
     "jinja2", "jinja2.ext", "markdown",
     "argcomplete", "argcomplete.completers",
     # pystray picks its backend at import time based on the OS
     # (Gtk/AppIndicator on Linux, win32 on Windows, darwin on macOS).
     # PyInstaller's static analysis can't see that dynamic import, so
-    # without listing it explicitly the backend -- and sometimes pystray
-    # itself -- gets silently left out of the binary, and the app just
+    # without listing it explicitly the backend, and sometimes pystray
+    # itself, gets silently left out of the binary, and the app just
     # falls back to taskbar-minimize with no visible error.
     "pystray", "pystray._base",
     "pystray._gtk", "gi", "gi.repository.Gtk", "gi.repository.AppIndicator3",
