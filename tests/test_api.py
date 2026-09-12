@@ -241,3 +241,38 @@ class TestSettingsValidation:
             "draw_window_seconds": "999",
         })
         assert node.settings.get(settings_mod.DRAW_WINDOW_SECONDS) == 7.0
+
+
+class TestPeersForDownload:
+    """_peers_for_download: the list /api/peers/download hands out.
+
+    Self is included deliberately, see api_peers_download's own comment:
+    whoever downloads this file wants a bootstrap seed for a new node,
+    and this node is a perfectly good candidate the moment its own
+    address is known.
+    """
+
+    def test_self_appended_when_known_and_not_already_present(self):
+        result = api._peers_for_download(["1.2.3.4:8333"], "5.6.7.8:8333")
+        assert result == ["1.2.3.4:8333", "5.6.7.8:8333"]
+
+    def test_self_not_duplicated_if_already_a_known_peer(self):
+        """Two nodes that already peered with each other could otherwise
+        end up with a duplicate entry for the same address."""
+        result = api._peers_for_download(["5.6.7.8:8333"], "5.6.7.8:8333")
+        assert result == ["5.6.7.8:8333"]
+
+    def test_self_omitted_entirely_when_not_yet_known(self):
+        """our_external_addr is None until the first PONG confirms it;
+        nothing should be appended rather than adding a garbage entry."""
+        result = api._peers_for_download(["1.2.3.4:8333"], None)
+        assert result == ["1.2.3.4:8333"]
+
+    def test_self_omitted_when_empty_string(self):
+        result = api._peers_for_download(["1.2.3.4:8333"], "")
+        assert result == ["1.2.3.4:8333"]
+
+    def test_does_not_mutate_the_input_list(self):
+        known = ["1.2.3.4:8333"]
+        api._peers_for_download(known, "5.6.7.8:8333")
+        assert known == ["1.2.3.4:8333"]

@@ -499,6 +499,16 @@ def _race_chart(race):
             "axis_lo": axis_lo, "axis_hi": axis_hi, "legend": legend}
 
 
+def _peers_for_download(known_addrs, self_addr):
+    """The address list /api/peers/download hands out: known_addrs plus
+    self_addr, deduped, self_addr omitted entirely when not yet known.
+    Pulled out as a pure function so it's testable without a running app;
+    see api_peers_download for why self is included at all."""
+    if self_addr and self_addr not in known_addrs:
+        return known_addrs + [self_addr]
+    return list(known_addrs)
+
+
 def _default_send_outputs(pool):
     """One 'wallet,0' line per known peer with a confirmed wallet address,
     so the sender can just change the one 0 they actually want to send
@@ -792,7 +802,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # meant to be saved as lapsecoin_peers.json in a new node's working
         # directory so it bootstraps from it on startup, not just a data
         # export for humans to read.
-        resp = jsonify(pool.all_addrs())
+        #
+        # This node's own address is included too, deliberately: the
+        # whole point of handing this file to someone starting a new
+        # node is that they can reach nodes on it, and this one is a
+        # perfectly good candidate the moment it exists. It's excluded
+        # everywhere a node reads a peers file back in (see
+        # Discovery._is_own_addr), so a node loading its own exported
+        # file, or one two nodes swapped, never tries to dial itself.
+        addrs = _peers_for_download(pool.all_addrs(), _self_external_addr())
+        resp = jsonify(addrs)
         resp.headers["Content-Disposition"] = 'attachment; filename="lapsecoin_peers.json"'
         return resp
 

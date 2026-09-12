@@ -102,10 +102,30 @@ class Discovery:
             with self._lock:
                 self._candidates.add(addr)
 
+    def _is_own_addr(self, addr: str) -> bool:
+        """True if addr is this node's own, by either of the two ways an
+        address can be self: it matches our confirmed external ip:port, or
+        its host is one of our own local interfaces. _flush_candidates has
+        always excluded the first; add_bootstrap_peer excluded neither,
+        so a --peer pointed at this node's own address (a copy-paste
+        mistake, or a config templated the same for every node) could
+        ping itself and, on a router that hairpins its own public IP back
+        to the sender, actually get a PONG and self-admit. Nothing else
+        about _ping_and_admit would have caught that: PeerPool.add has no
+        notion of which address is "us"."""
+        our_ext = self.udp.our_external_addr or ""
+        if addr == our_ext:
+            return True
+        host = addr.rsplit(":", 1)[0]
+        return host in self.udp._local_ips
+
     def add_bootstrap_peer(self, addr):
         """Admit a --peer CLI address. Tries UDP ping; if it fails attempts
         hole punch through any already-connected peer."""
         if not (isinstance(addr, str) and ":" in addr):
+            return
+        if self._is_own_addr(addr):
+            log.warning("[peers] --peer %s is this node's own address, ignoring", addr)
             return
         if self._ping_and_admit(addr):
             log.info("[peers] connected to the peer given on the command line, %s", addr)
@@ -256,9 +276,7 @@ class Discovery:
             self._candidates.clear()
 
         known = set(self.pool.all_addrs())
-        # Also exclude our own external address to avoid self-connection
-        own = self.udp.our_external_addr or ""
-        fresh = [a for a in batch if a not in known and a != own]
+        fresh = [a for a in batch if a not in known and not self._is_own_addr(a)]
         if not fresh:
             return
 
