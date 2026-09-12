@@ -1902,3 +1902,82 @@ class TestLivenessNotes:
         node._handle({"type": "alive", "note": {"address": other},
                       "sender": "1.2.3.4:1", "stemming": False}, [])
         assert other in node.active_addresses(3600)
+
+
+class TestLivenessEvictionIsByRecency:
+    """The bounded set of announced addresses must drop the one heard from
+    longest ago, not the one first seen.
+
+    Assigning to a key an OrderedDict already holds leaves it in place, so
+    a node announcing faithfully since startup sat at the front of the
+    eviction queue while junk inserted seconds ago sat safely behind it.
+    Anyone could then clear every real address out by inventing enough of
+    their own, and the rewarder would have nobody left to pay."""
+
+    def _cap(self, monkeypatch, n):
+        import node as node_mod
+        monkeypatch.setattr(node_mod, "ALIVE_MAX_TRACKED", n)
+
+    def test_re_announcing_saves_an_address_from_eviction(self, node_env, monkeypatch):
+        node, *_ = node_env
+        self._cap(monkeypatch, 3)
+        node._record_alive("faithful")
+        for i in range(2):
+            node._record_alive(f"other{i}")
+        node._record_alive("faithful")          # it announces again
+        node._record_alive("newcomer")          # pushes one out
+        assert "faithful" in node._alive_seen
+        assert "other0" not in node._alive_seen
+
+    def test_a_flood_of_invented_addresses_cannot_clear_a_live_one(self, node_env, monkeypatch):
+        node, *_ = node_env
+        self._cap(monkeypatch, 20)
+        node._record_alive("real")
+        for i in range(200):
+            node._record_alive(f"invented{i}")
+            node._record_alive("real")          # still announcing throughout
+        assert "real" in node._alive_seen
+        assert len(node._alive_seen) <= 20
+
+    def test_the_cap_still_holds(self, node_env, monkeypatch):
+        node, *_ = node_env
+        self._cap(monkeypatch, 5)
+        for i in range(100):
+            node._record_alive(f"a{i}")
+        assert len(node._alive_seen) == 5
+
+
+class TestLivenessHashIsStable:
+    """An originator and every relayer must land on the same item hash, or
+    the flood's once-per-item dedup stops working and a note circulates
+    forever.
+
+    Checked by round trip rather than against _alive_hash itself: asserting
+    a function equals itself passes however the function is written."""
+
+    def test_a_relayer_derives_the_same_hash_the_originator_used(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        node.announce_alive()
+        sent_note, _kind, sent_hash = gossip.spread.call_args.args[:3]
+
+        # the same note as it would arrive at another node
+        gossip.relay.reset_mock()
+        node._handle_inbound_alive({"note": dict(sent_note),
+                                    "sender": "1.2.3.4:1", "stemming": False})
+        relayed_hash = gossip.relay.call_args.args[2]
+        assert relayed_hash == sent_hash
+
+    def test_padding_a_note_cannot_mint_a_new_hash(self, node_env):
+        # Otherwise anyone re-floods the same claim indefinitely by adding
+        # a junk field, which is the dedup switched off.
+        node, _, __, gossip, *_ = node_env
+        other = address(3)
+        hashes = []
+        for note in ({"address": other},
+                     {"address": other, "junk": "x" * 50},
+                     {"address": other, "ts": 12345}):
+            gossip.relay.reset_mock()
+            node._handle_inbound_alive({"note": note, "sender": "1.2.3.4:1",
+                                        "stemming": False})
+            hashes.append(gossip.relay.call_args.args[2])
+        assert len(set(hashes)) == 1, "a padded note must not get a new identity"

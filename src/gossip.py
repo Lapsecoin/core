@@ -52,7 +52,6 @@ import secrets
 import threading
 from cachetools import LRUCache
 
-import tx as tx_mod
 
 log = logging.getLogger("ec.gossip")
 

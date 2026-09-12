@@ -98,6 +98,7 @@ import crypto as crypto_mod
 import state as state_mod
 import storage as storage_mod
 import tx as tx_mod
+import uptime_rewarder
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from version import LOCAL_VERSION
 
@@ -109,10 +110,11 @@ BLOCKS_PER_PAGE  = 8
 PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
 
-# How far back the send page looks for nodes that announced themselves
-# active, when prefilling a row per known node. Matches the rewarder's own
-# window (uptime_rewarder.ACTIVE_WINDOW_S).
-ALIVE_WINDOW_SECONDS = 3600
+# How far back to look for nodes that announced themselves active. Taken
+# from the rewarder rather than restated: it is the rewarder's policy, and
+# two copies of the same number held together by a comment is how they
+# stop agreeing.
+ALIVE_WINDOW_SECONDS = uptime_rewarder.ACTIVE_WINDOW_S
 
 
 # ---------------------------------------------------------------------------

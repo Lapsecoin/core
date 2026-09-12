@@ -32,7 +32,6 @@ sole writer; every mutation publishes a new snapshot atomically.
 
 import collections
 import json
-import os
 import logging
 import queue
 import statistics
@@ -156,6 +155,20 @@ ALIVE_MAX_TRACKED = 50_000
 # ---------------------------------------------------------------------------
 # Tail validation (pure, no node state touched)
 # ---------------------------------------------------------------------------
+
+def _alive_hash(address):
+    """The dedup identity of a liveness note.
+
+    Derived from the address alone, and deliberately not from the note as
+    it arrived. Two reasons. An originator and every relayer have to agree
+    on it or the flood's once-per-item dedup stops working, and hashing
+    whatever fields happened to be present would make that agreement an
+    accident of nobody having added one. And hashing the whole note would
+    let anyone mint unlimited distinct hashes for the same claim by
+    padding it with junk, which is the dedup switched off.
+    """
+    return crypto.sha256_hex(canonical_json({"address": address}))
+
 
 def _validate_tail(tail, prefix):
     """Validate new blocks against a trusted prefix, building the resulting
@@ -1400,15 +1413,25 @@ class Node:
         if not crypto.is_valid_address(addr):
             log.debug("[alive] ignoring a note with a malformed address")
             return
-        item_hash = crypto.sha256_hex(canonical_json({"address": addr}))
+        item_hash = _alive_hash(addr)
         self._note_echo(item_hash, sender)
         self._record_alive(addr)
         self.gossip.relay(note, gossip_mod.KIND_ALIVE, item_hash,
                           sender, stemming=stemming)
 
     def _record_alive(self, addr):
-        """Remember that this address was announced, and when."""
+        """Remember that this address was announced, and when.
+
+        move_to_end matters and is not decoration. Assigning to a key an
+        OrderedDict already holds leaves it where it was, so without this
+        the eviction below drops whichever address was *first seen*, not
+        the one least recently heard from: a node announcing faithfully
+        since startup would be evicted ahead of junk inserted a moment ago.
+        Anyone could then clear every real address out of this by inventing
+        ALIVE_MAX_TRACKED of their own, and nobody would be paid.
+        """
         self._alive_seen[addr] = time.time()
+        self._alive_seen.move_to_end(addr)
         while len(self._alive_seen) > ALIVE_MAX_TRACKED:
             self._alive_seen.popitem(last=False)
 
@@ -1426,7 +1449,7 @@ class Node:
         already in flight costs nothing to re-announce.
         """
         note = {"address": self.addr}
-        item_hash = crypto.sha256_hex(canonical_json(note))
+        item_hash = _alive_hash(self.addr)
         self._record_alive(self.addr)
         self._spread(note, gossip_mod.KIND_ALIVE, item_hash)
         log.debug("[alive] announced this node as active")

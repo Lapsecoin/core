@@ -544,7 +544,7 @@ def main():
     # dashboard's /rewards page. Its background thread sleeps a full cycle
     # (an hour, by default) before its first run, so it's never racing
     # node.start() below for the signing key, that's always up first.
-    rewarder = UptimeRewarder(node, pool)
+    rewarder = UptimeRewarder(node)
     rewarder.start()
 
     # ------------------------------------------------------------------

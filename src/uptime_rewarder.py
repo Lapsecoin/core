@@ -35,13 +35,12 @@ class UptimeRewarder:
     loop itself always runs, but does nothing on a tick while the budget
     is 0 (the default)."""
 
-    def __init__(self, node, pool, state_file=STATE_FILE,
+    def __init__(self, node, state_file=STATE_FILE,
                  budget_lapse=DEFAULT_BUDGET_LAPSE,
                  halflife_hours=DEFAULT_HALFLIFE_HOURS,
                  recent_blocks_window=RECENT_BLOCKS_WINDOW,
                  check_interval=CHECK_INTERVAL_S):
         self.node = node
-        self.pool = pool
         self.state_file = state_file
         self.halflife_hours = halflife_hours
         self.recent_blocks_window = recent_blocks_window

@@ -16,11 +16,8 @@ import json
 import os
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import uptime_rewarder as rewarder_mod
 from uptime_rewarder import UptimeRewarder
 from params import TICKS_PER_LAPSE
 from tests.fixtures import address
@@ -95,7 +92,7 @@ def make(tmp_path, **kw):
     node = _FakeNode(kw.pop("addr", address(0)), **{
         k: kw.pop(k) for k in list(kw) if k in
         ("balances", "chain", "alive", "confirmed", "submit_ok")})
-    r = UptimeRewarder(node, pool=None,
+    r = UptimeRewarder(node,
                        state_file=str(tmp_path / "rewards.json"),
                        budget_lapse=kw.pop("budget_lapse", 0),
                        **kw)
@@ -122,8 +119,7 @@ class TestBudget:
 
     def test_the_budget_survives_a_restart(self, tmp_path):
         r, node = make(tmp_path, budget_lapse=7)
-        again = UptimeRewarder(node, pool=None,
-                               state_file=str(tmp_path / "rewards.json"))
+        again = UptimeRewarder(node, state_file=str(tmp_path / "rewards.json"))
         assert again.status()["remaining_ticks"] == 7 * TICKS_PER_LAPSE
 
     def test_a_payout_never_exceeds_the_remaining_budget(self, tmp_path):
@@ -303,14 +299,14 @@ class TestStateFile:
         path = tmp_path / "rewards.json"
         path.write_text("{not json")
         node = _FakeNode(address(0))
-        r = UptimeRewarder(node, pool=None, state_file=str(path), budget_lapse=3)
+        r = UptimeRewarder(node, state_file=str(path), budget_lapse=3)
         assert r.status()["remaining_ticks"] == 3 * TICKS_PER_LAPSE
 
     def test_a_stale_enabled_flag_is_dropped(self, tmp_path):
         path = tmp_path / "rewards.json"
         path.write_text(json.dumps({"remaining_ticks": 5, "enabled": True}))
         node = _FakeNode(address(0))
-        r = UptimeRewarder(node, pool=None, state_file=str(path))
+        r = UptimeRewarder(node, state_file=str(path))
         assert "enabled" not in r.status()
         assert r.status()["remaining_ticks"] == 5
 
