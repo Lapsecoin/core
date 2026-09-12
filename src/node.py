@@ -1362,14 +1362,6 @@ class Node:
 
         tx_hash = tx_mod.tx_hash(tx_dict)
 
-        # Before validating, not after: a stem we have already passed on is
-        # not worth a signature check, and a walk can legitimately come back
-        # round to us (the rule only avoids the predecessor, not every node
-        # already visited). See gossip.mark_stem_seen.
-        if stemming and self.gossip.mark_stem_seen(tx_hash):
-            log.debug("[tx] stem already relayed, dropping  from=%s", origin)
-            return
-
         ok, err = self._validate_for_mempool(tx_dict)
         if not ok:
             log.debug("[tx] inbound rejected  reason=%s  from=%s", err, origin)
@@ -1378,8 +1370,24 @@ class Node:
 
         if stemming:
             log.debug("[tx] stem relay  from=%s", origin)
-            self.gossip.relay(tx_dict, gossip_mod.KIND_TX, tx_hash,
-                              sender, stemming=True)
+            went_public = self.gossip.relay(tx_dict, gossip_mod.KIND_TX,
+                                            tx_hash, sender, stemming=True)
+            if not went_public:
+                # Still private, and still not ours: we are a relay for it,
+                # not its destination. Keeping it out of the mempool is what
+                # stops /api/mempool answering "which nodes are on the
+                # private path", which is the thing the stem exists to hide.
+                return
+            # The walk ended here and we broadcast it to everyone, so it is
+            # public now and there is nothing left to hide by not keeping
+            # it. Not keeping it meant the one node that put a transaction
+            # in front of the whole network was the one node that could not
+            # then mine it, which cost that transaction a builder and cost
+            # us the fee, silently, on every walk that ended at us.
+            added, h_or_err = self.mempool.add(tx_dict)
+            if added:
+                log.debug("[tx] fluffed here, keeping it  hash=%s  from=%s",
+                          h_or_err[:12], origin)
             return
 
         added, h_or_err = self.mempool.add(tx_dict)

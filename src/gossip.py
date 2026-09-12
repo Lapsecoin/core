@@ -99,8 +99,6 @@ class Gossip:
         # public (fluff) phase, so each node floods a given item exactly
         # once no matter how many copies reach it.
         self._seen  = LRUCache(maxsize=SEEN_CACHE_SIZE)
-        # Items already forwarded in the private phase, see mark_stem_seen.
-        self._stem_seen = LRUCache(maxsize=SEEN_CACHE_SIZE)
         self._lock  = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -125,11 +123,18 @@ class Gossip:
         stemming: True if it arrived still in the private phase, in which
         case we apply the stem rule again; False if it arrived public, in
         which case we simply flood it onward (privacy is already spent, and
-        re-stemming a public item would only slow it down)."""
+        re-stemming a public item would only slow it down).
+
+        Returns True if the item went public here, which for a stemming
+        item means this node is where the walk ended and chose to fluff.
+        The caller needs to know because a stemming item is deliberately
+        not admitted locally (see Node._handle_inbound_tx), and that is
+        only right while it is still private.
+        """
         if stemming:
-            self._forward(item, kind, item_hash, predecessor=sender)
-        else:
-            self._fluff(item, kind, item_hash, exclude=sender)
+            return self._forward(item, kind, item_hash, predecessor=sender) is None
+        self._fluff(item, kind, item_hash, exclude=sender)
+        return True
 
     def force_fluff(self, item, kind, item_hash):
         """Flood an item we already put on the wire once, ignoring the seen
@@ -148,31 +153,6 @@ class Gossip:
             if h in self._seen:
                 return True
             self._seen[h] = True
-            return False
-
-    def mark_stem_seen(self, h):
-        """Mark h as already relayed in the private phase. Returns True if
-        it already was.
-
-        Kept apart from _seen, which is the public phase's "we have already
-        flooded this" and must stay that, or a stem hop would mark an item
-        and the fluff that follows it would be swallowed as a duplicate.
-
-        The stem had no dedup of any kind before this. A walk forwards to
-        one peer that is merely not its predecessor, so a hop two steps
-        back is a perfectly legal next choice and the walk can revisit
-        nodes; nothing bounds it but the coin flip that ends it. Every
-        revisit cost a full signature verification and a ledger snapshot
-        before the item was handed straight on again, and re-sending a
-        stemming item was free for anyone who wanted to make that happen
-        on purpose. Only receives mark it, never spread(): an originator
-        that marked its own item would then ignore its own echo coming
-        back and re-flood on every retry.
-        """
-        with self._lock:
-            if h in self._stem_seen:
-                return True
-            self._stem_seen[h] = True
             return False
 
     # ------------------------------------------------------------------

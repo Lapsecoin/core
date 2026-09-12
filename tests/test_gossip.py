@@ -223,3 +223,38 @@ class TestBlocksUseTheSameMechanism:
         g.relay(blk, gossip_mod.KIND_BLOCK, 'aa' * 32, pred, stemming=False)
         assert udp.send_block.call_count == 1
         assert udp.send_block.call_args.kwargs["peers"] == ["5.6.7.8:9000"]
+
+
+class TestRelayReportsWhetherItWentPublic:
+    """A stemming item is deliberately not admitted locally while it is
+    still private, so the caller has to be able to tell the difference
+    between 'stemmed onward' and 'fluffed here'."""
+
+    def test_a_stem_hop_that_forwards_reports_false(self, monkeypatch):
+        pool = MagicMock()
+        pool.get_all.return_value = ["a:1", "b:2", "c:3"]
+        g = gossip_mod.Gossip(pool, MagicMock())
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 0.0)  # always stem
+        assert g.relay({"x": 1}, gossip_mod.KIND_TX, "h1", "a:1", stemming=True) is False
+
+    def test_a_stem_hop_that_fluffs_reports_true(self, monkeypatch):
+        pool = MagicMock()
+        pool.get_all.return_value = ["a:1", "b:2", "c:3"]
+        g = gossip_mod.Gossip(pool, MagicMock())
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)  # always fluff
+        assert g.relay({"x": 1}, gossip_mod.KIND_TX, "h2", "a:1", stemming=True) is True
+
+    def test_a_dead_end_fluffs_and_reports_true(self, monkeypatch):
+        # Only peer is the predecessor, so the walk ends here whatever the
+        # coin flip says.
+        pool = MagicMock()
+        pool.get_all.return_value = ["a:1"]
+        g = gossip_mod.Gossip(pool, MagicMock())
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 0.0)
+        assert g.relay({"x": 1}, gossip_mod.KIND_TX, "h3", "a:1", stemming=True) is True
+
+    def test_a_public_relay_reports_true(self):
+        pool = MagicMock()
+        pool.get_all.return_value = ["a:1", "b:2"]
+        g = gossip_mod.Gossip(pool, MagicMock())
+        assert g.relay({"x": 1}, gossip_mod.KIND_TX, "h4", "a:1", stemming=False) is True

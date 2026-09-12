@@ -60,11 +60,10 @@ def node_env(tmp_path):
 
     gossip  = MagicMock()
     gossip.mark_seen.return_value = False
-    # Same reasoning as mark_seen above: the real one returns False the
-    # first time it sees an item hash, and a bare MagicMock() returns a
-    # truthy Mock, which would read as "already relayed this stem" and
-    # make the node drop every stemming tx a test hands it.
-    gossip.mark_stem_seen.return_value = False
+    # relay() reports whether the item went public; a bare MagicMock()
+    # returns a truthy Mock, which would read as "this fluffed" on every
+    # stem hop. See Gossip.relay.
+    gossip.relay.return_value = False
     syncer  = MagicMock()
     # Real check_and_sync returns True only when it actually adopted a
     # better chain (syncer.py docstring); a bare MagicMock() call would
@@ -1736,3 +1735,45 @@ class TestReorgStats:
 
         assert node.cs.tip["hash"] == better["hash"]   # the draw did fire
         assert node.reorg_stats()["count"] == 0        # and was not counted
+
+
+class TestTheFluffingNodeKeepsTheTransaction:
+    """A stemming transaction is relayed, not admitted, while it is still
+    private. But the stem rule can decide to end the walk here and
+    broadcast it to everyone, and at that point it is public and there is
+    nothing left to hide by not keeping it.
+
+    This node used to broadcast it and keep nothing, so the one node that
+    put a transaction in front of the whole network was the one node that
+    could not then mine it. A simulation over the real Gossip class put
+    the cost at roughly a fifth of nodes missing the transaction on a
+    20-node graph."""
+
+    def test_a_stem_hop_that_fluffs_admits_it(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        gossip.relay.return_value = True          # the walk ended here
+        node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
+        assert node.mempool.size() == 1
+
+    def test_a_stem_hop_that_forwards_does_not(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        gossip.relay.return_value = False         # still private, still moving
+        node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
+        assert node.mempool.size() == 0, \
+            "a transaction still in its private phase must not show up in our mempool"
+
+    def test_it_is_still_relayed_either_way(self, node_env):
+        node, _, __, gossip, *_ = node_env
+        node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        for went_public in (True, False):
+            gossip.relay.reset_mock()
+            gossip.relay.return_value = went_public
+            node.mempool.remove_many(list(node.mempool.pending_hashes()))
+            node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
+            gossip.relay.assert_called_once()
+            assert gossip.relay.call_args.kwargs["stemming"] is True
