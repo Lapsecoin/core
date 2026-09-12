@@ -12,6 +12,7 @@ import os
 import socket
 import sys
 import threading
+import time
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -644,3 +645,115 @@ class TestReassemblyMemoryCap:
         for msg_id in range(50):
             r.feed(("1.2.3.4", 9), msg_id, 0, 8, b"z" * 1024)
         assert r.held_bytes() <= 4096
+
+
+class TestSyncRequestsNeedAReachableSource:
+    """A GETSYNC is one small datagram whose source nothing verifies, and
+    the reply is the largest message this protocol makes, so a forged
+    source turned this node into an amplifier. Membership is the fast
+    path; anything else proves it can receive first."""
+
+    def _transport(self, pool):
+        t = peer_udp.UDPTransport(port=0, genesis_hash="ab" * 32,
+                                  on_block=lambda *a: None, on_tx=lambda *a: None,
+                                  on_peers=lambda *a: None, pool=pool)
+        return t
+
+    def test_an_existing_peer_is_served_immediately(self):
+        pool = MagicMock()
+        pool.all_addrs.return_value = ["1.2.3.4:9000"]
+        t = self._transport(pool)
+        assert t._may_serve_sync("1.2.3.4:9000") is True
+
+    def test_an_unknown_address_is_not_served_yet(self):
+        pool = MagicMock()
+        pool.all_addrs.return_value = []
+        t = self._transport(pool)
+        assert t._may_serve_sync("9.9.9.9:9000") is False
+
+    def test_an_unknown_address_starts_a_confirmation(self):
+        pool = MagicMock()
+        pool.all_addrs.return_value = []
+        t = self._transport(pool)
+        t._waiters = MagicMock()
+        t._start_confirmation("9.9.9.9:9000", lambda: None)
+        t._waiters.submit.assert_called_once()
+
+    def test_a_confirmed_address_is_served_without_pinging_again(self):
+        pool = MagicMock()
+        pool.all_addrs.return_value = []
+        t = self._transport(pool)
+        t._routable["9.9.9.9:9000"] = time.monotonic()
+        assert t._may_serve_sync("9.9.9.9:9000") is True
+
+    def test_a_stale_confirmation_expires(self):
+        pool = MagicMock()
+        pool.all_addrs.return_value = []
+        t = self._transport(pool)
+        t._routable["9.9.9.9:9000"] = (time.monotonic()
+                                       - peer_udp.ROUTABLE_TTL_SECONDS - 1)
+        assert t._may_serve_sync("9.9.9.9:9000") is False
+
+    def test_confirmations_in_flight_are_bounded(self):
+        # Otherwise a flood of forged sources is a flood of outbound PINGs.
+        pool = MagicMock()
+        pool.all_addrs.return_value = []
+        t = self._transport(pool)
+        t._waiters = MagicMock()
+        for i in range(peer_udp.ROUTABLE_MAX_PENDING + 20):
+            t._start_confirmation(f"9.9.{i // 256}.{i % 256}:9000", lambda: None)
+        assert len(t._routable_pending) <= peer_udp.ROUTABLE_MAX_PENDING
+
+    def test_one_address_does_not_start_two_confirmations(self):
+        pool = MagicMock()
+        pool.all_addrs.return_value = []
+        t = self._transport(pool)
+        t._waiters = MagicMock()
+        t._start_confirmation("9.9.9.9:9000", lambda: None)
+        t._start_confirmation("9.9.9.9:9000", lambda: None)
+        assert t._waiters.submit.call_count == 1
+
+
+class TestStrangerStillBootstraps:
+    """Two live transports: the gate above must not cost a node that has
+    never spoken to us its first sync. It is served on the original
+    request, not after a timeout and a retry."""
+
+    def _pair(self, ports):
+        from peerpool import PeerPool
+        gen = "ab" * 32
+        chain = [{"height": h, "hash": f"{h:064x}"} for h in range(5)]
+        made = []
+        for port in ports:
+            pool = PeerPool()
+            t = peer_udp.UDPTransport(port=port, genesis_hash=gen,
+                                      on_block=lambda *a: None,
+                                      on_tx=lambda *a: None,
+                                      on_peers=lambda *a: None, pool=pool)
+            t.set_chain_provider(lambda f, to, c=chain: c[f:(to or 4) + 1])
+            t.set_tip_provider(lambda c=chain: (4, c[-1]["hash"], "w", "0", 0))
+            t.start()
+            made.append((t, pool))
+        time.sleep(0.4)
+        return made
+
+    def test_a_stranger_is_served_on_its_first_request(self):
+        (server, server_pool), (client, _) = self._pair([19301, 19302])
+        try:
+            assert server_pool.all_addrs() == [], "precondition: client is a stranger"
+            resp = client.request_sync(f"127.0.0.1:{server.port}",
+                                       from_h=0, to_h=4, timeout=8)
+            assert resp is not None, "a new node was refused its first sync"
+            assert len(resp["chain"]) == 5
+        finally:
+            server.stop(); client.stop()
+
+    def test_later_pages_need_no_further_confirmation(self):
+        (server, _), (client, __) = self._pair([19303, 19304])
+        try:
+            for _ in range(3):
+                resp = client.request_sync(f"127.0.0.1:{server.port}",
+                                           from_h=0, to_h=4, timeout=8)
+                assert resp is not None and len(resp["chain"]) == 5
+        finally:
+            server.stop(); client.stop()

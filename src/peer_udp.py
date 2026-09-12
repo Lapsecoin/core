@@ -229,7 +229,19 @@ RATE_LIMIT_BURST    = 100
 CHUNK_ACK_TIMEOUT    = 1.5   # seconds to wait for acks before a retransmit round
 CHUNK_ACK_MAX_ROUNDS = 4
 
-# Workers for the ack waiters (see UDPTransport._acks). Each one is asleep
+# Return-routability confirmation for sync requests, see
+# UDPTransport._may_serve_sync. A confirmed address is remembered for a
+# while so a multi-page sync is not a PING per page; the window is short
+# because an address can stop being reachable at any time and the only
+# cost of re-confirming is one round trip.
+ROUTABLE_TTL_SECONDS  = 300
+ROUTABLE_PING_TIMEOUT = 3.0
+# Concurrent confirmations in flight. Bounds what a flood of forged source
+# addresses can make this node do: past this, sync requests from unknown
+# addresses are dropped rather than each starting a PING of its own.
+ROUTABLE_MAX_PENDING  = 32
+
+# Workers for the waiter pool (see UDPTransport._waiters). Each one is asleep
 # on an Event for nearly all of its life, so this is sized by how many
 # chunked sends can plausibly be in flight (a fan-out per peer, plus sync
 # replies) rather than by anything to do with CPU.
@@ -696,8 +708,14 @@ class UDPTransport:
         # its socket entirely, right when it is being told about the block
         # it is racing. These threads spend their lives asleep on an Event,
         # so there can be many more of them than there are cores.
-        self._acks      = ThreadPoolExecutor(max_workers=ACK_WAITER_THREADS,
-                                             thread_name_prefix="udp-ack")
+        self._waiters   = ThreadPoolExecutor(max_workers=ACK_WAITER_THREADS,
+                                             thread_name_prefix="udp-wait")
+        # Addresses that have proven they can receive at the address they
+        # claim, and the confirmations currently in flight. See
+        # _may_serve_sync.
+        self._routable: dict[str, float] = {}
+        self._routable_pending: set = set()
+        self._routable_lock = threading.Lock()
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -765,7 +783,7 @@ class UDPTransport:
                 pass
         self._executor.shutdown(wait=False)
         self._fanout.shutdown(wait=False)
-        self._acks.shutdown(wait=False)
+        self._waiters.shutdown(wait=False)
 
     # ------------------------------------------------------------------
     # Public send operations
@@ -1291,9 +1309,47 @@ class UDPTransport:
             self._handle_ack(data, sender)
 
     def _handle_getsync(self, msg_id: int, data: dict, sender: tuple):
-        """Serve a chain segment request. Calls back on_sync_request if set."""
+        """Serve a chain segment request, to an address we have reason to
+        believe actually sent it.
+
+        A sync page is the largest message this protocol produces, and a
+        GETSYNC is one small datagram whose source address nothing checks.
+        Forging a victim's address in one turned this node into an
+        amplifier pointed at them, at up to MAX_SYNC_BLOCKS blocks per
+        datagram, which is the whole shape of a reflection attack.
+
+        Gating on pool membership alone would have been wrong: an inbound
+        PING from a public address only touches the pool (a no-op unless
+        already present) and queues a hint, so a node that just found us,
+        pinged us and wants our chain is genuinely not a peer yet. It
+        would have been refused its first sync until our own discovery
+        loop got round to probing it back, which is bootstrap broken to
+        close a hole.
+
+        So membership is the fast path, and anything else is asked to
+        prove it can receive at the address it claims: an ordinary
+        PING, answered by an ordinary PONG, both already in the protocol.
+        Nothing on the wire changes, so a peer on an older version is
+        served exactly as before, it just answers a PING first. A forged
+        source only reaches a host that answers our PING with our genesis
+        hash, which reduces the reflection target set from the whole
+        internet to nodes on this network, and those are the hosts best
+        able to absorb it.
+        """
         sender_addr = f"{sender[0]}:{sender[1]}"
         self._pool.touch(sender_addr)
+        if self._may_serve_sync(sender_addr):
+            self._serve_sync(msg_id, data, sender)
+        else:
+            # Confirm, then answer this same request rather than making the
+            # requester wait out its timeout and ask again. The retry is
+            # still the backstop if the confirmation fails; this just means
+            # a new node's first sync costs a round trip instead of a
+            # timeout.
+            self._start_confirmation(sender_addr,
+                                     lambda: self._serve_sync(msg_id, data, sender))
+
+    def _serve_sync(self, msg_id: int, data: dict, sender: tuple):
         from_h = data.get("from_h", 0)
         if not isinstance(from_h, int) or from_h < 0:
             from_h = 0
@@ -1310,6 +1366,62 @@ class UDPTransport:
             _encode({"genesis": self.genesis_hash, "chain": chain}),
             BLOCK_COMPRESS_LEVEL)
         self._send_chunked(MT_SYNC, msg_id, payload, sender)
+
+    def _may_serve_sync(self, sender_addr: str) -> bool:
+        """Whether this address has already shown it can receive here.
+
+        True for a peer, and for an address confirmed recently enough that
+        a multi-page sync is not a PING per page.
+        """
+        if sender_addr in self._pool.all_addrs():
+            return True
+        with self._routable_lock:
+            seen = self._routable.get(sender_addr)
+        return seen is not None and time.monotonic() - seen < ROUTABLE_TTL_SECONDS
+
+    def _start_confirmation(self, sender_addr: str, then):
+        """PING sender_addr, and run `then` if it answers.
+
+        Bounded on purpose. A confirmation occupies a slot and, out of
+        slots, the request is dropped rather than each forged source
+        starting a PING of its own; dropping is something a UDP request
+        already has to survive, and the requester's own retry covers it.
+        """
+        with self._routable_lock:
+            if sender_addr in self._routable_pending:
+                return
+            if len(self._routable_pending) >= ROUTABLE_MAX_PENDING:
+                log.debug("[udp] too many address confirmations in flight, "
+                          "dropping a sync request from %s", sender_addr)
+                return
+            self._routable_pending.add(sender_addr)
+        try:
+            self._waiters.submit(self._confirm_routable, sender_addr, then)
+        except RuntimeError:
+            with self._routable_lock:
+                self._routable_pending.discard(sender_addr)
+
+    def _confirm_routable(self, addr: str, then=None):
+        """PING addr, remember it if it answers, then run `then`. Runs off
+        the receive path, since it waits on a round trip."""
+        answered = False
+        try:
+            answered = self.ping(addr, timeout=ROUTABLE_PING_TIMEOUT) is not None
+            if answered:
+                with self._routable_lock:
+                    self._routable[addr] = time.monotonic()
+                log.debug("[udp] %s answered, its sync requests are servable", addr)
+        except Exception:
+            log.debug("[udp] address confirmation failed for %s", addr, exc_info=True)
+        finally:
+            with self._routable_lock:
+                self._routable_pending.discard(addr)
+        if answered and then is not None:
+            try:
+                then()
+            except Exception:
+                log.debug("[udp] serving %s after confirmation failed", addr,
+                          exc_info=True)
 
     def _handle_punch_req(self, requester_addr: str, target_addr: str):
         """Relay: tell both peers to punch toward each other."""
@@ -1363,7 +1475,7 @@ class UDPTransport:
 
         if total > 1:
             try:
-                self._acks.submit(self._retransmit_until_acked, target, msg_id, total)
+                self._waiters.submit(self._retransmit_until_acked, target, msg_id, total)
             except RuntimeError:
                 # Pool already shut down. The chunks are on the wire either
                 # way; only the retransmit round is lost.
