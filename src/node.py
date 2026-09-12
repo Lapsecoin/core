@@ -1393,10 +1393,19 @@ class Node:
         added, h_or_err = self.mempool.add(tx_dict)
         if added:
             log.debug("[tx] inbound accepted  hash=%s  from=%s", h_or_err[:12], origin)
-            self.gossip.relay(tx_dict, gossip_mod.KIND_TX, tx_hash,
-                              sender, stemming=False)
         else:
             log.debug("[tx] inbound duplicate  from=%s", origin)
+        # Relayed either way. Whether our mempool already held this and
+        # whether we have already flooded it are different questions, and
+        # gossip._fluff answers the second itself, once per item hash, so
+        # passing everything through here cannot loop. Gating on the first
+        # is what broke the flood at its most important node: the
+        # originator has the transaction in its mempool from the moment it
+        # signed it and has flooded nothing, so a public copy arriving back
+        # found "already have it" and stopped there, stranding every peer
+        # reachable only through it.
+        self.gossip.relay(tx_dict, gossip_mod.KIND_TX, tx_hash,
+                          sender, stemming=False)
 
     # ------------------------------------------------------------------
     # Chain sync / reorg

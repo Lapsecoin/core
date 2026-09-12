@@ -108,19 +108,25 @@ class TestStemRule:
         g.relay(sample_tx(), gossip_mod.KIND_TX, tx_mod.tx_hash(sample_tx()), pred, stemming=True)
         assert udp.send_tx.call_args.kwargs["peers"] == ["5.6.7.8:9000"]
 
-    def test_dead_end_stops_here_rather_than_handing_back(self, monkeypatch):
-        """The predecessor is our only peer, so there is genuinely nowhere
-        for the item to go: it already came from the one node we could send
-        it to. The walk ends here.
+    def test_dead_end_hands_back_publicly_rather_than_dying(self, monkeypatch):
+        """The predecessor is our only peer, so the stem cannot continue.
+        The walk ends here, and the item goes public back down the one link
+        we have.
 
-        This is the case that makes the originator's rework mandatory
-        rather than decorative, the sender handed off and has no way to
-        know it landed on a leaf. See Node._retry_unconfirmed_spreads."""
+        Handing it back is not the redundant send it looks like. A stem hop
+        relays without admitting, so the predecessor is the one node we can
+        be certain does not hold this; returning it publicly is what makes
+        it real for them and lets it carry on past them. This used to send
+        nothing at all, which killed the item on every walk that reached a
+        leaf and left the originator's rework to notice, seconds later,
+        that nothing had come back."""
         always_stem(monkeypatch)
         pred = "1.2.3.4:9000"
         g, _, udp = make_gossip(peers=[pred])
         g.relay(sample_tx(), gossip_mod.KIND_TX, tx_mod.tx_hash(sample_tx()), pred, stemming=True)
-        udp.send_tx.assert_not_called()
+        udp.send_tx.assert_called_once()
+        assert udp.send_tx.call_args.kwargs["stemming"] is False
+        assert udp.send_tx.call_args.kwargs["peers"] == [pred]
 
     def test_dead_end_with_another_peer_present_goes_public(self, monkeypatch):
         """Same rule, but here the node has somewhere to put it: the stem
@@ -133,7 +139,9 @@ class TestStemRule:
         g.relay(sample_tx(), gossip_mod.KIND_TX, tx_mod.tx_hash(sample_tx()), pred, stemming=True)
         udp.send_tx.assert_called_once()
         assert udp.send_tx.call_args.kwargs["stemming"] is False
-        assert udp.send_tx.call_args.kwargs["peers"] == ["5.6.7.8:9000"]
+        # The predecessor is included: it relayed this without admitting it,
+        # so it is the one peer here that does not have it.
+        assert udp.send_tx.call_args.kwargs["peers"] == [pred, "5.6.7.8:9000"]
 
     def test_single_peer_node_still_propagates(self, monkeypatch):
         """A node with one peer has no anonymity to protect, and must still
@@ -207,12 +215,16 @@ class TestBlocksUseTheSameMechanism:
         assert len(udp.send_block.call_args.kwargs["peers"]) == 1
         assert udp.send_block.call_args.kwargs["stemming"] is True
 
-    def test_block_dead_end_stops_here(self, monkeypatch):
+    def test_block_dead_end_hands_back_publicly(self, monkeypatch):
+        """Same rule as a transaction's, and it matters more here: a block
+        that dies at a leaf is an evaluation somebody paid ~120s for."""
         always_stem(monkeypatch)
         pred = "1.2.3.4:9000"
         g, _, udp = make_gossip(peers=[pred])
         g.relay({"height": 1, "hash": "aa" * 32}, gossip_mod.KIND_BLOCK, 'aa' * 32, pred, stemming=True)
-        udp.send_block.assert_not_called()
+        udp.send_block.assert_called_once()
+        assert udp.send_block.call_args.kwargs["stemming"] is False
+        assert udp.send_block.call_args.kwargs["peers"] == [pred]
 
     def test_block_fluff_excludes_sender_and_dedups(self, monkeypatch):
         always_fluff(monkeypatch)
@@ -258,3 +270,115 @@ class TestRelayReportsWhetherItWentPublic:
         pool.get_all.return_value = ["a:1", "b:2"]
         g = gossip_mod.Gossip(pool, MagicMock())
         assert g.relay({"x": 1}, gossip_mod.KIND_TX, "h4", "a:1", stemming=False) is True
+
+
+class TestFluffReachesEveryConnectedNode:
+    """Propagation over real topologies, driving the real Gossip objects.
+
+    The requirement is coverage, not best effort: if the graph is
+    connected, every node ends up with the item. Two separate defects used
+    to break that, both from treating "sent it to me" as "already has it".
+    """
+
+    def _network(self, adj):
+        sent = []
+        nodes = {}
+
+        def udp_for(me):
+            class U:
+                def send_tx(self, tx, peers, stemming):
+                    for p in peers:
+                        sent.append((p, me, tx, stemming))
+                def send_block(self, *a, **k): pass
+            return U()
+
+        class Pool:
+            def __init__(self, peers): self._p = peers
+            def get_all(self): return list(self._p)
+
+        for n, peers in adj.items():
+            nodes[n] = gossip_mod.Gossip(Pool(peers), udp_for(n))
+        return nodes, sent
+
+    def _propagate(self, adj, origin):
+        """Returns the set of nodes that ended up holding the item."""
+        nodes, queue = self._network(adj)
+        held = {origin}
+        tx = {"h": "tx"}
+        nodes[origin].spread(tx, gossip_mod.KIND_TX, "tx")
+        steps = 0
+        while queue and steps < 10000:
+            me, sender, item, stemming = queue.pop(0)
+            steps += 1
+            if stemming:
+                # mirrors Node._handle_inbound_tx: relayed, and admitted
+                # only once the walk ends here and goes public
+                if nodes[me].relay(item, gossip_mod.KIND_TX, "tx", sender,
+                                   stemming=True):
+                    held.add(me)
+            else:
+                held.add(me)
+                nodes[me].relay(item, gossip_mod.KIND_TX, "tx", sender,
+                                stemming=False)
+        return held
+
+    def _ring(self, n):  return {i: [(i - 1) % n, (i + 1) % n] for i in range(n)}
+    def _line(self, n):  return {i: [j for j in (i-1, i+1) if 0 <= j < n] for i in range(n)}
+    def _star(self, n):  return {0: list(range(1, n)), **{i: [0] for i in range(1, n)}}
+
+    def test_a_ring_is_fully_covered_once_anything_fluffs(self, monkeypatch):
+        # Always fluff at the first hop, so the flood is what is under test
+        # rather than how long the stem happened to run.
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        adj = self._ring(6)
+        for origin in adj:
+            assert self._propagate(adj, origin) == set(adj), \
+                f"ring left nodes uncovered starting from {origin}"
+
+    def test_a_line_is_fully_covered(self, monkeypatch):
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        adj = self._line(8)
+        for origin in adj:
+            assert self._propagate(adj, origin) == set(adj)
+
+    def test_a_star_is_fully_covered_from_a_leaf(self, monkeypatch):
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        adj = self._star(6)
+        assert self._propagate(adj, 3) == set(adj)
+
+    def test_a_single_bridge_is_crossed(self, monkeypatch):
+        # Two cliques joined by one edge: the flood has to traverse it.
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        adj = {0: [1, 2, 3], 1: [0, 2], 2: [0, 1], 3: [0, 4, 5], 4: [3, 5], 5: [3, 4]}
+        for origin in adj:
+            assert self._propagate(adj, origin) == set(adj)
+
+    def test_the_predecessor_of_a_fluffing_stem_hop_is_included(self, monkeypatch):
+        # It is the one peer that provably does not have the item: a stem
+        # hop relays without admitting.
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        pool = MagicMock()
+        pool.get_all.return_value = ["a:1", "b:2", "c:3"]
+        udp = MagicMock()
+        g = gossip_mod.Gossip(pool, udp)
+        g.relay({"x": 1}, gossip_mod.KIND_TX, "h", "a:1", stemming=True)
+        peers = udp.send_tx.call_args.kwargs["peers"]
+        assert "a:1" in peers, "the stem predecessor was excluded from the fluff"
+
+    def test_a_public_relay_still_excludes_its_sender(self):
+        # There, excluding is right: they demonstrably have it.
+        pool = MagicMock()
+        pool.get_all.return_value = ["a:1", "b:2", "c:3"]
+        udp = MagicMock()
+        g = gossip_mod.Gossip(pool, udp)
+        g.relay({"x": 1}, gossip_mod.KIND_TX, "h", "a:1", stemming=False)
+        assert "a:1" not in udp.send_tx.call_args.kwargs["peers"]
+
+    def test_a_node_floods_an_item_only_once(self):
+        pool = MagicMock()
+        pool.get_all.return_value = ["a:1", "b:2"]
+        udp = MagicMock()
+        g = gossip_mod.Gossip(pool, udp)
+        for _ in range(5):
+            g.relay({"x": 1}, gossip_mod.KIND_TX, "h", "a:1", stemming=False)
+        assert udp.send_tx.call_count == 1, "flooding must be idempotent per item"

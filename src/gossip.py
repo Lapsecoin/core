@@ -170,7 +170,17 @@ class Gossip:
                 return peer
             # No peer other than whoever handed it to us. Continuing would
             # mean handing it straight back, so this is where the walk ends.
-        self._fluff(item, kind, item_hash, exclude=predecessor)
+
+        # Fluffed with nobody excluded, predecessor included. Excluding
+        # whoever sent us an item is right in the public phase, where they
+        # demonstrably have it, and exactly wrong here: a stem hop relays
+        # without admitting, so the predecessor is the one peer we can be
+        # certain does *not* have this. Excluding it left the whole stem
+        # path uncovered, and on a sparse graph the predecessor is often
+        # the only route back to a region, so the flood ran one direction
+        # and stopped. It buys no privacy either: the fluffing node is
+        # identifiable from the broadcast itself, by everyone.
+        self._fluff(item, kind, item_hash, exclude=None)
         return None
 
     def _stem_peer(self, predecessor):
