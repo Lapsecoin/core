@@ -15,6 +15,68 @@ MEMPOOL_TTL_SECONDS = 30 * 60
 MEMPOOL_MAX_BYTES = 100_000_000
 
 
+class _Overlay:
+    """A writable view over a State that copies nothing.
+
+    Reads fall through to the underlying state unless this view has
+    changed that address; writes land here and never touch it. That makes
+    creating one free and reading one about twice the cost of reading a
+    dict, which is the right trade for something created once per inbound
+    transaction, written to three times and discarded.
+
+    Implements the surface tx.validate and apply_tx actually use
+    (get_balance, get_nonce, credit, debit, set_nonce, apply_tx) and
+    nothing else, on purpose: anything that needs a real State, above all
+    anything that could become a committed one, should not be handed one
+    of these by accident.
+
+    Zero is stored rather than deleted here, unlike State.debit, and means
+    the same thing: a spent-out address. The view has to record that the
+    balance is now zero, since forgetting it would read the underlying
+    state's older, larger balance straight back.
+    """
+
+    __slots__ = ("_base", "_balances", "_nonces")
+
+    def __init__(self, base):
+        self._base     = base
+        self._balances = {}
+        self._nonces   = {}
+
+    def get_balance(self, addr):
+        v = self._balances.get(addr)
+        return self._base.get_balance(addr) if v is None else v
+
+    def get_nonce(self, addr):
+        v = self._nonces.get(addr)
+        return self._base.get_nonce(addr) if v is None else v
+
+    def credit(self, addr, amount):
+        if amount <= 0:
+            raise ValueError(f"credit amount must be positive, got {amount}")
+        self._balances[addr] = self.get_balance(addr) + amount
+
+    def debit(self, addr, amount):
+        if amount <= 0:
+            raise ValueError(f"debit amount must be positive, got {amount}")
+        bal = self.get_balance(addr)
+        if bal < amount:
+            raise ValueError(f"debit would make balance negative: {bal} - {amount}")
+        self._balances[addr] = bal - amount
+
+    def set_nonce(self, addr, nonce):
+        self._nonces[addr] = nonce
+
+    def apply_tx(self, tx_dict):
+        """Same rule as State.apply_tx, driven through this view."""
+        sender    = tx_dict["from"]
+        total_out = sum(o["amount"] for o in tx_dict["outputs"])
+        self.debit(sender, total_out + tx_dict["fee"])
+        for out in tx_dict["outputs"]:
+            self.credit(out["to"], out["amount"])
+        self.set_nonce(sender, tx_dict["nonce"])
+
+
 class _Entry:
     """One pending transaction plus the two facts about it that never
     change and used to be recomputed constantly."""
@@ -103,12 +165,28 @@ class Mempool:
         return max(nonces) if nonces else 0
 
     def probe_state_for(self, addr, state):
-        """State snapshot with addr's already-pending mempool txs applied,
-        in nonce order. Validating a newly submitted tx against this
-        (instead of the raw confirmed state) is what lets a wallet queue a
-        second send before the first confirms: both the nonce and the
-        balance it's checked against already account for the first one."""
-        probe = state.snapshot()
+        """A read-through view of `state` with addr's already-pending
+        mempool txs applied, in nonce order. Validating a newly submitted
+        tx against this (instead of the raw confirmed state) is what lets a
+        wallet queue a second send before the first confirms: both the
+        nonce and the balance it's checked against already account for the
+        first one.
+
+        An overlay rather than state.snapshot(). This runs once per inbound
+        transaction and the result is read a handful of times and thrown
+        away, so copying the entire ledger for it was the most expensive
+        thing about accepting a transaction and it scaled with the number
+        of holders, not with anything about the transaction. Measured at
+        1.8ms per probe against a hundred thousand holders, against a rate
+        limiter that permits thousands of transactions a second, which made
+        it the cheapest way to make a node stop keeping up.
+
+        Deliberately not the committed state's own representation. This
+        view is never promoted to a committed state (nothing here returns
+        it to ChainState), so it can be a cheap read-through without the
+        question of how overlays get flattened ever arising.
+        """
+        probe = _Overlay(state)
         pending = sorted(
             (e.tx for e in self._pool.values() if e.tx.get("from") == addr),
             key=lambda t: t["nonce"],

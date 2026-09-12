@@ -8,9 +8,12 @@ pending_nonce, pending_hashes, prune_stale.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mempool as mempool_mod
+from mempool import Mempool
 import state as state_mod
 from params import TICKS_PER_LAPSE
 from tests.fixtures import address, make_tx, seed_balance
@@ -203,3 +206,67 @@ class TestPruneStale:
         pruned = mp.prune_stale(state=s)
         assert len(pruned) == 0
         assert mp.size() == 1
+
+
+class TestProbeOverlayMatchesASnapshot:
+    """The probe is a read-through view now rather than a full copy of the
+    ledger. Differential: it must answer exactly what a real snapshot
+    would, for the operations tx.validate and apply_tx perform."""
+
+    def _both(self, seed):
+        base = state_mod.State()
+        for addr, bal, nonce in seed:
+            if bal:
+                base.credit(addr, bal)
+            if nonce:
+                base.set_nonce(addr, nonce)
+        return base
+
+    def test_reads_match_for_known_and_unknown_addresses(self):
+        base = self._both([("alice", 500, 2), ("bob", 10, 0)])
+        pool = Mempool()
+        probe = pool.probe_state_for("alice", base)
+        snap = base.snapshot()
+        for addr in ("alice", "bob", "nobody"):
+            assert probe.get_balance(addr) == snap.get_balance(addr)
+            assert probe.get_nonce(addr) == snap.get_nonce(addr)
+
+    def test_writes_match_a_snapshot_and_leave_the_base_alone(self):
+        base = self._both([("alice", 500, 2), ("bob", 10, 0)])
+        probe = Mempool().probe_state_for("alice", base)
+        snap = base.snapshot()
+        for target in (probe, snap):
+            target.debit("alice", 300)
+            target.credit("bob", 300)
+            target.set_nonce("alice", 3)
+        for addr in ("alice", "bob"):
+            assert probe.get_balance(addr) == snap.get_balance(addr)
+            assert probe.get_nonce(addr) == snap.get_nonce(addr)
+        # the underlying state is untouched by either
+        assert base.get_balance("alice") == 500
+        assert base.get_nonce("alice") == 2
+
+    def test_a_spent_out_address_reads_zero_not_its_old_balance(self):
+        # The overlay has to record the zero. Forgetting it would fall
+        # through and read the larger underlying balance straight back,
+        # which is a double spend.
+        base = self._both([("alice", 500, 0)])
+        probe = Mempool().probe_state_for("alice", base)
+        probe.debit("alice", 500)
+        assert probe.get_balance("alice") == 0
+        assert base.get_balance("alice") == 500
+
+    def test_debit_past_zero_still_refuses(self):
+        base = self._both([("alice", 100, 0)])
+        probe = Mempool().probe_state_for("alice", base)
+        with pytest.raises(ValueError):
+            probe.debit("alice", 101)
+
+    def test_pending_txs_are_applied_in_nonce_order(self):
+        base = self._both([(address(0), 10 * TICKS_PER_LAPSE, 0)])
+        pool = Mempool()
+        t1 = make_tx(0, 1, TICKS_PER_LAPSE, base)
+        pool.add(t1)
+        probe = pool.probe_state_for(address(0), base)
+        assert probe.get_nonce(address(0)) == 1
+        assert probe.get_balance(address(0)) == 9 * TICKS_PER_LAPSE
