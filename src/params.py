@@ -120,15 +120,25 @@ TIMESTAMP_SKEW_SECONDS = 30
 # question that can be asked on its own terms.
 MIN_BLOCK_SPACING_SECONDS = 30
 
-# Genesis timestamp: unix time when the chain was launched. Set once manually
-# before the first release and never changed.
+# Genesis timestamp: unix time when the chain was launched, and part of the
+# genesis hash, so changing it starts a different network.
+#
+# Maintained by hand. The release workflow will rewrite it on every release
+# instead, restarting the chain fresh each time, but only while the
+# repository variable TESTNET is set to "True"; it commits and pushes that
+# change, so a run of it leaves a "chore: set GENESIS_TIMESTAMP" commit
+# behind. There are none, so it has never fired and this value is whatever
+# was last committed here deliberately.
+#
+# A source-level TESTNET constant used to sit below this saying the
+# opposite. It fed nothing but a NETWORK_NAME that nothing read, so it
+# could disagree with the repository variable indefinitely without any
+# symptom, and it did. Removed rather than corrected: the variable that
+# governs the behaviour lives in the repository settings, and a second
+# copy of it here that cannot be checked against the first is worse than
+# no copy at all.
 GENESIS_TIMESTAMP = 1787869281
 
 # Number of BEP44 DHT slots used for peer discovery.
 BEP44_SLOT_COUNT = 256
 
-# TESTNET = True: GitHub Actions updates GENESIS_TIMESTAMP on every release,
-# letting the chain restart fresh. Set to False for mainnet; at that point
-# GENESIS_TIMESTAMP is fixed manually once and the workflow never touches it.
-TESTNET      = True
-NETWORK_NAME = "LapseCoin Testnet" if TESTNET else "LapseCoin"
