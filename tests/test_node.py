@@ -60,6 +60,11 @@ def node_env(tmp_path):
 
     gossip  = MagicMock()
     gossip.mark_seen.return_value = False
+    # Same reasoning as mark_seen above: the real one returns False the
+    # first time it sees an item hash, and a bare MagicMock() returns a
+    # truthy Mock, which would read as "already relayed this stem" and
+    # make the node drop every stemming tx a test hands it.
+    gossip.mark_stem_seen.return_value = False
     syncer  = MagicMock()
     # Real check_and_sync returns True only when it actually adopted a
     # better chain (syncer.py docstring); a bare MagicMock() call would
@@ -1429,8 +1434,8 @@ class TestDraw:
         node.open_draw(1)
         # Not exact equality: _draw_closes is now + 4.0 and _draw_anchor is
         # that same now, both taken from time.monotonic(), and (x + 4.0) - x
-        # is only guaranteed exactly 4.0 for some values of x, not all --
-        # whether it round-trips exactly depends on x's own bit pattern,
+        # is only guaranteed exactly 4.0 for some values of x, not all.
+        # Whether it round-trips exactly depends on x's own bit pattern,
         # which here is however long this machine has been up. Passed
         # every local run and failed on a CI runner with a different
         # uptime for exactly that reason; the code is right, the exact

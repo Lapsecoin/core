@@ -8,8 +8,35 @@ blocks are built by picking whichever valid, pending transactions pay
 the most per byte.
 """
 
+import threading
+
+from cachetools import LRUCache
+
 import crypto
 from crypto import canonical_json
+
+# Signature verifications already performed, so a transaction verified on
+# its way into the mempool is not verified again for every block that
+# carries it.
+#
+# FALCON-512 verification measures ~0.09ms, which is nothing on its own and
+# the dominant cost of a full block: at 2500 transactions that is 220ms of
+# signature checking per pass over the block, and a block is validated on
+# arrival, on entering the draw, and again when the height is settled.
+# Nearly all of those transactions came through this node's own mempool
+# minutes earlier and were verified then.
+#
+# Keyed on everything the answer depends on, which crucially includes the
+# signature itself. tx_hash deliberately excludes it (FALCON draws fresh
+# randomness, so re-signing the same content gives a different valid
+# signature, and the hash has to stay stable across that), so keying on
+# tx_hash alone would let a transaction with a good signature vouch for a
+# later copy of the same content carrying a forged one. The key is the
+# signed bytes, the signature, and the key that signed it; change any of
+# the three and it is a different question.
+_SIG_CACHE_SIZE = 50_000
+_sig_cache = LRUCache(maxsize=_SIG_CACHE_SIZE)
+_sig_cache_lock = threading.Lock()
 
 
 def create(from_addr, pubkey_hex, outputs, nonce, fee, secret_key_bytes, memo=""):
@@ -146,11 +173,25 @@ def _check_signature(tx_dict):
         sig_bytes    = bytes.fromhex(sig_hex)
         if crypto.public_key_to_address(pubkey_bytes) != tx_dict["from"]:
             return False, "pubkey does not match from address"
-        if not crypto.verify(crypto.serialize_for_signing(tx_dict), sig_bytes, pubkey_bytes):
+        signed = crypto.serialize_for_signing(tx_dict)
+        key    = (crypto.sha256(signed), sig_hex, pubkey_hex)
+        with _sig_cache_lock:
+            verdict = _sig_cache.get(key)
+        if verdict is None:
+            verdict = crypto.verify(signed, sig_bytes, pubkey_bytes)
+            with _sig_cache_lock:
+                _sig_cache[key] = verdict
+        if not verdict:
             return False, "invalid signature"
     except Exception:
         return False, "malformed pubkey or signature"
     return True, None
+
+
+def clear_signature_cache():
+    """Empty the verification cache. For tests that need a cold path."""
+    with _sig_cache_lock:
+        _sig_cache.clear()
 
 
 def _check_nonce(tx_dict, state):

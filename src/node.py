@@ -213,7 +213,9 @@ class Node:
         # a moment to resolve. See _reorg_to_sibling.
         self._draw_height = None
         self._draw_closes = 0.0
-        # When the open draw was anchored.
+        # When the open draw was anchored. Nothing in the cycle reads this;
+        # it is what says how long a running window actually is, which is
+        # otherwise unobservable from outside (only its end is stored).
         self._draw_anchor = 0.0
         self.running      = False
         self._kek         = None
@@ -623,8 +625,6 @@ class Node:
         # what is_better_than already resolves. Settling a height and
         # working on the next one are independent, so they shouldn't block
         # each other. See _reorg_to_sibling.
-        own_finished = False
-
         # Process anything that arrived in the drain at the very top of
         # this cycle (before `cs` was even known) through the same path
         # the wait loop below uses, see pre_cycle_blocks's comment.
@@ -638,7 +638,6 @@ class Node:
             last_heartbeat = vdf_start
             while True:
                 if _fut.done():
-                    own_finished = True
                     break
 
                 self._retry_unconfirmed_spreads()
@@ -927,12 +926,23 @@ class Node:
         """True if blk is a fully validated candidate for cs.height+1
         extending cs.tip.
 
-        This is the one gate standing between an attacker-crafted,
+        The single place a block is judged against a tip, and the only one.
+        Three separate paths used to run block_mod.validate themselves
+        (arrival, the cycle's candidate list, and picking the winner), and
+        two of the three went straight past this cache, so one block
+        arriving was verified three times over: three VDF proof checks and
+        three passes over every signature it carries. At a full block that
+        is most of a second of pure re-verification on the node loop, for
+        an answer already sitting in a dict. The same hole made a replayed
+        block free to send and expensive to receive, since nothing
+        consulted a verdict before paying for it again.
+
+        This is also the one gate standing between an attacker-crafted,
         zero-cost "block" message and aborting this node's own in-flight
         VDF (via _should_abandon, which this return value feeds). Crafting
         a fake block message costs nothing; the work it would cancel costs
-        ~120s. A block that hasn't cleared real
-        block_mod.validate() must never be allowed to influence that.
+        ~120s. A block that hasn't cleared real block_mod.validate() must
+        never be allowed to influence that.
 
         Deliberately does not relay: _handle_inbound_block is the single
         place that decides propagation, and it has already made that call
@@ -965,14 +975,11 @@ class Node:
 
         valid_peers = []
         for blk in peer_blocks:
-            if blk.get("height") != tip["height"] + 1:
-                continue
-            if blk.get("previous_hash") != tip["hash"]:
-                continue
-            probe = cs.state.snapshot()
-            ok, err = block_mod.validate(blk, probe, cs.chain)
-            if not ok:
-                log.debug("[vdf] peer block rejected: %s", err)
+            # Through _validate_candidate, not a direct block_mod.validate:
+            # everything here has almost certainly been judged already, on
+            # arrival or when it entered the draw, and this is where that
+            # verdict gets reused instead of re-derived. See that method.
+            if not self._validate_candidate(blk, cs):
                 continue
             log.debug("[vdf] peer block accepted  height=%d  hash=%s  builder=%s  tx=%d",
                       blk["height"], blk["hash"][:12],
@@ -1299,9 +1306,15 @@ class Node:
             return
 
         if height == cs.height + 1 and blk.get("previous_hash") == cs.tip["hash"]:
-            ok, err = block_mod.validate(blk, cs.state.snapshot(), cs.chain)
-            if not ok:
-                log.debug("[block] inbound rejected: %s", err)
+            # Through the cache, so a block replayed under a fresh transport
+            # msg_id costs a dict lookup rather than another VDF proof check
+            # and another pass over every signature it carries. Nothing at
+            # this layer deduplicates by item hash before here (the
+            # transport's msg_id dedup does not, since re-sending mints a
+            # new one), so without it the cost of replaying a block at this
+            # node was bounded only by the rate limiter.
+            if not self._validate_candidate(blk, cs):
+                log.debug("[block] inbound rejected at height %d", height)
                 return
             # Only now: a block that hasn't validated proves nothing about
             # the network still producing blocks, and treating it as proof
@@ -1348,6 +1361,14 @@ class Node:
         stemming = msg.get("stemming", False)
 
         tx_hash = tx_mod.tx_hash(tx_dict)
+
+        # Before validating, not after: a stem we have already passed on is
+        # not worth a signature check, and a walk can legitimately come back
+        # round to us (the rule only avoids the predecessor, not every node
+        # already visited). See gossip.mark_stem_seen.
+        if stemming and self.gossip.mark_stem_seen(tx_hash):
+            log.debug("[tx] stem already relayed, dropping  from=%s", origin)
+            return
 
         ok, err = self._validate_for_mempool(tx_dict)
         if not ok:
@@ -1577,10 +1598,16 @@ class Node:
         if discarded < REORG_NOTABLE_DEPTH:
             return
         count = int(self.storage.get_meta("reorg_count", 0) or 0) + 1
-        deepest = max(int(self.storage.get_meta("reorg_deepest", 0) or 0), discarded)
+        previous_deepest = int(self.storage.get_meta("reorg_deepest", 0) or 0)
+        deepest = max(previous_deepest, discarded)
         self.storage.set_meta("reorg_count", count)
         self.storage.set_meta("reorg_deepest", deepest)
-        if discarded >= deepest:
+        # Strictly deeper, compared against the previous record rather than
+        # against the one just updated to include this reorg. Against the
+        # latter every reorg that merely equals the standing record passed,
+        # and rewrote the date to say the record was set today when it was
+        # not.
+        if discarded > previous_deepest:
             self.storage.set_meta("reorg_deepest_at", int(time.time()))
         log.warning("[sync] that was a deep reorg: %d blocks replaced "
                     "(deepest this node has seen: %d, %d in total)",
