@@ -23,9 +23,12 @@ def compute_reward(total_minted: int) -> int:
 
 class State:
     def __init__(self):
-        self._balances    = {}  # addr -> int (ticks)
+        self._balances    = {}  # addr -> int (ticks), never 0, see debit()
         self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
         self.total_minted = 0   # ticks minted via block rewards since genesis
+        # Addresses whose balance or nonce has moved since the last time
+        # this state was written to disk. See dirty_addresses().
+        self._dirty       = set()
 
     # ------------------------------------------------------------------
     # Balance and nonce access
@@ -42,13 +45,11 @@ class State:
         stored, so every entry is a real holder."""
         return list(self._balances.values())
 
-    def get_circulating_supply(self):
-        return sum(self._balances.values())
-
     def credit(self, addr, amount):
         if amount <= 0:
             raise ValueError(f"credit amount must be positive, got {amount}")
         self._balances[addr] = self.get_balance(addr) + amount
+        self._dirty.add(addr)
 
     def debit(self, addr, amount):
         if amount <= 0:
@@ -56,10 +57,50 @@ class State:
         bal = self.get_balance(addr)
         if bal < amount:
             raise ValueError(f"debit would make balance negative: {bal} - {amount}")
-        self._balances[addr] = bal - amount
+        remaining = bal - amount
+        if remaining:
+            self._balances[addr] = remaining
+        else:
+            # Dropped, not stored as 0. get_all_balances' own docstring has
+            # always promised that every entry is a real holder, and the
+            # wealth histogram, the holder count and the distribution pages
+            # all read it that way, but nothing ever removed an address
+            # that spent its last tick. Every such address counted as a
+            # holder forever and sat in the smallest bucket. get_balance
+            # answers 0 for a missing key, so nothing else changes; the
+            # nonce is deliberately left alone, since it is what stops a
+            # spent-out address replaying its old transactions.
+            self._balances.pop(addr, None)
+        self._dirty.add(addr)
 
     def set_nonce(self, addr, nonce):
         self._nonces[addr] = nonce
+        self._dirty.add(addr)
+
+    # ------------------------------------------------------------------
+    # Change tracking for persistence
+    # ------------------------------------------------------------------
+
+    def dirty_addresses(self):
+        """Addresses touched since the last mark_persisted().
+
+        What this exists for: the state table used to be deleted in full
+        and reinserted in full on every single block commit, so the cost of
+        storing one block's worth of change was the size of the whole
+        ledger. Measured at 16ms for a thousand addresses, 180ms for ten
+        thousand, 1.2s for fifty thousand, growing forever and paid inside
+        the commit path every two minutes. A block moves a handful of
+        addresses, so this is the set that actually needs writing.
+
+        An address in here may have been removed from _balances entirely
+        (see debit), so a writer has to treat "touched" as "look it up
+        again", not as "upsert a row that certainly exists".
+        """
+        return frozenset(self._dirty)
+
+    def mark_persisted(self):
+        """Called by storage once the dirty set has been written."""
+        self._dirty.clear()
 
     # ------------------------------------------------------------------
     # Transaction application
@@ -124,11 +165,18 @@ class State:
 
     def snapshot(self):
         """Return a copy for use as a rollback probe. Safe because keys are
-        interned strings and values are ints, both immutable."""
+        interned strings and values are ints, both immutable.
+
+        The dirty set copies across too: a probe that goes on to become the
+        committed state (validate_and_apply hands its probe straight to
+        _apply_block_with_state) has to carry everything still unwritten
+        from before it was taken, or those rows would never reach disk.
+        """
         s = State()
         s._balances    = self._balances.copy()
         s._nonces      = self._nonces.copy()
         s.total_minted = self.total_minted
+        s._dirty       = set(self._dirty)
         return s
 
     # ------------------------------------------------------------------

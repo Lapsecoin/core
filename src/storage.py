@@ -224,8 +224,17 @@ class Storage:
     # State snapshots
     # ------------------------------------------------------------------
 
-    def _save_state_inner(self, state):
-        """Write state rows; must be called inside an existing db.atomic()."""
+    def _rewrite_state_inner(self, state):
+        """Replace every state row. Must be called inside a db.atomic().
+
+        The unconditional form, for the paths where the dirty set cannot be
+        trusted to describe the difference from what is on disk: a reorg
+        swaps in a state that may have been resumed from a cached snapshot
+        taken at some other height, so what changed relative to the table
+        is not something that state knows. Reorgs are rare, a full rewrite
+        is always correct, and doing it here is what lets the common path
+        below be incremental without having to reason about provenance.
+        """
         balances = state.all_balances()
         nonces   = state.all_nonces()
         rows = [
@@ -236,10 +245,47 @@ class Storage:
         if rows:
             State.insert_many(rows).execute()
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
+        state.mark_persisted()
+
+    def _save_state_delta_inner(self, state):
+        """Write only the addresses that moved. Must be called inside a
+        db.atomic().
+
+        The per-block path. See state.dirty_addresses for why: the cost of
+        committing one block used to be the size of the entire ledger,
+        every two minutes, forever.
+
+        An address is looked up rather than assumed present, because a
+        balance that reached zero is removed from the ledger entirely (see
+        State.debit) while its nonce stays. Only an address with neither
+        loses its row.
+        """
+        balances = state.all_balances()
+        nonces   = state.all_nonces()
+        touched  = state.dirty_addresses()
+        if not touched:
+            Emission.insert(key="total_minted",
+                            value=state.total_minted).on_conflict_replace().execute()
+            return
+
+        rows, gone = [], []
+        for addr in touched:
+            if addr in balances or addr in nonces:
+                rows.append({"addr": addr,
+                             "balance": balances.get(addr, 0),
+                             "nonce": nonces.get(addr, 0)})
+            else:
+                gone.append(addr)
+        if gone:
+            State.delete().where(State.addr.in_(gone)).execute()
+        if rows:
+            State.insert_many(rows).on_conflict_replace().execute()
+        Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
+        state.mark_persisted()
 
     def save_state(self, state):
         with db.atomic():
-            self._save_state_inner(state)
+            self._rewrite_state_inner(state)
 
     def load_state(self):
         rows     = State.select()
@@ -267,7 +313,7 @@ class Storage:
             Block.insert(height=blk["height"], hash=blk["hash"],
                          data="", dataz=_pack_block(blk)).on_conflict_replace().execute()
             self._index_block(blk)
-            self._save_state_inner(state)
+            self._save_state_delta_inner(state)
 
     def replace_chain_and_state(self, fork_point, blocks, state):
         """Replace chain tail and state in one atomic transaction."""
@@ -284,7 +330,8 @@ class Storage:
             ]).on_conflict_replace().execute()
             for blk in blocks:
                 self._index_block(blk)
-            self._save_state_inner(state)
+            # Full rewrite, not the delta: see _rewrite_state_inner.
+            self._rewrite_state_inner(state)
 
     def get_meta(self, key, default=None):
         row = Meta.get_or_none(Meta.key == key)

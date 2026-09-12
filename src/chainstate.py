@@ -12,6 +12,16 @@ import block as block_mod
 import state as state_mod
 
 
+def _apply_to_state(state, blk):
+    """Everything a block does to the ledger beyond its own transactions,
+    applied in place. The single definition of that rule; both apply_block
+    and from_chain go through here.
+    """
+    builder = blk.get("builder")
+    if builder:
+        _apply_builder_reward(state, builder, blk)
+
+
 def _apply_builder_reward(state, builder, blk):
     """Credit tx fees and the full newly-minted block reward to the builder.
 
@@ -77,17 +87,26 @@ class ChainState:
     def from_chain(cls, chain):
         """Build a ChainState by replaying a fully trusted chain.
         Used at startup and after sync/reorg.
+
+        Drives _apply_to_state, the same single definition of what a block
+        does to the ledger that apply_block uses, rather than a second
+        hand-written copy of it. Two copies of that rule is one more than
+        the number that can be right, and they would not have to drift far
+        to fork a chain.
+
+        Not written as a fold over apply_block, tempting as that is:
+        apply_block returns a new ChainState and so copies the chain list
+        every time, which over a replay of the whole chain is quadratic in
+        its length. The state is threaded through directly and the chain
+        list is built once, at the end.
         """
         state = state_mod.State()
         for blk in chain:
-            h = blk["height"]
-            if h == 0:
+            if blk["height"] == 0:
                 continue
             for t in blk["transactions"]:
                 state.apply_tx(t)
-            builder = blk.get("builder")
-            if builder:
-                _apply_builder_reward(state, builder, blk)
+            _apply_to_state(state, blk)
         return cls(list(chain), state, cls._cumulative_iterations(chain))
 
     @classmethod
@@ -131,9 +150,7 @@ class ChainState:
         validate_and_apply (which gets post_tx from the validation probe,
         avoiding a second application of all transactions).
         """
-        builder = blk.get("builder")
-        if builder:
-            _apply_builder_reward(post_tx_state, builder, blk)
+        _apply_to_state(post_tx_state, blk)
         new_iterations = self.cumulative_iterations + blk.get("vdf_iterations", 0)
         return ChainState(self.chain + [blk], post_tx_state, new_iterations)
 

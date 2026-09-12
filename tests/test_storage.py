@@ -364,3 +364,86 @@ class TestSchemaMigration:
         store.save_block(blk)
         assert store.load_block(0) == blk
         store.close()
+
+
+class TestIncrementalStateWrites:
+    """save_block_and_state writes only the addresses that moved.
+
+    The state table used to be deleted in full and reinserted in full on
+    every block commit, so storing one block's worth of change cost the
+    size of the whole ledger, every two minutes, forever.
+    """
+
+    def test_only_touched_rows_are_written(self, store):
+        st = state_mod.State()
+        for i in range(50):
+            st.credit(f"addr{i}", 100)
+        store.save_state(st)
+        assert st.dirty_addresses() == frozenset()
+
+        st.credit("addr0", 5)
+        blk = make_block(1, genesis()["hash"], [], 0)
+        store.save_block_and_state(blk, st)
+
+        balances, _nonces, _tm = store.load_state()
+        assert balances["addr0"] == 105
+        assert balances["addr7"] == 100      # untouched rows survive
+        assert len(balances) == 50
+
+    def test_an_emptied_address_loses_its_row_when_it_has_no_nonce(self, store):
+        st = state_mod.State()
+        st.credit("alice", 100)
+        st.credit("bob", 100)
+        store.save_state(st)
+
+        st.debit("alice", 100)
+        blk = make_block(1, genesis()["hash"], [], 0)
+        store.save_block_and_state(blk, st)
+
+        balances, _nonces, _tm = store.load_state()
+        assert "alice" not in balances
+        assert balances["bob"] == 100
+
+    def test_an_emptied_address_keeps_its_row_while_it_has_a_nonce(self, store):
+        st = state_mod.State()
+        st.credit("alice", 100)
+        st.set_nonce("alice", 4)
+        store.save_state(st)
+
+        st.debit("alice", 100)
+        blk = make_block(1, genesis()["hash"], [], 0)
+        store.save_block_and_state(blk, st)
+
+        balances, nonces, _tm = store.load_state()
+        assert balances["alice"] == 0
+        assert nonces["alice"] == 4
+
+    def test_a_reorg_rewrites_the_whole_table(self, store):
+        # replace_chain_and_state takes a state that may have been resumed
+        # from a cached snapshot at some other height, so what differs from
+        # the table is not something that state knows. It rewrites rather
+        # than trusting the dirty set.
+        st = state_mod.State()
+        st.credit("alice", 100)
+        st.credit("bob", 100)
+        store.save_state(st)
+
+        replacement = state_mod.State()
+        replacement.credit("carol", 7)
+        replacement.mark_persisted()        # nothing looks dirty at all
+        blk = make_block(1, genesis()["hash"], [], 0)
+        store.replace_chain_and_state(1, [blk], replacement)
+
+        balances, _nonces, _tm = store.load_state()
+        assert balances == {"carol": 7}
+
+    def test_total_minted_is_written_even_with_nothing_touched(self, store):
+        st = state_mod.State()
+        st.apply_reward_distribution([("alice", 500)])
+        store.save_state(st)
+        st.mark_persisted()
+
+        blk = make_block(1, genesis()["hash"], [], 0)
+        store.save_block_and_state(blk, st)
+        _balances, _nonces, total_minted = store.load_state()
+        assert total_minted == 500

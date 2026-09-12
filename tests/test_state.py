@@ -268,3 +268,84 @@ class TestSnapshot:
         bals = s.all_balances()
         bals["injected"] = 999
         assert "injected" not in s.all_balances()
+
+
+class TestZeroBalancesAreNotHolders:
+    """get_all_balances' docstring has always promised every entry is a
+    real holder, and the holder count, the wealth histogram and the
+    distribution pages all read it that way. Nothing used to remove an
+    address that spent its last tick, so every spent-out address counted
+    as a holder forever and sat in the smallest bucket."""
+
+    def test_spending_everything_removes_the_holder(self):
+        s = state_mod.State()
+        s.credit("alice", 500)
+        s.credit("bob", 10)
+        assert len(s.get_all_balances()) == 2
+        s.debit("alice", 500)
+        assert s.get_all_balances() == [10]
+        assert s.all_balances() == {"bob": 10}
+
+    def test_balance_still_reads_as_zero(self):
+        s = state_mod.State()
+        s.credit("alice", 500)
+        s.debit("alice", 500)
+        assert s.get_balance("alice") == 0
+
+    def test_the_nonce_survives_so_replays_stay_blocked(self):
+        # The balance going is not the account going. Dropping the nonce
+        # with it would let a spent-out address replay its old
+        # transactions.
+        s = state_mod.State()
+        s.credit("alice", 500)
+        s.set_nonce("alice", 7)
+        s.debit("alice", 500)
+        assert s.get_nonce("alice") == 7
+
+    def test_a_partial_spend_keeps_the_holder(self):
+        s = state_mod.State()
+        s.credit("alice", 500)
+        s.debit("alice", 499)
+        assert s.all_balances() == {"alice": 1}
+
+
+class TestDirtyTracking:
+    """Only what moved is written to disk; see storage._save_state_delta_inner."""
+
+    def test_touched_addresses_are_reported(self):
+        s = state_mod.State()
+        s.credit("alice", 10)
+        s.set_nonce("bob", 1)
+        assert s.dirty_addresses() == frozenset({"alice", "bob"})
+
+    def test_marking_persisted_clears_it(self):
+        s = state_mod.State()
+        s.credit("alice", 10)
+        s.mark_persisted()
+        assert s.dirty_addresses() == frozenset()
+
+    def test_a_removed_address_is_still_reported_as_touched(self):
+        # Its row has to be updated too, which means the writer has to hear
+        # about an address that is no longer in the ledger at all.
+        s = state_mod.State()
+        s.credit("alice", 10)
+        s.mark_persisted()
+        s.debit("alice", 10)
+        assert "alice" in s.dirty_addresses()
+
+    def test_a_snapshot_carries_unwritten_changes_forward(self):
+        # validate_and_apply hands its probe straight on to become the
+        # committed state, so anything still unwritten when the probe was
+        # taken has to travel with it or those rows never reach disk.
+        s = state_mod.State()
+        s.credit("alice", 10)
+        probe = s.snapshot()
+        probe.credit("bob", 5)
+        assert probe.dirty_addresses() == frozenset({"alice", "bob"})
+
+    def test_marking_a_snapshot_persisted_leaves_the_original_alone(self):
+        s = state_mod.State()
+        s.credit("alice", 10)
+        probe = s.snapshot()
+        probe.mark_persisted()
+        assert s.dirty_addresses() == frozenset({"alice"})
