@@ -32,8 +32,13 @@ Public app  (default port 8333, externally reachable):
     GET  /api/address/<addr>/balance
          {"address", "balance_ticks", "balance_lapse"}
 
-    GET  /api/address/<addr>/history
+    GET  /api/address/<addr>/history[?limit=<n>&offset=<n>]
          [{"height", "tx_hash", "direction": "sent"|"received", "tx"}, ...]
+         Newest first. Returns everything when limit is omitted, which is
+         what it has always done; limit/offset select a slice. The full
+         count is in the X-Total-Count response header either way, so a
+         caller can page without first fetching everything to find out
+         how much there is.
 
     GET  /api/address/<addr>/valid
          {"address", "valid": true|false}
@@ -914,12 +919,36 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/api/address/<addr>/history", endpoint=pfx+"api_history")
     def api_history(addr):
+        """Newest first. `limit` and `offset` select a slice.
+
+        The page next door has always shown three at a time while this
+        returned every entry an address ever had, which is a strange pair:
+        the caller that needs the least got the most, and the response
+        grew without bound as a chain nobody prunes gets longer.
+
+        Still a bare array and still unbounded by default, because
+        integrators are already polling this and a default page size would
+        silently truncate them. `limit` is the way to ask for less, the
+        total is in X-Total-Count so a caller can page without guessing,
+        and a bounded default belongs in a release that says so.
+        """
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
-        return jsonify([
+        rows = _get_address_history(addr, node)
+        total = len(rows)
+
+        limit  = request.args.get("limit", type=int)
+        offset = max(request.args.get("offset", 0, type=int) or 0, 0)
+        if limit is not None and limit < 0:
+            return jsonify({"error": "limit must not be negative"}), 400
+        rows = rows[offset:] if limit is None else rows[offset:offset + limit]
+
+        resp = jsonify([
             {"height": h, "tx_hash": th, "direction": d, "tx": t}
-            for h, th, d, t in _get_address_history(addr, node)
+            for h, th, d, t in rows
         ])
+        resp.headers["X-Total-Count"] = str(total)
+        return resp
 
     @app.route("/api/mempool", endpoint=pfx+"api_mempool")
     def api_mempool():
