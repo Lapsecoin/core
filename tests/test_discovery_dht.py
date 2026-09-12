@@ -9,7 +9,7 @@ this reason, but nothing downstream ever checked the result: DHTDiscovery
 missing libtorrent didn't degrade DHT discovery, it crashed the entire
 discovery thread (a bare daemon thread in main.py, so the crash is
 silent) and took LAN broadcast, the peer cache, and peer-exchange down
-with it -- every discovery mechanism, not just the DHT-specific one.
+with it: every discovery mechanism, not just the DHT-specific one.
 
 These tests hold discovery_dht.lt at None (simulating the import having
 failed) and check start() degrades instead of raising. No test file for

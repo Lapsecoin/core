@@ -13,6 +13,7 @@ import os
 import queue
 import sys
 import threading
+import time
 
 import argcomplete
 from argcomplete.completers import FilesCompleter
@@ -60,12 +61,16 @@ LOG_FILE_BACKUPS = 4
 # oldest-first and append-only, since rewriting a growing multi-megabyte
 # file to put new lines first would mean re-writing everything after
 # them, on every single line logged, an ever-growing cost for no
-# functional gain. This file is kept deliberately small instead, so a
-# full rewrite on every line is cheap regardless of how long the node has
-# been running, and that's what actually buys "open it and see what's
-# happening now without scrolling."
+# functional gain. This file is kept deliberately small instead, and its
+# rewrites are coalesced (see _NewestFirstTailHandler), so the cost stays
+# flat regardless of how long the node has been running or how much it is
+# logging. That's what actually buys "open it and see what's happening now
+# without scrolling."
 LOG_TAIL_FILE = "lapsecoin.log.latest"
 LOG_TAIL_LINES = 300
+# How often the tail file is rewritten at most. Anything at WARNING or
+# above still writes straight through, see _NewestFirstTailHandler.
+LOG_TAIL_FLUSH_SECONDS = 1.0
 
 # The Windows build is console=False (no console window for the default GUI
 # double-click experience). That leaves two things to handle before any
@@ -98,31 +103,63 @@ if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 0:
     _log_file_handler.doRollover()
 class _NewestFirstTailHandler(logging.Handler):
     """Keeps LOG_TAIL_FILE as just the newest LOG_TAIL_LINES lines,
-    newest at the top, rewritten in full on every record.
+    newest at the top.
 
     A deque(maxlen=...) does the actual capping: once full, appendleft
     silently drops whatever falls off the far end, which is the oldest
     line, exactly once per new one arriving, no separate trim step. The
     file itself is never read back to figure out what to keep, this
     handler's own deque is the only source of truth for its contents.
+
+    Newest-first means the file has to be written whole, since there is no
+    such thing as prepending to a file. What does not follow is writing it
+    whole on every single record, which is what this did: about 30KB
+    rewritten per line, synchronously, holding the logging lock, so every
+    thread that logs waits on it. At --log-level DEBUG the UDP layer logs
+    a line per datagram and this became the busiest writer in the process.
+    Rewrites are coalesced instead: at most one every
+    LOG_TAIL_FLUSH_SECONDS, plus one immediately for anything at WARNING
+    or above, so the file a person opens to see what just went wrong is
+    still current the moment it goes wrong.
     """
 
-    def __init__(self, path, max_lines):
+    def __init__(self, path, max_lines, flush_seconds):
         super().__init__()
         self.path = path
         self.lines = collections.deque(maxlen=max_lines)
+        self._flush_seconds = flush_seconds
+        self._last_write = 0.0
 
     def emit(self, record):
         try:
             self.lines.appendleft(self.format(record))
-            with open(self.path, "w") as f:
-                f.write("\n".join(self.lines))
-                f.write("\n")
+            now = time.monotonic()
+            if (record.levelno >= logging.WARNING
+                    or now - self._last_write >= self._flush_seconds):
+                self._write(now)
         except Exception:
             self.handleError(record)
 
+    def _write(self, now=None):
+        with open(self.path, "w") as f:
+            f.write("\n".join(self.lines))
+            f.write("\n")
+        self._last_write = time.monotonic() if now is None else now
 
-_log_handlers = [_log_file_handler, _NewestFirstTailHandler(LOG_TAIL_FILE, LOG_TAIL_LINES)]
+    def flush(self):
+        # Called by logging.shutdown() at exit, so whatever the coalescing
+        # was still holding lands rather than being lost on the way out.
+        try:
+            if self.lines:
+                self._write()
+        except Exception:
+            pass
+
+
+_log_handlers = [
+    _log_file_handler,
+    _NewestFirstTailHandler(LOG_TAIL_FILE, LOG_TAIL_LINES, LOG_TAIL_FLUSH_SECONDS),
+]
 if sys.stderr is not None:
     _log_handlers.append(logging.StreamHandler())
 
@@ -347,7 +384,7 @@ def main():
     genesis  = block_mod.create_genesis()
     pk_hex   = pk.hex()
 
-    pool     = PeerPool(args.host, args.port, max_peers=args.max_peers)
+    pool     = PeerPool(max_peers=args.max_peers)
     # Bounded so a flood can't grow memory without limit while the node
     # loop is busy. Sized from what can actually arrive between drains: the
     # loop drains about once a second, and peer_udp rate-limits each source

@@ -20,7 +20,7 @@ from peerpool import (
 
 
 def make_pool(max_peers=10):
-    return PeerPool(host="127.0.0.1", port=9000, max_peers=max_peers)
+    return PeerPool(max_peers=max_peers)
 
 
 # ---------------------------------------------------------------------------

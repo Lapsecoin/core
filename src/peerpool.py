@@ -59,12 +59,28 @@ def is_routable_peer_addr(addr: str) -> bool:
 
 class PeerPool:
 
-    def __init__(self, host, port, max_peers=None):
+    def __init__(self, max_peers=None):
         self._max_peers = max_peers if max_peers is not None else MAX_PEERS
         self._peers     = {}          # addr -> last_seen (wall clock)
         self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
         self._info      = {}          # addr -> {"height": int|None, "wallet": str}
+        # Held peers per /24 or /64, kept in step with _peers so the
+        # diversity cap is a lookup rather than a scan. See add().
+        self._subnets   = {}          # subnet key -> count
         self._lock      = threading.Lock()
+
+    def _forget(self, addr):
+        """Drop addr from every index. Callers hold the lock."""
+        if self._peers.pop(addr, None) is None:
+            return
+        self._info.pop(addr, None)
+        subnet = _subnet_key(addr)
+        if subnet is not None:
+            remaining = self._subnets.get(subnet, 0) - 1
+            if remaining > 0:
+                self._subnets[subnet] = remaining
+            else:
+                self._subnets.pop(subnet, None)
 
     # ---- Core operations ----
 
@@ -86,13 +102,15 @@ class PeerPool:
                 return False
             if now_mono < self._fails.get(addr, {}).get("cooldown_until", 0.0):
                 return False
+            # Counted, not recomputed. This used to parse every held peer's
+            # address and build an ip_network object for it on every add,
+            # and add runs on the PING path, so the cost of admitting one
+            # peer was proportional to how many were already held.
             subnet = _subnet_key(addr)
             if subnet is not None:
-                same_subnet = sum(
-                    1 for p in self._peers if _subnet_key(p) == subnet
-                )
-                if same_subnet >= MAX_PEERS_PER_SUBNET:
+                if self._subnets.get(subnet, 0) >= MAX_PEERS_PER_SUBNET:
                     return False
+                self._subnets[subnet] = self._subnets.get(subnet, 0) + 1
             self._peers[addr] = time.time()
         log.debug("[peer] added  addr=%s", addr)
         return True
@@ -140,14 +158,12 @@ class PeerPool:
             self._fails[addr] = {"strikes": strikes,
                                   "cooldown_until": time.monotonic() + cooldown}
             if banned:
-                self._peers.pop(addr, None)
-                self._info.pop(addr, None)
+                self._forget(addr)
                 log.warning("[peer] banned  addr=%s  strikes=%d", addr, strikes)
 
     def remove(self, addr):
         with self._lock:
-            self._peers.pop(addr, None)
-            self._info.pop(addr, None)
+            self._forget(addr)
 
     def evict_stale(self):
         """Remove peers not seen within STALE_SECONDS."""
@@ -155,8 +171,7 @@ class PeerPool:
         with self._lock:
             stale = [p for p, t in self._peers.items() if t < cutoff]
             for p in stale:
-                del self._peers[p]
-                self._info.pop(p, None)
+                self._forget(p)
             remaining = len(self._peers)
         if stale:
             # Not debug. Losing peers is the thing an operator is trying to

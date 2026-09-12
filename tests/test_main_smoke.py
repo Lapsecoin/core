@@ -66,7 +66,7 @@ def run_headless(tmp_path, keyfile, extra_env=None, ready_check=None):
     try:
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                break  # exited on its own -- never happens on a healthy start
+                break  # exited on its own, which never happens on a healthy start
             line = proc.stdout.readline()
             if not line:
                 time.sleep(0.05)

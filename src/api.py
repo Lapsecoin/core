@@ -81,6 +81,7 @@ import logging
 import os
 import secrets
 import sys
+import threading
 
 import markdown
 from flask import Flask, jsonify, render_template, request, send_file
@@ -130,14 +131,14 @@ HOLDER_BUCKET_EDGES = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000]
 def compute_holder_histogram(balances):
     """Count holders per order-of-magnitude LAPSE bucket. Returns a list of
     (label, count) pairs, smallest holders first."""
-    lapse_amounts = [b // TICKS_PER_LAPSE for b in balances]
     edges = HOLDER_BUCKET_EDGES
     counts = [0] * (len(edges) + 1)
-    for amt in lapse_amounts:
-        i = 0
-        while i < len(edges) and amt >= edges[i]:
-            i += 1
-        counts[i] += 1
+    for bal in balances:
+        # Through the shared index helper rather than a second copy of the
+        # same loop, which is what this was. bucket_index_for_lapse' own
+        # docstring promised it "mirrors the bucketing loop exactly", and a
+        # promise like that is better kept by there being one loop.
+        counts[bucket_index_for_lapse(bal // TICKS_PER_LAPSE)] += 1
 
     labels = [f"<{edges[0]:,}"]
     for lo, hi in zip(edges, edges[1:]):
@@ -210,30 +211,83 @@ def _recent_committed_txs(chain, limit):
 
 
 def _get_address_history(addr, node):
-    v = node.view
+    """Every indexed transaction touching addr, newest first.
+
+    Rows are grouped by block and each block is hashed through once, rather
+    than re-hashing its whole transaction list per row. An address with
+    several transactions in one block used to walk that block once per row,
+    recomputing tx_hash (a full canonical serialization plus a digest) for
+    every transaction on every pass.
+    """
+    chain = node.view.chain
+    wanted = {}
+    for height, tx_h in node.storage.get_tx_heights_for_addr(addr):
+        if 0 <= height < len(chain):
+            wanted.setdefault(height, []).append(tx_h)
+
     history = []
-    for h_height, h in node.storage.get_tx_heights_for_addr(addr):
-        chain = v.chain
-        if 0 <= h_height < len(chain):
-            for t in chain[h_height]["transactions"]:
-                if tx_mod.tx_hash(t) == h:
-                    direction = "sent" if t.get("from") == addr else "received"
-                    history.append((h_height, h, direction, t))
-                    break
+    for height, hashes in wanted.items():
+        by_hash = {tx_mod.tx_hash(t): t for t in chain[height]["transactions"]}
+        for tx_h in hashes:
+            t = by_hash.get(tx_h)
+            if t is not None:
+                direction = "sent" if t.get("from") == addr else "received"
+                history.append((height, tx_h, direction, t))
+    history.sort(key=lambda row: row[0], reverse=True)
     return history
 
 
+class _RewardSeries:
+    """The mint reward at each height, replayed from genesis once and
+    extended as the chain grows.
+
+    Two callers needed this and each replayed the whole emission curve from
+    genesis itself, one of them per page view: 45ms at height 100k on a
+    public, unauthenticated page, growing with the chain forever. The
+    series only ever gets longer at the end, so it is computed once and
+    appended to.
+
+    Read from Flask threads, which are many, and extended by whichever gets
+    there first, so extension holds a lock. The list is only ever appended
+    to under it, never rewritten, so a reader holding an index already
+    within range does not need one.
+    """
+
+    def __init__(self):
+        self._rewards = []       # reward minted by the block at each height
+        self._total_minted = 0   # running total after the last entry
+        self._lock = threading.Lock()
+
+    def _extend_to(self, height):
+        with self._lock:
+            while len(self._rewards) <= height:
+                reward = state_mod.compute_reward(self._total_minted)
+                self._rewards.append(reward)
+                if reward >= 1:
+                    self._total_minted += reward
+
+    def reward_at(self, height):
+        if height < 0:
+            return 0
+        if height >= len(self._rewards):
+            self._extend_to(height)
+        return self._rewards[height]
+
+    def prefix(self, count):
+        """Rewards for heights [0, count), for a single walk of the chain."""
+        if count <= 0:
+            return []
+        self.reward_at(count - 1)
+        return self._rewards[:count]
+
+
+_reward_series = _RewardSeries()
+
+
 def _block_reward(chain, height):
-    """Mint reward for the block at `height`, replaying total_minted from
-    genesis the same way _get_mined_blocks_for_addr and the real ledger do,
-    so this always agrees with what the address page shows for the same
-    block. 0 for genesis (no builder, nothing minted)."""
-    total_minted = 0
-    for h in range(height):
-        r = state_mod.compute_reward(total_minted)
-        if r >= 1:
-            total_minted += r
-    return state_mod.compute_reward(total_minted)
+    """Mint reward for the block at `height`. 0 for genesis (no builder,
+    nothing minted)."""
+    return _reward_series.reward_at(height)
 
 
 def _get_mined_blocks_for_addr(addr, node):
@@ -242,20 +296,15 @@ def _get_mined_blocks_for_addr(addr, node):
     Mining rewards never go through the mempool/AddrIndex (they're credited
     directly in chainstate._apply_builder_reward), so they can't be pulled
     from the same tx index as ordinary transfers. The chain is kept fully
-    in memory though, so we can just walk it once, replaying total_minted
-    the same way the ledger does, to recover the exact historical reward
-    for each block.
+    in memory though, so we can just walk it once, reading each height's
+    reward off the shared series rather than re-deriving the emission curve
+    on every lookup.
     """
-    mined = []
-    total_minted = 0
-    for height, blk in enumerate(node.view.chain):
-        reward = state_mod.compute_reward(total_minted)
-        if reward >= 1:
-            total_minted += reward
-        if blk.get("builder") == addr:
-            fees = block_mod.block_fees(blk)
-            mined.append((height, blk["hash"], reward + fees))
-    return mined
+    chain   = node.view.chain
+    rewards = _reward_series.prefix(len(chain))
+    return [(height, blk["hash"], rewards[height] + block_mod.block_fees(blk))
+            for height, blk in enumerate(chain)
+            if blk.get("builder") == addr]
 
 
 def _parse_csv_outputs(outputs_raw):
@@ -702,13 +751,17 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/whitepaper", endpoint=pfx+"whitepaper")
     def whitepaper():
-        import sys
+        # Only the bundle root and this source tree. The working directory
+        # used to be searched too, and markdown passes raw HTML straight
+        # through to a template that renders it with |safe, so whatever
+        # happened to be at ./docs/whitepaper.md when the node was started
+        # decided the contents of a page served on the public port. The
+        # shipped file is the only one that should ever be able to do that.
         base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
-        # Also try one level up in case api.py is in a subdirectory
         for candidate in [
             os.path.join(base, "docs", "whitepaper.md"),
+            # One level up, for a source checkout where this file is in src/.
             os.path.join(os.path.dirname(base), "docs", "whitepaper.md"),
-            os.path.join(os.getcwd(), "docs", "whitepaper.md"),
         ]:
             if os.path.isfile(candidate):
                 try:

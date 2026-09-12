@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import os
+import threading
 
 import nacl.pwhash
 import nacl.secret
@@ -51,12 +52,32 @@ def sign(message_bytes, secret_key_bytes):
     return oqs.Signature("Falcon-512", secret_key_bytes).sign(message_bytes)
 
 
+_verifiers = threading.local()
+
+
+def _verifier():
+    """A FALCON-512 verifier for this thread.
+
+    One per thread rather than one per call: constructing an oqs.Signature
+    allocates and frees a C-side object, which measured about 8% of the
+    cost of a verification, paid once per signature in every block. Kept
+    thread-local rather than shared because a liboqs signature object
+    carries its own state and nothing here promises it is safe to use from
+    two threads at once, and both Flask workers and the node loop verify.
+    """
+    v = getattr(_verifiers, "falcon", None)
+    if v is None:
+        v = oqs.Signature("Falcon-512")
+        _verifiers.falcon = v
+    return v
+
+
 def verify(message_bytes, signature_bytes, public_key_bytes):
     """Verify FALCON-512 signature. Returns True/False."""
     if isinstance(signature_bytes, str):
         signature_bytes = bytes.fromhex(signature_bytes)
     try:
-        return oqs.Signature("Falcon-512").verify(message_bytes, signature_bytes, public_key_bytes)
+        return _verifier().verify(message_bytes, signature_bytes, public_key_bytes)
     except Exception:
         return False
 

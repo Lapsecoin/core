@@ -15,6 +15,19 @@ MEMPOOL_TTL_SECONDS = 30 * 60
 MEMPOOL_MAX_BYTES = 100_000_000
 
 
+class _Entry:
+    """One pending transaction plus the two facts about it that never
+    change and used to be recomputed constantly."""
+
+    __slots__ = ("tx", "entered", "size", "fee_rate")
+
+    def __init__(self, tx_dict):
+        self.tx       = tx_dict
+        self.entered  = time.monotonic()
+        self.size     = tx_mod.tx_size(tx_dict)
+        self.fee_rate = tx_dict.get("fee", 0) / max(self.size, 1)
+
+
 class Mempool:
     """
     The node loop is the only writer. Flask threads are read-only.
@@ -23,7 +36,12 @@ class Mempool:
     """
 
     def __init__(self):
-        # tx_hash -> (tx_dict, entered_monotonic)
+        # tx_hash -> _Entry. Size and fee rate are stored alongside the
+        # transaction rather than derived on demand: both are a full
+        # canonical serialization of it, and both were being recomputed on
+        # every eviction sort (twice per candidate), every removal and
+        # every prune, for values that cannot change once a transaction
+        # exists.
         self._pool: dict = {}
         self._total_bytes = 0
 
@@ -32,35 +50,32 @@ class Mempool:
         if h in self._pool:
             return False, "duplicate"
 
-        size = tx_mod.tx_size(tx_dict)
-        overflow = self._total_bytes + size - MEMPOOL_MAX_BYTES
+        entry = _Entry(tx_dict)
+        overflow = self._total_bytes + entry.size - MEMPOOL_MAX_BYTES
         to_evict = []
         if overflow > 0:
-            rate = tx_mod.fee_rate(tx_dict)
-            by_worst_first = sorted(
-                ((h2, t2) for h2, (t2, _) in self._pool.items()),
-                key=lambda item: tx_mod.fee_rate(item[1]),
-            )
+            by_worst_first = sorted(self._pool.items(),
+                                    key=lambda item: item[1].fee_rate)
             freed = 0
-            for h2, t2 in by_worst_first:
+            for h2, other in by_worst_first:
                 if freed >= overflow:
                     break
-                if tx_mod.fee_rate(t2) >= rate:
+                if other.fee_rate >= entry.fee_rate:
                     break
                 to_evict.append(h2)
-                freed += tx_mod.tx_size(t2)
+                freed += other.size
             if freed < overflow:
                 return False, "mempool full: fee too low to replace pending txs"
 
         self.remove_many(to_evict)
-        self._pool[h] = (tx_dict, time.monotonic())
-        self._total_bytes += size
+        self._pool[h] = entry
+        self._total_bytes += entry.size
         return True, h
 
     def remove(self, tx_hash):
         entry = self._pool.pop(tx_hash, None)
         if entry:
-            self._total_bytes -= tx_mod.tx_size(entry[0])
+            self._total_bytes -= entry.size
 
     def remove_many(self, tx_hashes):
         for h in tx_hashes:
@@ -68,23 +83,23 @@ class Mempool:
 
     def get(self, tx_hash):
         entry = self._pool.get(tx_hash)
-        return entry[0] if entry else None
+        return entry.tx if entry else None
 
     def get_txs_by_hashes(self, tx_hashes):
-        return [self._pool[h][0] for h in tx_hashes if h in self._pool]
+        return [self._pool[h].tx for h in tx_hashes if h in self._pool]
 
     def size(self):
         return len(self._pool)
 
     def all_txs(self):
-        return [tx for tx, _ in self._pool.values()]
+        return [e.tx for e in self._pool.values()]
 
     def pending_nonce(self, addr):
         """Highest nonce in the mempool for addr, or 0 if none. Lets a
         wallet queue up several sends in a row without waiting for each
         one to confirm first."""
-        nonces = [t["nonce"] for t, _ in self._pool.values()
-                  if t.get("from") == addr]
+        nonces = [e.tx["nonce"] for e in self._pool.values()
+                  if e.tx.get("from") == addr]
         return max(nonces) if nonces else 0
 
     def probe_state_for(self, addr, state):
@@ -95,7 +110,7 @@ class Mempool:
         balance it's checked against already account for the first one."""
         probe = state.snapshot()
         pending = sorted(
-            (t for t, _ in self._pool.values() if t.get("from") == addr),
+            (e.tx for e in self._pool.values() if e.tx.get("from") == addr),
             key=lambda t: t["nonce"],
         )
         for t in pending:
@@ -109,7 +124,8 @@ class Mempool:
         """Evict txs that can never become valid: a nonce already superseded
         on chain, or simply too old. Returns list of pruned hashes."""
         now = time.monotonic()
-        pruned = [h for h, (t, entered) in self._pool.items()
-                  if t["nonce"] <= state.get_nonce(t["from"]) or now - entered > ttl_seconds]
+        pruned = [h for h, e in self._pool.items()
+                  if e.tx["nonce"] <= state.get_nonce(e.tx["from"])
+                  or now - e.entered > ttl_seconds]
         self.remove_many(pruned)
         return pruned

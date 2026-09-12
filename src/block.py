@@ -328,7 +328,7 @@ def validate(blk, state, chain):
     return True, None
 
 
-def assemble(tip, txs, builder_addr, iterations, deadline=None):
+def assemble(tip, txs, builder_addr, iterations):
     """Assemble a candidate block from a mempool snapshot.
 
     Pure function: does not touch node state. Groups candidate transactions
@@ -350,7 +350,6 @@ def assemble(tip, txs, builder_addr, iterations, deadline=None):
                 get_vdf_iterations(chain). Taken directly rather than
                 a chain argument so callers that already computed it
                 (to run the VDF itself) don't pay for it twice.
-    deadline:   float unix time; stop packing if exceeded
     """
     next_height = tip["height"] + 1
 
@@ -379,14 +378,8 @@ def assemble(tip, txs, builder_addr, iterations, deadline=None):
         reverse=True,
     )
 
-    hit_deadline = False
     for group in groups:
-        if hit_deadline:
-            break
         for t in group:
-            if deadline is not None and _time.time() >= deadline:
-                hit_deadline = True
-                break
             # Size of this tx as it would appear serialized inside the
             # block. We add 1 for the "," separator between txs (except
             # the first).

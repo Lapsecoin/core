@@ -19,7 +19,7 @@ External interface (called from main.py):
 import logging
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger("ec.http_probe")
 
@@ -44,19 +44,23 @@ def run(pool, interval=120, timeout=2.5):
     (bounded by MAX_WORKERS so one round never issues an unbounded burst of
     requests), then sleep. A peer added or removed between rounds is simply
     picked up or dropped on the next one. No separate bookkeeping needed
-    since pool.snapshot() is always the current membership."""
-    while True:
-        addrs = pool.all_addrs()
-        if addrs:
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool_exec:
+    since pool.snapshot() is always the current membership.
+
+    One executor for the life of the thread, not one per round: rounds are
+    forever, and building and tearing down twenty OS threads every two
+    minutes is a cost with nothing to show for it."""
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS,
+                            thread_name_prefix="http-probe") as pool_exec:
+        while True:
+            addrs = pool.all_addrs()
+            if addrs:
                 futures = {pool_exec.submit(_probe_one, addr, timeout): addr
-                          for addr in addrs}
-                for future in futures:
-                    addr = futures[future]
+                           for addr in addrs}
+                for future in as_completed(futures):
                     try:
                         ok = future.result()
                     except Exception:
                         ok = False
-                    pool.set_http_reachable(addr, ok)
-            log.debug("[http_probe] checked %d peers", len(addrs))
-        time.sleep(interval)
+                    pool.set_http_reachable(futures[future], ok)
+                log.debug("[http_probe] checked %d peers", len(addrs))
+            time.sleep(interval)

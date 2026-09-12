@@ -43,6 +43,7 @@ class DHTDiscovery:
         self.port           = port
         self.node_pubkey_hex = node_pubkey_hex
         self.bootstrapped   = False  # set once dht_bootstrap_alert is seen
+        self._slot_keys     = {}     # slot index -> (sk_64, pk), see _slot_keypair
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -169,6 +170,21 @@ class DHTDiscovery:
         return lt.sha1_hash(raw)
 
     def _slot_keypair(self, slot_index):
+        """The BEP44 keypair for one slot, derived once and kept.
+
+        A pure function of the genesis hash and the slot index, so it never
+        changes for the life of the node, yet get_all re-derived all
+        BEP44_SLOT_COUNT of them on every pass: an Ed25519 key construction
+        plus two hashes per slot, 255 of them, once a minute, forever, for
+        values that were identical every time.
+        """
+        cached = self._slot_keys.get(slot_index)
+        if cached is None:
+            cached = self._derive_slot_keypair(slot_index)
+            self._slot_keys[slot_index] = cached
+        return cached
+
+    def _derive_slot_keypair(self, slot_index):
         seed = hashlib.sha256(
             b"lapsecoin-peers-v1:"
             + self.genesis_hash.encode()

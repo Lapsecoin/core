@@ -16,6 +16,8 @@ settings page shows it as such rather than pretending it can be edited.
 
 import logging
 import os
+import threading
+import time
 
 log = logging.getLogger("ec.settings")
 
@@ -123,14 +125,33 @@ DRAW_WINDOW_SECONDS = Setting(
 ALL = [PRIVATE_ADDRESS, DRAW_WINDOW_SECONDS]
 
 
+# How long a value read from storage is reused before going back to the
+# database for it.
+#
+# Reading a setting looks like an attribute access and is a SQLite query,
+# about a quarter of a millisecond, and the callers are not occasional:
+# Node.open_draw reads the draw window once per candidate entering a draw,
+# and Node.advertised_addr (up to three reads) runs on every inbound
+# GETINFO, from a UDP worker thread. A second of staleness is
+# indistinguishable from none for a value a person edits by hand on a
+# settings page, and set() invalidates immediately anyway, so the page
+# still reflects a change on the very next read.
+CACHE_SECONDS = 1.0
+
+
 class Settings:
     """Reads through env -> storage -> default on every access, so a value
     changed from the settings page takes effect without a restart."""
 
-    def __init__(self, storage):
+    def __init__(self, storage, cache_seconds=CACHE_SECONDS):
         self.storage = storage
+        self._cache_seconds = cache_seconds
+        self._cache = {}          # setting key -> (value, read_at)
+        self._lock  = threading.Lock()
 
     def get(self, setting):
+        # The environment always wins and never touches the database, so it
+        # is checked first and is not what the cache is for.
         raw = os.environ.get(setting.env_name)
         if raw is not None:
             try:
@@ -138,6 +159,19 @@ class Settings:
             except (TypeError, ValueError):
                 log.warning("[settings] %s is not a valid %s, ignoring",
                             setting.env_name, setting.kind.__name__)
+
+        now = time.monotonic()
+        with self._lock:
+            cached = self._cache.get(setting.key)
+        if cached is not None and now - cached[1] < self._cache_seconds:
+            return cached[0]
+
+        value = self._read_stored(setting)
+        with self._lock:
+            self._cache[setting.key] = (value, now)
+        return value
+
+    def _read_stored(self, setting):
         raw = self.storage.get_meta("setting_" + setting.key)
         if raw is not None:
             try:
@@ -149,6 +183,8 @@ class Settings:
 
     def set(self, setting, value):
         self.storage.set_meta("setting_" + setting.key, str(value))
+        with self._lock:
+            self._cache.pop(setting.key, None)
 
     def forced_by_env(self, setting):
         return os.environ.get(setting.env_name) is not None

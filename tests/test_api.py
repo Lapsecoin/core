@@ -127,7 +127,7 @@ class TestPeersPage:
 
     def _client(self):
         node, cs = fresh()
-        pool = peerpool_mod.PeerPool(host="0.0.0.0", port=1234)
+        pool = peerpool_mod.PeerPool()
         pool.add("1.2.3.4:9000")
         pool.update_info("1.2.3.4:9000", height=5, wallet="peer.wallet.addr", version="0.2.0")
         pool.add("5.6.7.8:9000")  # no update_info, height/wallet/version unknown
@@ -159,7 +159,7 @@ class TestUpdateNav:
         from update_check import UpdateChecker
 
         node, _ = fresh()
-        pool = peerpool_mod.PeerPool(host="0.0.0.0", port=1234)
+        pool = peerpool_mod.PeerPool()
         checker = UpdateChecker(local_version="0.1.1")
         checker.severity = severity
         checker.latest_version = "9.9.9"
@@ -197,7 +197,7 @@ class TestSettingsValidation:
 
     def _client(self):
         node, cs = fresh()
-        pool = peerpool_mod.PeerPool(host="0.0.0.0", port=1234)
+        pool = peerpool_mod.PeerPool()
         app = api.create_private_app(node, pool)
         return app.test_client(), node
 

@@ -26,7 +26,7 @@ class _FakeUDP:
 
 
 def _pool_with(*addrs):
-    pool = peerpool_mod.PeerPool("1.2.3.4", 8333)
+    pool = peerpool_mod.PeerPool()
     for addr in addrs:
         pool.add(addr)
     return pool
@@ -95,5 +95,5 @@ class TestProbeRound:
         assert height is None
 
     def test_no_peers_is_a_no_op(self):
-        pool = peerpool_mod.PeerPool("1.2.3.4", 8333)
+        pool = peerpool_mod.PeerPool()
         assert info_probe.probe_round(pool, _FakeUDP({})) == 0

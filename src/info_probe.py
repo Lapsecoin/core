@@ -36,7 +36,7 @@ External interface (called from main.py):
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger("ec.info_probe")
 
@@ -50,7 +50,7 @@ def _probe_one(udp, addr, timeout):
         return None
 
 
-def probe_round(pool, udp, timeout=3.0):
+def probe_round(pool, udp, timeout=3.0, executor=None):
     """Ask every currently-known peer for its tip info once, in parallel
     (bounded by MAX_WORKERS so one round never issues an unbounded burst),
     and record what came back. Returns how many answered.
@@ -61,29 +61,39 @@ def probe_round(pool, udp, timeout=3.0):
     addrs = pool.all_addrs()
     if not addrs:
         return 0
+    if executor is None:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as own:
+            return _probe_with(pool, udp, addrs, timeout, own)
+    return _probe_with(pool, udp, addrs, timeout, executor)
+
+
+def _probe_with(pool, udp, addrs, timeout, executor):
     answered = 0
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool_exec:
-        futures = {pool_exec.submit(_probe_one, udp, addr, timeout): addr
-                   for addr in addrs}
-        for future in futures:
-            addr = futures[future]
-            try:
-                info = future.result()
-            except Exception:
-                info = None
-            if not isinstance(info, dict):
-                continue
-            answered += 1
-            pool.update_info(addr,
-                             height=info.get("height"),
-                             wallet=info.get("wallet", ""),
-                             version=info.get("version", ""))
+    futures = {executor.submit(_probe_one, udp, addr, timeout): addr
+               for addr in addrs}
+    for future in as_completed(futures):
+        try:
+            info = future.result()
+        except Exception:
+            info = None
+        if not isinstance(info, dict):
+            continue
+        answered += 1
+        pool.update_info(futures[future],
+                         height=info.get("height"),
+                         wallet=info.get("wallet", ""),
+                         version=info.get("version", ""))
     log.debug("[info_probe] asked %d peers, %d answered", len(addrs), answered)
     return answered
 
 
 def run(pool, udp, interval=60, timeout=3.0):
-    """Forever: one probe_round, then sleep."""
-    while True:
-        probe_round(pool, udp, timeout=timeout)
-        time.sleep(interval)
+    """Forever: one probe_round, then sleep.
+
+    One executor for the life of the thread rather than one per round; see
+    http_probe.run for why."""
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS,
+                            thread_name_prefix="info-probe") as executor:
+        while True:
+            probe_round(pool, udp, timeout=timeout, executor=executor)
+            time.sleep(interval)

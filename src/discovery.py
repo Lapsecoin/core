@@ -286,40 +286,49 @@ class Discovery:
         log.info("[peers] trying %d new address(es): %s",
                  len(fresh), ", ".join(fresh))
 
-        admitted = 0
-        for addr in fresh:
-            if self.pool.count() >= self.pool._max_peers:
-                break
-
-            if self._ping_and_admit(addr):
-                admitted += 1
-                continue
-
-            # Ping failed; try hole punch via each existing peer
-            punched = False
-            for relay in self.pool.get_all()[:PUNCH_ATTEMPTS]:
-                if self._punch_and_admit(relay, addr):
-                    admitted += 1
-                    punched = True
-                    break
-            if not punched:
-                # No relay available. Fire UDP bursts directly and re-ping.
-                # Both nodes discover each other via DHT simultaneously, so
-                # both will fire toward each other at roughly the same time,
-                # which is sufficient to open symmetric NAT holes without a relay.
-                log.debug("[peer] no relay, direct punch  addr=%s", addr)
-                self.udp.punch_direct(addr)
-                time.sleep(PUNCH_WAIT)
-                if self._ping_and_admit(addr):
-                    admitted += 1
-                else:
-                    log.debug("[peer] unreachable (no punch)  addr=%s", addr)
+        # Probed in parallel, on the pool, because a candidate is almost
+        # entirely waiting. One unreachable address costs a PING timeout,
+        # then up to PUNCH_ATTEMPTS relayed punches, then a direct one,
+        # each with its own wait: about fifty seconds of nothing happening.
+        # Run one after another on this thread, as this was, a batch from a
+        # DHT round could hold the discovery loop for many minutes, and
+        # that loop is also what expires dead peers, processes DHT alerts,
+        # re-broadcasts on the LAN and saves the peer cache. All of it
+        # stopped while the node waited on addresses that were never going
+        # to answer.
+        results = list(self._executor.map(self._try_candidate, fresh))
+        admitted = sum(1 for ok in results if ok)
 
         if admitted:
             log.info("[peers] connected to %d of them, %d peer(s) in total",
                      admitted, self.pool.count())
         else:
             log.info("[peers] none of those %d could be reached", len(fresh))
+
+    def _try_candidate(self, addr: str) -> bool:
+        """Everything we will try to reach one candidate: a plain ping, then
+        a punch relayed through peers we already have, then a direct punch.
+        Returns whether it ended up admitted."""
+        if self.pool.count() >= self.pool._max_peers:
+            return False
+        if self._ping_and_admit(addr):
+            return True
+
+        for relay in self.pool.get_all()[:PUNCH_ATTEMPTS]:
+            if self._punch_and_admit(relay, addr):
+                return True
+
+        # No relay worked. Fire UDP bursts directly and re-ping. Both nodes
+        # discover each other via DHT simultaneously, so both will fire
+        # toward each other at roughly the same time, which is sufficient to
+        # open symmetric NAT holes without a relay.
+        log.debug("[peer] no relay, direct punch  addr=%s", addr)
+        self.udp.punch_direct(addr)
+        time.sleep(PUNCH_WAIT)
+        if self._ping_and_admit(addr):
+            return True
+        log.debug("[peer] unreachable (no punch)  addr=%s", addr)
+        return False
 
     def _ping_and_admit(self, addr: str) -> bool:
         """UDP PING addr. If PONG arrives, exchange peers and admit. Returns True on success."""
