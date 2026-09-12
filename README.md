@@ -46,7 +46,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Optionally, `pip install libtorrent>=2.0.0` too, for DHT-based peer discovery. It's a C extension with real wheel gaps on some platforms (Windows in particular, where a new Python release regularly goes months without one), so it's left out of the required list rather than blocking the rest of the install; without it this node still finds peers via LAN broadcast, its saved peer cache, and any peer given on the command line.
+If that fails on `libtorrent` specifically: it's a C extension with real wheel gaps on some platforms (Windows in particular, where a new Python release regularly goes months without a published one), so it can be the one line standing between you and a working install. Delete it from `requirements.txt` and install everything else, then get a `lapsecoin_peers.json` from someone else's running node (their peers page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting. This node reads that file to seed known-good addresses on startup regardless of `libtorrent`, so you still connect without it, just via a peer someone handed you instead of the DHT finding one on its own.
 </details>
 
 <details>
@@ -143,7 +143,6 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 - Python 3.11+
 - chiavdf (VDF computation and verification)
 - liboqs-python (FALCON-512 signatures)
-- libtorrent (optional, DHT peer discovery; see "Running from source" above)
 - See `requirements.txt` for the full list
 </details>
 

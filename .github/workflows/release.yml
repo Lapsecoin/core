@@ -143,17 +143,12 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install -r requirements.txt
-          # Not in requirements.txt: both are C extensions with real
-          # PyPI wheel-availability gaps of their own (miniupnpc has no
-          # prebuilt wheels at all; libtorrent's Windows wheels regularly
-          # lag a new Python release by months), so requiring either
-          # there means a plain source install can fail on machines that
-          # would otherwise run this app just fine -- DHT discovery is
-          # one of several ways this app finds peers, not the only one,
-          # see discovery.py. Installed here instead, purely for the
-          # release binary, which should still ship with both when the
-          # CI runner (which does have a compiler) can build them.
-          pip install pyinstaller cairosvg Pillow miniupnpc libtorrent>=2.0.0
+          # Not in requirements.txt: it's a C extension with no prebuilt
+          # wheels, so requiring it there breaks plain source installs on
+          # machines without a compiler (see git history). CI runners have
+          # one by default, so it's installed here instead, purely for the
+          # release binary; the app already runs fine without it either way.
+          pip install pyinstaller cairosvg Pillow miniupnpc
 
       - name: Install appimagetool
         run: |
@@ -214,17 +209,12 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          # Not in requirements.txt: both are C extensions with real
-          # PyPI wheel-availability gaps of their own (miniupnpc has no
-          # prebuilt wheels at all; libtorrent's Windows wheels regularly
-          # lag a new Python release by months), so requiring either
-          # there means a plain source install can fail on machines that
-          # would otherwise run this app just fine -- DHT discovery is
-          # one of several ways this app finds peers, not the only one,
-          # see discovery.py. Installed here instead, purely for the
-          # release binary, which should still ship with both when the
-          # CI runner (which does have a compiler) can build them.
-          pip install pyinstaller cairosvg Pillow miniupnpc libtorrent>=2.0.0
+          # Not in requirements.txt: it's a C extension with no prebuilt
+          # wheels, so requiring it there breaks plain source installs on
+          # machines without a compiler (see git history). CI runners have
+          # one by default, so it's installed here instead, purely for the
+          # release binary; the app already runs fine without it either way.
+          pip install pyinstaller cairosvg Pillow miniupnpc
 
       - name: Generate icons
         shell: pwsh
