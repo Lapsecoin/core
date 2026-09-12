@@ -25,14 +25,21 @@ EMISSION_HALFLIFE = 5_000_000  # blocks (~20 years at 2 min/block)
 EMISSION_DECAY_DENOMINATOR = 10 ** 40
 EMISSION_DECAY_NUMERATOR   = 1386294265029292275522718605160789
 
+# The cadence the VDF iteration count is calibrated to hit (see
+# VDF_ITERATIONS). Nothing reads this to make a decision, since the real
+# pace is always measured from the chain's own timestamps rather than
+# assumed; it is here to name the target that calibration aims at.
 BLOCK_CYCLE_SECONDS = 120
 
-BLOCK_SIZE_LIMIT = 10_000_000  # 10 MB hard cap, raised only by network upgrade
+# 10 MB hard cap, raised only by network upgrade. The UDP transport sizes
+# its own chunking and decompression ceilings from this (see
+# peer_udp.MAX_MESSAGE_BYTES) so the two cannot drift apart: they did, and
+# the half of this limit the wire could not carry was unusable and
+# silently so.
+BLOCK_SIZE_LIMIT = 10_000_000
 
-MAX_PEERS           = 125
-PEER_CHECK_INTERVAL = 60
+MAX_PEERS = 125
 
-ADDRESS_BITS       = 132
 ADDRESS_WORD_COUNT = 12
 WORD_BITS          = 11
 

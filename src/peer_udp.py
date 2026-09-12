@@ -66,7 +66,6 @@ Module-level:
 """
 
 import ipaddress
-import json
 import logging
 import secrets
 import select
@@ -76,6 +75,10 @@ import threading
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor
+
+import msgpack
+
+from params import BLOCK_SIZE_LIMIT
 
 log = logging.getLogger("ec.udp")
 
@@ -149,21 +152,64 @@ LAN_DISCOVERY_PORT = 18334
 
 PORT_BIND_RETRIES = 5   # how many ascending ports to try if the requested one is taken
 
+# The PING burst that opens a NAT hole: enough datagrams, spaced widely
+# enough, to cover the gap between when we start punching and when the
+# other side does. See UDPTransport._punch_burst.
+PUNCH_BURST_COUNT   = 8
+PUNCH_BURST_SPACING = 0.05
+
 # Caps against a spoofed-source amplification attack: an attacker who forges
 # a peer's source address in a GETSYNC and requests the whole chain would
 # otherwise turn one small datagram into a multi-MB reply blasted at the
-# victim. This bounds both how many blocks one request can pull and how
-# large a single reassembled message (chunk_total) may claim to be.
+# victim. This bounds how many blocks one request can pull.
 MAX_SYNC_BLOCKS   = 500
-MAX_CHUNK_TOTAL   = 2000   # ~2.8MB reassembled, well above any real message
 
-# Ceilings on decompressing an inbound payload, see _inflate. The earlier
-# single ceiling reused MAX_CHUNK_TOTAL * MAX_CHUNK_SIZE, which is a limit
-# on wire bytes and the wrong shape for a limit on decompressed ones: it
-# left a sync page that the transport could perfectly well deliver being
-# refused for inflating past a number that describes something else.
+# Envelope room on top of a block: the genesis hash, the stemming flag, and
+# msgpack's own framing. Small and fixed, but the ceilings below have to
+# clear it or a block exactly at the consensus limit misses by a few bytes.
+MESSAGE_ENVELOPE_BYTES = 4096
+
+# The largest message this transport undertakes to carry, derived from the
+# consensus block limit rather than picked independently of it.
+#
+# These two numbers used to be chosen on their own, and they landed under
+# BLOCK_SIZE_LIMIT: at 2000 chunks the wire carried 2.8MB, real blocks
+# compress about 1.79x (FALCON signatures are random and do not compress),
+# so anything past roughly 5MB could be built and validated by everyone
+# and received by nobody. The receiver dropped it with no log line and the
+# builder had no way to find out, so half the block limit was unusable and
+# silently so. Deriving them here is what stops the two drifting apart
+# again: raise BLOCK_SIZE_LIMIT and the transport follows.
+#
+# Sized for the worst case rather than the typical one. Compression is not
+# guaranteed to help (a block full of signatures barely compresses, and a
+# hostile sender can make sure of it), so the chunk count assumes a payload
+# that did not shrink at all.
+MAX_MESSAGE_BYTES = BLOCK_SIZE_LIMIT + MESSAGE_ENVELOPE_BYTES
+MAX_CHUNK_TOTAL   = -(-MAX_MESSAGE_BYTES // MAX_CHUNK_SIZE)
+
+# Ceiling on decompressing an inbound payload, see _inflate. Two bounds,
+# because one number cannot do this job. The ratio stops a small payload
+# from expanding without limit, which is the actual bomb: an attacker has
+# to spend proportionally to what we allocate. The absolute cap stops a
+# large one, since a ratio alone would license hundreds of MB from a
+# message the wire already permits. Real traffic is nowhere near either: a
+# block expands about 1.8x and the best case measured, a page of
+# near-identical empty blocks, about 12x.
 MAX_INFLATE_RATIO = 200                 # vs ~1.8x for a block, ~12x for a page
-MAX_INFLATE_BYTES = 8 * 1024 * 1024
+MAX_INFLATE_BYTES = MAX_MESSAGE_BYTES
+
+# Total bytes held across every in-flight reassembly, all senders together.
+#
+# The per-message ceiling above is now large enough that it cannot be the
+# only bound: nothing has ever capped how many partial messages are held
+# at once, so at MAX_CHUNK_TOTAL a peer table could pin gigabytes by
+# starting a message each and never finishing it. That was survivable only
+# because a single message was capped at 2.8MB. Bounded here instead, so
+# raising the per-message ceiling costs memory that is still bounded in
+# total. A refused chunk is not a refused message: the sender's own ACK
+# loop resends, and by then the stale buffers have aged out.
+REASSEMBLY_MAX_BYTES = 64 * 1024 * 1024
 
 # Per-source-IP token bucket: caps how many datagrams/sec one address can
 # push into the worker pool, so a flood (PING or otherwise) from one sender
@@ -182,6 +228,23 @@ RATE_LIMIT_BURST    = 100
 # exhausted, never hanging.
 CHUNK_ACK_TIMEOUT    = 1.5   # seconds to wait for acks before a retransmit round
 CHUNK_ACK_MAX_ROUNDS = 4
+
+# Workers for the ack waiters (see UDPTransport._acks). Each one is asleep
+# on an Event for nearly all of its life, so this is sized by how many
+# chunked sends can plausibly be in flight (a fan-out per peer, plus sync
+# replies) rather than by anything to do with CPU.
+ACK_WAITER_THREADS = 64
+
+# A receiver acks its chunk holdings while a multi-chunk message arrives.
+# Acking after every single chunk, which is what this did, makes the ack
+# traffic quadratic in chunk count: a 1300-chunk block drew 1300 acks
+# carrying an average of 650 indices each, so the acks competed for the
+# same path as the chunks they were acknowledging. Acking every N chunks
+# (and always on the last one) keeps the retransmit loop fed with the same
+# information at a small fraction of the datagrams. The format is
+# unchanged, so a peer on either side of this change still understands the
+# other; it only sends fewer.
+ACK_EVERY_CHUNKS = 32
 
 # How many peers a multi-chunk message is sent to at once.
 #
@@ -281,19 +344,11 @@ def _is_lan_source(host: str) -> bool:
 
 
 def _encode(data: dict) -> bytes:
-    try:
-        import msgpack
-        return msgpack.packb(data, use_bin_type=True)
-    except ImportError:
-        return json.dumps(data).encode()
+    return msgpack.packb(data, use_bin_type=True)
 
 
 def _decode(raw: bytes) -> dict:
-    try:
-        import msgpack
-        return msgpack.unpackb(raw, raw=False)
-    except ImportError:
-        return json.loads(raw.decode())
+    return msgpack.unpackb(raw, raw=False)
 
 
 def probe_lan_ports(genesis_hash: str, wait: float = 1.5,
@@ -449,37 +504,94 @@ def _split(payload: bytes):
     return chunks
 
 
+class _Partial:
+    """One message being reassembled. Chunks live in their own dict rather
+    than alongside bookkeeping keys: the previous version kept both in one
+    dict and tested completeness with `len(rec) - 2 == rec["total"]`, which
+    counts keys rather than checking that the ones it is about to read are
+    actually there. A sender claiming three chunks and sending indices
+    10, 11, 12 satisfied that count and then raised KeyError joining
+    range(3), inside a worker whose exception nobody sees, leaving the
+    buffer behind. Indices are range-checked on the way in now, and
+    completeness is a plain count of what was stored."""
+
+    __slots__ = ("total", "ts", "chunks", "nbytes")
+
+    def __init__(self, total):
+        self.total  = total
+        self.ts     = time.monotonic()
+        self.chunks = {}
+        self.nbytes = 0
+
+    def add(self, idx, payload):
+        previous = self.chunks.get(idx)
+        if previous is not None:
+            self.nbytes -= len(previous)
+        self.chunks[idx] = payload
+        self.nbytes += len(payload)
+
+    def complete(self):
+        return len(self.chunks) == self.total
+
+    def join(self):
+        return b"".join(self.chunks[i] for i in range(self.total))
+
+
 class _Reassembler:
     """Reassemble chunked messages per (sender_addr, msg_id)."""
 
-    def __init__(self):
-        self._pending = {}   # (addr, msg_id) -> {idx: payload_bytes, "total": int, "ts": float}
-        self._lock    = threading.Lock()
+    def __init__(self, max_bytes=REASSEMBLY_MAX_BYTES):
+        self._pending  = {}   # (addr, msg_id) -> _Partial
+        self._lock     = threading.Lock()
+        self._max_bytes = max_bytes
+        self._held     = 0    # total bytes across every _Partial
 
     def feed(self, addr, msg_id, chunk_idx, chunk_total, payload):
         """Return complete payload bytes when all chunks arrive, else None."""
         if chunk_total == 1:
             return payload  # single-chunk, no reassembly needed
         if chunk_total <= 0 or chunk_total > MAX_CHUNK_TOTAL:
-            return None  # bogus or oversized claim; refuse to allocate for it
+            # Not silent any more. This is exactly how a block too large for
+            # the transport used to disappear: refused here, no log, and the
+            # builder left to wonder why nobody took its height.
+            log.debug("[udp] refusing %s: claims %d chunks, cap is %d",
+                      addr, chunk_total, MAX_CHUNK_TOTAL)
+            return None
+        if not 0 <= chunk_idx < chunk_total:
+            log.debug("[udp] refusing %s: chunk %d outside a %d-chunk message",
+                      addr, chunk_idx, chunk_total)
+            return None
 
         key = (addr, msg_id)
         with self._lock:
-            if key not in self._pending:
-                self._pending[key] = {"total": chunk_total, "ts": time.monotonic()}
-            rec = self._pending[key]
-            rec[chunk_idx] = payload
-            if len(rec) - 2 == rec["total"]:   # -2 for "total" and "ts" keys
-                full = b"".join(rec[i] for i in range(rec["total"]))
+            rec = self._pending.get(key)
+            if rec is None:
+                if self._held + len(payload) > self._max_bytes:
+                    log.debug("[udp] reassembly buffer full (%d bytes), "
+                              "dropping a new message from %s", self._held, addr)
+                    return None
+                rec = _Partial(chunk_total)
+                self._pending[key] = rec
+            elif self._held + len(payload) > self._max_bytes:
+                log.debug("[udp] reassembly buffer full (%d bytes), "
+                          "dropping a chunk from %s", self._held, addr)
+                return None
+            before = rec.nbytes
+            rec.add(chunk_idx, payload)
+            self._held += rec.nbytes - before
+            if rec.complete():
+                full = rec.join()
                 del self._pending[key]
+                self._held -= rec.nbytes
                 return full
         return None
 
     def evict_stale(self, max_age=60.0):
         cutoff = time.monotonic() - max_age
         with self._lock:
-            stale = [k for k, v in self._pending.items() if v["ts"] < cutoff]
+            stale = [k for k, v in self._pending.items() if v.ts < cutoff]
             for k in stale:
+                self._held -= self._pending[k].nbytes
                 del self._pending[k]
 
     def held_chunks(self, addr, msg_id):
@@ -487,12 +599,13 @@ class _Reassembler:
         Returns [] once the message has completed (feed() already deleted
         the entry). Callers must special-case the completing feed() call
         themselves if they need to ACK all indices in that case."""
-        key = (addr, msg_id)
         with self._lock:
-            rec = self._pending.get(key)
-            if rec is None:
-                return []
-            return [k for k in rec if isinstance(k, int)]
+            rec = self._pending.get((addr, msg_id))
+            return list(rec.chunks) if rec is not None else []
+
+    def held_bytes(self):
+        with self._lock:
+            return self._held
 
 
 class _PendingSync:
@@ -507,6 +620,13 @@ class _PendingSync:
     def feed(self, chunk_idx, chunk_total, payload):
         if chunk_total <= 0 or chunk_total > MAX_CHUNK_TOTAL:
             return  # bogus or oversized claim from a malicious sync peer
+        if not 0 <= chunk_idx < chunk_total:
+            # Same range check the reassembler now makes, and it matters
+            # more here: joining range(total) over out-of-range indices
+            # raised KeyError inside the receive worker, so the event was
+            # never set and request_sync sat out its full 30s timeout for
+            # an answer that had already arrived and been thrown away.
+            return
         self.total = chunk_total
         self.chunks[chunk_idx] = payload
         if len(self.chunks) == chunk_total:
@@ -566,6 +686,18 @@ class UDPTransport:
         self._fanout    = ThreadPoolExecutor(max_workers=FANOUT_CONCURRENCY,
                                              thread_name_prefix="udp-fan")
         self._fanout_slots = threading.BoundedSemaphore(FANOUT_PENDING_MAX)
+        # And separate again for the ack waiters, for the same reason one
+        # step further on. _send_chunked used to put _retransmit_until_acked
+        # on _executor, which is precisely the sharing the comment above
+        # forbids: a waiter holds its worker for up to
+        # CHUNK_ACK_MAX_ROUNDS * CHUNK_ACK_TIMEOUT seconds against a peer
+        # that never acks, and one transaction fluffed to a full peer table
+        # queues one per peer. Sixteen of those and the node stops reading
+        # its socket entirely, right when it is being told about the block
+        # it is racing. These threads spend their lives asleep on an Event,
+        # so there can be many more of them than there are cores.
+        self._acks      = ThreadPoolExecutor(max_workers=ACK_WAITER_THREADS,
+                                             thread_name_prefix="udp-ack")
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -633,6 +765,7 @@ class UDPTransport:
                 pass
         self._executor.shutdown(wait=False)
         self._fanout.shutdown(wait=False)
+        self._acks.shutdown(wait=False)
 
     # ------------------------------------------------------------------
     # Public send operations
@@ -679,15 +812,42 @@ class UDPTransport:
         entirely in gossip.py. This layer only puts bytes on the wire, and
         deliberately does not relay on the receiver's behalf (see the
         MT_BLOCK branch in _dispatch)."""
+        log.debug("[udp] send_block height=%s stem=%s",
+                  block.get("height"), stemming)
+        self._broadcast(MT_BLOCK, {"block": block}, peers, stemming, "block")
+
+    def send_tx(self, tx: dict, peers=None, stemming: bool = False):
+        """Send a tx to `peers` (default: all). stemming as in send_block."""
+        # Chunked, not a single datagram. A transaction carries a FALCON
+        # signature and key, so it is ~3.4KB and was going out as one
+        # oversized datagram that IP-fragments into three, every one of
+        # which has to survive or the transaction is lost. Fragmented UDP
+        # is exactly what NAT and middleboxes drop, so this was quietly
+        # costing transaction propagation. Compressed for the same reason
+        # blocks are, which also takes it to two chunks rather than three.
+        self._broadcast(MT_TX, {"tx": tx}, peers, stemming, "transaction")
+
+    def _broadcast(self, msg_type: int, body: dict, peers, stemming: bool,
+                   what: str):
+        """Compress `body` once and put it on the wire to every peer.
+
+        One path for blocks and transactions, which were two copies of this
+        with one difference that turned out to be a bug: the block copy
+        handed a paced send to the fan-out pool, and the transaction copy
+        did not. A compressed transaction is two chunks, so it paced, so
+        fluffing one walked the peer table on the caller's own thread at
+        5ms a chunk. That caller is the node loop, which means a hundred
+        peers cost it about a second of not draining its queue, per
+        transaction, for no reason the block path did not already have the
+        answer to.
+        """
         if peers is None:
             peers = self._pool.get_all()
         if not peers:
             return
-        log.debug("[udp] send_block height=%s to %d peers stem=%s",
-                  block.get("height"), len(peers), stemming)
         payload = zlib.compress(
-            _encode({"genesis": self.genesis_hash, "block": block,
-                     "stemming": stemming}), BLOCK_COMPRESS_LEVEL)
+            _encode({"genesis": self.genesis_hash, "stemming": stemming, **body}),
+            BLOCK_COMPRESS_LEVEL)
         msg_id = self._new_msg_id()
         self._mark_seen(msg_id)
         targets = [self._addr_tuple(a) for a in peers]
@@ -695,7 +855,7 @@ class UDPTransport:
             # One datagram does no pacing at all, so there is nothing to get
             # off this thread and a pool would only add scheduling to it.
             for target in targets:
-                self._send_chunked(MT_BLOCK, msg_id, payload, target)
+                self._send_chunked(msg_type, msg_id, payload, target)
             return
         # Anything paced goes to the pool even when it is going to a single
         # peer. Overlapping peers was only half the point; the other half is
@@ -705,36 +865,15 @@ class UDPTransport:
         # still blocking that loop for the whole pacing.
         for target in targets:
             if not self._fanout_slots.acquire(blocking=False):
-                log.warning("[udp] send queue full, dropping block to %s "
+                log.warning("[udp] send queue full, dropping %s to %s "
                             "(it will be re-sent if nobody echoes it back)",
-                            target)
+                            what, target)
                 continue
             try:
-                self._fanout.submit(self._fanout_send, MT_BLOCK, msg_id,
+                self._fanout.submit(self._fanout_send, msg_type, msg_id,
                                     payload, target)
             except RuntimeError:
                 self._fanout_slots.release()   # pool already shut down
-
-    def send_tx(self, tx: dict, peers=None, stemming: bool = False):
-        """Send a tx to `peers` (default: all). stemming as in send_block."""
-        if peers is None:
-            peers = self._pool.get_all()
-        if not peers:
-            return
-        # Chunked, not a single datagram. A transaction carries a FALCON
-        # signature and key, so it is ~3.4KB and was going out as one
-        # oversized datagram that IP-fragments into three, every one of
-        # which has to survive or the transaction is lost. Fragmented UDP
-        # is exactly what NAT and middleboxes drop, so this was quietly
-        # costing transaction propagation. Compressed for the same reason
-        # blocks are, which also takes it to two chunks rather than three.
-        payload = zlib.compress(
-            _encode({"genesis": self.genesis_hash, "tx": tx,
-                     "stemming": stemming}), BLOCK_COMPRESS_LEVEL)
-        msg_id = self._new_msg_id()
-        self._mark_seen(msg_id)
-        for addr in peers:
-            self._send_chunked(MT_TX, msg_id, payload, self._addr_tuple(addr))
 
     def send_peers(self, addr: str, peers: list[str]):
         """Send peer list to addr."""
@@ -844,20 +983,48 @@ class UDPTransport:
         # blocking here on ping()'s PONG wait is fine.
         self.ping(f"{host}:{port}")
 
-    def punch_direct(self, target_addr: str):
-        """Fire UDP bursts toward target to open our NAT hole.
-        No relay needed; both nodes do this simultaneously when they
-        discover each other via DHT."""
-        target = self._addr_tuple(target_addr)
+    def _ping_payload(self) -> dict:
+        """What every PING this node sends carries.
+
+        One definition, because the three places that built this by hand
+        did not agree and the disagreement was load-bearing: two of them
+        omitted `proto`, and _protocol_ok reads a missing `proto` as 0,
+        which is below the floor. So the receiver refused those PINGs
+        outright, sent no PONG, and never admitted the sender. Both of the
+        relay-assisted hole-punch paths (punch_via, and the PUNCH_GO
+        handler acting on a relay's instruction) were sending exactly
+        those PINGs, which is to say the punch they exist to perform could
+        not complete against any node enforcing the floor. Only
+        punch_direct, the one copy that happened to include the field,
+        worked.
+        """
         payload = {"genesis": self.genesis_hash, "proto": PROTOCOL_VERSION}
         if self.our_external_addr:
             payload["from"] = self.our_external_addr
-        for _ in range(8):
+        return payload
+
+    def _punch_burst(self, target_addr: str):
+        """Fire the PING burst that opens our NAT hole toward target.
+
+        Hole punching needs both sides sending toward each other at
+        roughly the same moment, so this is a burst rather than one
+        datagram: it covers the spread between when we start and when the
+        other side does.
+        """
+        target  = self._addr_tuple(target_addr)
+        payload = self._ping_payload()
+        for _ in range(PUNCH_BURST_COUNT):
             try:
                 self._send_one(MT_PING, self._new_msg_id(), payload, target)
             except Exception:
                 pass
-            time.sleep(0.05)
+            time.sleep(PUNCH_BURST_SPACING)
+
+    def punch_direct(self, target_addr: str):
+        """Fire UDP bursts toward target to open our NAT hole.
+        No relay needed; both nodes do this simultaneously when they
+        discover each other via DHT."""
+        self._punch_burst(target_addr)
 
     def punch_via(self, relay_addr: str, target_addr: str):
         """Ask relay to coordinate a hole punch toward target.
@@ -867,16 +1034,7 @@ class UDPTransport:
                        {"genesis": self.genesis_hash,
                         "target": target_addr},
                        self._addr_tuple(relay_addr))
-        # Fire simultaneously from our side; this is the key to hole punching:
-        # both sides must send toward each other at roughly the same time.
-        target = self._addr_tuple(target_addr)
-        for _ in range(8):
-            try:
-                self._send_one(MT_PING, self._new_msg_id(),
-                               {"genesis": self.genesis_hash}, target)
-            except Exception:
-                pass
-            time.sleep(0.05)
+        self._punch_burst(target_addr)
 
     # ------------------------------------------------------------------
     # Receive loop
@@ -918,6 +1076,23 @@ class UDPTransport:
             bucket[1] = now
             return True
 
+    @staticmethod
+    def _should_ack(chunk_idx: int, chunk_total: int, done: bool) -> bool:
+        """Whether this arriving chunk is one we answer with an ACK.
+
+        Single-chunk messages are never acked (they are fire-and-forget by
+        design). Beyond that: always when the message just completed, so
+        the sender's waiter is released immediately, always on the last
+        chunk index, so a message whose tail is what went missing still
+        draws an answer, and otherwise every ACK_EVERY_CHUNKS chunks. See
+        that constant for why every chunk was the wrong answer.
+        """
+        if chunk_total <= 1:
+            return False
+        if done or chunk_idx == chunk_total - 1:
+            return True
+        return chunk_idx % ACK_EVERY_CHUNKS == ACK_EVERY_CHUNKS - 1
+
     def _handle_datagram(self, data: bytes, sender: tuple):
         unpacked = _unpack(data)
         if unpacked is None:
@@ -934,7 +1109,7 @@ class UDPTransport:
                 pending = self._pending_sync.get(msg_id)
             if pending:
                 pending.feed(chunk_idx, chunk_total, payload_bytes)
-                if chunk_total > 1:
+                if self._should_ack(chunk_idx, chunk_total, pending.event.is_set()):
                     self._send_one(MT_ACK, self._new_msg_id(),
                                    {"acked_msg_id": msg_id,
                                     "acked_chunks": list(pending.chunks.keys())},
@@ -945,7 +1120,7 @@ class UDPTransport:
         complete = self._reassembler.feed(
             sender, msg_id, chunk_idx, chunk_total, payload_bytes
         )
-        if chunk_total > 1:
+        if self._should_ack(chunk_idx, chunk_total, complete is not None):
             held = (list(range(chunk_total)) if complete is not None
                     else self._reassembler.held_chunks(sender, msg_id))
             self._send_one(MT_ACK, self._new_msg_id(),
@@ -1069,14 +1244,7 @@ class UDPTransport:
             target = data.get("target", "")
             if target:
                 log.debug("[udp] punch_go -> %s", target)
-                tgt = self._addr_tuple(target)
-                for _ in range(8):
-                    try:
-                        self._send_one(MT_PING, self._new_msg_id(),
-                                       {"genesis": self.genesis_hash}, tgt)
-                    except Exception:
-                        pass
-                    time.sleep(0.05)
+                self._punch_burst(target)
                 if self._on_punch_go:
                     self._on_punch_go(target)
 
@@ -1194,7 +1362,13 @@ class UDPTransport:
                 time.sleep(0.005)  # pacing to avoid drops on NAT/internet paths
 
         if total > 1:
-            self._executor.submit(self._retransmit_until_acked, target, msg_id, total)
+            try:
+                self._acks.submit(self._retransmit_until_acked, target, msg_id, total)
+            except RuntimeError:
+                # Pool already shut down. The chunks are on the wire either
+                # way; only the retransmit round is lost.
+                with self._chunk_lock:
+                    self._pending_chunked_sends.pop((target, msg_id), None)
 
     def _fanout_send(self, msg_type, msg_id, payload, target):
         """One queued fan-out send, freeing its slot however it ends."""

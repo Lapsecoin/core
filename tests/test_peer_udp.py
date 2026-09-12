@@ -564,3 +564,83 @@ def test_an_old_peer_answering_our_ping_never_completes_the_handshake():
 
     answer(with_proto=True)
     assert udp.ping("1.2.3.4:8333", timeout=1.0) == "1.2.3.4:8333"
+
+
+class TestChunkIndexBounds:
+    """A chunk index outside the message it claims to belong to.
+
+    Both reassembly paths counted stored chunks to decide completeness
+    instead of checking that the indices they were about to read were the
+    ones present, so a sender claiming N chunks and sending N out-of-range
+    indices satisfied the count and then raised KeyError joining range(N).
+    """
+
+    def test_reassembler_refuses_an_out_of_range_index(self):
+        r = peer_udp._Reassembler()
+        out = None
+        for idx in (10, 11, 12):
+            out = r.feed(("1.2.3.4", 9), 777, idx, 3, b"x")
+        assert out is None
+        # and nothing is left pinned in the buffer
+        assert r.held_bytes() == 0
+
+    def test_pending_sync_refuses_an_out_of_range_index(self):
+        p = peer_udp._PendingSync()
+        for idx in (5, 6):
+            p.feed(idx, 2, b"y")
+        # Not merely "no crash": the event staying clear used to be the
+        # symptom of the crash, with request_sync then waiting out its full
+        # timeout for a reply that had already been thrown away.
+        assert p.result is None
+        assert not p.event.is_set()
+
+    def test_a_real_multi_chunk_message_still_reassembles(self):
+        r = peer_udp._Reassembler()
+        chunks = [b"a" * 10, b"b" * 10, b"c" * 10]
+        out = None
+        for idx, c in enumerate(chunks):
+            out = r.feed(("1.2.3.4", 9), 778, idx, len(chunks), c)
+        assert out == b"".join(chunks)
+        assert r.held_bytes() == 0
+
+
+class TestTransportCarriesAFullBlock:
+    """The wire ceilings are derived from BLOCK_SIZE_LIMIT rather than
+    chosen separately, so a block at the consensus limit can actually
+    reach a peer. They used to sit well under it, and a block past the
+    real ceiling was refused with no log line on the receiving side, so
+    the builder simply lost the height with nothing to explain it."""
+
+    def test_chunk_ceiling_covers_the_consensus_block_limit(self):
+        from params import BLOCK_SIZE_LIMIT
+        # Worst case is a payload that did not compress at all, which is
+        # close to true for a block full of FALCON signatures.
+        needed = -(-BLOCK_SIZE_LIMIT // peer_udp.MAX_CHUNK_SIZE)
+        assert peer_udp.MAX_CHUNK_TOTAL >= needed
+        assert peer_udp.MAX_INFLATE_BYTES >= BLOCK_SIZE_LIMIT
+
+    def test_chunk_total_still_fits_the_wire_header(self):
+        # chunk_total is packed as a signed short.
+        assert peer_udp.MAX_CHUNK_TOTAL <= 32767
+
+    def test_a_block_sized_payload_round_trips(self):
+        import zlib
+        payload = zlib.compress(os.urandom(6 * 1024 * 1024), 1)
+        chunks = peer_udp._split(payload)
+        assert len(chunks) <= peer_udp.MAX_CHUNK_TOTAL
+        r = peer_udp._Reassembler()
+        out = None
+        for idx, c in enumerate(chunks):
+            out = r.feed(("1.2.3.4", 9), 779, idx, len(chunks), c)
+        assert out == payload
+
+
+class TestReassemblyMemoryCap:
+    def test_total_held_bytes_are_bounded(self):
+        # A much larger per-message ceiling needs a bound on how many
+        # partial messages can be held at once, or a peer table could pin
+        # arbitrary memory by starting messages and never finishing them.
+        r = peer_udp._Reassembler(max_bytes=4096)
+        for msg_id in range(50):
+            r.feed(("1.2.3.4", 9), msg_id, 0, 8, b"z" * 1024)
+        assert r.held_bytes() <= 4096
