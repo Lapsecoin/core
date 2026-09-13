@@ -118,27 +118,27 @@ def race_odds(chain, own_seconds, own_addr=None):
     Returns None if there's no window yet. Otherwise:
       {"window": [(height, interval_seconds, builder), ...],
        "median": float, "own_seconds": float or None,
-       "odds_pct": float or None, "field_blocks": int,
+       "odds_pct": float or None, "own_pace": float or None,
+       "own_pace_measured": bool, "field_blocks": int,
        "own_blocks": int, "win_share_pct": float or None}
 
-    odds_pct is the percentage of the *field's* intervals own_seconds
-    beats: blocks this node did not build. Counting our own in there made
-    the figure self-referential, and on a network where one node builds
-    nearly everything that is nearly all of it. A dominant builder was
-    being told how often it beats itself, which is about 50% however
-    dominant it is, so the number fell as the node's grip tightened.
-    Worse, intervals cluster in a band a few seconds wide, so the small
-    unavoidable gap between a VDF's wall time and a timestamp delta (the
-    interval is stamped in create(), after the evaluation returns, and
-    includes committing the parent) swung it by tens of points. Against
-    the field both problems go: the comparison is to somebody else's
-    hardware, and a node that laps the field reads near 100 rather than
-    near 50.
+    odds_pct is the percentage of the *field's* intervals our own pace
+    beats, where the field is the blocks this node did not build and our
+    pace is the median interval of the blocks it did (own_pace below).
+
+    Counting our own blocks in the field made the figure self-referential,
+    and where one node builds nearly everything that is nearly all of it:
+    a dominant builder was told how often it beats itself, which is about
+    50% however dominant it is.
 
     None when the field is empty, which is a real state and not a zero:
     nobody else built anything in this window, so there is no evidence
     about how this node compares, and inventing a number from our own
     blocks is exactly the bug above.
+
+    own_pace is that median interval, or own_seconds as a fallback for a
+    node with no blocks in the window at all, where a rough figure in the
+    wrong unit beats no figure; own_pace_measured says which it is.
 
     win_share_pct is what actually happened: the share of the window this
     node built. Not a prediction and not derived from any of the above,
@@ -158,17 +158,46 @@ def race_odds(chain, own_seconds, own_addr=None):
     median = statistics.median(i for _, i, _ in window)
 
     field = [row for row in window if row[2] != own_addr] if own_addr else window
-    own_blocks = len(window) - len(field)
+    mine  = [row for row in window if row[2] == own_addr] if own_addr else []
+
+    # Our pace in the field's own unit: the median interval of the blocks
+    # we built, taken from this same window.
+    #
+    # own_seconds cannot do this job. It is a VDF wall clock over our last
+    # 30 completed builds; an interval is a timestamp delta over 720
+    # blocks, and carries whatever elapses between a parent being stamped
+    # and the next evaluation starting. Two different quantities over two
+    # different periods, so the difference between them is a constant
+    # nobody measured. Against a much slower field that constant is lost
+    # in the gap and the comparison survives it. Against hardware like
+    # ours it *is* the answer, and the number it produces is arbitrary:
+    # intervals sit in a band a few seconds wide, so a couple of seconds
+    # of mismatch swings it by tens of points. Two identical machines
+    # splitting a chain 50/50 would read anything at all.
+    #
+    # Interval against interval, both stamped the same way, both from the
+    # same window, and the mismatch cancels instead of being estimated.
+    # Two identical machines read 50, which is the correct answer and one
+    # the old form could only reach by luck.
+    own_pace = (statistics.median(i for _, i, _ in mine) if mine
+                else own_seconds)
 
     odds_pct = None
-    if own_seconds is not None and field:
-        beaten = sum(1 for _, i, _ in field if i > own_seconds)
-        odds_pct = 100.0 * beaten / len(field)
+    if own_pace is not None and field:
+        # A tie counts half, not nothing. With a strict comparison a field
+        # whose pace exactly equals ours scores 0, which reads as losing
+        # every race to machines we match exactly. Half credit makes an
+        # identical field come out at 50 where it belongs, and changes
+        # nothing once the two differ.
+        beaten = sum(1 for _, i, _ in field if i > own_pace)
+        tied   = sum(1 for _, i, _ in field if i == own_pace)
+        odds_pct = 100.0 * (beaten + 0.5 * tied) / len(field)
 
     return {"window": window, "median": median,
             "own_seconds": own_seconds, "odds_pct": odds_pct,
-            "field_blocks": len(field), "own_blocks": own_blocks,
-            "win_share_pct": (100.0 * own_blocks / len(window)
+            "own_pace": own_pace, "own_pace_measured": bool(mine),
+            "field_blocks": len(field), "own_blocks": len(mine),
+            "win_share_pct": (100.0 * len(mine) / len(window)
                               if own_addr else None)}
 
 

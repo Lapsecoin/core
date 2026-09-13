@@ -18,9 +18,9 @@
     <div class="stat-sub" id="win-share-sub">{{ "%d of the last %d"|format(race.own_blocks, race.window|length) }}</div>
   </div>
   <div class="stat">
-    <div class="stat-label">Self median build</div>
-    <div class="stat-value" id="own-median-val">{{ ("%.1f"|format(race.own_seconds) ~ "s") if race.own_seconds is not none else "--" }}</div>
-    <div class="stat-sub" id="own-median-sub">{{ "estimated, no build finished yet" if own_is_estimate else "from completed builds" }}</div>
+    <div class="stat-label">Self pace</div>
+    <div class="stat-value" id="own-median-val">{{ ("%.1f"|format(race.own_pace) ~ "s") if race.own_pace is not none else "--" }}</div>
+    <div class="stat-sub" id="own-median-sub">{{ "median interval of blocks we built" if race.own_pace_measured else ("estimated from calibration, no build finished yet" if own_is_estimate else "VDF clock: no block of ours in this window") }}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Window median</div>
@@ -90,7 +90,7 @@
           x2="{{ chart.width }}" y2="{{ chart.own_y }}"
           stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5,4"/>
     <text x="{{ chart.width - 4 }}" y="{{ chart.own_y - 4 }}" font-size="10" font-weight="600"
-          fill="var(--accent)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">self median{{ " (off scale)" if chart.own_clipped }}</text>
+          fill="var(--accent)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">self pace{{ " (off scale)" if chart.own_clipped }}</text>
     {% endif %}
   </svg>
   </div>
@@ -112,7 +112,9 @@
     stretch out squeezes its neighbour. </span>
     Block interval is a proxy for the winning builder's real build time.
     Pace is compared only against blocks other nodes built, since comparing
-    against your own says nothing. It measures whether you finish in time to
+    against your own says nothing, and both sides are measured the same way:
+    block intervals, not this node's VDF clock, which is a different quantity
+    over a different period. It measures whether you finish in time to
     enter a height's draw, not whether you take it: among the candidates that
     arrive in time, the lowest VDF output wins.
   </p>
@@ -382,9 +384,11 @@
       document.getElementById("win-share-sub").textContent =
         data.own_blocks + " of the last " + data.window_len;
       document.getElementById("own-median-val").textContent =
-        data.own_seconds !== null ? fmt1(data.own_seconds) + "s" : "--";
+        data.own_pace !== null ? fmt1(data.own_pace) + "s" : "--";
       document.getElementById("own-median-sub").textContent =
-        data.own_is_estimate ? "estimated, no build finished yet" : "from completed builds";
+        data.own_pace_measured ? "median interval of blocks we built"
+          : (data.own_is_estimate ? "estimated from calibration, no build finished yet"
+                                  : "VDF clock: no block of ours in this window");
       document.getElementById("window-median-val").textContent = fmt1(data.median) + "s";
       document.getElementById("window-count").textContent = data.window_len + " blocks";
 

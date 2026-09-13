@@ -119,23 +119,28 @@ class TestFeeEstimate:
 
 
 class TestOddsPage:
-    """The self-build figure on /odds is sometimes measured and sometimes a
-    calibration estimate, and the page has to say which. A node slower than
-    the field never finishes an evaluation, so on exactly the node whose
-    number comes from calibration, that number never becomes a measurement:
-    presenting it as one would be permanently wrong there."""
+    """The self figure on /odds has three sources and the page has to say
+    which one it is showing.
+
+    Once this node has built blocks in the window, its pace is the median
+    interval of those, in the same unit as everything it is compared
+    against. Before that there is only the VDF clock, which is a different
+    quantity (see block.race_odds), either measured from completed builds
+    or estimated from calibration."""
 
     class _OddsNode:
         """The surface /odds and /api/odds touch, and nothing else."""
 
-        def __init__(self, is_estimate):
+        def __init__(self, is_estimate, own_blocks=True):
             self.addr = address(0)
-            # One block of our own and one from somebody else, so the page
-            # has both a field to compare against and a win share to show.
+            # Height 1 is ours at 120s, height 2 is somebody else's at
+            # 200s, so there is a field to compare against and a win share
+            # to show. own_blocks=False hands height 1 to a third party,
+            # leaving this node with nothing of its own in the window.
             self.view = SimpleNamespace(chain=[
                 {"height": 0, "timestamp": 1000, "vdf_iterations": 100},
                 {"height": 1, "timestamp": 1120, "vdf_iterations": 100,
-                 "builder": address(0)},
+                 "builder": address(0) if own_blocks else address(2)},
                 {"height": 2, "timestamp": 1320, "vdf_iterations": 100,
                  "builder": address(1)},
             ])
@@ -150,21 +155,31 @@ class TestOddsPage:
         def reorg_stats(self):
             return {"deepest": 0, "count": 0}
 
-    def _client(self, is_estimate):
-        return api.create_private_app(self._OddsNode(is_estimate),
-                                      peerpool_mod.PeerPool()).test_client()
+    def _client(self, is_estimate, own_blocks=True):
+        node = self._OddsNode(is_estimate, own_blocks)
+        return api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
 
-    def test_page_marks_a_calibrated_figure_as_an_estimate(self):
-        html = self._client(True).get("/odds").get_data(as_text=True)
-        assert ('<div class="stat-sub" id="own-median-sub">'
-                'estimated, no build finished yet') in html
+    def _sub(self, html):
+        """The rendered sub-label, not a loose substring: the page also
+        ships the refresh script, which carries every label as a literal."""
+        marker = '<div class="stat-sub" id="own-median-sub">'
+        return html.split(marker, 1)[1].split("<", 1)[0].strip()
 
-    def test_page_marks_a_measured_figure_as_measured(self):
+    def test_pace_comes_from_our_own_blocks_when_we_have_them(self):
         html = self._client(False).get("/odds").get_data(as_text=True)
-        # The rendered element, not a loose substring: the page also ships
-        # the refresh script, which carries both labels as literals.
-        assert '<div class="stat-sub" id="own-median-sub">from completed builds' in html
-        assert '<div class="stat-sub" id="own-median-sub">estimated' not in html
+        assert self._sub(html) == "median interval of blocks we built"
+        # 120s, our block's interval, not the 90s VDF clock.
+        assert '<div class="stat-value" id="own-median-val">120.0s' in html
+
+    def test_a_calibrated_figure_is_marked_as_an_estimate(self):
+        # No block of ours in the window, so the VDF clock is all there is,
+        # and here it has not even been measured yet.
+        html = self._client(True, own_blocks=False).get("/odds").get_data(as_text=True)
+        assert self._sub(html) == "estimated from calibration, no build finished yet"
+
+    def test_a_measured_clock_without_our_blocks_says_it_is_a_clock(self):
+        html = self._client(False, own_blocks=False).get("/odds").get_data(as_text=True)
+        assert self._sub(html) == "VDF clock: no block of ours in this window"
 
     def test_the_page_says_what_the_pace_is_measured_against(self):
         # Without this the figure reads as a win probability, which it is
@@ -178,7 +193,9 @@ class TestOddsPage:
         assert data["field_blocks"] == 1
         assert data["own_blocks"] == 1
         assert data["win_share_pct"] == 50.0
-        # 90s of our own build time beats the field's only block (200s).
+        assert data["own_pace"] == 120.0
+        assert data["own_pace_measured"] is True
+        # Our 120s beats the field's only block (200s).
         assert data["odds_pct"] == 100.0
 
     def test_the_json_carries_the_same_distinction(self):

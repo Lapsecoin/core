@@ -470,7 +470,10 @@ def _race_chart(race):
     plot_w = _CHART_W - _CHART_PAD_L
     plot_h = _CHART_H - _CHART_PAD_T - _CHART_PAD_B
     median = race["median"]
-    own_seconds = race["own_seconds"]
+    # The self reference line plots own_pace, the same figure the odds are
+    # computed from, so the line sits in the chart's own unit (block
+    # intervals) rather than a VDF wall clock drawn among them.
+    own_seconds = race["own_pace"]
 
     typical = [s for _, s, _ in rows if median / 2 <= s <= median * 2] or [s for _, s, _ in rows]
     domain = list(typical)
@@ -853,6 +856,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "field_blocks": race["field_blocks"],
             "own_blocks": race["own_blocks"],
             "win_share_pct": race["win_share_pct"],
+            "own_pace": race["own_pace"],
+            "own_pace_measured": race["own_pace_measured"],
             "window_len": len(race["window"]), "chart": _race_chart(race),
             "reorgs": node.reorg_stats(),
         })

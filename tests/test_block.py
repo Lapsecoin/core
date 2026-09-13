@@ -606,6 +606,38 @@ class TestRaceOddsComparesAgainstTheField:
         chain = self._chain([(0, 100), (0, 100), (1, 200)])
         assert [i for _, i, _ in block_mod.race_window(chain)] == [100, 100, 200]
 
+    def test_equal_hardware_reads_as_an_even_race(self):
+        """The case that matters, and the one comparing a VDF clock to
+        timestamp deltas gets wrong.
+
+        Both machines build at the same pace and split the chain, so the
+        answer is 50. own_seconds here says 150s, a plausible wall clock
+        for a 100s interval once the gap between a parent being stamped
+        and the next evaluation starting is counted; used directly it says
+        this node loses every race. The blocks it actually built say
+        otherwise, in the field's own unit.
+        """
+        rows = [(0, 100), (1, 100)] * 6
+        chain = self._chain(rows)
+        race = block_mod.race_odds(chain, 150.0, address(0))
+        assert race["odds_pct"] == pytest.approx(50.0)
+        assert race["own_pace"] == pytest.approx(100.0)
+        assert race["own_pace_measured"]
+
+        # What the same data yields from the VDF clock: nothing to do with
+        # an even race.
+        field = [i for _, i, b in block_mod.race_window(chain) if b != address(0)]
+        assert 100.0 * sum(1 for i in field if i > 150.0) / len(field) == 0.0
+
+    def test_a_node_with_no_blocks_yet_falls_back_to_its_vdf_clock(self):
+        # Wrong unit, and the only figure such a node has. Flagged as not
+        # measured so the page can say so.
+        chain = self._chain([(1, 100)] * 4)
+        race = block_mod.race_odds(chain, 90.0, address(0))
+        assert race["own_pace"] == 90.0
+        assert not race["own_pace_measured"]
+        assert race["odds_pct"] == pytest.approx(100.0)
+
     def test_our_own_blocks_do_not_count_toward_the_odds(self):
         # Nine of our own at 100s, one from someone else at 200s. Our own
         # median build is 150s: slower than every block we built, faster
@@ -762,7 +794,8 @@ class TestRaceChartColorStability:
                 h += 1
                 rows.append((h, 120.0, builder))
         chart = api_mod._race_chart(
-            {"window": rows, "median": 120.0, "own_seconds": None, "odds_pct": None})
+            {"window": rows, "median": 120.0, "own_seconds": None,
+             "own_pace": None, "odds_pct": None})
         return {e["label"]: e["color"] for e in chart["legend"] if e["label"]}
 
     def test_colors_hold_when_the_lead_changes_hands(self):
@@ -795,7 +828,8 @@ class TestRaceChartColorStability:
                 h += 1
                 rows.append((h, 120.0, builder))
         chart = api_mod._race_chart(
-            {"window": rows, "median": 120.0, "own_seconds": None, "odds_pct": None})
+            {"window": rows, "median": 120.0, "own_seconds": None,
+             "own_pace": None, "odds_pct": None})
 
         assert [e["label"] for e in chart["legend"]] == ["bob", "carol", "alice"]
 
@@ -815,7 +849,8 @@ class TestRaceChartHeightAxis:
     def _race(self, n):
         return {"window": [(9000 + i, 120.0 + (i % 7), "a%d" % (i % 5))
                            for i in range(n)],
-                "median": 122.0, "own_seconds": 121.0, "odds_pct": 50.0}
+                "median": 122.0, "own_seconds": 121.0, "own_pace": 121.0,
+                "odds_pct": 50.0}
 
     def _x_from_ticks(self, chart, idx):
         """The page's piecewise map, at rest. Mirrors xOf() in odds.html."""
