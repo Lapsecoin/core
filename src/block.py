@@ -511,12 +511,29 @@ def assemble(tip, txs, builder_addr, iterations):
     """
     next_height = tip["height"] + 1
 
+    # Never earlier than the floor validation enforces. The clock is the
+    # right answer almost always, and is silently the wrong one whenever
+    # less than MIN_BLOCK_SPACING_SECONDS has passed since the parent was
+    # stamped: _check_timestamp rejects such a block, so a builder that
+    # stamped the honest time threw away the evaluation it had just spent
+    # two minutes on, logged "self-produced block failed validation", and
+    # did it again on the next height.
+    #
+    # That happens to whichever node is fastest, which is the one this
+    # chain is supposed to pay: a machine finishing inside 30s of the
+    # parent could never build at all. A node whose clock has drifted
+    # behind the chain hits it too, for as long as the drift lasts.
+    # Clamping is what the rule already asks for, spelled out.
+    timestamp = max(_time.time(),
+                    tip["timestamp"] + MIN_BLOCK_SPACING_SECONDS)
+
     skeleton = create(
         height=next_height,
         previous_hash=tip["hash"],
         transactions=[],
         builder=builder_addr,
         vdf_iterations=iterations,
+        timestamp=timestamp,
     )
     # "[" + "]" = 2 bytes for empty list; we'll add ", ".join(tx_jsons) inside
     base_size   = block_size(skeleton)

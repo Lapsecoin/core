@@ -9,6 +9,7 @@ VDF verification is mocked because vdf.evaluate takes ~120s.
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -19,6 +20,7 @@ import settings as settings_mod
 import state as state_mod
 import tx as tx_mod
 from params import (
+    MIN_BLOCK_SPACING_SECONDS,
     BLOCK_CYCLE_SECONDS, BLOCK_SIZE_LIMIT, GENESIS_MESSAGE,
     GENESIS_TIMESTAMP, TICKS_PER_LAPSE,
 )
@@ -573,6 +575,46 @@ class TestRaceChartBuilderColors:
 
         assert [e["label"] for e in chart["legend"]] == [address(0), address(1)]
         assert [e["count"] for e in chart["legend"]] == [4, 1]
+
+
+class TestAssembleRespectsTheSpacingFloor:
+    """A builder must not stamp a time its own validator will reject.
+
+    _check_timestamp requires ts >= parent + MIN_BLOCK_SPACING_SECONDS.
+    Stamping the wall clock breaks that whenever less than that has passed
+    since the parent was stamped, and the block is discarded after the
+    evaluation is already paid for: two minutes of VDF thrown away, on
+    whichever node is fastest, every height.
+    """
+
+    def _built_on(self, parent_age_seconds):
+        """A candidate built on a tip stamped `parent_age_seconds` ago."""
+        parent = dict(genesis(), timestamp=time.time() - parent_age_seconds)
+        cand = block_mod.assemble(parent, [], address(0), 1000)
+        return parent, cand
+
+    def test_a_fast_builder_still_produces_a_valid_block(self):
+        # Finished 8s after the parent: an honest clock reading would be
+        # rejected by the node that just wrote it.
+        parent, cand = self._built_on(8)
+        ok, err = block_mod._check_timestamp(cand, [parent])
+        assert ok, err
+        assert cand["timestamp"] == pytest.approx(
+            parent["timestamp"] + MIN_BLOCK_SPACING_SECONDS)
+
+    def test_a_normal_builder_still_stamps_the_clock(self):
+        # The floor is a floor, not a schedule: past it, the real time
+        # stands, so the chain's timeline keeps tracking reality.
+        parent, cand = self._built_on(140)
+        assert cand["timestamp"] == pytest.approx(time.time(), abs=2)
+        assert block_mod._check_timestamp(cand, [parent])[0]
+
+    def test_the_clamp_holds_right_at_the_boundary(self):
+        for age in (0, MIN_BLOCK_SPACING_SECONDS - 0.5,
+                    MIN_BLOCK_SPACING_SECONDS + 0.5):
+            parent, cand = self._built_on(age)
+            ok, err = block_mod._check_timestamp(cand, [parent])
+            assert ok, f"{age}s after the parent: {err}"
 
 
 class TestRaceOddsUsesTheDrawWindow:
