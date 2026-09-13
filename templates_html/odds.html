@@ -8,9 +8,14 @@
 {% else %}
 <div class="stats">
   <div class="stat">
-    <div class="stat-label">Odds</div>
+    <div class="stat-label">Pace vs field</div>
     <div class="stat-value" id="odds-pct-val">{{ ("%.1f"|format(race.odds_pct) ~ "%") if race.odds_pct is not none else "--" }}</div>
-    <div class="stat-sub" id="odds-pct-sub">{{ "of recent blocks self would beat" if race.odds_pct is not none else "no self builds yet" }}</div>
+    <div class="stat-sub" id="odds-pct-sub">{{ "of the %d blocks other nodes built"|format(race.field_blocks) if race.odds_pct is not none else ("nobody else built in this window" if race.field_blocks == 0 else "no build time to compare yet") }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Blocks won</div>
+    <div class="stat-value" id="win-share-val">{{ ("%.1f"|format(race.win_share_pct) ~ "%") if race.win_share_pct is not none else "--" }}</div>
+    <div class="stat-sub" id="win-share-sub">{{ "%d of the last %d"|format(race.own_blocks, race.window|length) }}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Self median build</div>
@@ -106,6 +111,10 @@
     give the blocks beside it more room; every block stays on the chart, so spreading one
     stretch out squeezes its neighbour. </span>
     Block interval is a proxy for the winning builder's real build time.
+    Pace is compared only against blocks other nodes built, since comparing
+    against your own says nothing. It measures whether you finish in time to
+    enter a height's draw, not whether you take it: among the candidates that
+    arrive in time, the lowest VDF output wins.
   </p>
 </div>
 <style>
@@ -364,7 +373,14 @@
       document.getElementById("odds-pct-val").textContent =
         data.odds_pct !== null ? fmt1(data.odds_pct) + "%" : "--";
       document.getElementById("odds-pct-sub").textContent =
-        data.odds_pct !== null ? "of recent blocks self would beat" : "no self builds yet";
+        data.odds_pct !== null
+          ? "of the " + data.field_blocks + " blocks other nodes built"
+          : (data.field_blocks === 0 ? "nobody else built in this window"
+                                     : "no build time to compare yet");
+      document.getElementById("win-share-val").textContent =
+        data.win_share_pct !== null ? fmt1(data.win_share_pct) + "%" : "--";
+      document.getElementById("win-share-sub").textContent =
+        data.own_blocks + " of the last " + data.window_len;
       document.getElementById("own-median-val").textContent =
         data.own_seconds !== null ? fmt1(data.own_seconds) + "s" : "--";
       document.getElementById("own-median-sub").textContent =

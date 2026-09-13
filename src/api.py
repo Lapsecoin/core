@@ -829,7 +829,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/odds", endpoint=pfx+"odds")
     def odds():
-        race = block_mod.race_odds(node.view.chain, node.own_vdf_median())
+        race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
+                                   node.addr)
         chart = _race_chart(race) if race else None
         return render_template("odds.html", title="Race Odds", race=race,
                                chart=chart, reorgs=node.reorg_stats(),
@@ -839,13 +840,19 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/api/odds", endpoint=pfx+"api_odds")
     def api_odds():
-        race = block_mod.race_odds(node.view.chain, node.own_vdf_median())
+        race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
+                                   node.addr)
         if not race:
             return jsonify(None)
         return jsonify({
             "median": race["median"],
             "own_seconds": race["own_seconds"], "odds_pct": race["odds_pct"],
             "own_is_estimate": node.own_vdf_is_estimate(),
+            # Who the odds are measured against, and what actually
+            # happened, which are different claims: see block.race_odds.
+            "field_blocks": race["field_blocks"],
+            "own_blocks": race["own_blocks"],
+            "win_share_pct": race["win_share_pct"],
             "window_len": len(race["window"]), "chart": _race_chart(race),
             "reorgs": node.reorg_stats(),
         })

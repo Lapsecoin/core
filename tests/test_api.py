@@ -129,9 +129,14 @@ class TestOddsPage:
         """The surface /odds and /api/odds touch, and nothing else."""
 
         def __init__(self, is_estimate):
+            self.addr = address(0)
+            # One block of our own and one from somebody else, so the page
+            # has both a field to compare against and a win share to show.
             self.view = SimpleNamespace(chain=[
                 {"height": 0, "timestamp": 1000, "vdf_iterations": 100},
                 {"height": 1, "timestamp": 1120, "vdf_iterations": 100,
+                 "builder": address(0)},
+                {"height": 2, "timestamp": 1320, "vdf_iterations": 100,
                  "builder": address(1)},
             ])
             self._is_estimate = is_estimate
@@ -160,6 +165,21 @@ class TestOddsPage:
         # the refresh script, which carries both labels as literals.
         assert '<div class="stat-sub" id="own-median-sub">from completed builds' in html
         assert '<div class="stat-sub" id="own-median-sub">estimated' not in html
+
+    def test_the_page_says_what_the_pace_is_measured_against(self):
+        # Without this the figure reads as a win probability, which it is
+        # not: it is a comparison against other builders' blocks only.
+        html = self._client(False).get("/odds").get_data(as_text=True)
+        assert "of the 1 blocks other nodes built" in html
+        assert "1 of the last 2" in html   # blocks won, the measured fact
+
+    def test_the_json_carries_the_field_and_the_win_share(self):
+        data = self._client(False).get("/api/odds").get_json()
+        assert data["field_blocks"] == 1
+        assert data["own_blocks"] == 1
+        assert data["win_share_pct"] == 50.0
+        # 90s of our own build time beats the field's only block (200s).
+        assert data["odds_pct"] == 100.0
 
     def test_the_json_carries_the_same_distinction(self):
         assert self._client(True).get("/api/odds").get_json()["own_is_estimate"] is True

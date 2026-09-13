@@ -574,6 +574,72 @@ class TestRaceChartBuilderColors:
         assert [e["count"] for e in chart["legend"]] == [4, 1]
 
 
+class TestRaceOddsComparesAgainstTheField:
+    """odds_pct counts only blocks this node did not build.
+
+    Counting our own made the figure self-referential, and on a network
+    where one node builds nearly everything that is nearly all of the
+    window: a dominant builder was being told how often it beats itself,
+    which is about 50% however dominant it is. Intervals sit in a band a
+    few seconds wide, so the unavoidable gap between a VDF's wall time and
+    a timestamp delta then swung it by tens of points.
+    """
+
+    def _chain(self, rows):
+        """rows: (builder_index, interval_seconds) oldest first.
+
+        make_block's timestamp_offset shifts a block off a fixed 120s grid
+        rather than naming an interval, so the offsets are accumulated here
+        to make each block land exactly `interval_seconds` after its parent.
+        """
+        chain = [genesis()]
+        offset = 0
+        for h, (idx, secs) in enumerate(rows, start=1):
+            offset = (secs - 240) if h == 1 else offset + secs - 120
+            chain.append(make_block(h, chain[-1]["hash"], [], builder_index=idx,
+                                    timestamp_offset=offset))
+        return chain
+
+    def test_the_helper_really_produces_those_intervals(self):
+        # The tests below are only about the intervals, so the arithmetic
+        # that builds them has to be checked rather than assumed.
+        chain = self._chain([(0, 100), (0, 100), (1, 200)])
+        assert [i for _, i, _ in block_mod.race_window(chain)] == [100, 100, 200]
+
+    def test_our_own_blocks_do_not_count_toward_the_odds(self):
+        # Nine of our own at 100s, one from someone else at 200s. Our own
+        # median build is 150s: slower than every block we built, faster
+        # than the only one we did not.
+        chain = self._chain([(0, 100)] * 9 + [(1, 200)])
+        race = block_mod.race_odds(chain, 150.0, address(0))
+        assert race["odds_pct"] == pytest.approx(100.0)
+        assert race["field_blocks"] == 1
+
+        # The whole-window comparison is what this replaces: it reads 10%
+        # off the same data, from our own blocks alone.
+        assert block_mod.race_odds(chain, 150.0)["odds_pct"] == pytest.approx(10.0)
+
+    def test_no_field_means_no_answer_rather_than_zero(self):
+        # Nobody else built anything, so there is no evidence about how
+        # this node compares. Zero would be a claim; None is the truth.
+        chain = self._chain([(0, 100)] * 5)
+        race = block_mod.race_odds(chain, 150.0, address(0))
+        assert race["odds_pct"] is None
+        assert race["field_blocks"] == 0
+
+    def test_win_share_reports_what_actually_happened(self):
+        chain = self._chain([(0, 100)] * 9 + [(1, 200)])
+        race = block_mod.race_odds(chain, 150.0, address(0))
+        assert race["win_share_pct"] == pytest.approx(90.0)
+        assert race["own_blocks"] == 9
+
+    def test_an_unknown_own_address_falls_back_to_the_whole_window(self):
+        chain = self._chain([(0, 100)] * 9 + [(1, 200)])
+        race = block_mod.race_odds(chain, 150.0)
+        assert race["field_blocks"] == 10
+        assert race["win_share_pct"] is None
+
+
 class TestRaceOddsNoOutlierBand:
     """race_odds no longer flags or excludes outliers: every interval in
     the window counts toward both the median and odds_pct."""

@@ -105,17 +105,49 @@ def race_window(chain):
     return rows
 
 
-def race_odds(chain, own_seconds):
+def race_odds(chain, own_seconds, own_addr=None):
     """Race-odds page data: recent block intervals (a proxy for builder
-    build time) and this node's odds of beating the field. own_seconds is
-    this node's own median real VDF build time, or None if it hasn't
-    finished a build yet.
+    build time) and how this node's own pace compares to the field.
+
+    own_seconds is this node's median real VDF build time, or None if it
+    has neither finished a build nor calibrated. own_addr is this node's
+    builder address, which is what separates our own blocks from everyone
+    else's; None (unknown) falls back to comparing against the whole
+    window.
 
     Returns None if there's no window yet. Otherwise:
       {"window": [(height, interval_seconds, builder), ...],
        "median": float, "own_seconds": float or None,
-       "odds_pct": float or None}
-    odds_pct is the percentage of this window's intervals own_seconds beats.
+       "odds_pct": float or None, "field_blocks": int,
+       "own_blocks": int, "win_share_pct": float or None}
+
+    odds_pct is the percentage of the *field's* intervals own_seconds
+    beats: blocks this node did not build. Counting our own in there made
+    the figure self-referential, and on a network where one node builds
+    nearly everything that is nearly all of it. A dominant builder was
+    being told how often it beats itself, which is about 50% however
+    dominant it is, so the number fell as the node's grip tightened.
+    Worse, intervals cluster in a band a few seconds wide, so the small
+    unavoidable gap between a VDF's wall time and a timestamp delta (the
+    interval is stamped in create(), after the evaluation returns, and
+    includes committing the parent) swung it by tens of points. Against
+    the field both problems go: the comparison is to somebody else's
+    hardware, and a node that laps the field reads near 100 rather than
+    near 50.
+
+    None when the field is empty, which is a real state and not a zero:
+    nobody else built anything in this window, so there is no evidence
+    about how this node compares, and inventing a number from our own
+    blocks is exactly the bug above.
+
+    win_share_pct is what actually happened: the share of the window this
+    node built. Not a prediction and not derived from any of the above,
+    which is the point of showing it alongside. odds_pct describes making
+    the draw; it cannot describe winning one, because a height goes to the
+    lowest vdf_output among the candidates that arrive in time (see
+    ChainState.is_better_than), and that is a draw between everyone fast
+    enough to be in it rather than a race the fastest wins.
+
     A real network stall shows up as one unusually long interval that
     own_seconds trivially beats, display-only, so that's an acceptable
     accuracy tradeoff for not special-casing outliers.
@@ -125,13 +157,19 @@ def race_odds(chain, own_seconds):
         return None
     median = statistics.median(i for _, i, _ in window)
 
+    field = [row for row in window if row[2] != own_addr] if own_addr else window
+    own_blocks = len(window) - len(field)
+
     odds_pct = None
-    if own_seconds is not None:
-        beaten = sum(1 for _, i, _ in window if i > own_seconds)
-        odds_pct = 100.0 * beaten / len(window)
+    if own_seconds is not None and field:
+        beaten = sum(1 for _, i, _ in field if i > own_seconds)
+        odds_pct = 100.0 * beaten / len(field)
 
     return {"window": window, "median": median,
-            "own_seconds": own_seconds, "odds_pct": odds_pct}
+            "own_seconds": own_seconds, "odds_pct": odds_pct,
+            "field_blocks": len(field), "own_blocks": own_blocks,
+            "win_share_pct": (100.0 * own_blocks / len(window)
+                              if own_addr else None)}
 
 
 def vdf_challenge(previous_hash: str, builder: str) -> bytes:
