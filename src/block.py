@@ -5,6 +5,7 @@ import time as _time
 
 import crypto
 from crypto import canonical_json
+import settings as settings_mod
 import tx as tx_mod
 import vdf as vdf_mod
 from params import (
@@ -105,7 +106,7 @@ def race_window(chain):
     return rows
 
 
-def race_odds(chain, own_seconds, own_addr=None):
+def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
     """Race-odds page data: recent block intervals (a proxy for builder
     build time) and how this node's own pace compares to the field.
 
@@ -119,34 +120,52 @@ def race_odds(chain, own_seconds, own_addr=None):
       {"window": [(height, interval_seconds, builder), ...],
        "median": float, "own_seconds": float or None,
        "odds_pct": float or None, "own_pace": float or None,
-       "own_pace_measured": bool, "field_blocks": int,
-       "own_blocks": int, "win_share_pct": float or None}
+       "own_pace_measured": bool, "entrants": int or None,
+       "draw_window": float, "field_builders": int,
+       "field_blocks": int, "own_blocks": int,
+       "win_share_pct": float or None}
 
-    odds_pct is the percentage of the *field's* intervals our own pace
-    beats, where the field is the blocks this node did not build and our
-    pace is the median interval of the blocks it did (own_pace below).
+    odds_pct is this node's share of the next height: 100/entrants when it
+    is fast enough to be in the draw at all, and 0 when it is not.
 
-    Counting our own blocks in the field made the figure self-referential,
-    and where one node builds nearly everything that is nearly all of it:
-    a dominant builder was told how often it beats itself, which is about
-    50% however dominant it is.
+    Every builder in the window gets a pace, the median interval of its
+    own blocks; ours is own_pace. A height is anchored to its first
+    candidate and stays open for draw_window seconds (Node.open_draw).
+    Everything landing inside is settled on vdf_output, which
+    vdf_challenge derives from (previous_hash, builder) alone, so it is a
+    draw among equals and not a race. Everything landing outside lost the
+    height. Entrants is therefore the builders whose pace is within
+    draw_window of the fastest, this node included, and the draw between
+    them is uniform.
 
-    None when the field is empty, which is a real state and not a zero:
-    nobody else built anything in this window, so there is no evidence
-    about how this node compares, and inventing a number from our own
-    blocks is exactly the bug above.
+    That is the rule this chain actually runs, so the question it answers
+    is countable rather than estimated. Earlier versions of this counted
+    how many of the field's blocks our pace beat, which had to invent its
+    own threshold and got it wrong in both directions: losing by half a
+    second and losing by a minute counted the same, though the first is a
+    coin flip and the second is never winning again. The setting's own
+    help text is the giveaway, it is "how much of a speed advantage it
+    takes to win outright".
 
-    own_pace is that median interval, or own_seconds as a fallback for a
-    node with no blocks in the window at all, where a rough figure in the
-    wrong unit beats no figure; own_pace_measured says which it is.
+    A near-tie still lands on one side or the other of draw_window, which
+    is not a rounding artifact: that boundary is the rule, and a builder
+    sitting on it is genuinely marginal. Both halves of the pace estimate
+    lean the same, conservative, way. A builder that rarely wins is only
+    seen on the heights it did win, which are its faster rounds, so it
+    looks more competitive than it is and is more likely to be counted as
+    an entrant; and our own consecutive blocks carry no propagation hop
+    where the field's blocks after ours do, worth well under a second
+    against a window in the seconds.
+
+    own_pace falls back to own_seconds for a node with no blocks in the
+    window at all, where a rough figure in the wrong unit beats no figure;
+    own_pace_measured says which it is.
 
     win_share_pct is what actually happened: the share of the window this
     node built. Not a prediction and not derived from any of the above,
-    which is the point of showing it alongside. odds_pct describes making
-    the draw; it cannot describe winning one, because a height goes to the
-    lowest vdf_output among the candidates that arrive in time (see
-    ChainState.is_better_than), and that is a draw between everyone fast
-    enough to be in it rather than a race the fastest wins.
+    which is the point of showing it alongside: the two are computed from
+    different things and a gap between them means one of the assumptions
+    here is wrong on this network.
 
     A real network stall shows up as one unusually long interval that
     own_seconds trivially beats, display-only, so that's an acceptable
@@ -182,20 +201,51 @@ def race_odds(chain, own_seconds, own_addr=None):
     own_pace = (statistics.median(i for _, i, _ in mine) if mine
                 else own_seconds)
 
+    # Each builder's pace, from its own blocks. The contest is between
+    # machines, not between blocks, so this is per builder rather than a
+    # percentile over a pile of intervals.
+    field_paces = {}
+    for _h, interval, builder in field:
+        field_paces.setdefault(builder, []).append(interval)
+    field_paces = {b: statistics.median(v) for b, v in field_paces.items()}
+
+    window_s = (settings_mod.DRAW_WINDOW_SECONDS.default if draw_window is None
+                else draw_window)
+
     odds_pct = None
-    if own_pace is not None and field:
-        # A tie counts half, not nothing. With a strict comparison a field
-        # whose pace exactly equals ours scores 0, which reads as losing
-        # every race to machines we match exactly. Half credit makes an
-        # identical field come out at 50 where it belongs, and changes
-        # nothing once the two differ.
-        beaten = sum(1 for _, i, _ in field if i > own_pace)
-        tied   = sum(1 for _, i, _ in field if i == own_pace)
-        odds_pct = 100.0 * (beaten + 0.5 * tied) / len(field)
+    entrants = None
+    if own_pace is not None:
+        # The draw window already defines who is competing, so use it
+        # rather than a percentile that has to invent a threshold.
+        #
+        # A height is anchored to its first candidate and stays open for
+        # this long (Node.open_draw); everything that lands inside is
+        # settled on vdf_output, which vdf_challenge derives from
+        # (previous_hash, builder) alone, so it is a draw and not a race.
+        # Everything that lands outside simply lost. That makes the
+        # question countable: who finishes within a window of the fastest
+        # builder, and how many of them are there.
+        #
+        # A percentile could not answer it. "Beat 70% of their blocks"
+        # conflates losing by half a second with losing by a minute, and
+        # the first is a coin flip while the second is never winning
+        # again. The setting's own help text says as much: it is "how much
+        # of a speed advantage it takes to win outright".
+        fastest  = min([own_pace] + list(field_paces.values()))
+        cutoff   = fastest + window_s
+        # Counted, not assumed: a node too slow for the window is not an
+        # entrant in its own draw. Adding ourselves unconditionally made
+        # "entrants" mean two different things depending on odds_pct, and
+        # the page reads it as one.
+        entrants = (sum(1 for p in field_paces.values() if p <= cutoff)
+                    + (1 if own_pace <= cutoff else 0))
+        odds_pct = 100.0 / entrants if own_pace <= cutoff else 0.0
 
     return {"window": window, "median": median,
             "own_seconds": own_seconds, "odds_pct": odds_pct,
             "own_pace": own_pace, "own_pace_measured": bool(mine),
+            "entrants": entrants, "draw_window": window_s,
+            "field_builders": len(field_paces),
             "field_blocks": len(field), "own_blocks": len(mine),
             "win_share_pct": (100.0 * len(mine) / len(window)
                               if own_addr else None)}

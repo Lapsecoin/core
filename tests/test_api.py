@@ -133,6 +133,7 @@ class TestOddsPage:
 
         def __init__(self, is_estimate, own_blocks=True):
             self.addr = address(0)
+            self.settings = settings_mod.Settings(_MemoryMeta())
             # Height 1 is ours at 120s, height 2 is somebody else's at
             # 200s, so there is a field to compare against and a win share
             # to show. own_blocks=False hands height 1 to a third party,
@@ -181,22 +182,41 @@ class TestOddsPage:
         html = self._client(False, own_blocks=False).get("/odds").get_data(as_text=True)
         assert self._sub(html) == "VDF clock: no block of ours in this window"
 
-    def test_the_page_says_what_the_pace_is_measured_against(self):
-        # Without this the figure reads as a win probability, which it is
-        # not: it is a comparison against other builders' blocks only.
+    def test_the_page_says_who_is_in_the_draw(self):
+        # The number is a share of a draw, so the page has to say how many
+        # builders are in it and how wide the window that decided that is.
+        # Our 120s against their 200s, so they are outside a 10s window.
         html = self._client(False).get("/odds").get_data(as_text=True)
-        assert "of the 1 blocks other nodes built" in html
+        assert "only builder inside the 10s draw window" in html
         assert "1 of the last 2" in html   # blocks won, the measured fact
 
-    def test_the_json_carries_the_field_and_the_win_share(self):
+    def test_the_json_carries_the_draw_and_the_win_share(self):
         data = self._client(False).get("/api/odds").get_json()
         assert data["field_blocks"] == 1
         assert data["own_blocks"] == 1
         assert data["win_share_pct"] == 50.0
         assert data["own_pace"] == 120.0
         assert data["own_pace_measured"] is True
-        # Our 120s beats the field's only block (200s).
+        # Their 200s is 80s off our 120s, well past the window.
+        assert data["entrants"] == 1
+        assert data["field_builders"] == 1
+        assert data["draw_window"] == 10.0
         assert data["odds_pct"] == 100.0
+
+    def test_the_configured_window_is_what_decides_the_draw(self):
+        # Same chain, wider window: the rival that was too slow becomes a
+        # tie and the odds halve, without any hardware changing. Read per
+        # request, so a node whose operator edits the setting sees the page
+        # that explains it change with it.
+        node = self._OddsNode(False)
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        assert client.get("/api/odds").get_json()["odds_pct"] == 100.0
+
+        node.settings.set(settings_mod.DRAW_WINDOW_SECONDS, 100)
+        data = client.get("/api/odds").get_json()
+        assert data["draw_window"] == 100.0
+        assert data["entrants"] == 2
+        assert data["odds_pct"] == 50.0
 
     def test_the_json_carries_the_same_distinction(self):
         assert self._client(True).get("/api/odds").get_json()["own_is_estimate"] is True

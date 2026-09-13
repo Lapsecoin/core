@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
+import settings as settings_mod
 import state as state_mod
 import tx as tx_mod
 from params import (
@@ -574,15 +575,16 @@ class TestRaceChartBuilderColors:
         assert [e["count"] for e in chart["legend"]] == [4, 1]
 
 
-class TestRaceOddsComparesAgainstTheField:
-    """odds_pct counts only blocks this node did not build.
+class TestRaceOddsUsesTheDrawWindow:
+    """Odds follow the rule the chain runs on rather than a percentile.
 
-    Counting our own made the figure self-referential, and on a network
-    where one node builds nearly everything that is nearly all of the
-    window: a dominant builder was being told how often it beats itself,
-    which is about 50% however dominant it is. Intervals sit in a band a
-    few seconds wide, so the unavoidable gap between a VDF's wall time and
-    a timestamp delta then swung it by tens of points.
+    A height is anchored to its first candidate and stays open for the
+    draw window (Node.open_draw). Everything inside is settled on
+    vdf_output, which is a draw and not a race; everything outside lost.
+    So the answer is a share among the builders inside that window, and a
+    percentile over the field's blocks cannot express it: losing by half a
+    second and losing by a minute score differently there, though one is a
+    coin flip and the other is never winning again.
     """
 
     def _chain(self, rows):
@@ -601,75 +603,104 @@ class TestRaceOddsComparesAgainstTheField:
         return chain
 
     def test_the_helper_really_produces_those_intervals(self):
-        # The tests below are only about the intervals, so the arithmetic
-        # that builds them has to be checked rather than assumed.
+        # Every test here is about intervals, so the arithmetic that builds
+        # them has to be checked rather than assumed.
         chain = self._chain([(0, 100), (0, 100), (1, 200)])
         assert [i for _, i, _ in block_mod.race_window(chain)] == [100, 100, 200]
 
-    def test_equal_hardware_reads_as_an_even_race(self):
-        """The case that matters, and the one comparing a VDF clock to
-        timestamp deltas gets wrong.
+    def test_a_rival_outside_the_window_is_not_competition(self):
+        # 40s behind us with a 10s window: it can only win a height we
+        # failed to take at all.
+        chain = self._chain([(0, 100), (1, 140)] * 4)
+        race = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
+        assert race["entrants"] == 1
+        assert race["odds_pct"] == pytest.approx(100.0)
 
-        Both machines build at the same pace and split the chain, so the
-        answer is 50. own_seconds here says 150s, a plausible wall clock
-        for a 100s interval once the gap between a parent being stamped
-        and the next evaluation starting is counted; used directly it says
-        this node loses every race. The blocks it actually built say
-        otherwise, in the field's own unit.
+    def test_a_rival_inside_the_window_halves_the_odds(self):
+        # 7s behind us, inside a 10s window, so the height is decided on
+        # vdf_output and speed stops mattering.
+        chain = self._chain([(0, 100), (1, 107)] * 4)
+        race = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
+        assert race["entrants"] == 2
+        assert race["odds_pct"] == pytest.approx(50.0)
+
+    def test_the_boundary_is_the_configured_window(self):
+        # The same chain, read under two settings. Nothing about the
+        # hardware changed; the rule did.
+        chain = self._chain([(0, 100), (1, 107)] * 4)
+        assert block_mod.race_odds(chain, None, address(0),
+                                   draw_window=5.0)["odds_pct"] == pytest.approx(100.0)
+        assert block_mod.race_odds(chain, None, address(0),
+                                   draw_window=15.0)["odds_pct"] == pytest.approx(50.0)
+
+    def test_three_inside_the_window_split_it_three_ways(self):
+        chain = self._chain([(0, 100), (1, 104), (2, 108)] * 3)
+        race = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
+        assert race["entrants"] == 3
+        assert race["odds_pct"] == pytest.approx(100.0 / 3)
+
+    def test_being_the_slow_one_is_zero_not_a_small_number(self):
+        # 40s behind the field. Not "unlikely": it arrives after every
+        # draw it could have entered has closed.
+        chain = self._chain([(0, 140), (1, 100)] * 4)
+        race = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
+        assert race["odds_pct"] == 0.0
+        # One builder is inside the window and it is not us, so we are not
+        # among the entrants we are counting.
+        assert race["entrants"] == 1
+
+    def test_equal_hardware_is_an_even_race_whatever_the_vdf_clock_says(self):
+        """The case a VDF clock compared to timestamp deltas gets wrong.
+
+        own_seconds here says 150s, a plausible wall clock for a 100s
+        interval once the gap between a parent being stamped and the next
+        evaluation starting is counted. Used directly it says this node
+        loses every race; the blocks it built say the field is its twin.
         """
-        rows = [(0, 100), (1, 100)] * 6
-        chain = self._chain(rows)
-        race = block_mod.race_odds(chain, 150.0, address(0))
+        chain = self._chain([(0, 100), (1, 100)] * 6)
+        race = block_mod.race_odds(chain, 150.0, address(0), draw_window=10.0)
         assert race["odds_pct"] == pytest.approx(50.0)
         assert race["own_pace"] == pytest.approx(100.0)
         assert race["own_pace_measured"]
 
-        # What the same data yields from the VDF clock: nothing to do with
-        # an even race.
-        field = [i for _, i, b in block_mod.race_window(chain) if b != address(0)]
-        assert 100.0 * sum(1 for i in field if i > 150.0) / len(field) == 0.0
-
     def test_a_node_with_no_blocks_yet_falls_back_to_its_vdf_clock(self):
         # Wrong unit, and the only figure such a node has. Flagged as not
         # measured so the page can say so.
-        chain = self._chain([(1, 100)] * 4)
-        race = block_mod.race_odds(chain, 90.0, address(0))
+        chain = self._chain([(1, 200)] * 4)
+        race = block_mod.race_odds(chain, 90.0, address(0), draw_window=10.0)
         assert race["own_pace"] == 90.0
         assert not race["own_pace_measured"]
         assert race["odds_pct"] == pytest.approx(100.0)
 
-    def test_our_own_blocks_do_not_count_toward_the_odds(self):
-        # Nine of our own at 100s, one from someone else at 200s. Our own
-        # median build is 150s: slower than every block we built, faster
-        # than the only one we did not.
-        chain = self._chain([(0, 100)] * 9 + [(1, 200)])
-        race = block_mod.race_odds(chain, 150.0, address(0))
+    def test_pace_is_a_builders_median_not_its_best_block(self):
+        """A machine is its typical pace, not its luckiest round.
+
+        Builder 1 sits at 200s and has one 101s block, the kind of thing a
+        stalled parent timestamp produces. Its median is 200, well outside
+        the window, so it is not competition. Reading the blocks
+        individually instead would let that single interval promote it into
+        the draw and halve our odds on one anomaly.
+        """
+        chain = self._chain([(0, 100)] * 6
+                            + [(1, 101)] + [(1, 200)] * 4)
+        race = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
+        assert race["field_builders"] == 1
+        assert race["entrants"] == 1
         assert race["odds_pct"] == pytest.approx(100.0)
-        assert race["field_blocks"] == 1
-
-        # The whole-window comparison is what this replaces: it reads 10%
-        # off the same data, from our own blocks alone.
-        assert block_mod.race_odds(chain, 150.0)["odds_pct"] == pytest.approx(10.0)
-
-    def test_no_field_means_no_answer_rather_than_zero(self):
-        # Nobody else built anything, so there is no evidence about how
-        # this node compares. Zero would be a claim; None is the truth.
-        chain = self._chain([(0, 100)] * 5)
-        race = block_mod.race_odds(chain, 150.0, address(0))
-        assert race["odds_pct"] is None
-        assert race["field_blocks"] == 0
 
     def test_win_share_reports_what_actually_happened(self):
         chain = self._chain([(0, 100)] * 9 + [(1, 200)])
         race = block_mod.race_odds(chain, 150.0, address(0))
         assert race["win_share_pct"] == pytest.approx(90.0)
         assert race["own_blocks"] == 9
+        assert race["field_blocks"] == 1
 
-    def test_an_unknown_own_address_falls_back_to_the_whole_window(self):
-        chain = self._chain([(0, 100)] * 9 + [(1, 200)])
-        race = block_mod.race_odds(chain, 150.0)
-        assert race["field_blocks"] == 10
-        assert race["win_share_pct"] is None
+    def test_the_window_defaults_to_the_settings_default(self):
+        # No caller should have to know the number, and the page's
+        # explanation of it has to match what was computed.
+        chain = self._chain([(0, 100), (1, 107)] * 4)
+        race = block_mod.race_odds(chain, None, address(0))
+        assert race["draw_window"] == settings_mod.DRAW_WINDOW_SECONDS.default
 
 
 class TestRaceOddsNoOutlierBand:

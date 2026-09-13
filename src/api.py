@@ -96,6 +96,7 @@ from flask_limiter.util import get_remote_address
 import block as block_mod
 import crypto as crypto_mod
 import state as state_mod
+import settings as settings_mod
 import storage as storage_mod
 import tx as tx_mod
 import uptime_rewarder
@@ -300,6 +301,14 @@ def _block_reward(chain, height):
     """Mint reward for the block at `height`. 0 for genesis (no builder,
     nothing minted)."""
     return _reward_series.reward_at(height)
+
+
+def _draw_window(node):
+    """This node's configured draw window, which is what decides who is
+    racing whom (see block.race_odds). Read per request rather than frozen
+    at startup, so changing it on the settings page changes the page that
+    explains it."""
+    return node.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
 
 
 def _get_mined_blocks_for_addr(addr, node):
@@ -833,7 +842,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/odds", endpoint=pfx+"odds")
     def odds():
         race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
-                                   node.addr)
+                                   node.addr, _draw_window(node))
         chart = _race_chart(race) if race else None
         return render_template("odds.html", title="Race Odds", race=race,
                                chart=chart, reorgs=node.reorg_stats(),
@@ -844,7 +853,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/api/odds", endpoint=pfx+"api_odds")
     def api_odds():
         race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
-                                   node.addr)
+                                   node.addr, _draw_window(node))
         if not race:
             return jsonify(None)
         return jsonify({
@@ -858,6 +867,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "win_share_pct": race["win_share_pct"],
             "own_pace": race["own_pace"],
             "own_pace_measured": race["own_pace_measured"],
+            "entrants": race["entrants"],
+            "draw_window": race["draw_window"],
+            "field_builders": race["field_builders"],
             "window_len": len(race["window"]), "chart": _race_chart(race),
             "reorgs": node.reorg_stats(),
         })
@@ -1120,7 +1132,6 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
-        import settings as settings_mod
         balance_lapse = node.view.state.get_balance(node.addr) / TICKS_PER_LAPSE
         ctx = dict(title="Settings", csrf_token=csrf_token,
                    alert_ok="", alert_err="", rewarder_available=rewarder is not None,
