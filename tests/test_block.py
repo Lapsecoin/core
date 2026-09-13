@@ -645,9 +645,9 @@ class TestRaceOddsUsesTheDrawWindow:
         chain = self._chain([(0, 140), (1, 100)] * 4)
         race = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
         assert race["odds_pct"] == 0.0
-        # One builder is inside the window and it is not us, so we are not
-        # among the entrants we are counting.
-        assert race["entrants"] == 1
+        assert race["in_draw_pct"] == 0.0
+        # No draw was ever entered, so there is no entrant count to report.
+        assert race["entrants"] is None
 
     def test_equal_hardware_is_an_even_race_whatever_the_vdf_clock_says(self):
         """The case a VDF clock compared to timestamp deltas gets wrong.
@@ -672,21 +672,70 @@ class TestRaceOddsUsesTheDrawWindow:
         assert not race["own_pace_measured"]
         assert race["odds_pct"] == pytest.approx(100.0)
 
-    def test_pace_is_a_builders_median_not_its_best_block(self):
-        """A machine is its typical pace, not its luckiest round.
+    def test_one_fast_block_buys_a_rival_a_share_not_the_window(self):
+        """A builder is credited at the rate its own record shows.
 
-        Builder 1 sits at 200s and has one 101s block, the kind of thing a
-        stalled parent timestamp produces. Its median is 200, well outside
-        the window, so it is not competition. Reading the blocks
-        individually instead would let that single interval promote it into
-        the draw and halve our odds on one anomaly.
+        Builder 1 sits at 200s with a single 101s block. It is inside the
+        window on about a fifth of heights, so it costs about a tenth of a
+        height: 0.2 x half a share. Neither of the point estimates can say
+        that. A median calls it 200s and hands us everything; reading the
+        blocks one by one calls it competition outright and halves us.
+
+        The cost of taking the record at face value is that a spurious
+        interval counts too, and a short one is easy to produce: an
+        interval is a gap between two timestamps, so a parent stamped late
+        shortens its child's. With few blocks to go on, one of those
+        carries a lot of weight. It is bounded (one block in n moves the
+        answer by at most 1/n) and it errs toward crediting a rival, which
+        is the safe direction for a figure about our own odds.
         """
         chain = self._chain([(0, 100)] * 6
                             + [(1, 101)] + [(1, 200)] * 4)
         race = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
         assert race["field_builders"] == 1
-        assert race["entrants"] == 1
-        assert race["odds_pct"] == pytest.approx(100.0)
+        assert race["entrants"] == pytest.approx(1.2, abs=0.05)
+        assert race["odds_pct"] == pytest.approx(90.0, abs=1.5)
+
+    def test_a_rival_near_the_edge_is_graded_not_snapped(self):
+        """The reason for drawing rather than comparing paces.
+
+        These three rivals are 5s, 10s and 15s off our pace, each with the
+        same spread. The first is inside the window on every height and the
+        last on none, so both ends are flat by construction: 50 and 100.
+        The middle one straddles the edge, and that is where comparing
+        medians has to pick a side and answer 50 or 100. Drawing from the
+        record puts it between them, at the rate its own blocks land each
+        side of the line.
+        """
+        def odds_against(gap):
+            # A spread either side of the gap, so the rival straddles the
+            # edge rather than sitting exactly on it.
+            rival = [(1, 100 + gap - 3), (1, 100 + gap), (1, 100 + gap + 3)]
+            chain = self._chain([(0, 100)] * 3 + rival * 2)
+            return block_mod.race_odds(chain, None, address(0),
+                                       draw_window=10.0)["odds_pct"]
+
+        near, edge, far = odds_against(5), odds_against(10), odds_against(15)
+        assert near == pytest.approx(50.0), "always inside the window"
+        assert far == pytest.approx(100.0), "never inside the window"
+        assert 50.0 < edge < 100.0, f"the edge case must grade, got {edge}"
+
+    def test_the_same_chain_always_gives_the_same_answer(self):
+        """Seeded from the tip, so a refresh with nothing happening shows
+        the same number.
+
+        The intervals here straddle the window on purpose. Identical ones
+        would make every simulated draw identical too, and the answer would
+        come out stable however the generator was seeded, which proves
+        nothing about the seeding.
+        """
+        chain = self._chain([(0, 98), (1, 105), (0, 102), (1, 113),
+                             (0, 100), (1, 109)] * 3)
+        first = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
+        assert 0.0 < first["odds_pct"] < 100.0, "needs a mixed outcome to be a test"
+        for _ in range(3):
+            again = block_mod.race_odds(chain, None, address(0), draw_window=10.0)
+            assert again["odds_pct"] == first["odds_pct"]
 
     def test_win_share_reports_what_actually_happened(self):
         chain = self._chain([(0, 100)] * 9 + [(1, 200)])

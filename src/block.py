@@ -1,5 +1,6 @@
 """Block creation, validation, serialization. Pure functions on dicts."""
 
+import random
 import statistics
 import time as _time
 
@@ -106,6 +107,60 @@ def race_window(chain):
     return rows
 
 
+# Draws simulated when estimating odds. Enough that the answer is steady
+# to a tenth of a point (the standard error of a mean over [0,1] is about
+# 0.5 points here), few enough to be a couple of milliseconds.
+ODDS_TRIALS = 10_000
+
+
+def _simulate_draws(own_samples, field_samples, window_s, seed,
+                    trials=ODDS_TRIALS):
+    """Replay the draw `trials` times over the observed intervals.
+
+    Returns (odds_pct, in_draw_pct, mean_entrants_when_in).
+
+    Each trial draws one interval per builder, with replacement, from what
+    that builder actually did, then applies the chain's own rule: the
+    height opens on the first candidate, everything within window_s of it
+    is settled on vdf_output and so splits the height evenly, everything
+    later has lost (Node.open_draw, ChainState.is_better_than).
+
+    Resampled rather than reduced to one pace apiece, because a pace is an
+    estimate and the rule has a hard edge. Comparing medians makes a rival
+    at 9.9s and one at 10.1s the difference between a half share and the
+    whole height, when the data cannot tell those two apart. Here a rival
+    near the edge is inside the window on some heights and outside on
+    others, at the rate its own blocks say, which is the honest answer and
+    the one a point estimate cannot give.
+
+    Non-parametric on purpose: block intervals are a build time plus
+    whatever the machine was doing, not a named distribution, so this
+    draws from the record instead of fitting a shape to it.
+
+    What it assumes, and cannot check: that every builder seen in the
+    window contends for every height. A peer that is merely offline half
+    the time looks like one that is present and slow. win_share_pct is the
+    check on that, being a measurement of the same quantity, and a gap
+    between the two means this assumption is not holding here.
+    """
+    rng    = random.Random(seed)
+    others = list(field_samples.values())
+    share_total = in_draw = entrant_total = 0.0
+    for _ in range(trials):
+        ours  = rng.choice(own_samples)
+        drawn = [rng.choice(s) for s in others]
+        cutoff = min([ours] + drawn) + window_s
+        if ours > cutoff:
+            continue        # finished after the draw for this height closed
+        entrants = 1 + sum(1 for d in drawn if d <= cutoff)
+        in_draw += 1
+        entrant_total += entrants
+        share_total   += 1.0 / entrants
+    return (100.0 * share_total / trials,
+            100.0 * in_draw / trials,
+            entrant_total / in_draw if in_draw else None)
+
+
 def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
     """Race-odds page data: recent block intervals (a proxy for builder
     build time) and how this node's own pace compares to the field.
@@ -201,50 +256,33 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
     own_pace = (statistics.median(i for _, i, _ in mine) if mine
                 else own_seconds)
 
-    # Each builder's pace, from its own blocks. The contest is between
-    # machines, not between blocks, so this is per builder rather than a
-    # percentile over a pile of intervals.
-    field_paces = {}
+    # Each builder's observed intervals, kept whole rather than reduced to
+    # one number: the spread is what decides the marginal cases below.
+    field_samples = {}
     for _h, interval, builder in field:
-        field_paces.setdefault(builder, []).append(interval)
-    field_paces = {b: statistics.median(v) for b, v in field_paces.items()}
+        field_samples.setdefault(builder, []).append(interval)
+    field_paces = {b: statistics.median(v) for b, v in field_samples.items()}
 
     window_s = (settings_mod.DRAW_WINDOW_SECONDS.default if draw_window is None
                 else draw_window)
+    own_samples = [i for _h, i, _b in mine] or ([own_pace] if own_pace is not None
+                                                else [])
 
-    odds_pct = None
-    entrants = None
-    if own_pace is not None:
-        # The draw window already defines who is competing, so use it
-        # rather than a percentile that has to invent a threshold.
-        #
-        # A height is anchored to its first candidate and stays open for
-        # this long (Node.open_draw); everything that lands inside is
-        # settled on vdf_output, which vdf_challenge derives from
-        # (previous_hash, builder) alone, so it is a draw and not a race.
-        # Everything that lands outside simply lost. That makes the
-        # question countable: who finishes within a window of the fastest
-        # builder, and how many of them are there.
-        #
-        # A percentile could not answer it. "Beat 70% of their blocks"
-        # conflates losing by half a second with losing by a minute, and
-        # the first is a coin flip while the second is never winning
-        # again. The setting's own help text says as much: it is "how much
-        # of a speed advantage it takes to win outright".
-        fastest  = min([own_pace] + list(field_paces.values()))
-        cutoff   = fastest + window_s
-        # Counted, not assumed: a node too slow for the window is not an
-        # entrant in its own draw. Adding ourselves unconditionally made
-        # "entrants" mean two different things depending on odds_pct, and
-        # the page reads it as one.
-        entrants = (sum(1 for p in field_paces.values() if p <= cutoff)
-                    + (1 if own_pace <= cutoff else 0))
-        odds_pct = 100.0 / entrants if own_pace <= cutoff else 0.0
+    odds_pct = in_draw_pct = entrants = None
+    if own_samples:
+        # Seeded from the tip, so the figure is stable while the chain is
+        # and moves when it does. An unseeded draw would have the page
+        # showing a different number on every refresh with nothing having
+        # happened.
+        seed = int(chain[-1].get("hash", "0")[:8] or "0", 16)
+        odds_pct, in_draw_pct, entrants = _simulate_draws(
+            own_samples, field_samples, window_s, seed)
 
     return {"window": window, "median": median,
             "own_seconds": own_seconds, "odds_pct": odds_pct,
             "own_pace": own_pace, "own_pace_measured": bool(mine),
-            "entrants": entrants, "draw_window": window_s,
+            "entrants": entrants, "in_draw_pct": in_draw_pct,
+            "draw_window": window_s,
             "field_builders": len(field_paces),
             "field_blocks": len(field), "own_blocks": len(mine),
             "win_share_pct": (100.0 * len(mine) / len(window)

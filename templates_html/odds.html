@@ -10,7 +10,7 @@
   <div class="stat">
     <div class="stat-label">Odds</div>
     <div class="stat-value" id="odds-pct-val">{{ ("%.1f"|format(race.odds_pct) ~ "%") if race.odds_pct is not none else "--" }}</div>
-    <div class="stat-sub" id="odds-pct-sub">{% if race.odds_pct is none %}no pace to compare yet{% elif race.odds_pct == 0 %}too slow for the {{ "%g"|format(race.draw_window) }}s draw window{% elif race.entrants == 1 %}only builder inside the {{ "%g"|format(race.draw_window) }}s draw window{% else %}one of {{ race.entrants }} builders inside the {{ "%g"|format(race.draw_window) }}s draw window{% endif %}</div>
+    <div class="stat-sub" id="odds-pct-sub">{% set w = "%g"|format(race.draw_window) %}{% if race.odds_pct is none %}no blocks to judge from yet{% elif race.odds_pct == 0 %}never inside the {{ w }}s draw window{% elif race.in_draw_pct < 95 %}in the {{ w }}s draw window on {{ "%.0f"|format(race.in_draw_pct) }}% of heights{% elif race.entrants < 1.05 %}only builder inside the {{ w }}s draw window{% else %}{{ "%.1f"|format(race.entrants) }} builders inside the {{ w }}s draw window{% endif %}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Blocks won</div>
@@ -111,12 +111,13 @@
     give the blocks beside it more room; every block stays on the chart, so spreading one
     stretch out squeezes its neighbour. </span>
     Block interval is a proxy for the winning builder's real build time.
-    Each builder's pace is the median interval of its own blocks, so every
-    side is measured the same way. Odds follow the rule the chain runs on:
-    a height stays open for the draw window, everything finishing inside it
-    is settled on VDF output rather than on speed, and everything outside it
-    has lost. So the odds are an equal share among the builders inside that
-    window, and zero for a node that cannot reach it.
+    Odds replay the last {{ race.window|length }} heights ten thousand times,
+    drawing each builder's interval from what that builder actually did and
+    applying the rule the chain runs on: a height stays open for the draw
+    window, everything finishing inside it is settled on VDF output rather
+    than on speed, and everything outside it has lost. Drawn rather than
+    averaged because that rule has a hard edge, and a builder sitting near
+    it is inside on some heights and outside on others.
   </p>
 </div>
 <style>
@@ -376,10 +377,12 @@
         data.odds_pct !== null ? fmt1(data.odds_pct) + "%" : "--";
       const win = data.draw_window + "s draw window";
       document.getElementById("odds-pct-sub").textContent =
-        data.odds_pct === null ? "no pace to compare yet"
-          : data.odds_pct === 0 ? "too slow for the " + win
-          : data.entrants === 1 ? "only builder inside the " + win
-          : "one of " + data.entrants + " builders inside the " + win;
+        data.odds_pct === null ? "no blocks to judge from yet"
+          : data.odds_pct === 0 ? "never inside the " + win
+          : data.in_draw_pct < 95
+              ? "in the " + win + " on " + Math.round(data.in_draw_pct) + "% of heights"
+          : data.entrants < 1.05 ? "only builder inside the " + win
+          : fmt1(data.entrants) + " builders inside the " + win;
       document.getElementById("win-share-val").textContent =
         data.win_share_pct !== null ? fmt1(data.win_share_pct) + "%" : "--";
       document.getElementById("win-share-sub").textContent =

@@ -303,14 +303,6 @@ def _block_reward(chain, height):
     return _reward_series.reward_at(height)
 
 
-def _draw_window(node):
-    """This node's configured draw window, which is what decides who is
-    racing whom (see block.race_odds). Read per request rather than frozen
-    at startup, so changing it on the settings page changes the page that
-    explains it."""
-    return node.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
-
-
 def _get_mined_blocks_for_addr(addr, node):
     """Blocks built by addr, with the reward + fees paid to the builder.
 
@@ -839,10 +831,36 @@ def _shared_read_only_routes(app, node, pool, limiter,
                                self_height=self_height,
                                self_version=LOCAL_VERSION, self_addr=_self_external_addr())
 
+    # Race-odds data for the current tip, computed once per tip and held
+    # here rather than in a module global: one cache per app, keyed by
+    # nothing that can be absent. race_odds simulates ten thousand draws
+    # (about 15ms) and nothing in its answer moves until the chain does,
+    # while two routes ask for it, /odds and the /api/odds the dashboard
+    # polls on a timer. They now also agree exactly instead of each
+    # simulating its way to a slightly different number.
+    odds_cache = {}
+    odds_lock  = threading.Lock()
+
+    def _race_for():
+        tip = node.view.chain[-1]
+        # The draw window is this node's own setting, read per request
+        # rather than frozen at startup, so an operator who changes it
+        # sees the page that explains it change too.
+        window = node.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
+        key = (tip.get("hash"), tip.get("height"), len(node.view.chain),
+               node.addr, window, node.own_vdf_median())
+        with odds_lock:
+            if odds_cache.get("key") == key:
+                return odds_cache["race"]
+        race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
+                                   node.addr, window)
+        with odds_lock:
+            odds_cache["key"], odds_cache["race"] = key, race
+        return race
+
     @app.route("/odds", endpoint=pfx+"odds")
     def odds():
-        race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
-                                   node.addr, _draw_window(node))
+        race = _race_for()
         chart = _race_chart(race) if race else None
         return render_template("odds.html", title="Race Odds", race=race,
                                chart=chart, reorgs=node.reorg_stats(),
@@ -852,8 +870,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/api/odds", endpoint=pfx+"api_odds")
     def api_odds():
-        race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
-                                   node.addr, _draw_window(node))
+        race = _race_for()
         if not race:
             return jsonify(None)
         return jsonify({
@@ -868,6 +885,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "own_pace": race["own_pace"],
             "own_pace_measured": race["own_pace_measured"],
             "entrants": race["entrants"],
+            "in_draw_pct": race["in_draw_pct"],
             "draw_window": race["draw_window"],
             "field_builders": race["field_builders"],
             "window_len": len(race["window"]), "chart": _race_chart(race),
