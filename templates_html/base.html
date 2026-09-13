@@ -146,6 +146,18 @@
   .stat-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .2rem; }
   .stat-value { font-size: 1.1rem; font-weight: bold; font-family: var(--mono); overflow-wrap: break-word; }
   .stat-sub { color: var(--ink-dim); font-size: .78rem; margin-top: .2rem; }
+  /* Several small figures sharing one box, each keeping its own label so
+     none of them has to be guessed from context. Same label and value
+     type as a box holding one figure, just in columns. */
+  /* A box holding three figures gets about twice the room of one holding
+     a single figure, so its columns stay on one line at the widths that
+     matter. */
+  .stat.stat-trio { flex: 1 1 250px; }
+  .stat-group { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; }
+  /* Figures, so they never break mid-number the way .stat-value's
+     break-word (there for addresses) would: the column wraps to the next
+     line instead, which stays readable. */
+  .stat-group .stat-value { font-size: 1.05rem; overflow-wrap: normal; white-space: nowrap; }
 
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -1.15rem; padding: 0 1.15rem; }
   table { width: 100%; min-width: 460px; border-collapse: collapse; font-size: .92rem; }
