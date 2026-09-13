@@ -118,6 +118,118 @@ class TestFeeEstimate:
         assert fees["next_block"] == expected
 
 
+class TestFmtDuration:
+    """Network age is shown as two units at most: a glanceable span, not
+    seconds of precision on something measured in days."""
+
+    def test_the_units_it_picks(self):
+        assert api.fmt_duration(0) == "just now"
+        assert api.fmt_duration(59) == "just now"
+        assert api.fmt_duration(60) == "1m"
+        assert api.fmt_duration(3599) == "59m"
+        assert api.fmt_duration(3661) == "1h 1m"
+        assert api.fmt_duration(90061) == "1d 1h"
+        assert api.fmt_duration(86400 * 370) == "1y 5d"
+
+    def test_it_never_shows_more_than_two(self):
+        # 1y 35d 6h 5m would be four; the tail is noise at that scale.
+        assert api.fmt_duration(86400 * 400 + 3600 * 6 + 305) == "1y 35d"
+
+    def test_a_missing_or_negative_span_does_not_throw(self):
+        # A clock that has gone backwards relative to genesis is not a
+        # reason for the dashboard to 500.
+        assert api.fmt_duration(None) == "just now"
+        assert api.fmt_duration(-5) == "just now"
+
+
+class TestDashboardTxPaging:
+    """Recent transactions page like every other listing on the site.
+
+    The walk is backwards from the tip and stops, so a later page costs
+    the same as the first: reaching page 5 touches 5 pages' worth of
+    transactions, never the whole chain.
+    """
+
+    class _DashNode:
+        def __init__(self, tx_count):
+            self.addr = address(0)
+            # Two transactions per block, so paging has to cross block
+            # boundaries rather than lining up with them.
+            chain, n = [{"height": 0, "transactions": []}], 0
+            while n < tx_count:
+                txs = []
+                for _ in range(min(2, tx_count - n)):
+                    n += 1
+                    txs.append({"from": address(1), "nonce": n, "fee": 0,
+                                "outputs": [{"to": address(2),
+                                             # whole LAPSE, so the rendered
+                                             # amount reads back as the index
+                                             "amount": n * TICKS_PER_LAPSE}]})
+                chain.append({"height": len(chain), "transactions": txs})
+            self.view = SimpleNamespace(chain=chain)
+
+        def get_info(self):
+            return {"height": len(self.view.chain) - 1, "tip_hash": "ab" * 32,
+                    "mempool_size": 0, "address": self.addr, "peer_count": 0,
+                    "total_minted": 0, "can_mint": 0, "block_reward": 0,
+                    "block_time_ratio": None, "network_age_seconds": 90061,
+                    "status": "ok"}
+
+    def _client(self, tx_count):
+        node = self._DashNode(tx_count)
+        return api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+
+    def _amounts(self, html):
+        """The amount column, which is the tx's index, so a page's contents
+        are identifiable without matching on hashes."""
+        import re
+        return [int(m) for m in re.findall(r'data-label="Amount">(\d+) LAPSE', html)]
+
+    def test_the_first_page_holds_the_newest(self):
+        html = self._client(20).get("/").get_data(as_text=True)
+        assert self._amounts(html) == [20, 19, 18, 17, 16, 15]
+
+    def test_the_second_page_continues_where_it_left_off(self):
+        html = self._client(20).get("/?tx_page=2").get_data(as_text=True)
+        assert self._amounts(html) == [14, 13, 12, 11, 10, 9]
+
+    def test_the_last_page_holds_the_remainder(self):
+        html = self._client(20).get("/?tx_page=4").get_data(as_text=True)
+        assert self._amounts(html) == [2, 1]
+
+    def test_a_page_past_the_end_clamps_to_the_last(self):
+        html = self._client(20).get("/?tx_page=99").get_data(as_text=True)
+        assert self._amounts(html) == [2, 1]
+
+    def test_a_page_before_the_start_clamps_to_the_first(self):
+        for bad in ("0", "-3", "banana"):
+            html = self._client(20).get(f"/?tx_page={bad}").get_data(as_text=True)
+            assert self._amounts(html) == [20, 19, 18, 17, 16, 15], bad
+
+    def test_no_pager_when_everything_fits_on_one_page(self):
+        html = self._client(4).get("/").get_data(as_text=True)
+        assert self._amounts(html) == [4, 3, 2, 1]
+        assert "tx_page=" not in html
+
+    def test_an_empty_chain_still_renders(self):
+        html = self._client(0).get("/").get_data(as_text=True)
+        assert "No transactions yet" in html
+
+    def test_every_block_counts_toward_the_page_total(self):
+        # Counted directly: a count that skips a block shortens the pager
+        # and makes the oldest transactions unreachable, which no test
+        # driving the route can see unless that block happens to hold one.
+        chain = [{"transactions": ["a", "b"]}, {"transactions": []},
+                 {}, {"transactions": ["c"]}]
+        assert api._committed_tx_count(chain) == 3
+
+    def test_the_page_tells_the_live_refresh_which_page_it_is_on(self):
+        # The poll only ever carries the newest transactions, so the script
+        # has to know not to write them over a reader sitting on page 3.
+        html = self._client(20).get("/?tx_page=3").get_data(as_text=True)
+        assert 'data-tx-page="3"' in html
+
+
 class TestOddsPage:
     """The self figure on /odds has three sources and the page has to say
     which one it is showing.

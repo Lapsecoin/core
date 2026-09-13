@@ -110,6 +110,7 @@ log = logging.getLogger("ec.api")
 BLOCKS_PER_PAGE  = 8
 PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
+DASHBOARD_TXS_PER_PAGE = 6
 
 # How far back to look for nodes that announced themselves active. Taken
 # from the rewarder rather than restated: it is the rewarder's policy, and
@@ -131,6 +132,25 @@ def fmt_balance(ticks):
 def fmt_lapse(ticks):
     """Whole-LAPSE amount only, comma-grouped, for compact display."""
     return f"{ticks // TICKS_PER_LAPSE:,} LAPSE"
+
+
+def fmt_duration(seconds):
+    """A span as the two largest units that fit: "1y 24d", "3d 4h", "12m".
+
+    Two units, never more: the point is a glanceable age, and seconds of
+    precision on something measured in days is noise dressed as detail.
+    """
+    seconds = max(int(seconds or 0), 0)
+    units = (("y", 31_536_000), ("d", 86_400), ("h", 3_600), ("m", 60))
+    parts = []
+    for suffix, size in units:
+        if seconds >= size or parts:
+            count, seconds = divmod(seconds, size)
+            if count or parts:
+                parts.append(f"{count}{suffix}")
+            if len(parts) == 2:
+                return " ".join(parts)
+    return " ".join(parts) if parts else "just now"
 
 
 # ---------------------------------------------------------------------------
@@ -210,17 +230,33 @@ def _pagination_window(page, total_pages, radius=2):
     return window
 
 
-def _recent_committed_txs(chain, limit):
+def _recent_committed_txs(chain, limit, offset=0):
     """Most recently committed transactions across the chain, tip first.
+
     Walks blocks backward from the tip so this stays cheap even on a long
-    chain with sparse blocks. It stops as soon as `limit` is reached."""
-    rows = []
+    chain with sparse blocks: it touches offset+limit transactions and
+    stops, never the whole chain, so a later page costs no more than the
+    size of the page before it.
+    """
+    rows, skipped = [], 0
     for blk in reversed(chain):
         for t in reversed(blk.get("transactions", [])):
+            if skipped < offset:
+                skipped += 1
+                continue
             rows.append((blk["height"], tx_mod.tx_hash(t), t, _tx_amount(t)))
             if len(rows) >= limit:
                 return rows
     return rows
+
+
+def _committed_tx_count(chain):
+    """How many transactions the chain holds, for paging the dashboard.
+
+    Counts block-by-block rather than walking transactions, so it is one
+    len() per block and does not touch a transaction at all.
+    """
+    return sum(len(blk.get("transactions", ())) for blk in chain)
 
 
 def _get_address_history(addr, node):
@@ -649,11 +685,18 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/", endpoint=pfx+"dashboard")
     def dashboard():
-        info = node.get_info()
+        info  = node.get_info()
         chain = node.view.chain
+        total = _committed_tx_count(chain)
+        total_pages = max(-(-total // DASHBOARD_TXS_PER_PAGE), 1)
+        page  = min(max(request.args.get("tx_page", 1, type=int) or 1, 1), total_pages)
+        offset = (page - 1) * DASHBOARD_TXS_PER_PAGE
         return render_template("dashboard.html", title="Dashboard",
             info=info, supply_cap=SUPPLY_CAP,
-            recent_txs=_recent_committed_txs(chain, limit=6))
+            recent_txs=_recent_committed_txs(chain, DASHBOARD_TXS_PER_PAGE, offset),
+            tx_page=page, tx_total_pages=total_pages,
+            tx_page_window=_pagination_window(page, total_pages),
+            tx_has_prev=page > 1, tx_has_next=page < total_pages)
 
     @app.route("/explorer", endpoint=pfx+"explorer")
     def explorer():
@@ -936,7 +979,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         chain = node.view.chain
         info["recent_txs"] = [
             {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount}
-            for height, h, t, amount in _recent_committed_txs(chain, limit=6)
+            for height, h, t, amount in _recent_committed_txs(
+                chain, DASHBOARD_TXS_PER_PAGE)
         ]
         return jsonify(info)
 
@@ -1079,6 +1123,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
+                                 fmt_duration=fmt_duration,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE)
     app.logger.setLevel(logging.WARNING)
     # Deliberately not touching the werkzeug logger. main.py already sets it
@@ -1127,6 +1172,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
+                                 fmt_duration=fmt_duration,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE)
     app.logger.setLevel(logging.WARNING)
     _close_db_after_request(app)

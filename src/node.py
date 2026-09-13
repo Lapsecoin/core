@@ -490,6 +490,10 @@ class Node:
             "can_mint":     v.state.compute_can_mint(),
             "block_reward": v.state.compute_block_reward(),
             "block_time_ratio": self.own_block_time_ratio(),
+            # Age of the chain itself, from genesis. Read off block 0
+            # rather than params.GENESIS_TIMESTAMP so it describes the
+            # chain this node is actually on.
+            "network_age_seconds": max(0.0, time.time() - v.chain[0]["timestamp"]),
             "status":       self.status_line,
         }
 

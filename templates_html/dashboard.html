@@ -12,6 +12,11 @@
   <div class="stat"><div class="stat-label">Mempool</div><div class="stat-value" id="live-mempool">{{ info.mempool_size }}</div></div>
   <div class="stat"><a href="/peers"><div class="stat-label">Peers</div><div class="stat-value" id="live-peers">{{ info.peer_count }}</div></a></div>
   <div class="stat">
+    <div class="stat-label">Network age</div>
+    <div class="stat-value" id="live-age">{{ fmt_duration(info.network_age_seconds) }}</div>
+    <div style="color:var(--muted);font-size:.75rem">since genesis</div>
+  </div>
+  <div class="stat">
     <div class="stat-label">Circulating</div>
     <div class="stat-value" style="font-size:1rem" id="live-circulating">{{ fmt_balance(info.total_minted) }}</div>
     <div style="color:var(--muted);font-size:.75rem" id="live-circulating-pct">{{ "%.4f"|format(info.total_minted / supply_cap * 100) }}% of 21M cap</div>
@@ -26,7 +31,7 @@
   <div class="card-title">Address</div>
   <div class="hash">{{ info.address }}</div>
 </div>
-<div class="card">
+<div class="card" data-tx-page="{{ tx_page }}">
   <div class="card-title">Recent transactions</div>
   <div class="table-wrap">
   <table class="stacked">
@@ -47,12 +52,41 @@
     </tbody>
   </table>
   </div>
+{% if tx_total_pages > 1 %}
+  <nav class="pager" aria-label="Recent transaction pagination">
+    {% if tx_has_prev %}<a href="/?tx_page={{ tx_page - 1 }}">Prev</a>{% endif %}
+    {% for p in tx_page_window %}
+      {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+      {% elif p == tx_page %}<span class="pager-current">{{ p }}</span>
+      {% else %}<a href="/?tx_page={{ p }}">{{ p }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if tx_has_next %}<a href="/?tx_page={{ tx_page + 1 }}">Next</a>{% endif %}
+  </nav>
+{% endif %}
 </div>
 <script>
 (function () {
   const TICKS_PER_LAPSE = {{ TICKS_PER_LAPSE }};
   const SUPPLY_CAP = {{ supply_cap }};
   const SELF_ADDRESS = {{ info.address|tojson }};
+  const TX_PAGE = parseInt(
+    document.querySelector("[data-tx-page]").getAttribute("data-tx-page"), 10);
+
+  function fmtDuration(seconds) {
+    seconds = Math.max(Math.floor(seconds || 0), 0);
+    const units = [["y", 31536000], ["d", 86400], ["h", 3600], ["m", 60]];
+    const parts = [];
+    for (const [suffix, size] of units) {
+      if (seconds >= size || parts.length) {
+        const count = Math.floor(seconds / size);
+        seconds -= count * size;
+        if (count || parts.length) parts.push(count + suffix);
+        if (parts.length === 2) return parts.join(" ");
+      }
+    }
+    return parts.length ? parts.join(" ") : "just now";
+  }
 
   function fmtBalance(ticks) {
     const lapse = Math.floor(ticks / TICKS_PER_LAPSE);
@@ -85,9 +119,16 @@
         diffEl.style.color = info.block_time_ratio > 1 ? "var(--red)" : "var(--green)";
       }
 
+      document.getElementById("live-age").textContent =
+        fmtDuration(info.network_age_seconds);
+
       const txBody = document.getElementById("live-recent-txs");
       const txs = info.recent_txs || [];
-      if (txs.length) {
+      if (TX_PAGE !== 1) {
+        // The poll only ever carries the newest transactions, so writing
+        // them into a table showing page 3 would silently yank the reader
+        // back to page 1. Stats above still refresh.
+      } else if (txs.length) {
         txBody.innerHTML = txs.map(function (tx) {
           return "<tr>" +
             "<td data-label=\"Height\"><a href=\"/explorer/block/" + tx.height + "\">" + tx.height + "</a></td>" +
