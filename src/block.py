@@ -520,8 +520,9 @@ def assemble(tip, txs, builder_addr, iterations):
     # did it again on the next height.
     #
     # That happens to whichever node is fastest, which is the one this
-    # chain is supposed to pay: a machine finishing inside 30s of the
-    # parent could never build at all. A node whose clock has drifted
+    # chain is supposed to pay: a machine finishing inside the spacing
+    # floor of the parent could never build at all. A node whose clock
+    # has drifted
     # behind the chain hits it too, for as long as the drift lasts.
     # Clamping is what the rule already asks for, spelled out.
     timestamp = max(_time.time(),

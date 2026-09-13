@@ -50,7 +50,8 @@ import tx as tx_mod
 import vdf as vdf_mod
 from cachetools import LRUCache
 from chainstate import ChainState
-from params import DB_PATH, VDF_CALIBRATION_ITERATIONS
+from params import (DB_PATH, MIN_BLOCK_SPACING_SECONDS,
+                    VDF_CALIBRATION_ITERATIONS)
 from storage import Storage
 
 log = logging.getLogger("ec.node")
@@ -748,6 +749,14 @@ class Node:
             self._commit(winner, relay=relay)
             return
 
+        # Finished, and possibly too early to say so. See _await_spacing.
+        self._await_spacing(cs, accumulated_blocks)
+        if self.cs is not cs:
+            log.info("[block %d] dropped while waiting out the spacing floor: "
+                     "a better chain arrived, so this has the wrong parent",
+                     cs.height + 1)
+            return
+
         candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr, iterations)
         candidate["vdf_output"]    = vdf_out
         candidate["vdf_proof"]     = vdf_proof
@@ -769,6 +778,53 @@ class Node:
         if winner is None:
             return
         self._commit(winner, relay=relay)
+
+    def _await_spacing(self, cs, accumulated_blocks):
+        """Hold a finished proof until its timestamp can be the honest one.
+
+        A block is invalid until MIN_BLOCK_SPACING_SECONDS have passed
+        since its parent was stamped, so a node that finishes sooner has
+        nothing valid to publish yet. What it used to do was publish
+        anyway: stamp the clock, fail its own validation, and throw away
+        the evaluation it had just spent two minutes on. Clamping the
+        stamp forward only moved the problem, since the next block's floor
+        is measured from the inflated stamp and the drift compounds until
+        it breaks the future-timestamp rule a block or two later.
+
+        So it waits, and waits for the real time rather than for the
+        earliest moment a peer would tolerate a future stamp. Timestamps
+        stay equal to when the block was actually made, the chain's
+        timeline keeps tracking reality, and nothing accumulates.
+
+        The wait is not idle. It drains the queue exactly as the build
+        loop does, so inbound blocks are still judged, a better chain is
+        still adopted, and rework still goes out. And it is not a delay
+        anybody loses by: every builder fast enough to be waiting is
+        waiting for the same instant, so they all arrive within the draw
+        window and the height is settled on vdf_output, which is what the
+        window is for.
+
+        Nothing reaches this today: the fastest block this chain has
+        ever produced took 92s, and the floor is 90s. It is what makes a
+        higher floor survivable rather than a way to make fast nodes
+        discard work.
+        """
+        remaining = (cs.tip["timestamp"] + MIN_BLOCK_SPACING_SECONDS
+                     - time.time())
+        if remaining <= 0:
+            return
+        deadline = time.monotonic() + remaining
+        log.info("[block %d] proof ready %.0fs before the spacing "
+                 "floor allows it, holding", cs.height + 1, remaining)
+        self.status_line = (f"block {cs.height + 1} ready, waiting "
+                            f"{remaining:.0f}s for the spacing floor")
+        while self.running and self.cs is cs:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self._retry_unconfirmed_spreads()
+            for blk in self._drain_queue(timeout=min(remaining, 1.0)):
+                self._consider_inbound_block(blk, cs, accumulated_blocks)
 
     def _consider_inbound_block(self, blk, cs, accumulated_blocks):
         """Record an inbound block as a candidate for this cycle's draw,

@@ -116,17 +116,14 @@ TIMESTAMP_SKEW_SECONDS = 30
 # manipulate the retarget window, which is derived from exactly these
 # deltas (see block.get_vdf_iterations).
 #
-# It is also a floor on block time, though a mild one. The rule is
-# "at least this far after the parent", so a builder that finishes early
-# stamps parent+30 and its block is perfectly valid; it forfeits the
-# surplus speed, it does not lose the block. Reaching the floor at all
-# takes hardware four times the calibration target, and if anyone did, the
-# retarget absorbs it in about eight months rather than the years a
-# two-week cadence suggests, because blocks at the floor complete each
-# retarget window four times faster too. 30 is a reasonable number for
-# this; it now just has its own name, so changing the skew tolerance for
-# clock reasons no longer moves it by accident.
-MIN_BLOCK_SPACING_SECONDS = 30
+# It is also a floor on block time. The rule is "at least this far after
+# the parent", so a builder that finishes early holds its proof (see
+# Node._await_spacing) rather than losing the block. 90s caps the
+# attacker advantage at ~1.6x (honest pace / floor) while staying below
+# VDF_ADJUST_MIN_SECONDS so the retarget mechanism is never frozen. The
+# existing chain's shortest interval is 92.16s, so no valid block is
+# retroactively rejected by this floor.
+MIN_BLOCK_SPACING_SECONDS = 90
 
 # Genesis timestamp: unix time when the chain was launched, and part of the
 # genesis hash, so changing it starts a different network.

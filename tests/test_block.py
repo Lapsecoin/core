@@ -578,13 +578,13 @@ class TestRaceChartBuilderColors:
 
 
 class TestAssembleRespectsTheSpacingFloor:
-    """A builder must not stamp a time its own validator will reject.
+    """assemble clamps the timestamp so it never falls below the floor.
 
     _check_timestamp requires ts >= parent + MIN_BLOCK_SPACING_SECONDS.
-    Stamping the wall clock breaks that whenever less than that has passed
-    since the parent was stamped, and the block is discarded after the
-    evaluation is already paid for: two minutes of VDF thrown away, on
-    whichever node is fastest, every height.
+    In practice _await_spacing holds the builder until the floor passes,
+    so assemble normally sees a wall clock already past the floor. The
+    clamp is defense in depth for the fraction of a second right at the
+    boundary.
     """
 
     def _built_on(self, parent_age_seconds):
@@ -593,28 +593,23 @@ class TestAssembleRespectsTheSpacingFloor:
         cand = block_mod.assemble(parent, [], address(0), 1000)
         return parent, cand
 
-    def test_a_fast_builder_still_produces_a_valid_block(self):
-        # Finished 8s after the parent: an honest clock reading would be
-        # rejected by the node that just wrote it.
-        parent, cand = self._built_on(8)
+    def test_right_at_the_floor_the_clamp_keeps_the_block_valid(self):
+        parent, cand = self._built_on(MIN_BLOCK_SPACING_SECONDS - 0.5)
         ok, err = block_mod._check_timestamp(cand, [parent])
         assert ok, err
         assert cand["timestamp"] == pytest.approx(
             parent["timestamp"] + MIN_BLOCK_SPACING_SECONDS)
 
     def test_a_normal_builder_still_stamps_the_clock(self):
-        # The floor is a floor, not a schedule: past it, the real time
-        # stands, so the chain's timeline keeps tracking reality.
         parent, cand = self._built_on(140)
         assert cand["timestamp"] == pytest.approx(time.time(), abs=2)
         assert block_mod._check_timestamp(cand, [parent])[0]
 
-    def test_the_clamp_holds_right_at_the_boundary(self):
-        for age in (0, MIN_BLOCK_SPACING_SECONDS - 0.5,
-                    MIN_BLOCK_SPACING_SECONDS + 0.5):
-            parent, cand = self._built_on(age)
-            ok, err = block_mod._check_timestamp(cand, [parent])
-            assert ok, f"{age}s after the parent: {err}"
+    def test_past_the_floor_the_clamp_is_a_noop(self):
+        parent, cand = self._built_on(MIN_BLOCK_SPACING_SECONDS + 0.5)
+        ok, err = block_mod._check_timestamp(cand, [parent])
+        assert ok, f"past the floor: {err}"
+        assert cand["timestamp"] == pytest.approx(time.time(), abs=2)
 
 
 class TestRaceOddsUsesTheDrawWindow:
@@ -1064,13 +1059,12 @@ class TestRetargetUsesAnExactRatio:
 
 class TestTimestampRulesAreSeparate:
     """The future-tolerance rule and the parent-gap rule are two different
-    questions and now have two different constants. Split at identical
-    values, so this is a no-op for validity today; what it buys is that
-    either can be tuned without silently moving the other."""
+    questions and now have two different constants."""
 
-    def test_the_split_is_behaviour_preserving_at_the_shipped_values(self):
+    def test_the_shipped_values_are_independent(self):
         from params import TIMESTAMP_SKEW_SECONDS, MIN_BLOCK_SPACING_SECONDS
-        assert TIMESTAMP_SKEW_SECONDS == MIN_BLOCK_SPACING_SECONDS == 30
+        assert TIMESTAMP_SKEW_SECONDS == 30
+        assert MIN_BLOCK_SPACING_SECONDS == 90
 
     def test_parent_gap_uses_its_own_constant(self, monkeypatch):
         monkeypatch.setattr("block.MIN_BLOCK_SPACING_SECONDS", 5)

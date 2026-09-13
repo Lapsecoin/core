@@ -24,6 +24,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
+from params import MIN_BLOCK_SPACING_SECONDS
 import crypto
 import node as node_mod
 import state as state_mod
@@ -1902,6 +1903,81 @@ class TestLivenessNotes:
         node._handle({"type": "alive", "note": {"address": other},
                       "sender": "1.2.3.4:1", "stemming": False}, [])
         assert other in node.active_addresses(3600)
+
+
+class TestAwaitSpacing:
+    """A finished proof waits for the spacing floor instead of being
+    thrown away.
+
+    A block is invalid until MIN_BLOCK_SPACING_SECONDS after its parent's
+    timestamp. Publishing sooner meant stamping the clock, failing our own
+    validation, and discarding an evaluation that had already been paid
+    for, on whichever node was fastest.
+    """
+
+    def test_it_returns_at_once_when_the_floor_has_passed(self, node_env):
+        # The normal case, and the only one this chain has ever been in:
+        # blocks take far longer than the floor.
+        node = node_env[0]
+        node.running = True
+        node.cs.chain[-1]["timestamp"] = time.time() - MIN_BLOCK_SPACING_SECONDS - 5
+        started = time.monotonic()
+        node._await_spacing(node.cs, [])
+        assert time.monotonic() - started < 0.2
+
+    def test_it_waits_out_the_remainder_when_the_proof_is_early(self, node_env):
+        node = node_env[0]
+        node.running = True
+        # 0.4s still to run on the floor.
+        node.cs.chain[-1]["timestamp"] = (time.time()
+                                          - MIN_BLOCK_SPACING_SECONDS + 0.4)
+        started = time.monotonic()
+        node._await_spacing(node.cs, [])
+        waited = time.monotonic() - started
+        assert 0.3 < waited < 2.0, waited
+
+    def test_what_it_waited_for_is_a_block_that_validates(self, node_env):
+        # The point of the wait: assemble's stamp is legal afterwards.
+        node = node_env[0]
+        node.running = True
+        node.cs.chain[-1]["timestamp"] = (time.time()
+                                          - MIN_BLOCK_SPACING_SECONDS + 0.3)
+        node._await_spacing(node.cs, [])
+        cand = block_mod.assemble(node.cs.tip, [], node.addr, 1000)
+        ok, err = block_mod._check_timestamp(cand, [node.cs.tip])
+        assert ok, err
+        # and the stamp is the real time, not a future one
+        assert cand["timestamp"] == pytest.approx(time.time(), abs=1.0)
+
+    def test_it_keeps_handling_inbound_blocks_while_it_waits(self, node_env):
+        # Not a sleep: the node stays responsive, or a wait long enough to
+        # matter would stall the queue it needs to be reading.
+        node, _, __, ___, ____, _____, net_q = node_env
+        node.running = True
+        node.cs.chain[-1]["timestamp"] = (time.time()
+                                          - MIN_BLOCK_SPACING_SECONDS + 0.5)
+        net_q.put({"type": "block", "block": {"height": 99, "hash": "ff" * 32},
+                   "sender": "1.2.3.4:1"})
+        node._await_spacing(node.cs, [])
+        assert net_q.empty(), "the queue was not drained during the wait"
+
+    def test_it_stops_the_moment_the_tip_moves(self, node_env):
+        # A better chain arriving makes the held proof worthless; waiting
+        # out the rest of the floor for it would waste the time twice.
+        node = node_env[0]
+        node.running = True
+        stale = node.cs
+        stale.chain[-1]["timestamp"] = time.time() + 30   # a long way to wait
+
+        def move_the_tip():
+            time.sleep(0.3)
+            node.cs = ChainState.from_genesis()
+
+        t = threading.Thread(target=move_the_tip); t.start()
+        started = time.monotonic()
+        node._await_spacing(stale, [])
+        t.join()
+        assert time.monotonic() - started < 3.0, "it kept waiting on a dead parent"
 
 
 class TestLivenessEvictionIsByRecency:
