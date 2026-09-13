@@ -134,6 +134,16 @@ def fmt_lapse(ticks):
     return f"{ticks // TICKS_PER_LAPSE:,} LAPSE"
 
 
+def fmt_lapse_dp(ticks, places=4):
+    """LAPSE with decimals: "28,708.2599 LAPSE".
+
+    For headline figures, where "28,708 LAPSE 25,987,856 ticks" is nine
+    digits of tick that wrap the line and answer nothing anyone asked. The
+    exact tick count is still on /api/info for anything that needs it.
+    """
+    return f"{ticks / TICKS_PER_LAPSE:,.{places}f} LAPSE"
+
+
 def fmt_duration(seconds):
     """A span as the two largest units that fit: "1y 24d", "3d 4h", "12m".
 
@@ -1124,6 +1134,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
                                  fmt_duration=fmt_duration,
+                                 fmt_lapse_dp=fmt_lapse_dp,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE)
     app.logger.setLevel(logging.WARNING)
     # Deliberately not touching the werkzeug logger. main.py already sets it
@@ -1173,6 +1184,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
                                  fmt_duration=fmt_duration,
+                                 fmt_lapse_dp=fmt_lapse_dp,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE)
     app.logger.setLevel(logging.WARNING)
     _close_db_after_request(app)

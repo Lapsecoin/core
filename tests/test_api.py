@@ -183,7 +183,8 @@ class TestDashboardTxPaging:
         """The amount column, which is the tx's index, so a page's contents
         are identifiable without matching on hashes."""
         import re
-        return [int(m) for m in re.findall(r'data-label="Amount">(\d+) LAPSE', html)]
+        return [int(float(m.replace(",", "")))
+                for m in re.findall(r'data-label="Amount">([\d,.]+) LAPSE', html)]
 
     def test_the_first_page_holds_the_newest(self):
         html = self._client(20).get("/").get_data(as_text=True)
