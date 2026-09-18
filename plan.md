@@ -293,16 +293,29 @@ the same wallet and passphrase-derived key market_routes already trades
 against. Covered in `tests/test_api.py::TestXlmView` /
 `TestSubmitXlmAndAlert` and `tests/test_xlm.py::TestAccountMerge`.
 
-### 5.2 No price derived from trade history
+### 5.2 No price derived from trade history — done
 
-Only top-of-book is shown. Both chains carry matching session memos for
-every completed trade, so the executed rate is derivable by anyone, which
-is the ticker the original design called for.
+Only top-of-book was shown. Both chains carry matching session memos for
+every completed trade, so the executed rate a trade settled at is public
+and cheap to compute.
 
 Wash trading is cheap and unpreventable here, as in any permissionless
-market. Mitigate with a median rather than a mean, requiring a signed
-order behind each counted trade, and weighting by standing. Label it for
-what it is.
+market. Mitigated with a median rather than a mean (a handful of wash
+trades pull a mean arbitrarily far but only outnumber a median), and
+weighted by this node's own trust score for the counterparty (so trades
+between two fresh, unstaked addresses count for as little as
+trust.score already makes a fresh identity worth). A signed order and
+claim already stand behind every Trade row by construction, so nothing
+further was needed there.
+
+**What shipped is narrower than "derivable by anyone" implied**: a node
+only ever sees trades it was itself a party to (there is no gossip of
+completed trades and no efficient way to scan the whole chain for
+memo-shaped payments between arbitrary strangers), so `market.ticker_price`
+reports this node's own trade history only, never a network-wide rate.
+The Market page's label says so explicitly, and names wash trading as a
+real possibility rather than presenting the number as a market price.
+Covered in `tests/test_market.py::TestTicker`.
 
 ### 5.3 No mainnet trade has ever run
 
