@@ -497,38 +497,38 @@ class TestPeersForDownload:
         assert known == ["1.2.3.4:8333"]
 
 
-class TestLivenessOnThePeersPage:
-    """What replaced the wallet column. A count, not a list: the addresses
-    are payable and deliberately not attributable to any IP, and listing
-    them beside a peer table is how the directory this replaced came
-    about."""
+class TestPeerListPublishesNoAddresses:
+    """The peers view must never tie a payable address to an IP.
 
-    def _client(self, alive):
+    This used to be a weaker claim: a count of nodes that had announced
+    themselves was shown, just not which ones. The announcements are gone
+    now (they broadcast a payable address network-wide, which is exactly
+    the link a trading identity cannot afford), so the invariant tightens
+    to what it should always have been: no LapseCoin address appears in
+    this view at all.
+    """
+
+    def _client(self):
         cs = ChainState.from_genesis()
         seed_balance(cs.state, 0, 1000.0)
-        node = _FakeNode(cs, alive=alive)
+        node = _FakeNode(cs)
         pool = peerpool_mod.PeerPool()
         pool.add("1.2.3.4:9000")
         return api.create_private_app(node, pool).test_client()
 
-    def test_the_count_is_shown(self):
-        html = self._client({address(1), address(2)}).get("/peers").get_data(as_text=True)
-        assert "2 nodes announced active" in html
-
-    def test_it_reads_singular_for_one(self):
-        html = self._client({address(1)}).get("/peers").get_data(as_text=True)
-        assert "1 node announced active" in html
-
-    def test_the_api_reports_a_count_and_never_the_addresses(self):
-        resp = self._client({address(1), address(2)}).get("/api/peers")
-        data = resp.get_json()
-        assert data["alive_count"] == 2
+    def test_no_address_appears_in_the_peers_api(self):
+        resp = self._client().get("/api/peers")
         body = resp.get_data(as_text=True)
-        assert address(1) not in body and address(2) not in body, \
-            "announced addresses must not be published next to peer IPs"
+        for i in range(1, 4):
+            assert address(i) not in body
 
     def test_no_peer_row_carries_a_payout_address(self):
-        data = self._client({address(1)}).get("/api/peers").get_json()
+        data = self._client().get("/api/peers").get_json()
         for peer in data["peers"]:
             assert "wallet" not in peer
         assert "wallet" not in data["self"]
+
+    def test_no_announced_count_is_reported_any_more(self):
+        data = self._client().get("/api/peers").get_json()
+        assert "alive_count" not in data
+

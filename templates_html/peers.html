@@ -15,7 +15,6 @@
 <div class="card">
   <div class="card-title" style="display:flex;justify-content:space-between;align-items:baseline;gap:.75rem">
     <span id="peers-count">{{ peer_count }} known peer{{ "s" if peer_count != 1 }}</span>
-    <span class="stat-sub" id="alive-count" title="Nodes that announced themselves active in the last hour. These notes travel the network, so they cover nodes this one is not directly connected to, and carry no address of the node that sent them.">{{ alive_count }} node{{ "s" if alive_count != 1 }} announced active</span>
     <a class="btn-sm" href="/api/peers/download" download="lapsecoin_peers.json">Download JSON</a>
   </div>
   <div class="table-wrap">

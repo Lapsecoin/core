@@ -26,11 +26,20 @@ trade needs.
 Blame
 -----
 Abandonment is considered here because this is the only place that knows
-both how long a trade has been stuck and whether the counterparty has
-been seen alive on the network meanwhile. Both are required before anyone
-is blamed; see swap_engine.consider_abandonment. Liveness comes from the
-notes peers already gossip, so it costs nothing extra and cannot be
-faked into making somebody look absent.
+how long a trade has been stuck.
+
+What it no longer consults is whether the peer looked "alive". That
+signal came from the liveness notes the uptime rewarder gossiped, and it
+was wrong twice over: those notes said a node was powered on, not that
+its swap worker had seen the trade and declined to pay, and broadcasting
+them published a payable address network-wide, which is exactly the link
+a trading identity must not have. They are gone.
+
+What replaces it is stronger and comes from the chain: a peer is only
+blamed once they have themselves reciprocated an earlier step. Their own
+signed transaction is the acceptance, so an unsolicited payment nobody
+answered can never be dressed up as abandonment. See
+swap_engine.consider_abandonment.
 """
 
 import logging
@@ -50,11 +59,6 @@ log = logging.getLogger("ec.swap_worker")
 # a step takes minutes, so this could be far slower without a trade
 # noticing.
 POLL_SECONDS = 20
-
-# How recently a peer must have been seen announcing itself for its
-# silence on a trade to count against it. Wide, because the alternative
-# is blaming somebody whose liveness note simply did not reach us.
-LIVENESS_WINDOW_SECONDS = 3600
 
 # Backoff after a chain is unreachable, so an outage does not turn into a
 # tight retry loop against a public endpoint that is already struggling.
@@ -101,20 +105,6 @@ class SwapWorker:
 
     def _enabled(self):
         return self.node.settings.get(settings_mod.SWAP_ENABLED)
-
-    def _peer_is_live(self, peer_addr):
-        """Whether this counterparty has been seen on the network lately.
-
-        Uses the liveness notes peers already gossip. A note travels
-        through relays, so its presence says the peer is around without
-        tying them to an address anyone can point at, and its absence is
-        weak evidence rather than proof, which is why it is only ever one
-        of two conditions for blame.
-        """
-        try:
-            return peer_addr in self.node.active_addresses(LIVENESS_WINDOW_SECONDS)
-        except Exception:
-            return False
 
     # -- lifecycle -----------------------------------------------------
 
@@ -183,8 +173,7 @@ class SwapWorker:
                 touched += 1
                 fresh = Trade.get_or_none(Trade.session_id == trade.session_id)
                 if fresh is not None and fresh.status == TRADE_STALLED:
-                    engine.consider_abandonment(
-                        fresh, self._peer_is_live(fresh.peer_lapse_addr))
+                    engine.consider_abandonment(fresh)
             except swap_engine.Unreachable as e:
                 # An outage says nothing about any trade, so nothing is
                 # concluded and nothing is blamed. Back off rather than

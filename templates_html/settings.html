@@ -9,42 +9,6 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
 <div class="card">
-  <div class="card-title">Uptime rewards</div>
-  {% if not rewarder_available %}
-  <div class="stat-label">Unavailable on this node.</div>
-  {% else %}
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-label">Status</div>
-      <div class="stat-value" style="font-size:1rem;color:{{ 'var(--green)' if remaining_lapse > 0 else 'var(--muted)' }}">
-        {{ "Active" if remaining_lapse > 0 else "Inactive" }}
-      </div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Budget left</div>
-      <div class="stat-value" style="font-size:1rem">{{ "%.4f"|format(remaining_lapse) }} LAPSE</div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Payout</div>
-      <div class="stat-value" style="font-size:.85rem">
-        {{ "pending" if pending else "none in flight" }}
-      </div>
-    </div>
-  </div>
-  <div class="form-row" style="margin-top:.6rem">
-    <label for="budget_lapse">Budget (LAPSE remaining) &middot; balance {{ "%.4f"|format(balance_lapse) }}</label>
-    <input type="number" id="budget_lapse" name="budget_lapse" min="0" step="any"
-           value="{{ '%.4f'|format(remaining_lapse) }}">
-    {% if suggested_lapse > 0 %}
-    <span class="stat-sub">Try 5%:
-      <a href="#" onclick="document.getElementById('budget_lapse').value='{{ '%.4f'|format(suggested_lapse) }}'; return false;">{{ "%.4f"|format(suggested_lapse) }}</a>
-    </span>
-    {% endif %}
-  </div>
-  {% endif %}
-</div>
-
-<div class="card">
   <div class="card-title">Node settings</div>
   {% for s in settings %}
   <div class="form-row">

@@ -148,29 +148,11 @@ RECENT_STATE_CACHE_SIZE = 20
 # handful of real candidates plus whatever noise arrives alongside them.
 JUDGED_CACHE_SIZE = 10_000
 
-# How many announced addresses to remember at once. Well above any
-# plausible network, and bounded so a flood of invented addresses costs
-# memory that stops growing rather than memory that does not.
-ALIVE_MAX_TRACKED = 50_000
 
 
 # ---------------------------------------------------------------------------
 # Tail validation (pure, no node state touched)
 # ---------------------------------------------------------------------------
-
-def _alive_hash(address):
-    """The dedup identity of a liveness note.
-
-    Derived from the address alone, and deliberately not from the note as
-    it arrived. Two reasons. An originator and every relayer have to agree
-    on it or the flood's once-per-item dedup stops working, and hashing
-    whatever fields happened to be present would make that agreement an
-    accident of nobody having added one. And hashing the whole note would
-    let anyone mint unlimited distinct hashes for the same claim by
-    padding it with junk, which is the dedup switched off.
-    """
-    return crypto.sha256_hex(canonical_json({"address": address}))
-
 
 def _validate_tail(tail, prefix):
     """Validate new blocks against a trusted prefix, building the resulting
@@ -314,9 +296,6 @@ class Node:
         # drop every attempt that lost a race and skew toward other builders'
         # numbers entirely. This is local, in-memory, per-node knowledge,
         # nothing else has it, so it can't be reconstructed from chain data.
-        # address -> wall clock when it last announced itself alive. See
-        # _handle_inbound_alive. Bounded, oldest dropped first.
-        self._alive_seen = collections.OrderedDict()
 
         self._own_build_seconds = collections.deque(maxlen=30)
         self._load_own_build_seconds()
@@ -1155,8 +1134,6 @@ class Node:
             msg["reply"].put(self.submit_tx(msg["tx"]))
         elif t == "tx":
             self._handle_inbound_tx(msg)
-        elif t == "alive":
-            self._handle_inbound_alive(msg)
         elif t == "order":
             self._handle_inbound_order(msg)
 
@@ -1454,37 +1431,6 @@ class Node:
                 self._sync_hint = sender
                 self._sync_hint_height = height
 
-    def _handle_inbound_alive(self, msg):
-        """Record a liveness note and pass it on.
-
-        The note says "a node is active and its payout address is X". It
-        carries nothing else, and deliberately nothing about who sent it:
-        it travels like any other item here, so the peer handing it over is
-        almost never its author, and an address is never tied to an IP by
-        receiving one. That is the whole reason this exists rather than
-        each node telling its peers a wallet over GETINFO, which made
-        exactly that link and published it.
-
-        Cheap to forge, and that is understood. A liar can claim any
-        address and any number of them; what that buys is a share of
-        whatever budget individual operators have voluntarily set aside,
-        which is capped, opt-in and mints nothing. The previous mechanism
-        was equally forgeable and leaked as well.
-        """
-        note     = msg["note"]
-        sender   = msg.get("sender")
-        stemming = msg.get("stemming", False)
-
-        addr = note.get("address")
-        if not crypto.is_valid_address(addr):
-            log.debug("[alive] ignoring a note with a malformed address")
-            return
-        item_hash = _alive_hash(addr)
-        self._note_echo(item_hash, sender)
-        self._record_alive(addr)
-        self.gossip.relay(note, gossip_mod.KIND_ALIVE, item_hash,
-                          sender, stemming=stemming)
-
     def _handle_inbound_order(self, msg):
         """Verify a swap order or cancellation, store it, and pass it on.
 
@@ -1536,41 +1482,6 @@ class Node:
     def publish_order(self, item):
         """Put this node's own order or cancellation onto the network."""
         self._spread(item, gossip_mod.KIND_ORDER, market_mod.order_hash(item))
-
-    def _record_alive(self, addr):
-        """Remember that this address was announced, and when.
-
-        move_to_end matters and is not decoration. Assigning to a key an
-        OrderedDict already holds leaves it where it was, so without this
-        the eviction below drops whichever address was *first seen*, not
-        the one least recently heard from: a node announcing faithfully
-        since startup would be evicted ahead of junk inserted a moment ago.
-        Anyone could then clear every real address out of this by inventing
-        ALIVE_MAX_TRACKED of their own, and nobody would be paid.
-        """
-        self._alive_seen[addr] = time.time()
-        self._alive_seen.move_to_end(addr)
-        while len(self._alive_seen) > ALIVE_MAX_TRACKED:
-            self._alive_seen.popitem(last=False)
-
-    def active_addresses(self, window_seconds):
-        """Addresses announced within the window. What the uptime rewarder
-        pays; see _handle_inbound_alive."""
-        cutoff = time.time() - window_seconds
-        return {a for a, seen in self._alive_seen.items() if seen >= cutoff}
-
-    def announce_alive(self):
-        """Tell the network this node is active and where to pay it.
-
-        Sent on the same cadence rewards are paid on, so one note per
-        window is all anyone needs, and dedup by item hash means a note
-        already in flight costs nothing to re-announce.
-        """
-        note = {"address": self.addr}
-        item_hash = _alive_hash(self.addr)
-        self._record_alive(self.addr)
-        self._spread(note, gossip_mod.KIND_ALIVE, item_hash)
-        log.debug("[alive] announced this node as active")
 
     def _handle_inbound_tx(self, msg):
         """Route an inbound tx: validate, admit to the mempool, propagate.

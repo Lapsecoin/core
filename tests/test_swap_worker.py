@@ -50,14 +50,10 @@ class FakeSettings:
 
 
 class FakeNode:
-    def __init__(self, enabled=True, unlocked=True, live_peers=()):
+    def __init__(self, enabled=True, unlocked=True):
         self.settings = FakeSettings(enabled)
         self._kek = b"k" * 32 if unlocked else None
         self.keyfile = "/nonexistent/node.key"
-        self._live = set(live_peers)
-
-    def active_addresses(self, window):
-        return self._live
 
 
 class Worker(swap_worker.SwapWorker):
@@ -207,7 +203,7 @@ class TestUnreachable:
         assert w.lapse.payments == []
 
     def test_outage_blames_nobody(self):
-        w = Worker(FakeNode(live_peers={"peer.lapse"}))
+        w = Worker(FakeNode())
         trade = make_trade()
         w.lapse.unreachable = True
         w.run_once()
@@ -228,17 +224,17 @@ class TestUnreachable:
 
 class TestBlame:
     def test_stall_alone_does_not_blame(self):
-        w = Worker(FakeNode(live_peers={"peer.lapse"}))
+        w = Worker(FakeNode())
         trade = make_trade()
         Increment.update(deadline_at=time.time() - 1).execute()
         w.run_once()
         assert Trade.get(Trade.session_id == trade.session_id).status == \
             TRADE_STALLED
 
-    def test_absent_peer_is_not_blamed(self):
-        """Liveness is one of two required conditions; without it a peer
-        with a dropped connection would lose their standing."""
-        w = Worker(FakeNode(live_peers=set()))
+    def test_peer_who_never_accepted_is_never_blamed(self):
+        """An unsolicited payment nobody answered is not a defection, and
+        this is the path a reputation attack would come down."""
+        w = Worker(FakeNode())
         trade = make_trade()
         w.run_once()
         trade = Trade.get(Trade.session_id == trade.session_id)
@@ -249,10 +245,20 @@ class TestBlame:
         assert Trade.get(Trade.session_id == trade.session_id).status != \
             trade_storage.TRADE_ABANDONED
 
-    def test_live_peer_ignoring_a_paid_step_is_blamed(self):
-        w = Worker(FakeNode(live_peers={"peer.lapse"}))
+    def test_peer_who_accepted_then_stopped_is_blamed(self):
+        w = Worker(FakeNode())
         trade = make_trade()
-        w.run_once()                       # our leg of step 1 settles
+        w.run_once()
+        first = Increment.get(Increment.id == f"{trade.session_id}:1")
+        settle_peer_leg(Trade.get(Trade.session_id == trade.session_id),
+                        first, w._engine())
+        w.run_once()
+        second = Increment.get(Increment.id == f"{trade.session_id}:2")
+        settle_peer_leg(Trade.get(Trade.session_id == trade.session_id),
+                        second, w._engine())
+        w.run_once()
+        w.run_once()
+
         trade = Trade.get(Trade.session_id == trade.session_id)
         trade.status = TRADE_STALLED
         trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10

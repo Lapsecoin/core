@@ -99,7 +99,6 @@ import state as state_mod
 import settings as settings_mod
 import storage as storage_mod
 import tx as tx_mod
-import uptime_rewarder
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from version import LOCAL_VERSION
 
@@ -112,11 +111,6 @@ PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
 DASHBOARD_TXS_PER_PAGE = 6
 
-# How far back to look for nodes that announced themselves active. Taken
-# from the rewarder rather than restated: it is the rewarder's policy, and
-# two copies of the same number held together by a comment is how they
-# stop agreeing.
-ALIVE_WINDOW_SECONDS = uptime_rewarder.ACTIVE_WINDOW_S
 
 
 # ---------------------------------------------------------------------------
@@ -621,16 +615,16 @@ def _peers_for_download(known_addrs, self_addr):
 
 
 def _default_send_outputs(node):
-    """One 'address,0' line per node seen announcing itself active, so the
-    sender can change the one 0 they actually want to send and leave the
-    rest; _parse_csv_outputs drops any line still at 0.
+    """What the send form starts with: nothing.
 
-    Read from liveness notes rather than from peers' advertised wallets,
-    which no longer exist. That also widens it usefully: a note travels, so
-    this lists nodes across the network rather than only the handful this
-    one happens to be connected to."""
-    return "\n".join(f"{addr},0"
-                      for addr in sorted(node.active_addresses(ALIVE_WINDOW_SECONDS)))
+    This used to prefill a row per node seen announcing itself active, so
+    an operator could pay them. Those announcements are gone (they
+    published a payable address network-wide, which is the link a trading
+    identity must not have), and with them the only source of addresses
+    this could honestly suggest. A blank field is the truthful default:
+    the node does not know who you want to pay.
+    """
+    return ""
 
 
 def _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=""):
@@ -653,7 +647,7 @@ def _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=""):
 
 def _shared_read_only_routes(app, node, pool, limiter,
                               private_port, public_port, is_private,
-                              update_checker=None, rewarder=None):
+                              update_checker=None):
     """Register all read-only UI and API routes on app."""
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
@@ -677,11 +671,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 "private_port": private_port,
                 "public_port": public_port,
                 "update_checker": update_checker,
-                # Remaining budget for the masthead badge, visible on both
-                # apps, the full settings page (/rewards) only exists on
-                # the private one. 0 (the default) reads as "off".
-                "rewards_remaining_lapse":
-                    rewarder.status()["remaining_ticks"] / TICKS_PER_LAPSE if rewarder else 0,
                 "nav_active": nav_active}
 
     @app.route("/favicon.svg", endpoint=pfx+"favicon")
@@ -878,7 +867,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
         self_height = node.view.chain[-1].get("height", 0)
         return render_template("peers.html", title="Peers", rows=all_rows[start:end],
                                peer_count=len(all_rows),
-                               alive_count=len(node.active_addresses(ALIVE_WINDOW_SECONDS)),
                                page=page, total_pages=total_pages,
                                page_window=_pagination_window(page, total_pages),
                                has_prev=page > 1, has_next=end < len(all_rows),
@@ -956,11 +944,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return jsonify({
             "self": _self_info(),
             "peer_count": len(all_rows),
-            # How many nodes announced themselves active recently. A count,
-            # not a list: the addresses are payable and deliberately not
-            # attributable to any IP, and publishing them next to a peer
-            # table is how the directory this replaced came about.
-            "alive_count": len(node.active_addresses(ALIVE_WINDOW_SECONDS)),
             "peers": _peer_dicts(all_rows[start:end]),
         })
 
@@ -1130,7 +1113,7 @@ def _base_dir():
 # ---------------------------------------------------------------------------
 
 def create_app(node, pool, private_port=8335, public_port=8333,
-               update_checker=None, rewarder=None):
+               update_checker=None):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
@@ -1155,7 +1138,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=False,
-                             update_checker=update_checker, rewarder=rewarder)
+                             update_checker=update_checker)
 
     # Send disabled on public port; show locked page
     @app.route("/send")
@@ -1179,7 +1162,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 # ---------------------------------------------------------------------------
 
 def create_private_app(node, pool, private_port=8335, public_port=8333,
-                       update_checker=None, rewarder=None):
+                       update_checker=None):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
@@ -1205,37 +1188,20 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=True,
-                             update_checker=update_checker, rewarder=rewarder)
+                             update_checker=update_checker)
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
         balance_lapse = node.view.state.get_balance(node.addr) / TICKS_PER_LAPSE
         ctx = dict(title="Settings", csrf_token=csrf_token,
-                   alert_ok="", alert_err="", rewarder_available=rewarder is not None,
-                   balance_lapse=balance_lapse,
-                   suggested_lapse=balance_lapse * 0.05)
-        if rewarder is not None:
-            status = rewarder.status()
-            ctx["remaining_lapse"] = status["remaining_ticks"] / TICKS_PER_LAPSE
-            ctx["pending"] = status["pending"]
+                   alert_ok="", alert_err="",
+                   balance_lapse=balance_lapse)
 
         if request.method == "POST":
             if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
                 ctx["alert_err"] = "Session expired; reload the page and try again."
             else:
                 errors = []
-                if rewarder is not None:
-                    budget_raw = request.form.get("budget_lapse", "").strip()
-                    try:
-                        new_budget = float(budget_raw)
-                        if new_budget < 0:
-                            raise ValueError
-                        current = rewarder.status()["remaining_ticks"] / TICKS_PER_LAPSE
-                        rewarder.adjust_budget(new_budget - current)
-                        ctx["remaining_lapse"] = new_budget
-                    except ValueError:
-                        errors.append("Budget must be a non-negative number.")
-
                 # Anything forced by an environment variable is shown but
                 # not editable here: a launch-time override shouldn't be
                 # silently rewritten by a page that can't see it.

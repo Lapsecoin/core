@@ -5,6 +5,7 @@ One UDP socket per node handles everything:
   - PEERS        : peer list exchange
   - BLOCK        : block gossip
   - TX           : transaction gossip (Dandelion stem/fluff)
+  - ORDER        : swap orders and cancellations, same stem/fluff
   - GETSYNC      : request chain segment
   - SYNC         : chain segment response (chunked for large syncs)
   - PUNCH_REQ    : ask relay to coordinate a hole punch to a third peer
@@ -100,12 +101,6 @@ MT_INFO      = 0x0C   # response: {"height": N, "tip_hash": "...", "version": ".
 # codebase accumulates a path per format change forever, and the protocol
 # floor below is what makes retiring one safe instead of silent.
 MT_BLOCK     = 0x0D
-# "I am an active node, pay me here." Relayed like any other item, so the
-# peer handing it to you is not its author and no address is ever tied to
-# an IP. See UDPTransport.send_alive. A node too old to know this type
-# falls through _dispatch's chain of elifs and ignores it, so this needs
-# no protocol floor bump.
-MT_ALIVE     = 0x0E
 
 # A signed swap order, or a signed cancellation of one. Carries no funds
 # and touches no consensus state: an order is an offer to trade, and the
@@ -734,7 +729,6 @@ class UDPTransport:
         self._routable: dict[str, float] = {}
         self._routable_pending: set = set()
         self._routable_lock = threading.Lock()
-        self._on_alive      = None  # set by main; liveness notes from the network
         self._on_order      = None  # set by main; swap orders from the network
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
@@ -912,12 +906,6 @@ class UDPTransport:
                                     payload, target)
             except RuntimeError:
                 self._fanout_slots.release()   # pool already shut down
-
-    def send_alive(self, note: dict, peers=None, stemming: bool = False):
-        """Put a liveness note on the wire. Same propagation as everything
-        else here, which is the point: it travels, so the address in it is
-        never linkable to the node it came from."""
-        self._broadcast(MT_ALIVE, {"alive": note}, peers, stemming, "liveness note")
 
     def send_order(self, order: dict, peers=None, stemming: bool = False):
         """Put a signed order (or cancellation) on the wire.
@@ -1183,7 +1171,7 @@ class UDPTransport:
         if complete is None:
             return
 
-        if msg_type in (MT_BLOCK, MT_TX, MT_ALIVE):
+        if msg_type in (MT_BLOCK, MT_TX, MT_ORDER):
             complete = _inflate(complete)
             if complete is None:
                 return
@@ -1286,14 +1274,6 @@ class UDPTransport:
                     self._on_tx(tx, sender_addr,
                                 bool(data.get("stemming", False)))
 
-        elif msg_type == MT_ALIVE:
-            if self._is_new(msg_id):
-                self._pool.touch(sender_addr)
-                note = data.get("alive")
-                if isinstance(note, dict) and self._on_alive:
-                    self._on_alive(note, sender_addr,
-                                   bool(data.get("stemming", False)))
-
         elif msg_type == MT_ORDER:
             if self._is_new(msg_id):
                 self._pool.touch(sender_addr)
@@ -1354,7 +1334,7 @@ class UDPTransport:
                         # readers (Syncer, PeerPool.update_info) working
                         # unchanged against them. A wallet used to travel
                         # here too and no longer does: see
-                        # Node._handle_inbound_alive for what replaced it.
+                        # Node._handle_inbound_order for the same pattern.
                         "version":  data.get("version", ""),
                         # Absent from peers too old to send it; None means
                         # "unknown", never "zero", see Syncer.
@@ -1591,10 +1571,6 @@ class UDPTransport:
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
-
-    def set_alive_callback(self, fn):
-        """fn(note, sender_addr, stemming). Set by main after Node init."""
-        self._on_alive = fn
 
     def set_order_callback(self, fn):
         """fn(order, sender_addr, stemming). Set by main after Node init.

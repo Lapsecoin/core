@@ -35,7 +35,6 @@ from swap_worker import SwapWorker
 from syncer import Syncer
 from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
-from uptime_rewarder import UptimeRewarder
 from version import LOCAL_VERSION
 
 LOG_FILE = "lapsecoin.log"
@@ -452,10 +451,6 @@ def main():
         _offer({"type": "tx", "tx": tx,
                 "sender": sender_addr, "stemming": stemming}, "tx")
 
-    def on_alive(note, sender_addr, stemming=False):
-        _offer({"type": "alive", "note": note,
-                "sender": sender_addr, "stemming": stemming}, "alive")
-
     def on_order(order, sender_addr, stemming=False):
         _offer({"type": "order", "order": order,
                 "sender": sender_addr, "stemming": stemming}, "order")
@@ -522,7 +517,6 @@ def main():
         return (tip.get("height", 0), tip.get("hash", ""),
                 LOCAL_VERSION, node.cs.cumulative_iterations)
 
-    udp.set_alive_callback(on_alive)
     udp.set_order_callback(on_order)
     udp.set_chain_provider(_chain_provider)
     udp.set_tip_provider(_tip_provider)
@@ -546,13 +540,6 @@ def main():
     )
     update_checker.start()
 
-    # Off by default; toggled and its budget edited from the private
-    # dashboard's /rewards page. Its background thread sleeps a full cycle
-    # (an hour, by default) before its first run, so it's never racing
-    # node.start() below for the signing key, that's always up first.
-    rewarder = UptimeRewarder(node)
-    rewarder.start()
-
     # Drives swap steps. Its own thread rather than part of the block
     # cycle, because a step waits on a public API over the network and a
     # cycle that blocks on one stops building blocks. It reconciles every
@@ -569,14 +556,13 @@ def main():
     private_port = args.private_port if args.private_port else port + 2
 
     app = create_app(node, pool, private_port=private_port,
-                     public_port=port, update_checker=update_checker,
-                     rewarder=rewarder)
+                     public_port=port, update_checker=update_checker)
     _serve(app, args.host, port)
     log.info("[startup] public API on http://%s:%d", args.host, port)
 
     private_app = create_private_app(node, pool, private_port=private_port,
-                                     public_port=port, update_checker=update_checker,
-                                     rewarder=rewarder)
+                                     public_port=port,
+                                     update_checker=update_checker)
     _serve(private_app, "127.0.0.1", private_port)
     log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
     log.info("[startup] genesis=%s", genesis["hash"][:12])

@@ -464,51 +464,66 @@ class TestBlame:
         engine.advance(trade)
         assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ACTIVE
 
+    def _stall(self, trade, age=None):
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        trade.status = TRADE_STALLED
+        trade.stalled_since = time.time() - (
+            age if age is not None else swap_engine.ABANDON_AFTER_SECONDS + 10)
+        trade.save()
+        return trade
+
     def test_no_blame_before_the_margin_elapses(self):
         engine, _l, _x = make_engine()
         trade = make_trade()
-        trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - 10
-        trade.save()
-        assert engine.consider_abandonment(trade, peer_was_reachable=True) is False
+        assert engine.consider_abandonment(self._stall(trade, age=10)) is False
 
-    def test_no_blame_when_the_peer_was_unreachable(self):
-        """Otherwise this measures connectivity, not honesty."""
+    def test_no_blame_without_an_acceptance_on_chain(self):
+        """The attack this closes: send somebody an unsolicited payment
+        tagged with a session they never agreed to, wait, and report them
+        as a defector. A step nobody answered proves nobody agreed."""
         engine, _l, _x = make_engine()
         trade = make_trade()
-        engine.advance(trade)
-        trade = Trade.get(Trade.session_id == trade.session_id)
-        trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
-        trade.save()
-        assert engine.consider_abandonment(trade, peer_was_reachable=False) is False
+        engine.advance(trade)            # we paid; they never reciprocated
+        assert engine.consider_abandonment(self._stall(trade)) is False
+        assert PeerRecord.get_or_none(
+            PeerRecord.lapse_addr == "peer.lapse") is None
 
     def test_no_blame_when_this_node_owes_the_move(self):
         engine, _l, _x = make_engine()
         trade = make_trade()
-        # Step 1 fully settled; step 2 is ours to send and we have not.
         first = Increment.get(Increment.id == f"{trade.session_id}:1")
         engine.advance(trade)
         settle_peer_leg(trade, first, engine)
-        engine.advance(trade)
-        trade = Trade.get(Trade.session_id == trade.session_id)
-        trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
-        trade.save()
-        assert engine.consider_abandonment(trade, peer_was_reachable=True) is False
+        engine.advance(trade)            # step 2 is ours and unsent
+        assert engine.consider_abandonment(self._stall(trade)) is False
 
-    def test_blame_only_after_paying_and_waiting_long_with_a_live_peer(self):
+    def test_blame_once_they_accepted_then_stopped(self):
+        """Their own settled leg is the acceptance: a signed transaction
+        carrying this session's tag, which only they could produce."""
         engine, _l, _x = make_engine()
         trade = make_trade()
-        engine.advance(trade)           # our leg of step 1 settles
-        trade = Trade.get(Trade.session_id == trade.session_id)
-        trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
-        trade.save()
+        first = Increment.get(Increment.id == f"{trade.session_id}:1")
+        engine.advance(trade)
+        settle_peer_leg(trade, first, engine)   # they accept step 1
+        engine.advance(trade)
+        second = Increment.get(Increment.id == f"{trade.session_id}:2")
+        settle_peer_leg(trade, second, engine)  # they move first on step 2
+        engine.advance(trade)                   # we reciprocate
+        third = Increment.get(Increment.id == f"{trade.session_id}:3")
+        engine.advance(trade)                   # we pay step 3, they vanish
 
-        assert engine.consider_abandonment(trade, peer_was_reachable=True) is True
+        assert engine.consider_abandonment(self._stall(trade)) is True
         assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
         assert PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse").abandoned_count == 1
+
+    def test_acceptance_cannot_be_forged_by_the_accuser(self):
+        """Only an inbound leg counts. Our own payments, however many,
+        never amount to the counterparty having agreed."""
+        engine, _l, _x = make_engine()
+        trade = make_trade()
+        for _ in range(5):
+            engine.advance(trade)
+        assert engine._peer_ever_reciprocated(trade) is False
 
 
 class TestReconcile:

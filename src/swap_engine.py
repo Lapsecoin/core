@@ -585,22 +585,38 @@ class Engine:
 
     # -- blame ---------------------------------------------------------
 
-    def consider_abandonment(self, trade, peer_was_reachable):
+    def consider_abandonment(self, trade):
         """Decide whether a long stall is finally somebody's fault.
 
-        Requires both a wide margin past the deadline and evidence the
-        peer was reachable while it elapsed. Without the second condition
-        this punishes people for outages, and a reputation system that
-        does that measures connectivity rather than honesty.
+        Three conditions, and the middle one is what makes this safe to
+        act on:
 
-        Only ever blames a peer who owes the next move. A trade where this
-        node is the one who has not sent is this node's own problem.
+        The deadline is long past. Wide on purpose, because a restarting
+        node and a defecting one look identical for a while.
+
+        The peer has already reciprocated at least one step. Their own
+        signed transaction on chain is the acceptance, and nothing else
+        here counts as one. Without this an attacker sends an unsolicited
+        payment tagged with a session the victim never agreed to, waits,
+        and reports them as a defector; with it, a step nobody answered
+        proves only that nobody agreed, which is not a wrong.
+
+        This node does not itself owe the next move. A trade held up by
+        our own unsent leg is our problem, not theirs.
+
+        Deliberately no longer asks whether the peer looked reachable.
+        That came from liveness notes which said a node was powered on,
+        not that it had seen this trade, and publishing them tied a
+        payable address to the network. Reciprocation is both stronger
+        evidence and free.
         """
         if trade.status != TRADE_STALLED or not trade.stalled_since:
             return False
         if time.time() - trade.stalled_since < ABANDON_AFTER_SECONDS:
             return False
-        if not peer_was_reachable:
+        if not self._peer_ever_reciprocated(trade):
+            log.debug("[swap] %s stalled, but the peer never accepted it; "
+                      "no blame", trade.session_id)
             return False
 
         pending = (Increment.select()
@@ -626,6 +642,26 @@ class Engine:
                 return True
             return False
         return False
+
+    @staticmethod
+    def _peer_ever_reciprocated(trade):
+        """Whether the counterparty has settled a leg of their own here.
+
+        This is the acceptance. There is no handshake message and none is
+        needed: a settled inbound leg is a transaction they signed,
+        carrying this trade's session tag, which nobody else could have
+        produced. It says they saw the trade, agreed to its terms, and
+        acted on them.
+
+        Reading agreement off the chain rather than off a protocol message
+        also means it survives everything a message would not: a restart,
+        a lost database, a peer this node has never exchanged a datagram
+        with. The evidence is public and permanent.
+        """
+        return (Increment.select()
+                .where(Increment.session_id == trade.session_id,
+                       Increment.in_state == LEG_SETTLED)
+                .exists())
 
 
 # ---------------------------------------------------------------------------
