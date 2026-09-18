@@ -116,9 +116,6 @@ class LapseAdapter:
     def __init__(self, node):
         self.node = node
 
-    def height(self):
-        return self.node.view.chain[-1]["height"]
-
     def balance(self, addr):
         return self.node.view.state.get_balance(addr)
 
@@ -589,12 +586,12 @@ class Engine:
         not equality, so the difference simply settles the step it was
         scheduled for; nothing downstream needs to know this happened.
 
-        Sponsored creation (xlm.build_sponsored_create_account) cannot
-        be used here even though it would spare the buyer this cost: it
-        requires a signature from the new account's own key in the same
-        transaction (CAP-33's end-sponsoring operation is sourced by the
-        sponsored account), which means active, real-time cooperation
-        from the seller. Nothing in this protocol gives a payer any way
+        Sponsored creation (CAP-33) cannot be used here even though it
+        would spare the buyer this cost: it requires a signature from the
+        new account's own key in the same transaction (its end-sponsoring
+        operation is sourced by the sponsored account), which means
+        active, real-time cooperation from the seller. Nothing in this
+        protocol gives a payer any way
         to obtain that from a counterparty it has never exchanged a
         message with.
         """

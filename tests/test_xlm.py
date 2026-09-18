@@ -186,40 +186,6 @@ class TestAccountMerge:
         assert not hasattr(env.transaction.operations[0], "amount")
 
 
-class TestSponsoredCreation:
-    """A seller holding only LAPSE must be able to receive XLM without
-    first owning any."""
-
-    def _build(self):
-        sponsor_seed, _ = xlm.generate_keypair()
-        new_seed, new_pub = xlm.generate_keypair()
-        xdr, tx_hash = xlm.build_sponsored_create_account(
-            sponsor_seed, new_seed, "s:1", 42)
-        return xdr, tx_hash, new_pub
-
-    def test_has_all_three_sponsorship_operations(self):
-        from stellar_sdk import TransactionEnvelope
-        xdr, _h, _p = self._build()
-        env = TransactionEnvelope.from_xdr(xdr, xlm.NETWORK_PASSPHRASE)
-        names = [type(op).__name__ for op in env.transaction.operations]
-        assert names == ["BeginSponsoringFutureReserves",
-                         "CreateAccount",
-                         "EndSponsoringFutureReserves"]
-
-    def test_new_account_starts_at_zero(self):
-        from stellar_sdk import TransactionEnvelope
-        xdr, _h, _p = self._build()
-        env = TransactionEnvelope.from_xdr(xdr, xlm.NETWORK_PASSPHRASE)
-        assert env.transaction.operations[1].starting_balance == "0"
-
-    def test_requires_both_signatures(self):
-        """Neither side can sponsor the other unilaterally."""
-        from stellar_sdk import TransactionEnvelope
-        xdr, _h, _p = self._build()
-        env = TransactionEnvelope.from_xdr(xdr, xlm.NETWORK_PASSPHRASE)
-        assert len(env.signatures) == 2
-
-
 class _FakeResponse:
     def __init__(self, status_code, payload=None, text=""):
         self.status_code = status_code

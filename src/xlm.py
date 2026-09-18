@@ -54,9 +54,12 @@ STROOPS_PER_XLM = 10_000_000
 BASE_FEE_STROOPS = 100
 
 # Two base reserves to bring an account into existence. Held by the
-# account, not spent, and recoverable by merging the account away. A
-# brand-new seller never has to fund this themselves: see
-# build_sponsored_create_account.
+# account, not spent, and recoverable by merging the account away (see
+# build_account_merge). A brand-new seller never has to fund this
+# themselves: plain create-account is used unconditionally instead (see
+# swap_engine._xlm_send_amount), because sponsored creation would need a
+# real-time signature from a counterparty this protocol has never
+# exchanged a message with.
 BASE_RESERVE_STROOPS = 5_000_000          # 0.5 XLM
 ACCOUNT_MIN_BALANCE_STROOPS = 2 * BASE_RESERVE_STROOPS
 
@@ -457,39 +460,6 @@ def build_create_account(secret_seed, destination, stroops, memo, sequence):
           .set_timeout(TX_TIMEOUT_SECONDS)
           .build())
     tx.sign(kp)
-    return tx.to_xdr(), tx.hash_hex()
-
-
-def build_sponsored_create_account(sponsor_seed, destination_seed, memo, sequence):
-    """Bring an account into existence holding nothing, with the sponsor
-    carrying its reserve.
-
-    This is what lets somebody holding only LAPSE sell it for XLM. Their
-    address cannot receive a payment until an account exists behind it,
-    and creating one normally costs the minimum balance they do not have
-    yet. Under CAP-33 the sponsor carries that reserve instead, so the
-    new account exists at a zero balance and the seller funds nothing.
-
-    Both sponsorship operations must sit in one transaction and both
-    accounts must sign it, so neither side can do this to the other
-    unilaterally. The sponsor's own minimum balance rises while the
-    sponsorship stands, and it can be handed back once the account has
-    funds of its own.
-    """
-    sponsor = Keypair.from_secret(sponsor_seed)
-    new_account = Keypair.from_secret(destination_seed)
-    tx = (_builder(sponsor.public_key, sequence)
-          .add_text_memo(memo)
-          .append_begin_sponsoring_future_reserves_op(
-              sponsored_id=new_account.public_key)
-          .append_create_account_op(destination=new_account.public_key,
-                                    starting_balance="0")
-          .append_end_sponsoring_future_reserves_op(
-              source=new_account.public_key)
-          .set_timeout(TX_TIMEOUT_SECONDS)
-          .build())
-    tx.sign(sponsor)
-    tx.sign(new_account)
     return tx.to_xdr(), tx.hash_hex()
 
 

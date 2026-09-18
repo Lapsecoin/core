@@ -129,7 +129,7 @@ class TestSlashing:
         trust.record_abandonment("bad.peer", "session-x")
         for _ in range(50):
             trust.record_completed("bad.peer", 100 * LAPSE)
-        assert trust.get_score("bad.peer", AGED, FUNDED) == 0.0
+        assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
 
     def test_abandonment_records_its_evidence(self):
         trust.record_abandonment("bad.peer", "session-abc")
@@ -141,13 +141,13 @@ class TestSlashing:
         """Which is the cost that makes the number mean anything."""
         trust.record_abandonment("bad.peer")
         trust.record_completed("fresh.peer", 100 * LAPSE)
-        assert trust.get_score("bad.peer", AGED, FUNDED) == 0.0
-        assert trust.get_score("fresh.peer", AGED, FUNDED) > 0.0
+        assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
+        assert trust.get_detail("fresh.peer", AGED, FUNDED)["score"] > 0.0
 
 
 class TestRecords:
     def test_unknown_peer_scores_zero(self):
-        assert trust.get_score("never.seen", AGED, FUNDED) == 0.0
+        assert trust.get_detail("never.seen", AGED, FUNDED)["score"] == 0.0
 
     def test_unknown_peer_detail_is_marked_unknown(self):
         assert trust.get_detail("never.seen")["known"] is False
@@ -167,18 +167,6 @@ class TestRecords:
         assert detail["stake"] > 0
         assert detail["score"] == pytest.approx(
             detail["history"] * detail["stake"], rel=1e-6)
-
-    def test_all_scores_without_chain_facts_is_zero_not_a_fallback(self):
-        """Falling back to counting trades when the chain cannot be read
-        would quietly restore the Sybil hole."""
-        trust.record_completed("peer", 50 * LAPSE)
-        assert trust.all_scores()["peer"] == 0.0
-
-    def test_all_scores_uses_supplied_chain_facts(self):
-        trust.record_completed("peer", 50 * LAPSE)
-        scores = trust.all_scores(stake_lookup=lambda a: (AGED, FUNDED))
-        assert scores["peer"] > 0.0
-
 
 class FakeStorage:
     def __init__(self, heights_by_addr=None):
@@ -226,15 +214,6 @@ class TestAddressAgeBlocks:
         """A height read mid-reorg must not report negative age."""
         node = FakeNode("me", height=100, heights_by_addr={"peer": [(500, "h")]})
         assert trust.address_age_blocks(node, "peer") == 0
-
-
-class TestStakeLookupFor:
-    def test_returns_age_and_balance(self):
-        node = FakeNode("me", height=1000,
-                        heights_by_addr={"peer": [(200, "h")]},
-                        balances={"peer": 5 * LAPSE})
-        lookup = trust.stake_lookup_for(node)
-        assert lookup("peer") == (800, 5 * LAPSE)
 
 
 class TestMutualScores:

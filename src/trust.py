@@ -137,16 +137,6 @@ def _record(addr):
     return row
 
 
-def get_score(addr, address_age_blocks=0, balance_ticks=0, now=None):
-    """Standing for one peer, or 0 for one never seen."""
-    ensure_tables()
-    row = PeerRecord.get_or_none(PeerRecord.lapse_addr == addr)
-    if row is None:
-        return 0.0
-    return score(row.completed_count, row.completed_lapse, row.abandoned_count,
-                 row.last_completed_at, address_age_blocks, balance_ticks, now)
-
-
 def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None):
     """Standing plus the figures behind it.
 
@@ -209,27 +199,6 @@ def record_abandonment(addr, session_id=""):
     return row
 
 
-def all_scores(stake_lookup=None, now=None):
-    """Every peer this node has dealt with, scored.
-
-    stake_lookup(addr) -> (age_blocks, balance_ticks), so the caller
-    supplies chain facts rather than this module reaching for a node.
-    Without it the stake term is zero, which makes every score zero; that
-    is the honest answer when the chain cannot be consulted, not a reason
-    to fall back to counting trades.
-    """
-    ensure_tables()
-    out = {}
-    for row in PeerRecord.select():
-        age, balance = (0, 0)
-        if stake_lookup is not None:
-            age, balance = stake_lookup(row.lapse_addr)
-        out[row.lapse_addr] = score(
-            row.completed_count, row.completed_lapse, row.abandoned_count,
-            row.last_completed_at, age, balance, now)
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Chain facts
 # ---------------------------------------------------------------------------
@@ -246,16 +215,6 @@ def address_age_blocks(node, addr):
         return 0
     first_seen = min(height for height, _tx_hash in heights)
     return max(node.view.chain[-1]["height"] - first_seen, 0)
-
-
-def stake_lookup_for(node):
-    """A stake_lookup bound to a running node, for all_scores."""
-
-    def lookup(addr):
-        return (address_age_blocks(node, addr),
-                node.view.state.get_balance(addr))
-
-    return lookup
 
 
 def mutual_scores(node, peer_addr):

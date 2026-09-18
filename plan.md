@@ -110,15 +110,15 @@ to delete.
 |---|---|
 | `swap.parse_session_tag` | done: called by `swap_engine.discover_trades` |
 | `swap.opening_mover` | done: called from both sides (see 1.3) |
-| `xlm.build_sponsored_create_account` | cannot be called here at all (see 1.2); delete along with its tests |
+| `xlm.build_sponsored_create_account` | done: deleted along with its tests (cannot be called here at all; see 1.2) |
 | `xlm.build_create_account` | done: called from `Engine._build_and_send` (see 1.2) |
-| `swap_engine.LapseAdapter.height` | delete |
-| `swap_engine.LapseAdapter.balance` | wire into the solvency check (4.2) or delete |
+| `swap_engine.LapseAdapter.height` | done: deleted, still unused |
+| `swap_engine.LapseAdapter.balance` | done: wired into the solvency check (4.2/4.4) |
 | `swap_engine.XLMAdapter.balance` | same |
-| `trust.get_score` | superseded by `get_detail`; delete |
-| `trust.all_scores`, `trust.stake_lookup_for` | delete unless the ticker (5.2) wants them |
-| `market.prune_expired` | never called, so orders accumulate forever; call it (4.4) |
-| `swap_worker.status()` | never surfaced; see 3.3 |
+| `trust.get_score` | done: deleted (superseded by `get_detail`); its tests moved to `get_detail(...)["score"]` |
+| `trust.all_scores`, `trust.stake_lookup_for` | done: deleted; the ticker (5.2) reads `get_detail` directly instead |
+| `market.prune_expired` | done: called from `swap_worker.run_once` (see 2, 4.4) |
+| `swap_worker.status()` | done: surfaced on the Trades page (see 3.3) |
 
 ---
 
