@@ -266,16 +266,20 @@ and look up by tag.
 
 ## 5. Missing
 
-### 5.1 No way to withdraw XLM
+### 5.1 No way to withdraw XLM — done
 
-There is no send path for the trading wallet. XLM can arrive and cannot
-leave except by trading LAPSE back, which means a user can never reach
-USD. This is the most user-visible gap in the feature.
+There was no send path for the trading wallet. XLM could arrive and could
+not leave except by trading LAPSE back, which meant a user could never
+reach USD. This was the most user-visible gap in the feature.
 
-**Fix.** An asset dropdown on the existing send page (LAPSE / XLM) rather
-than a second page, reusing the form and the passphrase handling. The XLM
-option needs spendable-minus-reserve, and an account-merge option to
-close the wallet and reclaim the reserve.
+**Fix.** An asset toggle on the existing send page (LAPSE / XLM), reusing
+the form and the passphrase handling rather than a second page. The XLM
+side offers a plain payment, capped at spendable so the reserve stays
+locked, or account-merge (new: `xlm.build_account_merge`) to close the
+wallet and reclaim the reserve along with everything else. Both reuse
+the same wallet and passphrase-derived key market_routes already trades
+against. Covered in `tests/test_api.py::TestXlmView` /
+`TestSubmitXlmAndAlert` and `tests/test_xlm.py::TestAccountMerge`.
 
 ### 5.2 No price derived from trade history
 
