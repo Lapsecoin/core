@@ -253,14 +253,26 @@ expiry/solvency tests) and `TestPlaceOrder`, and
 `tests/test_swap_engine.py::TestDiscoverTrades` (the new maker-solvency
 tests).
 
-### 4.5 `find_payment` rescans an address's entire history
+### 4.5 `find_payment` rescans an address's entire history — done
 
-`swap_engine.LapseAdapter.find_payment` walks every transaction the
-address has ever made, for every increment, on every pass. Cost grows
+`swap_engine.LapseAdapter.find_payment` walked every transaction the
+address had ever made, for every increment, on every pass. Cost grew
 without bound with account age.
 
-**Fix.** Index confirmed payments by session tag as blocks are applied,
-and look up by tag.
+**Fix.** `storage.AddrIndex` gets a `memo` column, populated as blocks
+are indexed; `Storage.get_tx_by_addr_and_memo` looks a payment up by its
+exact session tag directly, and `find_payment` now uses it instead of
+`get_tx_heights_for_addr`. `recent_incoming` (discovery) is untouched:
+it genuinely doesn't know the memo ahead of time. Schema v3, with a
+one-shot migration (`_migrate_addrindex_memo`) backfilling existing
+databases. Caught while testing the migration itself: declaring the
+`(addr, memo)` index on the model let `create_tables(safe=True)` build
+it against the existing table before the migration added the column,
+corrupting the index outright; fixed by creating that index by hand
+with `CREATE INDEX IF NOT EXISTS` after `_migrate()` runs. Covered in
+`tests/test_storage.py::TestTxAndAddrIndex` and
+`TestAddrIndexMemoMigration`, and
+`tests/test_swap_engine.py::TestLapseAdapterFindPayment`.
 
 ---
 
