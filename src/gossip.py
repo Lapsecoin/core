@@ -88,6 +88,7 @@ def _random_fraction():
 KIND_BLOCK = "block"
 KIND_TX    = "tx"
 KIND_ALIVE = "alive"
+KIND_ORDER = "order"
 
 
 class Gossip:
@@ -205,5 +206,7 @@ class Gossip:
             self.udp.send_block(item, peers=peers, stemming=stemming)
         elif kind == KIND_ALIVE:
             self.udp.send_alive(item, peers=peers, stemming=stemming)
+        elif kind == KIND_ORDER:
+            self.udp.send_order(item, peers=peers, stemming=stemming)
         else:
             self.udp.send_tx(item, peers=peers, stemming=stemming)

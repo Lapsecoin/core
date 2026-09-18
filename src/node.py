@@ -44,6 +44,7 @@ import block as block_mod
 import crypto
 from crypto import canonical_json
 import gossip as gossip_mod
+import market as market_mod
 import mempool as mempool_mod
 import settings as settings_mod
 import tx as tx_mod
@@ -1156,6 +1157,8 @@ class Node:
             self._handle_inbound_tx(msg)
         elif t == "alive":
             self._handle_inbound_alive(msg)
+        elif t == "order":
+            self._handle_inbound_order(msg)
 
     def _spread(self, item, kind, item_hash):
         """Originate an item and remember it until we see it come back from
@@ -1481,6 +1484,58 @@ class Node:
         self._record_alive(addr)
         self.gossip.relay(note, gossip_mod.KIND_ALIVE, item_hash,
                           sender, stemming=stemming)
+
+    def _handle_inbound_order(self, msg):
+        """Verify a swap order or cancellation, store it, and pass it on.
+
+        Verified before relaying, not after. An order is signed, so a
+        relay cannot forge one, but relaying first would mean every node
+        forwarding whatever junk anyone sends and only then discovering it
+        was junk, which is a free amplifier. A block is handled the same
+        way for the same reason.
+
+        Nothing here touches consensus. An order is an advertisement: it
+        moves no funds, enters no block, and a node that never trades can
+        drop every one of these without consequence.
+        """
+        item = msg["order"]
+        sender = msg.get("sender")
+        stemming = msg.get("stemming", False)
+
+        try:
+            item_hash = market_mod.order_hash(item)
+        except Exception:
+            log.debug("[market] ignoring an unreadable order")
+            return
+
+        self._note_echo(item_hash, sender)
+        if self.gossip.mark_seen(item_hash):
+            # Already handled. Checking before verifying matters on a
+            # flood: a FALCON verification is the expensive part, and a
+            # duplicate has already paid for one.
+            return
+
+        try:
+            if market_mod.is_cancellation(item):
+                canceller = market_mod.verify_cancellation(item)
+                market_mod.apply_cancellation(item["cancel"], canceller)
+            else:
+                market_mod.verify_order(item, current_height=self.view.height)
+                market_mod.store_order(item)
+        except market_mod.OrderRejected as e:
+            log.debug("[market] rejected an order from %s: %s", sender, e)
+            return
+        except Exception:
+            log.warning("[market] failed to handle an inbound order",
+                        exc_info=True)
+            return
+
+        self.gossip.relay(item, gossip_mod.KIND_ORDER, item_hash,
+                          sender, stemming=stemming)
+
+    def publish_order(self, item):
+        """Put this node's own order or cancellation onto the network."""
+        self._spread(item, gossip_mod.KIND_ORDER, market_mod.order_hash(item))
 
     def _record_alive(self, addr):
         """Remember that this address was announced, and when.

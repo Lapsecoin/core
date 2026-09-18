@@ -107,6 +107,18 @@ MT_BLOCK     = 0x0D
 # no protocol floor bump.
 MT_ALIVE     = 0x0E
 
+# A signed swap order, or a signed cancellation of one. Carries no funds
+# and touches no consensus state: an order is an offer to trade, and the
+# trade itself happens in ordinary transactions on two chains.
+#
+# Relayed exactly like a liveness note, and for the same reason: the peer
+# handing you an order is not necessarily its author, so posting one does
+# not announce which IP wants the trade. It also inherits that type's
+# compatibility story, falling through _dispatch on a node too old to
+# know it, so no protocol floor bump is needed and a node that never
+# trades is unaffected by any of this.
+MT_ORDER     = 0x0F
+
 # Level 1 rather than 6: on the wire this competes with pacing, not disk.
 # It reaches within about a point of the ratio at a third of the CPU, and
 # every hop pays the decompress, so the cheaper end is the right one here.
@@ -723,6 +735,7 @@ class UDPTransport:
         self._routable_pending: set = set()
         self._routable_lock = threading.Lock()
         self._on_alive      = None  # set by main; liveness notes from the network
+        self._on_order      = None  # set by main; swap orders from the network
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -905,6 +918,16 @@ class UDPTransport:
         else here, which is the point: it travels, so the address in it is
         never linkable to the node it came from."""
         self._broadcast(MT_ALIVE, {"alive": note}, peers, stemming, "liveness note")
+
+    def send_order(self, order: dict, peers=None, stemming: bool = False):
+        """Put a signed order (or cancellation) on the wire.
+
+        Same propagation as everything else here. An order is signed by
+        its maker, so relaying cannot forge one, and travelling through
+        relays is what keeps the maker's trading address unlinked from the
+        IP that posted it.
+        """
+        self._broadcast(MT_ORDER, {"order": order}, peers, stemming, "order")
 
     def send_peers(self, addr: str, peers: list[str]):
         """Send peer list to addr."""
@@ -1271,6 +1294,19 @@ class UDPTransport:
                     self._on_alive(note, sender_addr,
                                    bool(data.get("stemming", False)))
 
+        elif msg_type == MT_ORDER:
+            if self._is_new(msg_id):
+                self._pool.touch(sender_addr)
+                order = data.get("order")
+                # Handed up unverified, exactly as a block is. Whether the
+                # signature holds is decided where the keys and the order
+                # book live, not at the transport, and relaying before that
+                # check would let anyone flood the network with junk that
+                # every node forwards. See Node._handle_inbound_order.
+                if isinstance(order, dict) and self._on_order:
+                    self._on_order(order, sender_addr,
+                                   bool(data.get("stemming", False)))
+
         elif msg_type == MT_GETSYNC:
             self._handle_getsync(msg_id, data, sender)
 
@@ -1559,6 +1595,14 @@ class UDPTransport:
     def set_alive_callback(self, fn):
         """fn(note, sender_addr, stemming). Set by main after Node init."""
         self._on_alive = fn
+
+    def set_order_callback(self, fn):
+        """fn(order, sender_addr, stemming). Set by main after Node init.
+
+        Left unset on a node that does not trade, in which case inbound
+        orders are dropped at _dispatch and cost nothing.
+        """
+        self._on_order = fn
 
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""

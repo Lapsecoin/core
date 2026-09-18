@@ -455,6 +455,10 @@ def main():
         _offer({"type": "alive", "note": note,
                 "sender": sender_addr, "stemming": stemming}, "alive")
 
+    def on_order(order, sender_addr, stemming=False):
+        _offer({"type": "order", "order": order,
+                "sender": sender_addr, "stemming": stemming}, "order")
+
     def on_peers(peer_list, sender_addr):
         for p in peer_list:
             if isinstance(p, str) and ":" in p:
@@ -518,6 +522,7 @@ def main():
                 LOCAL_VERSION, node.cs.cumulative_iterations)
 
     udp.set_alive_callback(on_alive)
+    udp.set_order_callback(on_order)
     udp.set_chain_provider(_chain_provider)
     udp.set_tip_provider(_tip_provider)
 
