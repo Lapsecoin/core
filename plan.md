@@ -13,31 +13,35 @@ are fixed.
 
 ## 1. Broken flows
 
-### 1.1 A trade can never complete
+### 1.1 A trade can never complete — done
 
-`market_routes.py:455` is the only place a `Trade` row is created, always
-with `role="taker"`. Nothing tells the maker a trade exists, so the
-maker's worker never reciprocates. The taker pays step one and waits
-forever.
+`market_routes.py:455` was the only place a `Trade` row was created,
+always with `role="taker"`. Fixed: `swap_engine.discover_trades`, called
+from `swap_worker.run_once` before the existing per-trade advance loop,
+watches this node's own orders for a settled step-1 payment and creates
+the maker-side `Trade` and `Increment` rows.
 
-**Fix.** The maker discovers the trade from the chain. Their node already
-watches its own address; it should recognise an incoming payment whose
-memo names one of its own open orders, create the maker-side `Trade`, and
-reciprocate.
+The memo now carries an order reference, exactly as sketched here:
+`swap.session_tag(order_id, session_id, n)` produces
+`<order8>:<session8>:<n>` (20 bytes), and `parse_session_tag` validates
+both prefixes as hex of the exact expected length.
 
-This needs no new message type and no handshake. It also produces the
-acceptance proof that `swap_engine._peer_ever_reciprocated` already
-depends on.
-
-The memo must carry an order reference. Stellar's text memo is 28 bytes,
-which is the binding constraint:
-
-```
-<order8>:<session8>:<n>     20 bytes, fits
-```
-
-`swap.session_tag` and `swap.parse_session_tag` both need to change
-shape, and `parse_session_tag` gets its first caller (see 2.1).
+One gap this write-up did not anticipate: the payment alone only ever
+reveals the taker's address on the chain it arrived on, never the other
+one the maker needs for its own reciprocating leg, and Stellar's memo has
+no room left to carry it (LapseCoin's 200-byte memo would, but Stellar's
+28 bytes are already spent). Resolved with a small signed "fill claim"
+gossiped the same way an order is (`market.py`'s claim section,
+`trade_storage.Claim`, `gossip.KIND_CLAIM`, `node._handle_inbound_claim`):
+the taker states which addresses to pay and how much for a given session,
+signed with the same key that controls the LapseCoin address it names. It
+proves address control and nothing else; the maker still independently
+re-derives the whole schedule from the claim's stated fill size and step
+count and checks it against its own exposure cap before creating
+anything, never trusting a taker's word for what is safe. A cancelled or
+expired order with a live claim is still discovered: cancelling withdraws
+what is unfilled, not what already has money moving against it
+(`market.orders_by_maker_with_claims`).
 
 ### 1.2 A seller holding no XLM cannot be paid
 
@@ -58,19 +62,29 @@ it does not. Decide which: plain create costs the buyer 1 XLM that the
 seller then holds as reserve, sponsored create costs the buyer nothing
 permanent but raises their own reserve while it stands.
 
-### 1.3 The first-mover rule is documented but not implemented
+### 1.3 The first-mover rule is documented but not implemented — done
 
-`swap.opening_mover` exists, is tested, and is **never called**.
-`market_routes._start_trade` hardcodes `i_open = True`, so the taker
-always opens.
+`swap.opening_mover` existed, was tested, and was never called;
+`market_routes._start_trade` hardcoded `i_open = True`. Fixed, with one
+necessary carve-out this write-up did not account for: step 1 can only
+ever be sent by the taker, because nothing else could tell the maker a
+session exists in the first place (no handshake; see 1.1). Wiring
+`opening_mover` into step 1 as originally described would have let a
+well-established taker facing a newer maker compute `i_open = False` and
+wait for a maker who has no way to know it should move first — a silent
+deadlock, not a fairness improvement.
 
-The documented rule is that the less established side opens, so the party
-asking to be trusted is the one who demonstrates it. What actually
-happens is that takers always carry the opening risk regardless of
-standing.
-
-**Fix.** Call `opening_mover` with both sides' scores and fall back to
-role on a tie, which is what its `None` return is for.
+`opening_mover` is now called by both sides (`trust.mutual_scores`
+derives both halves from data neither side can lie about) and genuinely
+decides who moves first from step 2 onward, where both sides already know
+the trade exists and either could safely be the one waiting; step 1
+stays forced to the taker regardless of trust, in both
+`market_routes._start_trade` and `swap_engine.discover_trades`. A test
+(`test_a_tie_in_trust_never_makes_both_sides_believe_they_open`) locks in
+the one way this could go wrong: the maker's step-2 decision has to be
+derived as the *negation* of what the taker computed, never as an
+independent parallel `opening_mover` call, or a tied trust score would
+have both sides believe they open step 2 and neither would send.
 
 ---
 
@@ -82,8 +96,8 @@ to delete.
 
 | Symbol | Verdict |
 |---|---|
-| `swap.parse_session_tag` | gets its caller in 1.1 |
-| `swap.opening_mover` | gets its caller in 1.3 |
+| `swap.parse_session_tag` | done: called by `swap_engine.discover_trades` |
+| `swap.opening_mover` | done: called from both sides (see 1.3) |
 | `xlm.build_sponsored_create_account` | gets its caller in 1.2 |
 | `xlm.build_create_account` | reachable only via a flag nobody sets; see 1.2 |
 | `swap_engine.LapseAdapter.height` | delete |
@@ -250,8 +264,10 @@ calling any of it finished.
 2. **Per-kind dedup plus the 3-and-100-node delivery harness** (4.1) —
    done, and turned up a real order-propagation bug beyond what 4.1
    originally described (see above).
-3. **Maker-side discovery** (1.1), which brings 1.3 and the memo format
-   with it. This is what makes a trade complete.
+3. **Maker-side discovery** (1.1), which brought 1.3 and the memo format
+   with it — done. This is what makes a trade complete. Also introduced
+   the fill-claim message and `market.orders_by_maker_with_claims`,
+   neither of which this write-up anticipated (see 1.1's notes above).
 4. **Account creation on the XLM leg** (1.2). Needed before any trade
    with a counterparty who holds no XLM, which is most new users.
 5. **Admission control, sequence allocator, solvency, expiry** (4.2, 4.3,

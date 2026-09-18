@@ -267,7 +267,8 @@ def register(app, node, csrf_token):
                         "That is more than this node will risk with this "
                         "counterparty in one go. The most it will do is "
                         f"{swap_mod.lapse_for_xlm(e.max_safe_stroops, row.price_stroops_per_lapse) / TICKS_PER_LAPSE:.4f} LAPSE.")
-                except ValueError as e:
+                except (ValueError, market_mod.OrderRejected,
+                       market_mod.ClaimRejected) as e:
                     alert_err = str(e)
                 except Exception as e:
                     log.warning("[market] starting a trade failed", exc_info=True)
@@ -428,13 +429,7 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
         raise ValueError("that is not this node's passphrase")
 
     lapse_total = parse_lapse(request.form.get("amount_lapse"))
-    remaining = market_mod.remaining_ticks(order_row)
-    if lapse_total > remaining:
-        raise ValueError("that is more than the order has left")
-    if order_row.min_fill and lapse_total < order_row.min_fill:
-        raise ValueError(
-            f"this order will not go below "
-            f"{order_row.min_fill / TICKS_PER_LAPSE:.4f} LAPSE")
+    market_mod.validate_fill(order_row, lapse_total)
 
     xlm_total = swap_mod.xlm_for_lapse(lapse_total,
                                        order_row.price_stroops_per_lapse)
@@ -446,12 +441,31 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
     schedule, count, _cap = swap_mod.plan(
         lapse_total, xlm_total, detail["score"], stranger_cap=cap)
 
-    # The taker is the less established side by construction here, since
-    # they are the one accepting somebody else's standing offer, so they
-    # open. i_move_first then alternates from there.
-    i_open = True
+    # Who would open if both sides already knew this trade existed. Fed
+    # by trust alone, never anything the maker says, so it cannot be
+    # gamed by a counterparty claiming to be more or less established
+    # than it is (see trust.mutual_scores).
+    i_open = swap_mod.opening_mover(
+        *trust_mod.mutual_scores(node, order_row.maker_lapse_addr))
+    if i_open is None:
+        i_open = True   # an even match still needs somebody to start
+
     session_id = swap_mod.new_session_id(order_row.order_id, node.addr)
     now = time.time()
+
+    # Built, signed and stored before the trade itself: if this fails
+    # (the per-taker claim cap, see market.MAX_CLAIMS_PER_TAKER), nothing
+    # has been created yet. Doing it the other way round would risk an
+    # orphaned trade this node itself will still try to send steps into,
+    # that the maker can never discover for want of the one thing a claim
+    # supplies (see market.py's claim section).
+    claim = market_mod.build_claim(
+        order_id=order_row.order_id, session_id=session_id,
+        taker_lapse_addr=node.addr, taker_xlm_addr=xlm_addr,
+        lapse_total=lapse_total, increment_count=count,
+        pubkey_hex=node.pk_hex)
+    market_mod.sign_claim(claim, node.keyfile, kek)
+    market_mod.store_claim(claim)
 
     Trade.create(
         session_id=session_id, order_id=order_row.order_id, role="taker",
@@ -467,11 +481,25 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
 
     timeout = swap_engine.step_timeout_seconds(depth, LAPSE_BLOCK_SECONDS)
     for n, (lapse_amount, xlm_amount) in enumerate(schedule, start=1):
+        # Step 1 is forced to this side regardless of i_open: the maker
+        # has no handshake and no way to learn a session exists except by
+        # seeing this node's own first payment land (see
+        # swap_engine.discover_trades), so the taker is always the one
+        # who has to send it. opening_mover's real effect starts at step
+        # 2, once both sides already know the trade exists and either
+        # could safely be the one waiting.
+        i_move_first = True if n == 1 else swap_mod.i_move_first(n, i_open)
         Increment.create(
             id=f"{session_id}:{n}", session_id=session_id, n=n,
             lapse_amount=lapse_amount, xlm_amount=xlm_amount,
-            i_move_first=swap_mod.i_move_first(n, i_open),
+            i_move_first=i_move_first,
             created_at=now, deadline_at=now + timeout)
+
+    # Only now, with both rows safely on disk, put it on the network. A
+    # crash between here and the send below costs nothing new: the trade
+    # simply gets picked up, claim included, on the next worker pass.
+    node.publish_claim(claim)
+
     log.info("[market] trade %s opened: %d steps against %s",
              session_id, count, order_row.maker_lapse_addr[:24])
     return session_id

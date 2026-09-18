@@ -280,6 +280,58 @@ class TestOrderHash:
                market.order_hash(signed_order(maker))
 
 
+class TestValidateFill:
+    """Shared by the taker's own request and the maker's independent
+    re-check of a claim (see swap_engine.discover_trades): the maker
+    must never take a taker's word that a fill fits, any more than a
+    taker's own request is trusted without this."""
+
+    def test_a_fill_within_bounds_is_accepted(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        market.validate_fill(row, 5 * LAPSE)   # must not raise
+
+    def test_zero_or_negative_is_refused(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        for bad in (0, -1):
+            with pytest.raises(market.OrderRejected, match="positive"):
+                market.validate_fill(row, bad)
+
+    def test_more_than_remaining_is_refused(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        with pytest.raises(market.OrderRejected, match="left"):
+            market.validate_fill(row, 11 * LAPSE)
+
+    def test_below_min_fill_is_refused(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        with pytest.raises(market.OrderRejected, match="min_fill|will not go"):
+            market.validate_fill(row, 1 * LAPSE)
+
+    def test_above_max_fill_is_refused(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE, max_fill=3 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        with pytest.raises(market.OrderRejected, match="max fill"):
+            market.validate_fill(row, 4 * LAPSE)
+
+    def test_accounts_for_what_is_already_delivered(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        # Nothing delivered yet, so the full remaining size still fits...
+        market.validate_fill(row, 10 * LAPSE)
+        # ...but not more than the order ever had.
+        with pytest.raises(market.OrderRejected):
+            market.validate_fill(row, 10 * LAPSE + 1)
+
+
 class TestAlreadyKnown:
     """Backing market_routes/node's pre-verification dedup. Must answer
     from stored state, not from gossip's own seen-cache: the two track
@@ -379,6 +431,47 @@ class TestOrdersByMaker:
         rows = market.orders_by_maker(maker["addr"], current_height=100)
         assert len(rows) == 1
         assert rows[0].order_id == order["order_id"]
+
+
+class TestOrdersByMakerWithClaims:
+    """Discovery's own view: unlike orders_by_maker, a cancelled or
+    expired order must still surface here if a claim (and therefore
+    possibly a real payment) is already waiting against it."""
+
+    def test_an_order_with_no_claims_is_absent(self, maker):
+        market.store_order(signed_order(maker))
+        assert market.orders_by_maker_with_claims(maker["addr"]) == []
+
+    def test_an_open_order_with_a_claim_shows(self, maker, taker):
+        order = signed_order(maker)
+        market.store_order(order)
+        market.store_claim(signed_claim(taker, order_id=order["order_id"]))
+        rows = market.orders_by_maker_with_claims(maker["addr"])
+        assert [r.order_id for r in rows] == [order["order_id"]]
+
+    def test_a_cancelled_order_with_a_claim_still_shows(self, maker, taker):
+        """A cancellation withdraws what is unfilled, not what already
+        has money moving against it (see market.py's own docstring)."""
+        order = signed_order(maker)
+        market.store_order(order)
+        market.store_claim(signed_claim(taker, order_id=order["order_id"]))
+        market.apply_cancellation(order["order_id"], maker["addr"])
+        rows = market.orders_by_maker_with_claims(maker["addr"])
+        assert [r.order_id for r in rows] == [order["order_id"]]
+
+    def test_someone_elses_order_is_never_returned(self, maker, taker, tmp_path):
+        other_sk, other_pk = crypto.generate_keypair()
+        other_path = str(tmp_path / "unrelated.key")
+        crypto.save_key(other_path, other_sk, other_pk, "pw")
+        other_kek = crypto.derive_kek(other_path, "pw")
+        _seed, other_xlm = xlm_mod.generate_keypair()
+        other = {"addr": crypto.public_key_to_address(other_pk),
+                 "pubkey": other_pk.hex(), "keyfile": other_path,
+                 "kek": other_kek, "xlm": other_xlm}
+        order = signed_order(other)
+        market.store_order(order)
+        market.store_claim(signed_claim(taker, order_id=order["order_id"]))
+        assert market.orders_by_maker_with_claims(maker["addr"]) == []
 
 
 class TestClaims:

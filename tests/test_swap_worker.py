@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.dirname(__file__))
 
+import market as market_mod
 import settings as settings_mod
 import storage as storage_mod
 import swap
@@ -321,3 +322,118 @@ class TestKekSealedWallet:
         seed, public = xlm_mod.generate_keypair()
         with pytest.raises(ValueError):
             xlm_mod.save_key(str(tmp_path / "k"), seed, public)
+
+
+class _View:
+    def __init__(self, height):
+        self.height = height
+        self.chain = [{"height": height}]
+
+
+class DiscoveryFakeNode(FakeNode):
+    """FakeNode plus the bits discover_trades and its pruning companions
+    read: an address and a tip height."""
+
+    def __init__(self, enabled=True, unlocked=True, addr="maker.lapse", height=100):
+        super().__init__(enabled, unlocked)
+        self.addr = addr
+        self.view = _View(height)
+
+
+class TestDiscoveryWiring:
+    """run_once's own responsibility here is narrow: call discover_trades
+    with the right arguments when a wallet exists, skip it when one does
+    not, and never let either that or pruning stop trades already running
+    from being advanced. discover_trades' own correctness is
+    test_swap_engine.py's job, not this file's."""
+
+    def _worker_with_wallet(self, tmp_path, node=None):
+        node = node or DiscoveryFakeNode()
+        seed, pub = xlm_mod.generate_keypair()
+        xlm_path = str(tmp_path / "xlm.key")
+        xlm_mod.save_key(xlm_path, seed, pub, kek=node._kek)
+        w = Worker(node)
+        w.xlm_keyfile = xlm_path
+        return w, pub
+
+    def test_discovery_runs_with_the_right_arguments_when_a_wallet_exists(
+            self, tmp_path, monkeypatch):
+        w, pub = self._worker_with_wallet(tmp_path)
+        calls = []
+        monkeypatch.setattr(swap_engine, "discover_trades",
+                            lambda *a: calls.append(a) or 0)
+        w.run_once()
+        assert len(calls) == 1
+        _engine, node, my_xlm_addr, cap, depth = calls[0]
+        assert my_xlm_addr == pub
+        assert node is w.node
+        assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
+        assert depth >= swap_engine.MIN_CONFIRM_DEPTH
+
+    def test_discovery_is_skipped_without_a_trading_wallet(self, monkeypatch):
+        w = Worker(DiscoveryFakeNode())   # default xlm_keyfile is nonexistent
+        calls = []
+        monkeypatch.setattr(swap_engine, "discover_trades",
+                            lambda *a: calls.append(a) or 0)
+        w.run_once()
+        assert calls == []
+
+    def test_discovery_unreachable_pauses_the_whole_pass(self, tmp_path, monkeypatch):
+        w, _pub = self._worker_with_wallet(tmp_path)
+
+        def boom(*a):
+            raise swap_engine.Unreachable("horizon down")
+        monkeypatch.setattr(swap_engine, "discover_trades", boom)
+
+        assert w.run_once() == 0
+        assert w._unreachable_until > time.time()
+
+    def test_a_discovery_bug_does_not_stop_existing_trades_advancing(
+            self, tmp_path, monkeypatch):
+        w, _pub = self._worker_with_wallet(tmp_path)
+        trade = make_trade()
+
+        def boom(*a):
+            raise ValueError("bug in discovery")
+        monkeypatch.setattr(swap_engine, "discover_trades", boom)
+
+        w.run_once()
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        assert inc.out_state == trade_storage.LEG_SETTLED
+
+    def test_prune_runs_each_pass(self, tmp_path, monkeypatch):
+        w, _pub = self._worker_with_wallet(tmp_path)
+        calls = []
+        monkeypatch.setattr(market_mod, "prune_expired",
+                            lambda h: calls.append(("orders", h)))
+        monkeypatch.setattr(market_mod, "prune_claims",
+                            lambda: calls.append(("claims",)))
+        w.run_once()
+        assert ("orders", 100) in calls
+        assert ("claims",) in calls
+
+    def test_a_pruning_bug_does_not_stop_existing_trades_advancing(
+            self, tmp_path, monkeypatch):
+        w, _pub = self._worker_with_wallet(tmp_path)
+        trade = make_trade()
+
+        def boom(height):
+            raise ValueError("bug in pruning")
+        monkeypatch.setattr(market_mod, "prune_expired", boom)
+
+        w.run_once()
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        assert inc.out_state == trade_storage.LEG_SETTLED
+
+    def test_discovery_runs_before_pruning(self, tmp_path, monkeypatch):
+        """A node that was offline longer than a claim's lifetime must get
+        at least one chance to discover it before pruning can remove it
+        (see market.CLAIM_MAX_AGE_SECONDS)."""
+        w, _pub = self._worker_with_wallet(tmp_path)
+        order = []
+        monkeypatch.setattr(swap_engine, "discover_trades",
+                            lambda *a: order.append("discover") or 0)
+        monkeypatch.setattr(market_mod, "prune_claims",
+                            lambda: order.append("prune"))
+        w.run_once()
+        assert order == ["discover", "prune"]

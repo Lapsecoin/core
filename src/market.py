@@ -309,6 +309,30 @@ def remaining_ticks(order_row):
     return max(order_row.lapse_total - delivered_ticks(order_row.order_id), 0)
 
 
+def validate_fill(order_row, lapse_total):
+    """Check a proposed fill size against an order's own terms. Raises
+    OrderRejected with a human-readable reason if it does not fit.
+
+    Shared by the taker's own request (market_routes._start_trade) and
+    the maker's independent re-check of a claim
+    (swap_engine.discover_trades): the same three bounds apply to a fill
+    regardless of which side proposes it, and a maker must never take a
+    taker's word that its own order permits what a claim states, any
+    more than a taker's own request is trusted without this check.
+    """
+    if lapse_total <= 0:
+        raise OrderRejected("fill amount must be positive")
+    remaining = remaining_ticks(order_row)
+    if lapse_total > remaining:
+        raise OrderRejected("that is more than the order has left")
+    if order_row.min_fill and lapse_total < order_row.min_fill:
+        raise OrderRejected(
+            f"this order will not go below {order_row.min_fill} ticks")
+    max_fill = order_row.max_fill or order_row.lapse_total
+    if lapse_total > max_fill:
+        raise OrderRejected("that is more than this order's max fill")
+
+
 def open_orders(current_height, exclude_maker=None):
     """Every order still on offer here, newest first."""
     ensure_tables()
@@ -336,6 +360,28 @@ def orders_by_maker(addr, current_height):
                        Order.cancelled == False,          # noqa: E712
                        Order.expiry_block > current_height)
                 .order_by(Order.received_at.desc()))
+
+
+def orders_by_maker_with_claims(addr):
+    """This maker's own orders that have at least one live claim against
+    them, regardless of whether the order itself is still open.
+
+    Discovery-specific (see swap_engine.discover_trades), and
+    deliberately not filtered by cancelled or expiry the way
+    orders_by_maker is: a claim that arrived, and was already paid for,
+    before this node cancelled its own order still deserves completion.
+    Cancelling withdraws what is unfilled, not what already has money
+    moving against it, and filtering this query the same way
+    orders_by_maker is would strand exactly that taker.
+    """
+    ensure_tables()
+    order_ids = [row.order_id for row in
+                Claim.select(Claim.order_id).distinct()]
+    if not order_ids:
+        return []
+    return list(Order.select()
+                .where(Order.maker_lapse_addr == addr,
+                       Order.order_id.in_(order_ids)))
 
 
 def get_order(order_id):
