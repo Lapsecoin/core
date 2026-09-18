@@ -493,6 +493,25 @@ def build_sponsored_create_account(sponsor_seed, destination_seed, memo, sequenc
     return tx.to_xdr(), tx.hash_hex()
 
 
+def build_account_merge(secret_seed, destination, sequence):
+    """Close this account, sending its entire balance (reserve included)
+    to `destination` in one operation. Returns (xdr, tx_hash).
+
+    No memo: there is no session this ties to, and no amount to state
+    either, since Stellar itself computes what to hand over as whatever
+    remains once the transaction fee is paid. This is the only way this
+    wallet's reserve is ever recoverable, since a plain payment can only
+    ever move the spendable balance above it.
+    """
+    kp = Keypair.from_secret(secret_seed)
+    tx = (_builder(kp.public_key, sequence)
+          .append_account_merge_op(destination=destination)
+          .set_timeout(TX_TIMEOUT_SECONDS)
+          .build())
+    tx.sign(kp)
+    return tx.to_xdr(), tx.hash_hex()
+
+
 def envelope_hash(xdr):
     """The hash of an already-built envelope, without re-signing it."""
     return TransactionEnvelope.from_xdr(xdr, NETWORK_PASSPHRASE).hash_hex()

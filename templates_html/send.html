@@ -4,6 +4,13 @@
 {% if alert_ok_tx %}<div class="alert alert-ok">{{ alert_ok_verb }} tx: <span class="hash">{{ alert_ok_tx }}</span></div>{% endif %}
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 {% if alert_err_lines %}<div class="alert alert-err">{% for line in alert_err_lines %}{{ line }}<br>{% endfor %}</div>{% endif %}
+
+<div class="form-group" style="display:flex;gap:1rem;margin-bottom:.5rem">
+  <label><input type="radio" name="asset-picker" value="lapse" {% if asset != 'xlm' %}checked{% endif %}> LAPSE</label>
+  <label><input type="radio" name="asset-picker" value="xlm" {% if asset == 'xlm' %}checked{% endif %}> XLM</label>
+</div>
+
+<div id="lapse-panel">
 <div class="stats">
   <div class="stat" style="flex-basis:280px">
     <div class="stat-label">Your address</div>
@@ -33,6 +40,7 @@
   <div class="card-title">Outputs, paste CSV (address,amount) or upload file</div>
   <form method="POST" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="asset" value="lapse">
     <div class="form-group">
       <label>CSV outputs (address,amount). Only lines changed to a nonzero amount get sent.</label>
       <textarea name="outputs" rows="2" placeholder="word1.word2...word12,1000&#10;word1.word2...word12,500">{{ outputs_value }}</textarea>
@@ -62,6 +70,64 @@
     </div>
   </form>
 </div>
+</div>
+
+<div id="xlm-panel">
+{% if not xlm_addr %}
+<div class="card">
+  <div class="card-title">No Stellar trading address yet</div>
+  <p>Create one from the <a href="/market">Market</a> page before sending XLM.</p>
+</div>
+{% else %}
+<div class="stats">
+  <div class="stat" style="flex-basis:280px">
+    <div class="stat-label">Your Stellar address</div>
+    <div class="hash">{{ xlm_addr }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Spendable</div>
+    <div class="stat-value" style="color:var(--green);font-size:.95rem">{{ fmt_xlm(xlm_spendable) }} XLM</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Locked in reserve</div>
+    <div class="stat-value" style="font-size:.95rem">{{ fmt_xlm(xlm_locked) }} XLM</div>
+  </div>
+</div>
+<div class="card">
+  <div class="card-title">Send XLM</div>
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="asset" value="xlm">
+    <div class="form-group">
+      <label for="xlm-to">Destination Stellar address</label>
+      <input type="text" id="xlm-to" name="xlm_to" value="{{ xlm_to_value }}"
+             placeholder="G..." style="width:100%">
+    </div>
+    <div class="form-group" style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1 1 160px">
+        <label for="xlm-amount">Amount, in XLM</label>
+        <input type="text" id="xlm-amount" name="xlm_amount" value="{{ xlm_amount_value }}"
+               placeholder="0.0000000" style="width:100%" {% if xlm_merge_value %}disabled{% endif %}>
+      </div>
+      <div style="flex:0 0 auto;padding-bottom:.4rem">
+        <label title="Sends this wallet's entire balance, reserve included, and closes the account.">
+          <input type="checkbox" id="xlm-merge" name="xlm_merge" value="1" {% if xlm_merge_value %}checked{% endif %}>
+          Close wallet (send everything, including the reserve)
+        </label>
+      </div>
+    </div>
+    <div class="form-group" style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1 1 220px">
+        <label for="xlm-passphrase">Your signing passphrase</label>
+        <input type="password" id="xlm-passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
+      </div>
+      <button type="submit" style="flex:0 0 auto">Sign &amp; Send</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+</div>
+
 <script>
 (function () {
   // Bytes, not characters: the server caps memo by its UTF-8 byte length
@@ -78,6 +144,28 @@
   }
   input.addEventListener("input", refresh);
   refresh();
+})();
+
+(function () {
+  // Which panel shows is purely a display choice; the server decides which
+  // form was actually submitted from the "asset" hidden field each panel
+  // carries, so nothing here needs to touch validation.
+  const radios = document.querySelectorAll('input[name="asset-picker"]');
+  const panels = {lapse: document.getElementById("lapse-panel"),
+                  xlm: document.getElementById("xlm-panel")};
+  function refresh() {
+    const picked = document.querySelector('input[name="asset-picker"]:checked').value;
+    for (const key in panels) panels[key].style.display = key === picked ? "" : "none";
+  }
+  radios.forEach(r => r.addEventListener("change", refresh));
+  refresh();
+})();
+
+(function () {
+  const merge = document.getElementById("xlm-merge");
+  const amount = document.getElementById("xlm-amount");
+  if (!merge || !amount) return;
+  merge.addEventListener("change", () => { amount.disabled = merge.checked; });
 })();
 </script>
 {% endblock %}

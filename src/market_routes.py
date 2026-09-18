@@ -130,6 +130,16 @@ def parse_xlm(raw):
 # Registration
 # ---------------------------------------------------------------------------
 
+def xlm_keyfile_path(node):
+    """Where this node's Stellar trading wallet lives, next to its own
+    key file. A module-level function (rather than staying a closure
+    inside register()) so /send in api.py can find the same wallet for
+    withdrawals without duplicating the path logic."""
+    import os
+    return os.path.join(os.path.dirname(os.path.abspath(node.keyfile)),
+                        "xlm_trading.key")
+
+
 def register(app, node, csrf_token):
     """Attach the Market and Trades pages to the private app.
 
@@ -141,9 +151,7 @@ def register(app, node, csrf_token):
     """
 
     def xlm_keyfile():
-        import os
-        return os.path.join(os.path.dirname(os.path.abspath(node.keyfile)),
-                            "xlm_trading.key")
+        return xlm_keyfile_path(node)
 
     def swaps_on():
         return node.settings.get(settings_mod.SWAP_ENABLED)

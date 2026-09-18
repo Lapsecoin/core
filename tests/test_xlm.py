@@ -146,6 +146,46 @@ class TestTransactionBuilding:
         assert xlm.envelope_hash(xdr) == tx_hash
 
 
+class TestAccountMerge:
+    """Closing the trading wallet (plan item 5.1): the only way its
+    reserve, which a plain payment can never move, is ever recovered."""
+
+    def test_envelope_hash_matches_build(self):
+        seed, _ = xlm.generate_keypair()
+        _, dest = xlm.generate_keypair()
+        xdr, tx_hash = xlm.build_account_merge(seed, dest, 5)
+        assert xlm.envelope_hash(xdr) == tx_hash
+
+    def test_sequence_changes_the_hash(self):
+        seed, _ = xlm.generate_keypair()
+        _, dest = xlm.generate_keypair()
+        _, hash_5 = xlm.build_account_merge(seed, dest, 5)
+        _, hash_6 = xlm.build_account_merge(seed, dest, 6)
+        assert hash_5 != hash_6
+
+    def test_it_is_a_merge_operation_to_the_right_destination(self):
+        from stellar_sdk import TransactionEnvelope
+        seed, _ = xlm.generate_keypair()
+        _, dest = xlm.generate_keypair()
+        xdr, _h = xlm.build_account_merge(seed, dest, 5)
+        env = TransactionEnvelope.from_xdr(xdr, xlm.NETWORK_PASSPHRASE)
+        ops = env.transaction.operations
+        assert len(ops) == 1
+        assert ops[0].destination.account_id == dest
+
+    def test_no_amount_is_stated(self):
+        """There is nothing to state: Stellar computes what to hand over
+        as whatever remains once the transaction fee is paid, which is
+        exactly why this is the one way the reserve is recoverable at
+        all."""
+        seed, _ = xlm.generate_keypair()
+        _, dest = xlm.generate_keypair()
+        xdr, _h = xlm.build_account_merge(seed, dest, 5)
+        from stellar_sdk import TransactionEnvelope
+        env = TransactionEnvelope.from_xdr(xdr, xlm.NETWORK_PASSPHRASE)
+        assert not hasattr(env.transaction.operations[0], "amount")
+
+
 class TestSponsoredCreation:
     """A seller holding only LAPSE must be able to receive XLM without
     first owning any."""
