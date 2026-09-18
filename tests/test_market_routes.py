@@ -108,6 +108,14 @@ def fresh_db():
     storage_mod.db.close()
 
 
+@pytest.fixture(autouse=True)
+def plenty_of_xlm(monkeypatch):
+    """Every test below is about LapseCoin-side logic, not Horizon, so the
+    solvency check's XLM leg defaults to "funded" everywhere; the handful
+    of tests that exist to exercise that check override this themselves."""
+    monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 10**18)
+
+
 class _View:
     def __init__(self, height, balances=None):
         self.height = height
@@ -154,9 +162,13 @@ class TakerNode:
         self.view = _View(height, balances)
         self.storage = _Storage(heights_by_addr)
         self.publish_claim_calls = []
+        self.publish_order_calls = []
 
     def publish_claim(self, claim):
         self.publish_claim_calls.append(claim)
+
+    def publish_order(self, order):
+        self.publish_order_calls.append(order)
 
 
 class FakeForm(dict):
@@ -293,6 +305,7 @@ class TestStartTrade:
 
     def test_a_buy_order_makes_the_taker_send_lapse(self, tmp_path):
         node = TakerNode(tmp_path)
+        node.view.state.balances[node.addr] = 10**12
         order = make_maker_order(direction="buy", price=1000)
         session_id = self._call(node, order, {"amount_lapse": "1"})
         trade = Trade.get(Trade.session_id == session_id)
@@ -329,3 +342,103 @@ class TestStartTrade:
         richer_maker = step_two_mover(taker_balance=1, maker_balance=10**12)
         assert richer_taker != richer_maker, \
             "step 2's mover must depend on which side trust favours"
+
+    def test_an_expired_order_cannot_be_filled(self, tmp_path):
+        """market_take fetches the order by id directly, bypassing the
+        expiry filter open_orders() normally applies, so a stale link or
+        a fill racing the order's own aging-out must be caught here too
+        (plan item 4.4)."""
+        node = TakerNode(tmp_path, height=1000)
+        order = make_maker_order(expiry_block=999)   # already behind the tip
+        with pytest.raises(market_mod.OrderRejected, match="expired"):
+            self._call(node, order, {"amount_lapse": "1"})
+        assert Trade.select().count() == 0
+        assert node.publish_claim_calls == []
+
+    def test_an_order_expiring_exactly_this_block_cannot_be_filled(self, tmp_path):
+        node = TakerNode(tmp_path, height=1000)
+        order = make_maker_order(expiry_block=1000)
+        with pytest.raises(market_mod.OrderRejected, match="expired"):
+            self._call(node, order, {"amount_lapse": "1"})
+
+    def test_a_taker_without_enough_xlm_is_refused(self, tmp_path, monkeypatch):
+        """direction='sell' means the taker pays XLM; a taker who cannot
+        cover that leg must never reach a created trade (plan item 4.4)."""
+        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 0)
+        node = TakerNode(tmp_path)
+        order = make_maker_order(direction="sell", price=1000)
+        with pytest.raises(ValueError, match="XLM"):
+            self._call(node, order, {"amount_lapse": "1"})
+        assert Trade.select().count() == 0
+        assert node.publish_claim_calls == []
+
+    def test_a_taker_without_enough_lapse_is_refused(self, tmp_path):
+        """direction='buy' means the taker pays LAPSE."""
+        node = TakerNode(tmp_path)   # no balance seeded: get_balance is 0
+        order = make_maker_order(direction="buy", price=1000)
+        with pytest.raises(ValueError, match="LAPSE"):
+            self._call(node, order, {"amount_lapse": "1"})
+        assert Trade.select().count() == 0
+        assert node.publish_claim_calls == []
+
+    def test_a_taker_with_exactly_enough_xlm_is_not_refused(self, tmp_path, monkeypatch):
+        order = make_maker_order(direction="sell", price=1000)
+        xlm_total = swap_mod.xlm_for_lapse(1 * LAPSE, 1000)
+        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: xlm_total)
+        node = TakerNode(tmp_path)
+        session_id = self._call(node, order, {"amount_lapse": "1"})
+        assert Trade.get(Trade.session_id == session_id) is not None
+
+
+class TestPlaceOrder:
+    def _call(self, node, form, height=1000):
+        fake_request = FakeRequest({"passphrase": node.passphrase, **form})
+        original = market_routes.request
+        market_routes.request = fake_request
+        try:
+            return market_routes._place_order(node, node.xlm_addr, height)
+        finally:
+            market_routes.request = original
+
+    def test_a_sell_order_needs_enough_lapse(self, tmp_path):
+        node = TakerNode(tmp_path)   # balance defaults to 0
+        with pytest.raises(ValueError, match="LAPSE"):
+            self._call(node, {"direction": "sell", "amount_lapse": "1",
+                              "price_xlm": "0.0001"})
+        assert Order.select().count() == 0
+        assert node.publish_order_calls == []
+
+    def test_a_sell_order_with_enough_lapse_succeeds(self, tmp_path):
+        node = TakerNode(tmp_path)
+        node.view.state.balances[node.addr] = 10 * LAPSE
+        self._call(node, {"direction": "sell", "amount_lapse": "1",
+                          "price_xlm": "0.0001"})
+        assert Order.select().count() == 1
+        assert len(node.publish_order_calls) == 1
+
+    def test_a_buy_order_needs_enough_xlm(self, tmp_path, monkeypatch):
+        """Plan item 4.4: only the sell side used to check its own asset;
+        a buy order committed the maker to paying out XLM it never had."""
+        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 0)
+        node = TakerNode(tmp_path)
+        with pytest.raises(ValueError, match="XLM"):
+            self._call(node, {"direction": "buy", "amount_lapse": "1",
+                              "price_xlm": "0.0001"})
+        assert Order.select().count() == 0
+        assert node.publish_order_calls == []
+
+    def test_a_buy_order_with_enough_xlm_succeeds(self, tmp_path, monkeypatch):
+        required = swap_mod.xlm_for_lapse(1 * LAPSE, xlm_mod.str_to_stroops("0.0001"))
+        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: required)
+        node = TakerNode(tmp_path)
+        self._call(node, {"direction": "buy", "amount_lapse": "1",
+                          "price_xlm": "0.0001"})
+        assert Order.select().count() == 1
+
+    def test_a_buy_order_with_exactly_not_enough_xlm_is_refused(self, tmp_path, monkeypatch):
+        required = swap_mod.xlm_for_lapse(1 * LAPSE, xlm_mod.str_to_stroops("0.0001"))
+        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: required - 1)
+        node = TakerNode(tmp_path)
+        with pytest.raises(ValueError, match="XLM"):
+            self._call(node, {"direction": "buy", "amount_lapse": "1",
+                              "price_xlm": "0.0001"})

@@ -1034,6 +1034,25 @@ def _discover_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
               for sender, tag, amount, _tx_hash, _conf in incoming):
         return False   # not paid (yet); tried again next pass
 
+    # The taker has already paid; nothing checked so far says this node
+    # can pay its own side back. Without this a maker who accepted an
+    # order it cannot fully cover commits to a trade here, unattended,
+    # that only surfaces the shortfall as a stall partway through, and a
+    # stall is what blame is measured from. Same principle as the
+    # taker's own check in market_routes._start_trade, just run on the
+    # side that never gets a form to reject it from.
+    if maker_i_send == "lapse":
+        have, need = engine.lapse.balance(node.addr), claim.lapse_total
+    else:
+        have, need = engine.xlm.balance(my_xlm_addr), xlm_total
+    if have < need:
+        log.warning(
+            "[swap] refusing claim %s from %s: this node cannot fund its "
+            "own %s leg (has %d, needs %d)",
+            claim.session_id[:16], claim.taker_lapse_addr[:24],
+            maker_i_send, have, need)
+        return False
+
     # opening_mover is computed from the same mutual, unforgeable data
     # either side of a dyad can derive on its own (trust.mutual_scores),
     # so it lands on the same answer the taker already used without

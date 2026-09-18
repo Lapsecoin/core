@@ -194,37 +194,64 @@ whoever originated the item, this node's own orders included. Covered in
 `tests/test_node.py::TestHandleInboundOrder` against a real `Gossip`
 instance, and in `tests/test_market.py::TestAlreadyKnown`.
 
-### 4.2 Unbounded order intake
+### 4.2 Unbounded order intake — done
 
 `MAX_ORDERS_PER_MAKER = 20` caps per maker, but makers are free: generate
 keypairs, twenty orders each, forever. Every distinct order costs a
-FALCON verification and a row.
+FALCON verification and a row. Same shape on the claim book.
 
-**Fix.** A global cap, a per-peer intake rate, and cheap structural
-checks before the signature check. Dedup already runs first, which is
-right; the expensive check should come last.
+**Fix.** `market.MAX_ORDERS_TOTAL` / `MAX_CLAIMS_TOTAL` cap the books
+themselves regardless of how many addresses an attacker mints;
+`_check_admission` / `_check_claim_admission` run before the signature
+check (dedup already ran first, which was right) so a flood of garbage
+never buys a FALCON verification per entry. `store_order`/`store_claim`
+also recheck the global cap directly, as defense in depth against any
+future caller that skips `verify_order`/`verify_claim`. Covered in
+`tests/test_market.py::TestAdmissionRunsBeforeTheSignatureCheck` and
+`TestClaimAdmissionRunsBeforeTheSignatureCheck`.
 
-### 4.3 XLM sequence collisions across concurrent trades
+### 4.3 XLM sequence collisions across concurrent trades — done
 
-`XLMAdapter.build` reads the sequence fresh from Horizon per build. Two
-trades both sending XLM will collide: A submits, B builds before Horizon
+`XLMAdapter.build` read the sequence fresh from Horizon per build. Two
+trades both sending XLM would collide: A submits, B builds before Horizon
 reflects it, B gets a stale sequence and dies. `_resend` then reads that
 as "sequence consumed" and rebuilds, possibly in a loop.
 
-**Fix.** One allocator per account that hands out sequences, seeded from
-Horizon and advanced locally per envelope built.
+**Fix.** `swap_engine.SequenceAllocator`: one allocator per account,
+seeded from Horizon once and advanced in memory per envelope built, so a
+same-process build for a second trade on the same wallet never re-reads
+Horizon before it has caught up with the first submission. `reset()` is
+called from `Engine._resend`'s dead-envelope path, so a sequence spent
+by something outside this allocator (a manual withdrawal, another
+process on the same wallet) still forces a fresh read next time. Covered
+in `tests/test_swap_engine.py::TestSequenceAllocator` and
+`TestXLMAdapterSequencing`.
 
-### 4.4 Solvency and expiry are not checked where it matters
+### 4.4 Solvency and expiry are not checked where it matters — done
 
-- The taker's own balance is never checked before a trade starts, so a
-  trade can be opened that cannot be funded. It then stalls, and a stall
-  is what blame is measured from.
-- A buy order never checks the maker's XLM balance. Only the sell side
-  checks LAPSE (`market_routes.py:372`).
-- The engine never reads `expiry_block`, so a trade outlives its order
-  silently.
-- `market.prune_expired` is never called (see 2), so expired orders stay
-  in the book and in the database indefinitely.
+- The taker's own balance was never checked before a trade starts, so a
+  trade could be opened that cannot be funded. It then stalls, and a
+  stall is what blame is measured from. Fixed in
+  `market_routes._start_trade`: checks XLM (spendable) or LAPSE balance,
+  whichever side this node's leg is, before the claim is ever built.
+- A buy order never checked the maker's XLM balance; only the sell side
+  checked LAPSE. Fixed symmetrically in `market_routes._place_order`.
+- `market_take` fetches an order by id directly, bypassing the expiry
+  filter `open_orders()` normally applies, so a trade could still be
+  opened against an order whose `expiry_block` had already passed.
+  Fixed with an explicit check in `_start_trade`.
+- Beyond the plan's own list: `swap_engine._discover_one` had the same
+  gap on the maker's side — a taker's payment landing was enough to
+  commit this node to a trade with no check that it could pay its own
+  leg back. Fixed with the same balance check, run right before the
+  `Trade` row is created.
+- `market.prune_expired` not being called was already fixed in section 2
+  above (`swap_worker.run_once` calls it after each discovery pass).
+
+Covered in `tests/test_market_routes.py::TestStartTrade` (the new
+expiry/solvency tests) and `TestPlaceOrder`, and
+`tests/test_swap_engine.py::TestDiscoverTrades` (the new maker-solvency
+tests).
 
 ### 4.5 `find_payment` rescans an address's entire history
 

@@ -371,11 +371,19 @@ def _place_order(node, xlm_addr, height):
         raise ValueError("expiry must be between 1 and 720 hours")
     expiry_block = height + max(int(hours * 3600 / LAPSE_BLOCK_SECONDS), 1)
 
+    # Checked here rather than left for the chain, because finding out once
+    # a counterparty has already committed to a trade is what turns a
+    # simple mistake into a stall, and a stall is what blame is measured
+    # from. Both sides of the book get the same treatment: a sell order
+    # needs the LAPSE it offers, a buy order needs the XLM it would pay
+    # out if filled all the way.
     if direction == "sell" and lapse_total > node.view.state.get_balance(node.addr):
-        # Checked here rather than left for the chain, because finding out
-        # at step one means a counterparty has already committed to a trade
-        # that cannot finish.
         raise ValueError("you do not hold that much LAPSE")
+    if direction == "buy":
+        required_stroops = swap_mod.xlm_for_lapse(lapse_total, price)
+        if required_stroops > _spendable(xlm_addr):
+            raise ValueError("you do not hold enough XLM to fill this buy "
+                             "order all the way")
 
     order = market_mod.build_order(
         maker_lapse_addr=node.addr, maker_xlm_addr=xlm_addr,
@@ -418,6 +426,14 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
     if not xlm_addr:
         raise ValueError("create a Stellar address first")
 
+    # market_take fetches the order by id directly rather than through
+    # open_orders(), which is the only place expiry is normally filtered,
+    # so a stale link or a fill submitted right as an order ages out must
+    # be caught here too. Without this a trade outlives the order it was
+    # supposedly filling.
+    if order_row.expiry_block <= height:
+        raise market_mod.OrderRejected("this order has expired")
+
     # Checked, not just used: a wrong passphrase here would otherwise
     # surface as a trade that exists and cannot send, discovered only once
     # a counterparty was already waiting on it.
@@ -433,6 +449,19 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
 
     xlm_total = swap_mod.xlm_for_lapse(lapse_total,
                                        order_row.price_stroops_per_lapse)
+
+    # A maker selling LAPSE means this node pays XLM; a maker buying LAPSE
+    # means this node pays LAPSE. Checked before anything is created: an
+    # unfunded trade only ever surfaces later as a stall, and a stall is
+    # what blame is measured from, so a fill nobody could ever have paid
+    # for must never reach that point.
+    i_send = "xlm" if order_row.direction == "sell" else "lapse"
+    if i_send == "xlm":
+        if xlm_total > _spendable(xlm_addr):
+            raise ValueError("you do not hold enough XLM for this fill")
+    elif lapse_total > node.view.state.get_balance(node.addr):
+        raise ValueError("you do not hold that much LAPSE")
+
     detail = trust_mod.get_detail(
         order_row.maker_lapse_addr,
         trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
@@ -472,9 +501,7 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
         my_lapse_addr=node.addr, my_xlm_addr=xlm_addr,
         peer_lapse_addr=order_row.maker_lapse_addr,
         peer_xlm_addr=order_row.maker_xlm_addr,
-        # The maker's direction is about their LAPSE, so the taker's is the
-        # opposite: a maker selling LAPSE means this node sends XLM.
-        i_send="xlm" if order_row.direction == "sell" else "lapse",
+        i_send=i_send,
         lapse_total=lapse_total, xlm_total=xlm_total,
         increment_count=count, confirm_depth=depth,
         status=TRADE_ACTIVE, created_at=now, updated_at=now)

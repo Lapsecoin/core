@@ -79,8 +79,16 @@ class FakeChain:
         # is already funded.
         self.nonexistent_accounts = set()
         self.build_calls = []           # (to_addr, amount, create_account)
+        # Deliberately huge by default so existing tests that never
+        # mention balance keep behaving as if this node can afford
+        # whatever it is asked to send; see TestDiscoverTrades' solvency
+        # tests for where this is actually made to matter.
+        self.balances = {}
 
     # -- reads ---------------------------------------------------------
+
+    def balance(self, addr):
+        return self.balances.get(addr, 10**18)
 
     def account_exists(self, addr):
         self._check_reachable()
@@ -991,6 +999,51 @@ class TestDiscoverTrades:
         assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
         trade = Trade.get(Trade.session_id == claim.session_id)
         assert trade.i_send == "xlm"
+
+    def test_a_maker_who_cannot_fund_the_lapse_leg_is_refused(self):
+        """The taker has already paid; that must not be enough on its own
+        to commit this node to a trade it cannot itself complete."""
+        make_order(direction="sell")
+        claim = make_claim()
+        engine, lapse, xlm = make_engine()
+        node = FakeDiscoveryNode()
+        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
+        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
+        memo = swap.session_tag("order-1", claim.session_id, 1)
+        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
+        lapse.balances["maker.lapse"] = claim.lapse_total - 1
+
+        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert Trade.select().count() == 0
+
+    def test_a_maker_who_cannot_fund_the_xlm_leg_is_refused(self):
+        make_order(direction="buy")
+        claim = make_claim()
+        engine, lapse, xlm = make_engine()
+        node = FakeDiscoveryNode()
+        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
+        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
+        memo = swap.session_tag("order-1", claim.session_id, 1)
+        lapse.deliver("taker.lapse", "maker.lapse", memo, schedule[0][0])
+        xlm.balances["GMAKER"] = xlm_total - 1
+
+        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert Trade.select().count() == 0
+
+    def test_a_maker_with_exactly_enough_is_not_refused(self):
+        """The boundary: exactly enough must still succeed, so this is not
+        an off-by-one rejecting a maker who can actually pay."""
+        make_order(direction="sell")
+        claim = make_claim()
+        engine, lapse, xlm = make_engine()
+        node = FakeDiscoveryNode()
+        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
+        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
+        memo = swap.session_tag("order-1", claim.session_id, 1)
+        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
+        lapse.balances["maker.lapse"] = claim.lapse_total
+
+        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
 
     def test_no_claims_against_an_order_discovers_nothing(self):
         make_order()
