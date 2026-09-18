@@ -35,8 +35,12 @@ import uuid
 
 import crypto
 import swap as swap_mod
+import trust as trust_mod
 from crypto import canonical_json
-from trade_storage import Claim, Order, Trade, Increment, ensure_tables, LEG_SETTLED
+from params import TICKS_PER_LAPSE
+from trade_storage import (
+    Claim, Order, Trade, Increment, ensure_tables, LEG_SETTLED, TRADE_COMPLETED,
+)
 
 log = logging.getLogger("ec.market")
 
@@ -511,6 +515,96 @@ def best_prices(current_height, exclude_maker=None):
     return {"best_buy": best_buy, "best_sell": best_sell, "spread": spread,
             "buy_depth": sum(e["remaining"] for e in depth["buys"]),
             "sell_depth": sum(e["remaining"] for e in depth["sells"])}
+
+
+# ---------------------------------------------------------------------------
+# Ticker: what LAPSE actually traded for, from this node's own history
+# ---------------------------------------------------------------------------
+#
+# Both chains carry a matching session memo for every step of every trade,
+# so the price a completed trade actually executed at is public and cheap
+# to compute: it needs nothing beyond the Trade row a completed session
+# already leaves behind here. What it is not is a network-wide feed: this
+# node only ever sees trades it was itself a party to, so it can only ever
+# report on its own history, never on the book as a whole. The UI must say
+# so, not present this as a market-wide rate.
+#
+# Wash trading (a maker and taker under one operator's control, trading
+# with themselves) is cheap here and impossible to rule out; there is no
+# escrow or fee that makes it cost anything. A signed order and a signed
+# claim stand behind every Trade row already (see the module docstring
+# and the claim section above), so nothing further is required to "count"
+# a trade, but that alone does not stop wash trading between two
+# addresses controlled by the same person. What actually blunts it: a
+# median rather than a mean, since a handful of self-traded outliers can
+# only pull a mean arbitrarily far but can move a median only by
+# outnumbering genuine trades, and weighting each sample by this node's
+# own trust score for the counterparty, so a pair of fresh, unstaked
+# addresses trading with each other back and forth counts for as little
+# as trust.score already makes a fresh identity worth.
+
+# A trade with a zero-trust counterparty still happened and still belongs
+# in the sample; it is simply worth as little as any other zero-score
+# observation, which is what floors it at rather than at zero weight
+# (a true zero would let it vanish from the total and, if every sample
+# happened to be zero-score, leave nothing to divide by).
+_TICKER_MIN_WEIGHT = 1e-9
+
+
+def executed_trade_prices(node, limit=200):
+    """(price_stroops_per_lapse, weight) for this node's own most recent
+    completed trades, most recent first. See the module section above
+    for what "weight" means and why this is inherently a local, not a
+    network-wide, view.
+    """
+    ensure_tables()
+    rows = (Trade.select()
+            .where(Trade.status == TRADE_COMPLETED)
+            .order_by(Trade.updated_at.desc())
+            .limit(limit))
+    out = []
+    for row in rows:
+        if row.lapse_total <= 0 or row.xlm_total <= 0:
+            continue
+        price = row.xlm_total * TICKS_PER_LAPSE // row.lapse_total
+        if price <= 0:
+            continue
+        detail = trust_mod.get_detail(
+            row.peer_lapse_addr,
+            trust_mod.address_age_blocks(node, row.peer_lapse_addr),
+            node.view.state.get_balance(row.peer_lapse_addr))
+        weight = max(detail["score"], _TICKER_MIN_WEIGHT)
+        out.append((price, weight))
+    return out
+
+
+def _weighted_median(samples):
+    """The value at the 50th percentile by cumulative weight.
+
+    Falls back to the plain (unweighted) median only in the degenerate
+    case every sample carries the floor weight, since a weighted median
+    over equal weights is just the ordinary median with extra steps.
+    """
+    ordered = sorted(samples, key=lambda s: s[0])
+    total = sum(w for _p, w in ordered)
+    half = total / 2
+    cum = 0.0
+    for price, weight in ordered:
+        cum += weight
+        if cum >= half:
+            return price
+    return ordered[-1][0]
+
+
+def ticker_price(node, limit=200):
+    """A weighted median of this node's own recently completed trades, or
+    None with nothing yet to show. See the module section above for what
+    this number is and, as importantly, what it is not.
+    """
+    samples = executed_trade_prices(node, limit)
+    if not samples:
+        return None
+    return _weighted_median(samples)
 
 
 # ---------------------------------------------------------------------------

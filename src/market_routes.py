@@ -218,12 +218,13 @@ def register(app, node, csrf_token):
 
         depth = market_mod.book_depth(height, exclude_maker=node.addr)
         best = market_mod.best_prices(height, exclude_maker=node.addr)
+        ticker = market_mod.ticker_price(node)
 
         return render_template(
             "market.html", title="Market",
             swap_enabled=swaps_on(),
             alert_ok=alert_ok, alert_err=alert_err,
-            depth=depth, best=best,
+            depth=depth, best=best, ticker=ticker,
             lapse_addr=node.addr,
             lapse_balance=node.view.state.get_balance(node.addr),
             xlm_addr=xlm_addr,

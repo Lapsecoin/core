@@ -18,6 +18,7 @@ import crypto
 import market
 import storage as storage_mod
 import trade_storage
+import trust as trust_mod
 import xlm as xlm_mod
 from trade_storage import Increment, LEG_SETTLED, Order, Trade
 
@@ -727,3 +728,132 @@ class TestDepth:
         market.store_order(signed_order(maker, direction="sell",
                                         lapse_total=3 * LAPSE))
         assert market.best_prices(100)["sell_depth"] == 8 * LAPSE
+
+
+# ---------------------------------------------------------------------------
+# Ticker (plan item 5.2): a weighted median of this node's own completed
+# trades, not a network-wide feed.
+# ---------------------------------------------------------------------------
+
+class _TickerState:
+    def __init__(self, balances=None):
+        self.balances = balances or {}
+
+    def get_balance(self, addr):
+        return self.balances.get(addr, 0)
+
+
+class _TickerView:
+    def __init__(self, balances=None):
+        self.chain = [{"height": 1000}]
+        self.state = _TickerState(balances)
+
+
+class _TickerStorage:
+    def __init__(self, heights_by_addr=None):
+        self.heights_by_addr = heights_by_addr or {}
+
+    def get_tx_heights_for_addr(self, addr):
+        return self.heights_by_addr.get(addr, [])
+
+
+class _TickerNode:
+    """Just enough of a node for trust.get_detail/address_age_blocks,
+    which the ticker's weighting leans on."""
+
+    def __init__(self, addr="me.lapse", balances=None, heights_by_addr=None):
+        self.addr = addr
+        self.view = _TickerView(balances)
+        self.storage = _TickerStorage(heights_by_addr)
+
+
+def _completed_trade(session_id, peer, lapse_total, xlm_total, updated_at=None):
+    now = updated_at if updated_at is not None else time.time()
+    return Trade.create(
+        session_id=session_id, order_id="order-x", role="taker",
+        my_lapse_addr="me.lapse", my_xlm_addr="GME",
+        peer_lapse_addr=peer, peer_xlm_addr="GPEER",
+        i_send="xlm", lapse_total=lapse_total, xlm_total=xlm_total,
+        increment_count=1, confirm_depth=1,
+        status=trade_storage.TRADE_COMPLETED, created_at=now, updated_at=now)
+
+
+class TestTicker:
+    def test_no_completed_trades_is_none(self):
+        node = _TickerNode()
+        assert market.ticker_price(node) is None
+
+    def test_a_single_trades_price_is_reported_exactly(self):
+        _completed_trade("s1", "peer.lapse", 10 * LAPSE, 10_000 * XLM)
+        node = _TickerNode()
+        price = market.ticker_price(node)
+        assert price == 10_000 * XLM * 100_000_000 // (10 * LAPSE)
+
+    def test_an_active_trade_is_not_counted(self):
+        Trade.create(
+            session_id="active1", order_id="order-x", role="taker",
+            my_lapse_addr="me.lapse", my_xlm_addr="GME",
+            peer_lapse_addr="peer.lapse", peer_xlm_addr="GPEER",
+            i_send="xlm", lapse_total=1 * LAPSE, xlm_total=1000 * XLM,
+            increment_count=1, confirm_depth=1,
+            status=trade_storage.TRADE_ACTIVE,
+            created_at=time.time(), updated_at=time.time())
+        node = _TickerNode()
+        assert market.ticker_price(node) is None
+
+    def test_median_is_not_dragged_by_one_outlier_the_way_a_mean_would_be(self):
+        """A mean of {1000, 1000, 1000, 1_000_000} is dominated by the
+        outlier; a median of an odd count is simply the middle value."""
+        node = _TickerNode(balances={"peer.lapse": 10**12})
+        for i in range(3):
+            _completed_trade(f"s{i}", "peer.lapse", 1 * LAPSE, 1000 * XLM)
+        _completed_trade("outlier", "peer.lapse", 1 * LAPSE, 1_000_000 * XLM)
+        price = market.ticker_price(node)
+        normal_price = 1000 * XLM * 100_000_000 // (1 * LAPSE)
+        assert price == normal_price
+
+    def test_a_trusted_counterpartys_trades_outweigh_a_strangers(self):
+        """Weighting by standing means a handful of trades against a
+        long-standing, staked counterparty should win a plain vote
+        against a larger number of trades with a brand-new stranger."""
+        trusted = "trusted.lapse"
+        stranger = "stranger.lapse"
+        node = _TickerNode(
+            balances={trusted: 10**15},
+            heights_by_addr={trusted: [(1, "h")]})
+        trust_mod.record_completed(trusted, 50 * LAPSE)
+
+        low_price = 100 * XLM * 100_000_000 // (1 * LAPSE)
+        high_price = 100_000 * XLM * 100_000_000 // (1 * LAPSE)
+        _completed_trade("trusted1", trusted, 1 * LAPSE, 100_000 * XLM)
+        for i in range(5):
+            _completed_trade(f"stranger{i}", stranger, 1 * LAPSE, 100 * XLM)
+
+        price = market.ticker_price(node)
+        assert price == high_price, \
+            "the single trusted trade should outweigh five stranger ones"
+
+    def test_the_limit_caps_how_far_back_it_looks(self):
+        node = _TickerNode()
+        for i in range(5):
+            _completed_trade(f"old{i}", "peer.lapse", 1 * LAPSE, 100 * XLM,
+                             updated_at=1000 + i)
+        for i in range(3):
+            _completed_trade(f"new{i}", "peer.lapse", 1 * LAPSE, 100_000 * XLM,
+                             updated_at=2000 + i)
+        samples = market.executed_trade_prices(node, limit=3)
+        assert len(samples) == 3
+        high_price = 100_000 * XLM * 100_000_000 // (1 * LAPSE)
+        assert all(p == high_price for p, _w in samples)
+
+    def test_zero_lapse_total_is_never_a_divide_by_zero(self):
+        Trade.create(
+            session_id="zero1", order_id="order-x", role="taker",
+            my_lapse_addr="me.lapse", my_xlm_addr="GME",
+            peer_lapse_addr="peer.lapse", peer_xlm_addr="GPEER",
+            i_send="xlm", lapse_total=0, xlm_total=1000 * XLM,
+            increment_count=1, confirm_depth=1,
+            status=trade_storage.TRADE_COMPLETED,
+            created_at=time.time(), updated_at=time.time())
+        node = _TickerNode()
+        assert market.ticker_price(node) is None

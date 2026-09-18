@@ -48,6 +48,18 @@
   </div>
 </div>
 
+{% if ticker %}
+  <p class="stat-sub" style="margin:-.25rem 0 .35rem">
+    Last traded around <strong>{{ fmt_price(ticker) }}</strong> XLM per LAPSE,
+    a weighted median of this node's own recently completed trades
+    (weighted by how much this node trusts each counterparty).
+    This is what <em>this node</em> has actually traded at, not a
+    network-wide rate; nothing stops two cooperating addresses from
+    trading with each other to move it, so treat it as a data point,
+    not a price feed.
+  </p>
+{% endif %}
+
 {% if xlm_usd %}
   <p class="stat-sub" style="margin:-.25rem 0 .6rem">
     XLM is about ${{ "%.4f"|format(xlm_usd) }} right now, so
