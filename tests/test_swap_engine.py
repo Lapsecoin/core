@@ -223,11 +223,18 @@ class FakeMempool:
 
 
 class FakeAddrStorage:
-    def __init__(self, heights_by_addr=None):
+    def __init__(self, heights_by_addr=None, memo_by_addr=None):
         self.heights_by_addr = heights_by_addr or {}
+        # {addr: {memo: [(height, tx_hash), ...]}}, mirroring the real
+        # (addr, memo) index find_payment now queries directly instead of
+        # walking everything get_tx_heights_for_addr would return.
+        self.memo_by_addr = memo_by_addr or {}
 
     def get_tx_heights_for_addr(self, addr):
         return self.heights_by_addr.get(addr, [])
+
+    def get_tx_by_addr_and_memo(self, addr, memo):
+        return self.memo_by_addr.get(addr, {}).get(memo, [])
 
 
 class FakeView:
@@ -240,11 +247,12 @@ class FakeLapseNode:
     mempool, a chain, and the address index that backs storage lookups.
     """
 
-    def __init__(self, mempool_txs=None, chain=None, heights_by_addr=None):
+    def __init__(self, mempool_txs=None, chain=None, heights_by_addr=None,
+                memo_by_addr=None):
         self.mempool = FakeMempool(mempool_txs)
         self.view = FakeView(chain if chain is not None else
                              [{"height": 0, "transactions": []}])
-        self.storage = FakeAddrStorage(heights_by_addr)
+        self.storage = FakeAddrStorage(heights_by_addr, memo_by_addr)
 
 
 def _tx(from_addr, outputs, memo=None, nonce=1):
@@ -336,6 +344,78 @@ class TestLapseAdapterRecentIncoming:
         node = FakeLapseNode(mempool_txs=txs)
         adapter = swap_engine.LapseAdapter(node)
         assert len(adapter.recent_incoming("me.lapse", limit=3)) == 3
+
+
+class TestLapseAdapterFindPayment:
+    """Plan item 4.5: find_payment already knows the exact memo (this
+    step's own session tag) it is checking for, so it must look it up
+    through storage.get_tx_by_addr_and_memo rather than walking every
+    transaction the sender has ever made."""
+
+    def test_finds_a_confirmed_payment_via_the_memo_index(self):
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}], memo="tag")
+        h = tx_mod.tx_hash(t)
+        chain = [{"height": 0, "transactions": []},
+                 {"height": 1, "transactions": [t]}]
+        node = FakeLapseNode(chain=chain,
+                             memo_by_addr={"peer.lapse": {"tag": [(1, h)]}})
+        adapter = swap_engine.LapseAdapter(node)
+        found = adapter.find_payment("peer.lapse", "me.lapse", "tag", 5 * LAPSE)
+        assert found == (h, 1)
+
+    def test_never_consults_the_full_address_history(self):
+        """If this regresses to the old address-wide scan, this fake
+        would happily serve rows from heights_by_addr and the test would
+        pass for the wrong reason, so it asserts the other index is
+        simply never touched."""
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}], memo="tag")
+        h = tx_mod.tx_hash(t)
+        chain = [{"height": 0, "transactions": []},
+                 {"height": 1, "transactions": [t]}]
+
+        class _AssertingStorage(FakeAddrStorage):
+            def get_tx_heights_for_addr(self, addr):
+                raise AssertionError("find_payment must not scan full address history")
+
+        node = FakeLapseNode(chain=chain)
+        node.storage = _AssertingStorage(memo_by_addr={"peer.lapse": {"tag": [(1, h)]}})
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.find_payment("peer.lapse", "me.lapse", "tag", 5 * LAPSE) == (h, 1)
+
+    def test_a_pending_mempool_payment_is_found_before_the_index_is_checked(self):
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}], memo="tag")
+        node = FakeLapseNode(mempool_txs=[t])
+        adapter = swap_engine.LapseAdapter(node)
+        found = adapter.find_payment("peer.lapse", "me.lapse", "tag", 5 * LAPSE)
+        assert found == (tx_mod.tx_hash(t), 0)
+
+    def test_wrong_memo_in_the_index_does_not_match(self):
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}], memo="other-tag")
+        h = tx_mod.tx_hash(t)
+        chain = [{"height": 0, "transactions": []}, {"height": 1, "transactions": [t]}]
+        node = FakeLapseNode(chain=chain,
+                             memo_by_addr={"peer.lapse": {"other-tag": [(1, h)]}})
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.find_payment("peer.lapse", "me.lapse", "tag", 5 * LAPSE) is None
+
+    def test_underpayment_at_the_right_memo_does_not_match(self):
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 1 * LAPSE}], memo="tag")
+        h = tx_mod.tx_hash(t)
+        chain = [{"height": 0, "transactions": []}, {"height": 1, "transactions": [t]}]
+        node = FakeLapseNode(chain=chain,
+                             memo_by_addr={"peer.lapse": {"tag": [(1, h)]}})
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.find_payment("peer.lapse", "me.lapse", "tag", 5 * LAPSE) is None
+
+    def test_no_match_at_all_returns_none(self):
+        node = FakeLapseNode()
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.find_payment("peer.lapse", "me.lapse", "tag", 1) is None
 
 
 class TestSequenceAllocator:

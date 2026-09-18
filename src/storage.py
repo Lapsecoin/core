@@ -6,7 +6,7 @@ Schema:
   State      per-address balance and nonce
   Emission   total_minted singleton
   TxIndex    tx_hash -> block_height lookup
-  AddrIndex  addr -> (tx_hash, block_height) lookup
+  AddrIndex  addr -> (tx_hash, block_height, memo) lookup
 
 Blocks are the source of truth. State is rebuilt from blocks on open
 if the stored state is missing or the chain was extended offline.
@@ -37,7 +37,7 @@ class _Base(Model):
 # Bumped when the on-disk layout changes in a way that needs a one-shot
 # migration. Stored in Meta, so a database carries its own version and the
 # migration runs once rather than being re-decided on every read.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Blocks are written once and read on every start, so this trades compress
 # time for read time in the direction that suits: level 6 over level 1 buys
@@ -80,9 +80,23 @@ class AddrIndex(_Base):
     addr         = TextField()
     tx_hash      = TextField()
     block_height = IntegerField()
+    # A LapseCoin transaction's own memo, carried here so a swap step's
+    # find_payment can look a payment up by its exact session tag instead
+    # of scanning every transaction an address has ever made (see
+    # Storage.get_tx_by_addr_and_memo). Null for the overwhelming majority
+    # of transfers, which have no memo at all.
+    memo         = TextField(null=True)
 
     class Meta:
         primary_key = CompositeKey("addr", "tx_hash")
+        # (addr, memo) is deliberately not declared here: create_tables()
+        # would then try to create it against an *existing* table on an
+        # upgrade from a pre-memo database, before the migration below
+        # has added the column, which corrupts the index outright (a
+        # column-less index that later "gains" data as the column and
+        # its own rows appear). It is created by hand instead, in
+        # Storage.__init__, once the column is guaranteed to exist
+        # either way.
         indexes = ((("addr",), False),)
 
 
@@ -108,6 +122,12 @@ class Storage:
         db.connect(reuse_if_open=True)
         db.create_tables(_TABLES, safe=True)
         self._migrate()
+        # See AddrIndex.Meta's comment: created here, after _migrate has
+        # guaranteed the memo column exists, rather than declared on the
+        # model where create_tables() would race the migration on an
+        # upgrade. A no-op after the first run either way.
+        db.execute_sql(
+            "CREATE INDEX IF NOT EXISTS addrindex_addr_memo ON addrindex (addr, memo)")
 
     # ------------------------------------------------------------------
     # Schema migration
@@ -134,6 +154,8 @@ class Storage:
             return
         if version < 2:
             self._migrate_blocks_to_compressed()
+        if version < 3:
+            self._migrate_addrindex_memo()
         self.set_meta("schema_version", SCHEMA_VERSION)
 
     def _migrate_blocks_to_compressed(self):
@@ -170,6 +192,33 @@ class Storage:
             log.warning("[storage] could not compact after migrating "
                         "(the database is correct either way)", exc_info=True)
 
+    def _migrate_addrindex_memo(self):
+        """Backfill AddrIndex.memo for rows written before it existed.
+
+        A one-time walk of every block, exactly the cost find_payment's
+        old address-history scan paid on every single pass; here it is
+        paid once, at upgrade, and never again. Safe to interrupt and
+        re-run: every UPDATE is idempotent, and the version is only
+        recorded once the whole pass completes.
+        """
+        cols = {r[1] for r in db.execute_sql("PRAGMA table_info(addrindex)").fetchall()}
+        if "memo" not in cols:
+            db.execute_sql("ALTER TABLE addrindex ADD COLUMN memo TEXT")
+
+        updated = 0
+        with db.atomic():
+            for row in Block.select().order_by(Block.height):
+                blk = _unpack_block(row)
+                for t in blk.get("transactions", []):
+                    memo = t.get("memo") or None
+                    if memo is None:
+                        continue
+                    h = tx_mod.tx_hash(t)
+                    updated += (AddrIndex.update(memo=memo)
+                               .where(AddrIndex.tx_hash == h).execute())
+        if updated:
+            log.info("[storage] backfilled memo on %d address-index rows", updated)
+
     # ------------------------------------------------------------------
     # Blocks
     # ------------------------------------------------------------------
@@ -181,10 +230,12 @@ class Storage:
         tx_rows, addr_rows = [], []
         for t in txs:
             h = tx_mod.tx_hash(t)
+            memo = t.get("memo") or None
             tx_rows.append({"tx_hash": h, "block_height": height})
             addrs = {t["from"]} | {o["to"] for o in t.get("outputs", [])}
             for addr in addrs:
-                addr_rows.append({"addr": addr, "tx_hash": h, "block_height": height})
+                addr_rows.append({"addr": addr, "tx_hash": h,
+                                  "block_height": height, "memo": memo})
         if tx_rows:
             TxIndex.insert_many(tx_rows).on_conflict_ignore().execute()
         if addr_rows:
@@ -204,6 +255,21 @@ class Storage:
         rows = (AddrIndex
                 .select(AddrIndex.block_height, AddrIndex.tx_hash)
                 .where(AddrIndex.addr == addr)
+                .order_by(AddrIndex.block_height.desc()))
+        return [(r.block_height, r.tx_hash) for r in rows]
+
+    def get_tx_by_addr_and_memo(self, addr, memo):
+        """Like get_tx_heights_for_addr, but filtered to one exact memo.
+
+        A swap step's find_payment already knows precisely which memo it
+        is looking for (its own session tag), so it has no reason to walk
+        every transaction an address has ever made the way discovery's
+        recent_incoming does; this is the (addr, memo) index that lets it
+        go straight there instead (see AddrIndex.memo).
+        """
+        rows = (AddrIndex
+                .select(AddrIndex.block_height, AddrIndex.tx_hash)
+                .where(AddrIndex.addr == addr, AddrIndex.memo == memo)
                 .order_by(AddrIndex.block_height.desc()))
         return [(r.block_height, r.tx_hash) for r in rows]
 

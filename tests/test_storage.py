@@ -180,6 +180,67 @@ class TestTxAndAddrIndex:
         rows = store.get_tx_heights_for_addr(address(1))
         assert len(rows) == 1
 
+    def test_lookup_by_memo_finds_the_right_transaction(self, store):
+        """Plan item 4.5: a swap step looks a payment up by its exact
+        session tag rather than scanning every transaction the sender
+        has ever made."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, memo="session-tag-1")
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        store.save_block(g)
+        store.save_block(b1)
+        rows = store.get_tx_by_addr_and_memo(address(0), "session-tag-1")
+        assert len(rows) == 1
+        assert rows[0][0] == 1
+        assert rows[0][1] == tx_mod.tx_hash(t)
+
+    def test_lookup_by_memo_matches_both_sender_and_recipient(self, store):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, memo="tag")
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        store.save_block(g)
+        store.save_block(b1)
+        assert len(store.get_tx_by_addr_and_memo(address(0), "tag")) == 1
+        assert len(store.get_tx_by_addr_and_memo(address(1), "tag")) == 1
+
+    def test_wrong_memo_does_not_match(self, store):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, memo="tag")
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        store.save_block(g)
+        store.save_block(b1)
+        assert store.get_tx_by_addr_and_memo(address(0), "other-tag") == []
+
+    def test_memoless_transactions_never_match_a_real_tag(self, store):
+        """A session tag is always a nonempty string (see
+        swap.session_tag), so this is the only lookup find_payment ever
+        actually performs against a memoless row."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)   # no memo
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        store.save_block(g)
+        store.save_block(b1)
+        assert store.get_tx_by_addr_and_memo(address(0), "") == []
+        assert store.get_tx_by_addr_and_memo(address(0), "tag") == []
+
+    def test_an_unrelated_address_never_matches_a_real_memo(self, store):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, memo="tag")
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        store.save_block(g)
+        store.save_block(b1)
+        assert store.get_tx_by_addr_and_memo(address(2), "tag") == []
+
 
 # ---------------------------------------------------------------------------
 # 4. replace_chain_and_state (reorg path)
@@ -357,6 +418,121 @@ class TestSchemaMigration:
         assert finished.load_all_blocks() == blocks
         assert int(finished.get_meta("schema_version")) == storage_mod.SCHEMA_VERSION
         finished.close()
+
+
+# ---------------------------------------------------------------------------
+# 9. Migrating a pre-v3 database (AddrIndex.memo backfill, plan item 4.5)
+# ---------------------------------------------------------------------------
+
+def _write_v2_format_db(path, blocks):
+    """A v2 database: compressed blocks, but AddrIndex has no memo column
+    yet — the shape 4.5's migration has to upgrade from."""
+    import json as _json
+    import zlib as _zlib
+    from peewee import (
+        SqliteDatabase, Model, IntegerField, TextField, BlobField, CompositeKey,
+    )
+
+    olddb = SqliteDatabase(str(path), pragmas={"journal_mode": "wal"})
+
+    class OldBlock(Model):
+        height = IntegerField(primary_key=True)
+        hash   = TextField()
+        data   = TextField()
+        dataz  = BlobField(null=True)
+
+        class Meta:
+            database = olddb
+            table_name = "block"
+
+    class OldTxIndex(Model):
+        tx_hash      = TextField(primary_key=True)
+        block_height = IntegerField()
+
+        class Meta:
+            database = olddb
+            table_name = "txindex"
+
+    class OldAddrIndex(Model):
+        addr         = TextField()
+        tx_hash      = TextField()
+        block_height = IntegerField()
+
+        class Meta:
+            database = olddb
+            table_name = "addrindex"
+            primary_key = CompositeKey("addr", "tx_hash")
+
+    class OldMeta(Model):
+        key   = TextField(primary_key=True)
+        value = TextField()
+
+        class Meta:
+            database = olddb
+            table_name = "meta"
+
+    olddb.connect()
+    olddb.create_tables([OldBlock, OldTxIndex, OldAddrIndex, OldMeta])
+    for b in blocks:
+        OldBlock.insert(height=b["height"], hash=b["hash"], data="",
+                        dataz=_zlib.compress(_json.dumps(b).encode(), 6)).execute()
+        for t in b.get("transactions", []):
+            h = tx_mod.tx_hash(t)
+            OldTxIndex.insert(tx_hash=h, block_height=b["height"]).execute()
+            addrs = {t["from"]} | {o["to"] for o in t.get("outputs", [])}
+            for a in addrs:
+                (OldAddrIndex.insert(addr=a, tx_hash=h, block_height=b["height"])
+                 .on_conflict_ignore().execute())
+    OldMeta.insert(key="schema_version", value="2").execute()
+    olddb.close()
+
+
+class TestAddrIndexMemoMigration:
+    def test_memo_is_backfilled_for_a_pre_v3_database(self, tmp_path):
+        path = tmp_path / "v2.db"
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, memo="old-session-tag")
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        _write_v2_format_db(path, [g, b1])
+
+        store = Storage(str(path))
+        rows = store.get_tx_by_addr_and_memo(address(0), "old-session-tag")
+        assert len(rows) == 1
+        assert rows[0][1] == tx_mod.tx_hash(t)
+        assert int(store.get_meta("schema_version")) == storage_mod.SCHEMA_VERSION
+        store.close()
+
+    def test_memoless_rows_stay_unmatched_after_migration(self, tmp_path):
+        path = tmp_path / "v2.db"
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)   # no memo
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        _write_v2_format_db(path, [g, b1])
+
+        store = Storage(str(path))
+        assert store.get_tx_by_addr_and_memo(address(0), "") == []
+        # The old address-wide lookup must still see the row either way.
+        assert len(store.get_tx_heights_for_addr(address(0))) == 1
+        store.close()
+
+    def test_migration_does_not_repeat_on_reopen(self, tmp_path):
+        path = tmp_path / "v2.db"
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, memo="tag")
+        g = genesis()
+        b1 = make_block(1, g["hash"], [t])
+        _write_v2_format_db(path, [g, b1])
+
+        Storage(str(path)).close()
+        again = Storage(str(path))
+        rows = again.get_tx_by_addr_and_memo(address(0), "tag")
+        assert len(rows) == 1
+        again.close()
 
     def test_a_fresh_database_needs_no_migration(self, tmp_path):
         store = Storage(str(tmp_path / "new.db"))

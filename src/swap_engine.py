@@ -148,7 +148,12 @@ class LapseAdapter:
 
         chain = self.node.view.chain
         tip = chain[-1]["height"]
-        for block_height, tx_hash in self.node.storage.get_tx_heights_for_addr(from_addr):
+        # Looks up by the exact memo (this step's own session tag) rather
+        # than walking every transaction from_addr has ever made: unlike
+        # recent_incoming's discovery scan, this call already knows
+        # precisely which payment it is checking for (see
+        # storage.Storage.get_tx_by_addr_and_memo).
+        for block_height, tx_hash in self.node.storage.get_tx_by_addr_and_memo(from_addr, memo):
             if not 0 <= block_height < len(chain):
                 continue
             for candidate in chain[block_height]["transactions"]:
