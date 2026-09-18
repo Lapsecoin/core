@@ -260,6 +260,52 @@ class LapseAdapter:
         """
         return self.node.view.state.get_nonce(addr) >= seq
 
+    def forget_sequence(self, addr):
+        """No-op: a nonce always comes fresh from local node state, so
+        there is nothing cached here for a dead envelope to invalidate."""
+
+
+class SequenceAllocator:
+    """Hands out Stellar sequence numbers without re-reading Horizon.
+
+    Horizon's account endpoint is only eventually consistent with a
+    submission this same process just made: reading it again immediately
+    after, for a second trade sharing the same address, can still return
+    the pre-submission value. Two builds would then embed the same
+    sequence and one submission would fail with tx_bad_seq for no reason
+    but a read race against ourselves, on a wallet nothing else was
+    touching.
+
+    The fix is to never ask Horizon twice for one address inside a
+    process's own bookkeeping: read it once, then hand out successive
+    values from memory. That is correct exactly because the engine
+    submits each leg before moving on to the next trade, so by the time
+    a second allocation for the same address happens, the first one's
+    transaction has already been accepted or has already failed; either
+    way Horizon is no longer the question.
+
+    It is not a substitute for the chain's own answer, only a way to
+    avoid asking a question whose answer is momentarily unreliable.
+    Something outside this process (a manual withdrawal, another
+    instance of this same wallet) can still spend a sequence number this
+    allocator does not know about; that is what reset() is for, called
+    once the chain proves a stored envelope can never apply (see
+    Engine._resend).
+    """
+
+    def __init__(self):
+        self._next = {}
+
+    def allocate(self, addr):
+        if addr not in self._next:
+            self._next[addr] = xlm_mod.get_sequence(addr)
+        seq = self._next[addr]
+        self._next[addr] = seq + 1
+        return seq
+
+    def reset(self, addr):
+        self._next.pop(addr, None)
+
 
 class XLMAdapter:
     """The Stellar side. Thin: xlm.py already does the work."""
@@ -268,6 +314,7 @@ class XLMAdapter:
 
     def __init__(self, keyfile_path):
         self.keyfile_path = keyfile_path
+        self._sequences = SequenceAllocator()
 
     def balance(self, addr):
         return xlm_mod.get_spendable_stroops(addr)
@@ -320,7 +367,7 @@ class XLMAdapter:
 
     def build(self, to_addr, amount, memo, seed, create_account=False):
         try:
-            sequence = xlm_mod.get_sequence(
+            sequence = self._sequences.allocate(
                 xlm_mod.Keypair.from_secret(seed).public_key)
         except xlm_mod.XLMUnreachable as e:
             raise Unreachable(str(e)) from e
@@ -346,6 +393,9 @@ class XLMAdapter:
             raise Unreachable(str(e)) from e
         except xlm_mod.XLMError:
             return False
+
+    def forget_sequence(self, addr):
+        self._sequences.reset(addr)
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +522,7 @@ class Engine:
             inc.out_envelope = ""
             inc.out_detail = detail
             inc.save()
+            adapter.forget_sequence(from_addr)
             return False
         inc.out_detail = detail
         inc.save()

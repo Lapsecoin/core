@@ -109,6 +109,9 @@ class FakeChain:
         self._check_reachable()
         return any(p["seq"] >= seq for p in self.payments)
 
+    def forget_sequence(self, addr):
+        pass
+
     # -- writes --------------------------------------------------------
 
     def build(self, to_addr, amount, memo, secret, create_account=False):
@@ -325,6 +328,99 @@ class TestLapseAdapterRecentIncoming:
         node = FakeLapseNode(mempool_txs=txs)
         adapter = swap_engine.LapseAdapter(node)
         assert len(adapter.recent_incoming("me.lapse", limit=3)) == 3
+
+
+class TestSequenceAllocator:
+    """Plan item 4.3: two trades sharing one XLM wallet must never be
+    handed the same sequence number, and the fix must not depend on
+    Horizon having already caught up with a submission this same
+    process just made (see SequenceAllocator's docstring)."""
+
+    def test_first_allocation_reads_the_chain(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(xlm_mod, "get_sequence",
+                            lambda addr: calls.append(addr) or 100)
+        alloc = swap_engine.SequenceAllocator()
+        assert alloc.allocate("GADDR") == 100
+        assert calls == ["GADDR"]
+
+    def test_later_allocations_for_the_same_address_do_not_reread_the_chain(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(xlm_mod, "get_sequence",
+                            lambda addr: calls.append(addr) or 100)
+        alloc = swap_engine.SequenceAllocator()
+        got = [alloc.allocate("GADDR") for _ in range(3)]
+        assert got == [100, 101, 102]
+        assert calls == ["GADDR"], "only the first allocation should touch Horizon"
+
+    def test_different_addresses_are_tracked_independently(self, monkeypatch):
+        seqs = {"GA": 5, "GB": 50}
+        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: seqs[addr])
+        alloc = swap_engine.SequenceAllocator()
+        assert alloc.allocate("GA") == 5
+        assert alloc.allocate("GB") == 50
+        assert alloc.allocate("GA") == 6
+        assert alloc.allocate("GB") == 51
+
+    def test_reset_forces_a_fresh_read_next_time(self, monkeypatch):
+        seqs = iter([100, 200])
+        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: next(seqs))
+        alloc = swap_engine.SequenceAllocator()
+        assert alloc.allocate("GADDR") == 100
+        assert alloc.allocate("GADDR") == 101
+        alloc.reset("GADDR")
+        assert alloc.allocate("GADDR") == 200
+
+    def test_resetting_an_address_never_read_is_harmless(self):
+        swap_engine.SequenceAllocator().reset("GADDR")
+
+    def test_a_failed_first_read_leaves_nothing_cached(self, monkeypatch):
+        def boom(addr):
+            raise xlm_mod.XLMUnreachable("horizon is down")
+        monkeypatch.setattr(xlm_mod, "get_sequence", boom)
+        alloc = swap_engine.SequenceAllocator()
+        with pytest.raises(xlm_mod.XLMUnreachable):
+            alloc.allocate("GADDR")
+
+        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: 7)
+        assert alloc.allocate("GADDR") == 7, "the failed read must not have cached anything"
+
+
+class TestXLMAdapterSequencing:
+    """The real adapter wired to the allocator above, not the FakeChain
+    stand-in the rest of this file drives the engine through."""
+
+    def _adapter(self, monkeypatch, start_seq=42):
+        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: start_seq)
+        built = []
+        monkeypatch.setattr(
+            xlm_mod, "build_payment",
+            lambda seed, to, amount, memo, seq: built.append(seq) or (f"xdr{seq}", f"hash{seq}"))
+        return swap_engine.XLMAdapter("keyfile"), built
+
+    def test_two_builds_for_the_same_seed_get_consecutive_sequences(self, monkeypatch):
+        seed, _pub = xlm_mod.generate_keypair()
+        adapter, built = self._adapter(monkeypatch)
+        adapter.build("GDEST", 1, "memo1", seed)
+        adapter.build("GDEST", 1, "memo2", seed)
+        assert built == [42, 43]
+
+    def test_two_different_seeds_are_not_forced_onto_one_counter(self, monkeypatch):
+        seed_a, _ = xlm_mod.generate_keypair()
+        seed_b, _ = xlm_mod.generate_keypair()
+        adapter, built = self._adapter(monkeypatch)
+        adapter.build("GDEST", 1, "memo1", seed_a)
+        adapter.build("GDEST", 1, "memo2", seed_b)
+        assert built == [42, 42], "distinct wallets must each start from their own chain read"
+
+    def test_forget_sequence_makes_the_next_build_reread_the_chain(self, monkeypatch):
+        seed, pub = xlm_mod.generate_keypair()
+        adapter, built = self._adapter(monkeypatch)
+        adapter.build("GDEST", 1, "memo1", seed)
+        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: 999)
+        adapter.forget_sequence(pub)
+        adapter.build("GDEST", 1, "memo2", seed)
+        assert built == [42, 999]
 
 
 class TestHappyPath:
