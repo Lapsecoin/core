@@ -195,7 +195,7 @@ def register(app, node, csrf_token):
                 action = request.form.get("action", "")
                 try:
                     if action == "create_xlm_wallet":
-                        xlm_addr, alert_ok = _create_wallet(xlm_keyfile())
+                        xlm_addr, alert_ok = _create_wallet(node, xlm_keyfile())
                     elif action == "place_order":
                         alert_ok = _place_order(node, xlm_addr, height)
                     elif action == "cancel_order":
@@ -316,18 +316,36 @@ def register(app, node, csrf_token):
 # Actions
 # ---------------------------------------------------------------------------
 
-def _create_wallet(path):
+def _create_wallet(node, path):
+    """Create the Stellar trading wallet, sealed under the node's own key.
+
+    Sealed with the node's key-encryption key rather than a passphrase of
+    its own, which is what lets the swap worker use it. A node keeps that
+    key while it runs and discards the passphrase at startup, so a wallet
+    with a separate passphrase could not be opened by anything running
+    unattended, and a trade already part-paid would stall until somebody
+    came back to type it. The passphrase asked for here is the node's own,
+    and it is verified against the node key file before anything is
+    written.
+    """
     import os
     if os.path.exists(path):
         raise ValueError("this node already has a Stellar trading address")
     passphrase = request.form.get("passphrase", "").strip()
     if not passphrase:
-        raise ValueError("a passphrase is required")
+        raise ValueError("your node passphrase is required")
+    try:
+        kek = crypto_mod.derive_kek(node.keyfile, passphrase)
+        crypto_mod.decrypt_secret_key(node.keyfile, kek=kek)
+    except ValueError:
+        raise ValueError("that is not this node's passphrase")
     seed, public = xlm_mod.generate_keypair()
-    xlm_mod.save_key(path, seed, public, passphrase)
+    xlm_mod.save_key(path, seed, public, kek=kek)
     del seed
-    return public, ("Stellar address created. It holds nothing yet, which is "
-                    "fine: you can sell LAPSE without funding it first.")
+    return public, ("Stellar address created and unlocked with your node "
+                    "passphrase, so trades keep running without you here. "
+                    "It holds nothing yet, which is fine: you can sell "
+                    "LAPSE without funding it first.")
 
 
 def _place_order(node, xlm_addr, height):
@@ -399,9 +417,14 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
         raise ValueError("create a Stellar address first")
 
     # Checked, not just used: a wrong passphrase here would otherwise
-    # surface as a trade that exists and cannot send.
-    crypto_mod.derive_kek(node.keyfile, passphrase)
-    xlm_mod.decrypt_seed(xlm_keyfile_path, passphrase)
+    # surface as a trade that exists and cannot send, discovered only once
+    # a counterparty was already waiting on it.
+    try:
+        kek = crypto_mod.derive_kek(node.keyfile, passphrase)
+        crypto_mod.decrypt_secret_key(node.keyfile, kek=kek)
+        xlm_mod.decrypt_seed(xlm_keyfile_path, kek=kek)
+    except ValueError:
+        raise ValueError("that is not this node's passphrase")
 
     lapse_total = parse_lapse(request.form.get("amount_lapse"))
     remaining = market_mod.remaining_ticks(order_row)

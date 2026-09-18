@@ -31,6 +31,7 @@ from node import Node
 from params import DB_PATH
 from peer_udp import LAN_DISCOVERY_PORT, PORT_BIND_RETRIES, UDPTransport, probe_lan_ports
 from peerpool import PeerPool
+from swap_worker import SwapWorker
 from syncer import Syncer
 from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
@@ -551,6 +552,16 @@ def main():
     # node.start() below for the signing key, that's always up first.
     rewarder = UptimeRewarder(node)
     rewarder.start()
+
+    # Drives swap steps. Its own thread rather than part of the block
+    # cycle, because a step waits on a public API over the network and a
+    # cycle that blocks on one stops building blocks. It reconciles every
+    # unfinished trade against both chains before it sends anything, which
+    # is what makes a restart mid-trade safe, and it does nothing at all
+    # while swaps are off or the node is locked.
+    swap_worker = SwapWorker(node, os.path.join(
+        os.path.dirname(os.path.abspath(args.keyfile)), "xlm_trading.key"))
+    swap_worker.start()
 
     # ------------------------------------------------------------------
     # HTTP servers: browser UI only, no peer routes

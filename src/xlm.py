@@ -128,18 +128,38 @@ def is_valid_address(address):
         return False
 
 
-def save_key(path, secret_seed, public_key, passphrase):
-    """Encrypt the seed to disk with the same scheme crypto.py uses for the
-    LapseCoin wallet: Argon2id to a key-encryption key, NaCl secretbox, file
-    mode 0600. The seed never touches disk in the clear."""
-    if not passphrase:
-        raise ValueError("passphrase is mandatory")
-    salt = nacl.utils.random(nacl.pwhash.argon2id.SALTBYTES)
+def save_key(path, secret_seed, public_key, passphrase=None, kek=None):
+    """Encrypt the seed to disk. Supply exactly one of passphrase or kek.
+
+    Same scheme crypto.py uses for the LapseCoin wallet: NaCl secretbox
+    under a key-encryption key, file mode 0600, and the seed never touches
+    disk in the clear.
+
+    The kek form is what the node actually uses, and the reason is the
+    swap worker. A node keeps its key-encryption key while it runs and
+    throws the passphrase away at startup, on purpose. If this seed were
+    sealed under a passphrase of its own there would be nothing in memory
+    able to open it, so every step of every trade would need somebody
+    present to type it, and an unattended node could never finish a trade
+    it had already started paying into. Sealing it under the same kek
+    means one passphrase for the user and a wallet the running node can
+    actually use.
+    """
+    # Emptiness, not just absence: an empty passphrase is a missing one,
+    # and testing `is None` alone would let "" through and seal a wallet
+    # behind nothing.
+    if bool(passphrase) == bool(kek):
+        raise ValueError("supply exactly one of a non-empty passphrase or a kek")
     ops = nacl.pwhash.argon2id.OPSLIMIT_MODERATE
     mem = nacl.pwhash.argon2id.MEMLIMIT_MODERATE
-    key = nacl.pwhash.argon2id.kdf(nacl.secret.SecretBox.KEY_SIZE,
-                                   passphrase.encode(), salt,
-                                   opslimit=ops, memlimit=mem)
+    if kek is not None:
+        salt = b""
+        key = kek
+    else:
+        salt = nacl.utils.random(nacl.pwhash.argon2id.SALTBYTES)
+        key = nacl.pwhash.argon2id.kdf(nacl.secret.SecretBox.KEY_SIZE,
+                                       passphrase.encode(), salt,
+                                       opslimit=ops, memlimit=mem)
     ciphertext = nacl.secret.SecretBox(key).encrypt(secret_seed.encode())
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -147,6 +167,7 @@ def save_key(path, secret_seed, public_key, passphrase):
                    "public_key": public_key,
                    "ciphertext": base64.b64encode(ciphertext).decode(),
                    "salt": base64.b64encode(salt).decode(),
+                   "sealed_with": "kek" if kek is not None else "passphrase",
                    "ops": ops, "mem": mem}, f, indent=2)
     os.chmod(tmp, 0o600)
     # Renamed into place rather than written over: a crash partway through
@@ -166,20 +187,34 @@ def load_public_key(path):
         return None
 
 
-def decrypt_seed(path, passphrase):
-    """Decrypt and return the secret seed. Callers drop it immediately."""
+def decrypt_seed(path, passphrase=None, kek=None):
+    """Decrypt and return the secret seed. Callers drop it immediately.
+
+    Supply whichever the file was sealed with. The file records which, so
+    a caller offering the wrong one gets told that rather than a generic
+    corruption error.
+    """
     with open(path) as f:
         data = json.load(f)
-    key = nacl.pwhash.argon2id.kdf(
-        nacl.secret.SecretBox.KEY_SIZE, passphrase.encode(),
-        base64.b64decode(data["salt"]),
-        opslimit=data.get("ops", nacl.pwhash.argon2id.OPSLIMIT_MODERATE),
-        memlimit=data.get("mem", nacl.pwhash.argon2id.MEMLIMIT_MODERATE))
+    sealed_with = data.get("sealed_with", "passphrase")
+    if sealed_with == "kek":
+        if kek is None:
+            raise ValueError("this wallet is sealed with the node key; "
+                             "unlock the node rather than supplying a passphrase")
+        key = kek
+    else:
+        if not passphrase:
+            raise ValueError("this wallet needs its passphrase")
+        key = nacl.pwhash.argon2id.kdf(
+            nacl.secret.SecretBox.KEY_SIZE, passphrase.encode(),
+            base64.b64decode(data["salt"]),
+            opslimit=data.get("ops", nacl.pwhash.argon2id.OPSLIMIT_MODERATE),
+            memlimit=data.get("mem", nacl.pwhash.argon2id.MEMLIMIT_MODERATE))
     try:
         plaintext = nacl.secret.SecretBox(key).decrypt(
             base64.b64decode(data["ciphertext"]))
     except nacl.exceptions.CryptoError:
-        raise ValueError("wrong passphrase or corrupted key file")
+        raise ValueError("wrong key or corrupted key file")
     return plaintext.decode()
 
 
