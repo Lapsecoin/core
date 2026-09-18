@@ -122,6 +122,13 @@ class LapseAdapter:
     def balance(self, addr):
         return self.node.view.state.get_balance(addr)
 
+    def account_exists(self, addr):
+        """Always True: a LapseCoin address can receive a payment
+        whether or not it has ever held a balance, unlike Stellar's
+        accounts. Present so callers can treat both adapters the same
+        way rather than special-casing which chain they are on."""
+        return True
+
     def find_payment(self, from_addr, to_addr, memo, min_amount):
         """A settled or pending payment matching every agreed term.
 
@@ -264,6 +271,19 @@ class XLMAdapter:
 
     def balance(self, addr):
         return xlm_mod.get_spendable_stroops(addr)
+
+    def account_exists(self, addr):
+        """Whether the destination can receive a plain payment at all.
+
+        A Stellar address with no account behind it (never funded) can
+        only be reached by a create-account operation, never a plain
+        payment; see ensure_sent's use of this before building an XLM
+        leg.
+        """
+        try:
+            return xlm_mod.account_exists(addr)
+        except xlm_mod.XLMUnreachable as e:
+            raise Unreachable(str(e)) from e
 
     def find_payment(self, from_addr, to_addr, memo, min_amount):
         try:
@@ -466,7 +486,9 @@ class Engine:
             envelope, tx_hash, seq = adapter.build(to_addr, amount, memo, kek)
             stored = self._dump_envelope(envelope)
         else:
-            envelope, tx_hash, seq = adapter.build(to_addr, amount, memo, seed)
+            send_amount, create_account = self._xlm_send_amount(adapter, to_addr, amount)
+            envelope, tx_hash, seq = adapter.build(
+                to_addr, send_amount, memo, seed, create_account=create_account)
             stored = envelope
 
         # Written down before it is sent. A crash between here and the
@@ -484,6 +506,45 @@ class Engine:
             inc.out_state = LEG_SUBMITTED
             inc.out_submitted_at = time.time()
         inc.save()
+
+    @staticmethod
+    def _xlm_send_amount(adapter, to_addr, agreed_amount):
+        """What to actually put in an XLM leg's envelope, and whether it
+        has to be a create-account operation.
+
+        A plain payment to a Stellar address with no account behind it
+        fails outright (op_no_destination): a seller who has never
+        funded their trading wallet is exactly who a "sell LAPSE without
+        owning XLM first" feature exists for, so this is not an edge
+        case, it is the normal first payment to a new counterparty.
+
+        Bringing an account into existence costs at least the network's
+        own minimum reserve (xlm.ACCOUNT_MIN_BALANCE_STROOPS) regardless
+        of what this step was scheduled for, since Stellar has no
+        smaller unit an account can be created with. When the agreed
+        amount already clears it, nothing changes.
+
+        This is deliberately the one place a step's outbound amount can
+        exceed what swap.py's exposure cap planned for, and it is
+        bounded: at most once per trade, since the destination account
+        then exists for every later step, and by at most one XLM (the
+        gap between the agreed amount and the minimum) in the worst
+        case. The counterparty's own find_payment accepts paid >= agreed,
+        not equality, so the difference simply settles the step it was
+        scheduled for; nothing downstream needs to know this happened.
+
+        Sponsored creation (xlm.build_sponsored_create_account) cannot
+        be used here even though it would spare the buyer this cost: it
+        requires a signature from the new account's own key in the same
+        transaction (CAP-33's end-sponsoring operation is sourced by the
+        sponsored account), which means active, real-time cooperation
+        from the seller. Nothing in this protocol gives a payer any way
+        to obtain that from a counterparty it has never exchanged a
+        message with.
+        """
+        if adapter.account_exists(to_addr):
+            return agreed_amount, False
+        return max(agreed_amount, xlm_mod.ACCOUNT_MIN_BALANCE_STROOPS), True
 
     @staticmethod
     def _dump_envelope(tx_dict):

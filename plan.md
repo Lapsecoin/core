@@ -43,24 +43,36 @@ expired order with a live claim is still discovered: cancelling withdraws
 what is unfilled, not what already has money moving against it
 (`market.orders_by_maker_with_claims`).
 
-### 1.2 A seller holding no XLM cannot be paid
+### 1.2 A seller holding no XLM cannot be paid — done
 
-`xlm.build_sponsored_create_account` and `xlm.build_create_account` are
-both fully implemented and tested, and **neither is ever called**.
-`swap_engine.XLMAdapter.build` takes a `create_account` flag that nothing
-passes, so every XLM leg is built as a plain payment.
+`xlm.build_sponsored_create_account` and `xlm.build_create_account` were
+both fully implemented and tested, and neither was ever called.
+`swap_engine.XLMAdapter.build`'s `create_account` flag now gets passed:
+`Engine._build_and_send` (via the new `_xlm_send_amount`) checks
+`adapter.account_exists(destination)` before building an XLM leg and
+switches to a create-account operation when it does not exist,
+raising the sent amount to `xlm.ACCOUNT_MIN_BALANCE_STROOPS` if the
+step's own agreed amount would not have cleared it (Stellar has no
+smaller unit an account can be created with). The counterparty's own
+settlement check only ever requires paid >= agreed, so the difference
+simply overpays the step it was scheduled for.
 
-A plain payment to an address with no account behind it fails with
-`op_no_destination`. So the advertised property — that somebody holding
-only LAPSE can sell it without owning XLM first — does not hold. The UI
-states it does (`market.html`, "you can sell LAPSE without funding it
-first"), which makes this worse than a missing feature.
+**The "decide which" this write-up asked for turned out to have only one
+answer.** Sponsored creation cannot be used here at all: CAP-33's
+end-sponsoring operation is sourced by the new account itself, which
+means the transaction needs a signature from the seller's own key before
+it can be submitted. A buyer paying a seller it has never exchanged a
+message with has no way to obtain that signature — there is no
+handshake, and building one just for this would be a materially bigger
+feature than plan.md's phrasing suggested. `xlm.build_sponsored_create_account`
+is therefore not merely "gets its caller in 1.2" as the dead-code table
+below used to say; it cannot have one under this architecture, and
+should be deleted rather than kept as an unusable alternative.
 
-**Fix.** `ensure_sent` checks `account_exists(destination)` before
-building an XLM leg, and chooses create-account or sponsored-create when
-it does not. Decide which: plain create costs the buyer 1 XLM that the
-seller then holds as reserve, sponsored create costs the buyer nothing
-permanent but raises their own reserve while it stands.
+Plain create is used unconditionally, which does cost the buyer up to
+one XLM (the gap between the agreed step and the minimum, at most, and
+only on the first payment to a given destination) — the tradeoff this
+section already named, just resolved rather than left open.
 
 ### 1.3 The first-mover rule is documented but not implemented — done
 
@@ -98,8 +110,8 @@ to delete.
 |---|---|
 | `swap.parse_session_tag` | done: called by `swap_engine.discover_trades` |
 | `swap.opening_mover` | done: called from both sides (see 1.3) |
-| `xlm.build_sponsored_create_account` | gets its caller in 1.2 |
-| `xlm.build_create_account` | reachable only via a flag nobody sets; see 1.2 |
+| `xlm.build_sponsored_create_account` | cannot be called here at all (see 1.2); delete along with its tests |
+| `xlm.build_create_account` | done: called from `Engine._build_and_send` (see 1.2) |
 | `swap_engine.LapseAdapter.height` | delete |
 | `swap_engine.LapseAdapter.balance` | wire into the solvency check (4.2) or delete |
 | `swap_engine.XLMAdapter.balance` | same |
@@ -268,8 +280,8 @@ calling any of it finished.
    with it — done. This is what makes a trade complete. Also introduced
    the fill-claim message and `market.orders_by_maker_with_claims`,
    neither of which this write-up anticipated (see 1.1's notes above).
-4. **Account creation on the XLM leg** (1.2). Needed before any trade
-   with a counterparty who holds no XLM, which is most new users.
+4. **Account creation on the XLM leg** (1.2) — done. Needed before any
+   trade with a counterparty who holds no XLM, which is most new users.
 5. **Admission control, sequence allocator, solvency, expiry** (4.2, 4.3,
    4.4).
 6. **XLM withdrawal** (5.1).

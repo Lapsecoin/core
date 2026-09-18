@@ -24,6 +24,7 @@ import swap
 import swap_engine
 import trade_storage
 import trust
+import xlm as xlm_mod
 from trade_storage import (
     Increment, Trade, PeerRecord,
     LEG_PENDING, LEG_INTENT, LEG_SUBMITTED, LEG_SETTLED, LEG_DEAD,
@@ -72,8 +73,18 @@ class FakeChain:
         self.crash_on_submit = False
         self.depth = 10
         self.submit_attempts = 0
+        # Addresses with no account behind them yet, mirroring a never-
+        # funded Stellar destination. Empty by default so existing tests
+        # that never mention this keep behaving as if every destination
+        # is already funded.
+        self.nonexistent_accounts = set()
+        self.build_calls = []           # (to_addr, amount, create_account)
 
     # -- reads ---------------------------------------------------------
+
+    def account_exists(self, addr):
+        self._check_reachable()
+        return addr not in self.nonexistent_accounts
 
     def _check_reachable(self):
         if self.unreachable:
@@ -103,8 +114,10 @@ class FakeChain:
     def build(self, to_addr, amount, memo, secret, create_account=False):
         self._check_reachable()
         self.seq += 1
+        self.build_calls.append((to_addr, amount, create_account))
         envelope = {"to": to_addr, "amount": amount, "memo": memo,
-                    "seq": self.seq, "from": self.my_address}
+                    "seq": self.seq, "from": self.my_address,
+                    "create_account": create_account}
         tx_hash = f"{self.asset}-{memo}-{self.seq}"
         if self.asset == "lapse":
             return envelope, tx_hash, self.seq
@@ -129,6 +142,8 @@ class FakeChain:
             "seq": envelope["seq"],
             "hash": f"{self.asset}-{envelope['memo']}-{envelope['seq']}",
         })
+        if envelope.get("create_account"):
+            self.nonexistent_accounts.discard(envelope["to"])
         return True, "submitted"
 
     # -- helpers for tests ---------------------------------------------
@@ -363,6 +378,93 @@ class TestHappyPath:
             settle_peer_leg(trade, inc, engine)
         row = PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse")
         assert row.completed_count == 1
+
+
+class TestAccountCreation:
+    """Plan item 1.2: a plain payment to a Stellar address with no
+    account behind it fails outright, so a seller who has never funded
+    their trading wallet (exactly who the "sell LAPSE without owning XLM
+    first" feature is for) could never actually be paid."""
+
+    def test_first_payment_to_an_unfunded_destination_creates_the_account(self):
+        engine, _lapse, xlm = make_engine()
+        xlm.nonexistent_accounts.add("GPEER")
+        trade = make_trade(i_send="xlm")
+        engine.advance(trade)
+        assert xlm.build_calls[0][2] is True, "must be a create-account operation"
+
+    def test_a_funded_destination_gets_a_plain_payment(self):
+        engine, _lapse, xlm = make_engine()
+        trade = make_trade(i_send="xlm")
+        engine.advance(trade)
+        assert xlm.build_calls[0][2] is False
+
+    def test_amount_is_bumped_to_the_minimum_when_the_agreed_step_is_smaller(self):
+        engine, _lapse, xlm = make_engine()
+        xlm.nonexistent_accounts.add("GPEER")
+        trade = make_trade(i_send="xlm", count=20)   # many steps: a tiny probe
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        assert inc.xlm_amount < xlm_mod.ACCOUNT_MIN_BALANCE_STROOPS
+        engine.advance(trade)
+        sent_addr, sent_amount, create_account = xlm.build_calls[0]
+        assert create_account is True
+        assert sent_amount == xlm_mod.ACCOUNT_MIN_BALANCE_STROOPS
+
+    def test_the_counterparty_still_recognises_the_bumped_payment(self):
+        """The other side's own check only ever asks for paid >= agreed,
+        so the overpayment settles the step it was scheduled for without
+        either side's stored schedule needing to change."""
+        engine, _lapse, xlm = make_engine()
+        xlm.nonexistent_accounts.add("GPEER")
+        trade = make_trade(i_send="xlm", count=20)
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        engine.advance(trade)
+        inc = Increment.get(Increment.id == inc.id)
+        assert inc.out_state == LEG_SETTLED
+
+    def test_no_bump_when_the_agreed_amount_already_clears_the_minimum(self):
+        engine, _lapse, xlm = make_engine()
+        xlm.nonexistent_accounts.add("GPEER")
+        trade = make_trade(i_send="xlm", count=2)   # few steps: large amounts
+        inc1 = Increment.get(Increment.id == f"{trade.session_id}:1")
+        inc2 = Increment.get(Increment.id == f"{trade.session_id}:2")
+        assert inc2.xlm_amount >= xlm_mod.ACCOUNT_MIN_BALANCE_STROOPS
+        assert inc1.i_move_first is True and inc2.i_move_first is False
+
+        engine.advance(trade)                # step 1: we send (creates GPEER)
+        settle_peer_leg(trade, inc1, engine)
+        engine.advance(trade)                # step 1: notice their reply, done
+        settle_peer_leg(trade, inc2, engine)  # they open step 2
+        engine.advance(trade)                # step 2: notice + send ours
+
+        _addr, sent_amount, _ca = xlm.build_calls[-1]
+        assert sent_amount == inc2.xlm_amount
+
+    def test_only_the_first_payment_to_a_destination_creates_it(self):
+        """Once the create-account envelope settles, the account exists
+        for every later step; a second create-account attempt against an
+        address that already exists would simply fail."""
+        engine, _lapse, xlm = make_engine()
+        xlm.nonexistent_accounts.add("GPEER")
+        trade = make_trade(i_send="xlm", count=3)
+        for _ in range(12):
+            inc = engine.advance(trade)
+            if inc is None:
+                break
+            settle_peer_leg(trade, inc, engine)
+        create_flags = [call[2] for call in xlm.build_calls]
+        assert create_flags.count(True) == 1
+        assert create_flags[0] is True
+
+    def test_lapse_destinations_never_need_account_creation(self):
+        """Every LapseCoin address can receive a payment regardless of
+        whether it has ever held a balance; only Stellar has this
+        distinction."""
+        engine, lapse, _xlm = make_engine()
+        trade = make_trade(i_send="lapse")
+        engine.advance(trade)
+        assert lapse.account_exists("peer.lapse") is True
+        assert lapse.build_calls[0][2] is False
 
 
 class TestCrashSafety:
