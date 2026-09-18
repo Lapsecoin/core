@@ -320,9 +320,52 @@ def open_orders(current_height, exclude_maker=None):
     return [row for row in query if remaining_ticks(row) > 0]
 
 
+def orders_by_maker(addr, current_height):
+    """Every one of this maker's own orders still on the book, whether or
+    not anything remains to fill.
+
+    Distinct from open_orders: that one is a taker's view of what is
+    available to trade against, so it drops anything already fully
+    delivered. This is a maker managing their own orders, who still wants
+    to see one that just finished.
+    """
+    ensure_tables()
+    return list(Order.select()
+                .where(Order.maker_lapse_addr == addr,
+                       Order.cancelled == False,          # noqa: E712
+                       Order.expiry_block > current_height)
+                .order_by(Order.received_at.desc()))
+
+
 def get_order(order_id):
     ensure_tables()
     return Order.get_or_none(Order.order_id == order_id)
+
+
+def already_known(item):
+    """Whether this exact order or cancellation has already been handled
+    here, cheaply and without a signature check.
+
+    Backed by the database rather than gossip's own seen-cache. Those
+    answer different questions: this one is "have we already verified and
+    stored this", gossip's is "have we already put this on the wire in the
+    public phase". Answering the first from the second looks harmless but
+    is not: it marks an item as flooded before this node has actually
+    flooded it, so the one call downstream that would have done so finds
+    it already marked and silently sends nothing. That is invisible on two
+    directly connected nodes and total past the first hop on a real
+    network, which is exactly the shape a propagation bug takes when
+    nothing measures delivery across topology (see
+    gossip.Gossip.mark_seen and the harness in test_gossip.py).
+    """
+    if not isinstance(item, dict):
+        return False
+    ensure_tables()
+    if is_cancellation(item):
+        row = get_order(item.get("cancel", ""))
+        return bool(row and row.cancelled)
+    row = get_order(item.get("order_id", ""))
+    return row is not None
 
 
 def prune_expired(current_height):

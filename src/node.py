@@ -368,7 +368,7 @@ class Node:
         return self._kek is not None
 
     def mark_tx_seen(self, tx_hash):
-        return self.gossip.mark_seen(tx_hash)
+        return self.gossip.mark_seen(tx_hash, gossip_mod.KIND_TX)
 
     def own_vdf_median(self):
         """How long a full evaluation takes on this machine, in seconds.
@@ -1455,27 +1455,36 @@ class Node:
             return
 
         self._note_echo(item_hash, sender)
-        if self.gossip.mark_seen(item_hash):
-            # Already handled. Checking before verifying matters on a
-            # flood: a FALCON verification is the expensive part, and a
-            # duplicate has already paid for one.
-            return
 
-        try:
-            if market_mod.is_cancellation(item):
-                canceller = market_mod.verify_cancellation(item)
-                market_mod.apply_cancellation(item["cancel"], canceller)
-            else:
-                market_mod.verify_order(item, current_height=self.view.height)
-                market_mod.store_order(item)
-        except market_mod.OrderRejected as e:
-            log.debug("[market] rejected an order from %s: %s", sender, e)
-            return
-        except Exception:
-            log.warning("[market] failed to handle an inbound order",
-                        exc_info=True)
-            return
+        if not market_mod.already_known(item):
+            # A database lookup, not gossip.mark_seen: that cache tracks
+            # whether *this node has flooded the item onward*, a different
+            # question, and answering this one from it would mark the item
+            # seen before this node ever actually sent it, so the relay
+            # below would always find "already seen" and silently do
+            # nothing. See market.already_known.
+            try:
+                if market_mod.is_cancellation(item):
+                    canceller = market_mod.verify_cancellation(item)
+                    market_mod.apply_cancellation(item["cancel"], canceller)
+                else:
+                    market_mod.verify_order(item, current_height=self.view.height)
+                    market_mod.store_order(item)
+            except market_mod.OrderRejected as e:
+                log.debug("[market] rejected an order from %s: %s", sender, e)
+                return
+            except Exception:
+                log.warning("[market] failed to handle an inbound order",
+                            exc_info=True)
+                return
 
+        # Relayed either way, exactly like a tx or a block: whether we had
+        # already verified this and whether gossip has already flooded it
+        # are different questions, and gossip.relay (by way of
+        # gossip._fluff) answers the second itself, once per item hash.
+        # Gating this on the first is what would strand every peer
+        # reachable only through whoever originated the item, including
+        # this node's own orders echoing back to it.
         self.gossip.relay(item, gossip_mod.KIND_ORDER, item_hash,
                           sender, stemming=stemming)
 

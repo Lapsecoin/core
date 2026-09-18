@@ -548,6 +548,9 @@ def main():
     # while swaps are off or the node is locked.
     swap_worker = SwapWorker(node, os.path.join(
         os.path.dirname(os.path.abspath(args.keyfile)), "xlm_trading.key"))
+    # Handed to the Trades page so a stalled trade can be told apart from a
+    # locked wallet or an unreachable Horizon instead of looking identical.
+    node.swap_worker = swap_worker
     swap_worker.start()
 
     # ------------------------------------------------------------------

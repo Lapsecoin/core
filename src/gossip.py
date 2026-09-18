@@ -57,6 +57,18 @@ log = logging.getLogger("ec.gossip")
 
 SEEN_CACHE_SIZE = 50_000
 
+# Orders are gossiped by anyone willing to pay one FALCON verification,
+# with no block reward and no stake riding on getting one wrong, unlike a
+# block or a tx. A flood of them must not be able to spend the budget that
+# block and tx dedup depend on: evicting a block's entry means that block
+# gets re-flooded, which is a consensus cost paid for a swap feature doing
+# nothing wrong except being popular. Smaller than the consensus kinds'
+# budget on purpose, since it bounds only how much memory a flood of
+# advertisements can occupy, never how much delivery they get; the actual
+# rate a peer may push orders at is a separate admission control (see
+# market.MAX_ORDERS_PER_MAKER and the intake limits in market_routes.py).
+ORDER_SEEN_CACHE_SIZE = 20_000
+
 # Probability that a stem hop forwards again instead of fluffing, giving a
 # geometric stem length with mean 1/(1-q) hops where the topology allows it.
 #
@@ -89,6 +101,12 @@ KIND_BLOCK = "block"
 KIND_TX    = "tx"
 KIND_ORDER = "order"
 
+_SEEN_CACHE_SIZES = {
+    KIND_BLOCK: SEEN_CACHE_SIZE,
+    KIND_TX: SEEN_CACHE_SIZE,
+    KIND_ORDER: ORDER_SEEN_CACHE_SIZE,
+}
+
 
 class Gossip:
 
@@ -97,8 +115,13 @@ class Gossip:
         self.udp  = udp
         # Hash -> True for every item we've already put on the wire in the
         # public (fluff) phase, so each node floods a given item exactly
-        # once no matter how many copies reach it.
-        self._seen  = LRUCache(maxsize=SEEN_CACHE_SIZE)
+        # once no matter how many copies reach it. One cache per item kind
+        # rather than one shared cache: a hash is only ever compared
+        # against other hashes of the same kind, so a flood of one kind
+        # evicting another kind's entry is now structurally impossible
+        # rather than merely unlikely.
+        self._seen = {kind: LRUCache(maxsize=size)
+                      for kind, size in _SEEN_CACHE_SIZES.items()}
         self._lock  = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -147,12 +170,20 @@ class Gossip:
         log.debug("[gossip] re-flooding %s to %d peers", kind, len(peers))
         self._send(item, kind, peers=peers, stemming=False)
 
-    def mark_seen(self, h):
-        """Mark h as already handled. Returns True if it already was."""
+    def mark_seen(self, h, kind):
+        """Mark h as already handled, within its own kind's cache.
+
+        Returns True if it already was. kind is required rather than
+        defaulted: which budget a hash counts against is exactly the
+        property this cache separation exists to make explicit, and a
+        silently-wrong default is the same class of bug as sharing one
+        cache in the first place.
+        """
+        cache = self._seen[kind]
         with self._lock:
-            if h in self._seen:
+            if h in cache:
                 return True
-            self._seen[h] = True
+            cache[h] = True
             return False
 
     # ------------------------------------------------------------------
@@ -192,7 +223,7 @@ class Gossip:
     def _fluff(self, item, kind, item_hash, exclude=None):
         """Public phase: flood to every peer except whoever sent it to us,
         at most once per item hash."""
-        if self.mark_seen(item_hash):
+        if self.mark_seen(item_hash, kind):
             return
         peers = [p for p in self.pool.get_all() if p != exclude]
         if not peers:

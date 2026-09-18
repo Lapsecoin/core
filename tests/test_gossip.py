@@ -10,6 +10,7 @@ UDP calls are mocked via the udp object. No network.
 """
 
 import os
+import random
 import sys
 from unittest.mock import MagicMock, patch
 import threading
@@ -49,18 +50,18 @@ def sample_tx():
 class TestMarkSeen:
     def test_first_time_returns_false(self):
         g, _, _ = make_gossip()
-        assert g.mark_seen("abc123") is False
+        assert g.mark_seen("abc123", gossip_mod.KIND_TX) is False
 
     def test_second_time_returns_true(self):
         g, _, _ = make_gossip()
-        g.mark_seen("abc123")
-        assert g.mark_seen("abc123") is True
+        g.mark_seen("abc123", gossip_mod.KIND_TX)
+        assert g.mark_seen("abc123", gossip_mod.KIND_TX) is True
 
     def test_different_hashes_each_new(self):
         g, _, _ = make_gossip()
-        assert g.mark_seen("hash1") is False
-        assert g.mark_seen("hash2") is False
-        assert g.mark_seen("hash1") is True
+        assert g.mark_seen("hash1", gossip_mod.KIND_TX) is False
+        assert g.mark_seen("hash2", gossip_mod.KIND_TX) is False
+        assert g.mark_seen("hash1", gossip_mod.KIND_TX) is True
 
     def test_mark_seen_thread_safe(self):
         g, _, _ = make_gossip()
@@ -68,7 +69,7 @@ class TestMarkSeen:
 
         def worker(i):
             try:
-                g.mark_seen(f"hash_{i}")
+                g.mark_seen(f"hash_{i}", gossip_mod.KIND_TX)
             except Exception as e:
                 errors.append(e)
 
@@ -78,6 +79,23 @@ class TestMarkSeen:
         for t in threads:
             t.join()
         assert errors == []
+
+    def test_kinds_do_not_share_a_budget(self):
+        """The whole point of the split: filling one kind's cache to its
+        ceiling must not evict, or even touch, another kind's entries."""
+        g, _, _ = make_gossip()
+        g.mark_seen("shared-hash", gossip_mod.KIND_BLOCK)
+        for i in range(gossip_mod.ORDER_SEEN_CACHE_SIZE + 100):
+            g.mark_seen(f"order-{i}", gossip_mod.KIND_ORDER)
+        assert g.mark_seen("shared-hash", gossip_mod.KIND_BLOCK) is True, \
+            "a block hash must survive an order flood"
+
+    def test_same_hash_different_kinds_are_independent(self):
+        g, _, _ = make_gossip()
+        assert g.mark_seen("h", gossip_mod.KIND_TX) is False
+        assert g.mark_seen("h", gossip_mod.KIND_ORDER) is False
+        assert g.mark_seen("h", gossip_mod.KIND_TX) is True
+        assert g.mark_seen("h", gossip_mod.KIND_BLOCK) is False
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +221,102 @@ class TestFluff:
 
 
 # ---------------------------------------------------------------------------
+# Network simulation: real Gossip objects wired together, no mocks on the
+# propagation path itself. Shared by the topology-coverage tests below and
+# by the scale/flood harness further down, so there is exactly one place
+# that decides what "deliver everything that was sent" means.
+# ---------------------------------------------------------------------------
+
+def _build_network(adj):
+    """One real Gossip per simulated node, wired to fake pool/udp objects
+    that record what would have gone out instead of transmitting it.
+
+    Returns (nodes, outboxes), where outboxes has one queue per item kind,
+    mirroring the three distinct send_* methods the real transport exposes
+    (peer_udp.UDPTransport.send_tx/send_block/send_order): nothing here
+    should be able to confuse one kind's traffic for another's.
+    """
+    outboxes = {gossip_mod.KIND_TX: [], gossip_mod.KIND_BLOCK: [],
+                gossip_mod.KIND_ORDER: []}
+    nodes = {}
+
+    def udp_for(me):
+        class U:
+            def send_tx(self, item, peers, stemming):
+                for p in peers:
+                    outboxes[gossip_mod.KIND_TX].append((p, me, item, stemming))
+            def send_block(self, item, peers, stemming):
+                for p in peers:
+                    outboxes[gossip_mod.KIND_BLOCK].append((p, me, item, stemming))
+            def send_order(self, item, peers, stemming):
+                for p in peers:
+                    outboxes[gossip_mod.KIND_ORDER].append((p, me, item, stemming))
+        return U()
+
+    class Pool:
+        def __init__(self, peers): self._p = peers
+        def get_all(self): return list(self._p)
+
+    for n, peers in adj.items():
+        nodes[n] = gossip_mod.Gossip(Pool(peers), udp_for(n))
+    return nodes, outboxes
+
+
+def _drain(nodes, outbox, kind, item_hash, held, max_steps=500_000):
+    """Deliver every queued message of one kind, mirroring how Node treats
+    a stemming item (relayed, admitted only once it goes public here) vs.
+    a public one (admitted and relayed on), adding arrivals to `held`.
+    """
+    steps = 0
+    while outbox and steps < max_steps:
+        peer, sender, item, stemming = outbox.pop(0)
+        steps += 1
+        if stemming:
+            if nodes[peer].relay(item, kind, item_hash, sender, stemming=True):
+                held.add(peer)
+        else:
+            held.add(peer)
+            nodes[peer].relay(item, kind, item_hash, sender, stemming=False)
+    if outbox:
+        raise AssertionError(f"delivery did not settle within {max_steps} steps")
+    return steps
+
+
+def _propagate(adj, origin, kind=gossip_mod.KIND_TX, item_hash="tx", item=None):
+    """Originate one item at `origin` and return the set of nodes that end
+    up holding it, once every send it triggered has been delivered."""
+    nodes, outboxes = _build_network(adj)
+    held = {origin}
+    nodes[origin].spread(item if item is not None else {"h": item_hash},
+                         kind, item_hash)
+    _drain(nodes, outboxes[kind], kind, item_hash, held)
+    return held
+
+
+def _ring(n):  return {i: [(i - 1) % n, (i + 1) % n] for i in range(n)}
+def _line(n):  return {i: [j for j in (i - 1, i + 1) if 0 <= j < n] for i in range(n)}
+def _star(n):  return {0: list(range(1, n)), **{i: [0] for i in range(1, n)}}
+
+
+def _mesh(n, extra_edges_per_node, seed):
+    """A ring, so the graph is connected the way real bootstrap peering
+    guarantees it (every node knows at least a predecessor), plus a
+    handful of random extra edges per node, closer to a real peer-to-peer
+    graph than a ring, line or star alone. `seed` controls only which
+    extra edges exist, not the stem/fluff decisions made over it.
+    """
+    rnd = random.Random(seed)
+    adj = {i: {(i - 1) % n, (i + 1) % n} for i in range(n)}
+    for i in range(n):
+        for _ in range(extra_edges_per_node):
+            j = rnd.randrange(n)
+            if j != i:
+                adj[i].add(j)
+                adj[j].add(i)
+    return {i: sorted(peers) for i, peers in adj.items()}
+
+
+# ---------------------------------------------------------------------------
 # 4. Blocks take the same path as txs
 # ---------------------------------------------------------------------------
 
@@ -280,78 +394,32 @@ class TestFluffReachesEveryConnectedNode:
     to break that, both from treating "sent it to me" as "already has it".
     """
 
-    def _network(self, adj):
-        sent = []
-        nodes = {}
-
-        def udp_for(me):
-            class U:
-                def send_tx(self, tx, peers, stemming):
-                    for p in peers:
-                        sent.append((p, me, tx, stemming))
-                def send_block(self, *a, **k): pass
-            return U()
-
-        class Pool:
-            def __init__(self, peers): self._p = peers
-            def get_all(self): return list(self._p)
-
-        for n, peers in adj.items():
-            nodes[n] = gossip_mod.Gossip(Pool(peers), udp_for(n))
-        return nodes, sent
-
-    def _propagate(self, adj, origin):
-        """Returns the set of nodes that ended up holding the item."""
-        nodes, queue = self._network(adj)
-        held = {origin}
-        tx = {"h": "tx"}
-        nodes[origin].spread(tx, gossip_mod.KIND_TX, "tx")
-        steps = 0
-        while queue and steps < 10000:
-            me, sender, item, stemming = queue.pop(0)
-            steps += 1
-            if stemming:
-                # mirrors Node._handle_inbound_tx: relayed, and admitted
-                # only once the walk ends here and goes public
-                if nodes[me].relay(item, gossip_mod.KIND_TX, "tx", sender,
-                                   stemming=True):
-                    held.add(me)
-            else:
-                held.add(me)
-                nodes[me].relay(item, gossip_mod.KIND_TX, "tx", sender,
-                                stemming=False)
-        return held
-
-    def _ring(self, n):  return {i: [(i - 1) % n, (i + 1) % n] for i in range(n)}
-    def _line(self, n):  return {i: [j for j in (i-1, i+1) if 0 <= j < n] for i in range(n)}
-    def _star(self, n):  return {0: list(range(1, n)), **{i: [0] for i in range(1, n)}}
-
     def test_a_ring_is_fully_covered_once_anything_fluffs(self, monkeypatch):
         # Always fluff at the first hop, so the flood is what is under test
         # rather than how long the stem happened to run.
         monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
-        adj = self._ring(6)
+        adj = _ring(6)
         for origin in adj:
-            assert self._propagate(adj, origin) == set(adj), \
+            assert _propagate(adj, origin) == set(adj), \
                 f"ring left nodes uncovered starting from {origin}"
 
     def test_a_line_is_fully_covered(self, monkeypatch):
         monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
-        adj = self._line(8)
+        adj = _line(8)
         for origin in adj:
-            assert self._propagate(adj, origin) == set(adj)
+            assert _propagate(adj, origin) == set(adj)
 
     def test_a_star_is_fully_covered_from_a_leaf(self, monkeypatch):
         monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
-        adj = self._star(6)
-        assert self._propagate(adj, 3) == set(adj)
+        adj = _star(6)
+        assert _propagate(adj, 3) == set(adj)
 
     def test_a_single_bridge_is_crossed(self, monkeypatch):
         # Two cliques joined by one edge: the flood has to traverse it.
         monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
         adj = {0: [1, 2, 3], 1: [0, 2], 2: [0, 1], 3: [0, 4, 5], 4: [3, 5], 5: [3, 4]}
         for origin in adj:
-            assert self._propagate(adj, origin) == set(adj)
+            assert _propagate(adj, origin) == set(adj)
 
     def test_the_predecessor_of_a_fluffing_stem_hop_is_included(self, monkeypatch):
         # It is the one peer that provably does not have the item: a stem
@@ -382,3 +450,133 @@ class TestFluffReachesEveryConnectedNode:
         for _ in range(5):
             g.relay({"x": 1}, gossip_mod.KIND_TX, "h", "a:1", stemming=False)
         assert udp.send_tx.call_count == 1, "flooding must be idempotent per item"
+
+
+# ---------------------------------------------------------------------------
+# 5. Delivery at scale, under the network's own real randomness, then under
+#    an order flood. What plan.md 4.1 asks for: measured, not asserted.
+# ---------------------------------------------------------------------------
+
+class TestDeliveryUnderRealRandomness:
+    """Every other coverage test above pins _random_fraction to an extreme
+    so the flood, not the stem, is what gets exercised. That is the right
+    default, but it never once lets the real coin flip run, and the real
+    coin flip is exactly what decides how many hops a private walk takes
+    before anything has been measured.
+
+    Delivery does not mathematically depend on which values that flip
+    produces: every walk stops stemming somewhere with probability 1 (a
+    dead end forces it even if the draw never would), and once anything
+    goes public the flood is a deterministic sweep of the connected graph.
+    So this is a property that should hold on a single trial. Running many
+    is what turns that argument from something read in the module
+    docstring into something watched happening: 100% delivery at the small
+    end of this network's expected scale and at the large end, using the
+    unpatched, cryptographically-random _random_fraction throughout.
+    """
+
+    TRIALS = 30
+
+    def test_full_delivery_at_3_nodes(self):
+        adj = _ring(3)
+        for trial in range(self.TRIALS):
+            for origin in adj:
+                held = _propagate(adj, origin, item_hash=f"t{trial}-{origin}")
+                assert held == set(adj), (
+                    f"trial {trial} from node {origin} reached only {held}")
+
+    def test_full_delivery_at_100_nodes(self):
+        for trial in range(self.TRIALS):
+            adj = _mesh(100, extra_edges_per_node=3, seed=trial)
+            origin = trial % 100
+            held = _propagate(adj, origin, item_hash=f"t{trial}")
+            assert held == set(adj), (
+                f"trial {trial} from node {origin} reached "
+                f"{len(held)}/100 nodes")
+
+    def test_full_delivery_on_a_sparser_100_node_graph(self):
+        """Fewer extra edges than the main scale test: closer to a network
+        of nodes with few peers each, where the stem rule's dead-end clause
+        (fluff rather than strand when the only peer is the predecessor)
+        carries more of the weight."""
+        for trial in range(self.TRIALS):
+            adj = _mesh(100, extra_edges_per_node=1, seed=1000 + trial)
+            origin = trial % 100
+            held = _propagate(adj, origin, item_hash=f"s{trial}")
+            assert held == set(adj), (
+                f"trial {trial} from node {origin} reached "
+                f"{len(held)}/100 nodes on the sparse graph")
+
+
+class TestOrderFloodDoesNotDegradeConsensusDelivery:
+    """The property plan.md 4.1 exists for: a swap feature must not be
+    able to slow consensus down. Before the per-kind cache split, enough
+    distinct orders sharing a block's dedup cache could evict its entry,
+    and an evicted block hash means that block gets re-flooded, a
+    consensus cost paid for a feature that moves no funds and enters no
+    block. The split makes this structural rather than a matter of timing:
+    proven here by flooding an order cache well past its own ceiling on
+    every node in the network and then measuring, not assuming, that a
+    block still reaches all of them.
+
+    Flood generation is pinned to always-fluff, which is a claim about
+    speed and determinism for that phase only, not about the property
+    under test: it makes each flooded order take the shortest path to
+    full coverage so filling the cache costs one pass per item rather
+    than an average of ten. The final block delivery, which is what the
+    assertion is actually about, runs under real randomness so it is not
+    trivially true by construction.
+    """
+
+    def test_block_still_reaches_everyone_after_the_order_cache_is_saturated(
+            self, monkeypatch):
+        n = 8
+        adj = _mesh(n, extra_edges_per_node=2, seed=7)
+        nodes, outboxes = _build_network(adj)
+
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        flood_count = gossip_mod.ORDER_SEEN_CACHE_SIZE + 2_000
+        origin = 0
+        for k in range(flood_count):
+            h = f"order-{k}"
+            nodes[origin].spread({"o": h}, gossip_mod.KIND_ORDER, h)
+            _drain(nodes, outboxes[gossip_mod.KIND_ORDER],
+                  gossip_mod.KIND_ORDER, h, held={origin})
+            origin = (origin + 1) % n   # spread the flood's origin around
+
+        for node in nodes.values():
+            assert len(node._seen[gossip_mod.KIND_ORDER]) == \
+                gossip_mod.ORDER_SEEN_CACHE_SIZE, \
+                "the order cache should have filled to its ceiling and no further"
+
+        monkeypatch.undo()   # real randomness for the thing under test
+        held = {5}
+        nodes[5].spread({"h": "the-real-block"}, gossip_mod.KIND_BLOCK,
+                        "the-real-block")
+        _drain(nodes, outboxes[gossip_mod.KIND_BLOCK], gossip_mod.KIND_BLOCK,
+              "the-real-block", held)
+        assert held == set(adj), \
+            f"block delivery degraded by the order flood: reached {held}"
+
+    def test_tx_dedup_is_also_untouched_by_the_order_flood(self, monkeypatch):
+        """Same property, the other consensus kind. Orders and txs are
+        gossiped over the same peers at the same time in practice, so both
+        need their own proof, not just block's."""
+        n = 8
+        adj = _mesh(n, extra_edges_per_node=2, seed=11)
+        nodes, outboxes = _build_network(adj)
+
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        flood_count = gossip_mod.ORDER_SEEN_CACHE_SIZE + 2_000
+        for k in range(flood_count):
+            h = f"order-{k}"
+            nodes[0].spread({"o": h}, gossip_mod.KIND_ORDER, h)
+            _drain(nodes, outboxes[gossip_mod.KIND_ORDER],
+                  gossip_mod.KIND_ORDER, h, held={0})
+
+        monkeypatch.undo()
+        held = {3}
+        nodes[3].spread({"h": "atx"}, gossip_mod.KIND_TX, "atx")
+        _drain(nodes, outboxes[gossip_mod.KIND_TX], gossip_mod.KIND_TX,
+              "atx", held)
+        assert held == set(adj)

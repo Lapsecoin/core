@@ -108,47 +108,65 @@ refresh.
 **Fix.** One fetch, one parse, one small struct. `xlm.py` should expose a
 single `account_summary(addr)` and the three helpers collapse into it.
 
-### 3.2 Routes reach through a module into the ORM
+### 3.2 Routes reach through a module into the ORM — done
 
-`market_routes._my_orders` builds a peewee query against
-`market_mod.Order` directly (`market_routes.py:516`). Every other
-database access in that file goes through a `market.py` function. This is
-the one place the boundary leaks, and it duplicates filter logic that
-`market.open_orders` already has.
+`market_routes._my_orders` built a peewee query against `market_mod.Order`
+directly. Fixed: `market.orders_by_maker(addr, height)` now holds that
+filter logic (deliberately not reusing `open_orders`'s remaining>0 filter,
+since a maker managing their own orders still wants to see one that
+finished), and `_my_orders` calls it.
 
-**Fix.** `market.orders_by_maker(addr, height)` and call that.
-
-### 3.3 A stalled worker is invisible
+### 3.3 A stalled worker is invisible — done
 
 `swap_worker.status()` reports whether the worker is running, unlocked,
-paused after an outage, and what the last error was. Nothing displays it.
-A trade that is not progressing looks identical to one that is waiting,
-and the user has no way to tell a locked wallet from an unreachable
-Horizon from a genuine wait.
-
-**Fix.** Surface it on the Trades page. This is small and worth doing
-early, because it makes every later problem visible instead of silent.
+paused after an outage, and what the last error was. Surfaced on the
+Trades page now (`market_routes._worker_view`, `templates_html/trades.html`):
+a banner when locked, stopped, or paused after a Horizon outage, and a
+quiet one-liner when everything is fine and a trade is active.
 
 ---
 
 ## 4. Security and correctness
 
-### 4.1 Swap traffic can degrade block propagation
+### 4.1 Swap traffic can degrade block propagation — done
 
-`gossip.py:101` keeps one 50k LRU shared by every item kind. Flooding
-distinct orders evicts block and transaction hashes, and an evicted block
-hash means that block gets re-flooded. A swap feature must not be able to
-slow consensus down.
+`gossip.py` kept one 50k LRU shared by every item kind. Fixed: `Gossip`
+now holds one cache per kind (`_seen` is a dict keyed by `KIND_*`), block
+and tx each keep the original 50k allowance, and orders get their own
+20k (`ORDER_SEEN_CACHE_SIZE`) that cannot touch the others.
+`mark_seen(h, kind)` now requires the kind explicitly rather than
+defaulting, since a silently-wrong default is the same class of bug as
+sharing one cache.
 
-**Fix.** Per-kind dedup namespaces with their own budgets. Consensus
-kinds keep the full allowance; swap kinds get a separate one and cannot
-touch it.
+**Measured, not asserted.** `tests/test_gossip.py` now drives real
+`Gossip` objects (no mocks on the propagation path) under the real,
+cryptographically-random stem/fluff coin flip, not just the
+always-fluff extreme the older topology tests used: 30 trials at 3 nodes
+and 30 at 100 nodes (plus 30 more on a sparser 100-node graph), all
+asserting full delivery. Then `TestOrderFloodDoesNotDegradeConsensusDelivery`
+floods a node's order cache 2,000 entries past its ceiling and confirms a
+block (and separately a tx) still reaches every node afterward.
 
-**Must be measured, not asserted.** The Dandelion stem/fluff rule is
-built to deliver to every node from three peers up to a hundred, and
-there is currently no test of that property at all. Build the harness,
-confirm 100% delivery at 3 and at 100 nodes, then confirm it still holds
-with an order flood running.
+**Bonus find while building the harness.** `node._handle_inbound_order`
+had a real, live bug, not merely a risk: it called `gossip.mark_seen`
+directly to skip re-verifying a duplicate order, using the exact cache
+`gossip._fluff` also consults to decide whether it has already flooded
+the item. That pre-mark meant the very first time any node relayed an
+order onward, `_fluff` found the hash already "seen" and silently sent
+nothing — orders propagated at most one hop from wherever they entered
+the network, full stop, unless the origin itself happened to fluff
+immediately. Invisible to the existing test suite because node.py's tests
+mock gossip (no real dedup memory) and gossip.py's tests never drove
+node.py's real order-handling sequence. Fixed by adding
+`market.already_known(item)`, a database-backed pre-check that answers
+"have we verified and stored this" without touching gossip's own
+seen-cache, and by making `_handle_inbound_order` relay unconditionally
+afterward — exactly the "relayed either way" pattern `_handle_inbound_tx`
+and block handling already use, and for the identical reason: gating a
+relay on local novelty is what strands every peer reachable only through
+whoever originated the item, this node's own orders included. Covered in
+`tests/test_node.py::TestHandleInboundOrder` against a real `Gossip`
+instance, and in `tests/test_market.py::TestAlreadyKnown`.
 
 ### 4.2 Unbounded order intake
 
@@ -228,11 +246,10 @@ calling any of it finished.
 
 ## 6. Order of work
 
-1. **Worker status on the Trades page** (3.3). Small, and makes
-   everything after it visible instead of silent.
-2. **Per-kind dedup plus the 3-and-100-node delivery harness** (4.1).
-   Protects consensus before swap traffic grows, and the harness is
-   reusable.
+1. **Worker status on the Trades page** (3.3) — done.
+2. **Per-kind dedup plus the 3-and-100-node delivery harness** (4.1) —
+   done, and turned up a real order-propagation bug beyond what 4.1
+   originally described (see above).
 3. **Maker-side discovery** (1.1), which brings 1.3 and the memo format
    with it. This is what makes a trade complete.
 4. **Account creation on the XLM leg** (1.2). Needed before any trade

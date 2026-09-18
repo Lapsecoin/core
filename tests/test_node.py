@@ -26,10 +26,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import block as block_mod
 from params import MIN_BLOCK_SPACING_SECONDS
 import crypto
+import market as market_mod
 import node as node_mod
 import state as state_mod
+import trade_storage
 import tx as tx_mod
+import xlm as xlm_mod
 from chainstate import ChainState
+import gossip as gossip_mod
+from gossip import Gossip
 from node import Node, NodeView, _validate_tail
 from params import TICKS_PER_LAPSE
 from tests.fixtures import (
@@ -91,6 +96,46 @@ def node_env(tmp_path):
     node._loop_thread = threading.current_thread()
     node._kek = kek
     return node, keyfile, kek, gossip, syncer, pool, net_q
+
+
+@pytest.fixture
+def node_env_real_gossip(tmp_path):
+    """Like node_env, but with a real Gossip instance instead of a mock.
+
+    Needed for anything that must catch a propagation bug rather than
+    assume its absence: a MagicMock's mark_seen has no real dedup memory,
+    so two calls racing over the same seen-cache (see market.already_known)
+    are invisible to a test built on a mocked gossip, however many times it
+    is asserted against.
+    """
+    sk, pk = keypair(2)
+    keyfile = str(tmp_path / "node_real_gossip.key")
+    passphrase = "testpass"
+    crypto.save_key(keyfile, sk, pk, passphrase)
+    kek = crypto.derive_kek(keyfile, passphrase)
+
+    pool = MagicMock()
+    pool.get_all.return_value = ["1.2.3.4:1", "5.6.7.8:1"]
+    pool.snapshot.return_value = []
+    pool.count.return_value = 2
+    udp = MagicMock()
+    gossip = Gossip(pool, udp)
+    syncer = MagicMock()
+    syncer.check_and_sync.return_value = False
+    net_q = queue.Queue()
+    db_path = str(tmp_path / "chain_real_gossip.db")
+
+    node = Node(
+        keyfile=keyfile, public_key=pk, gossip=gossip, syncer=syncer,
+        pool=pool, net_in_q=net_q, db_path=db_path,
+    )
+    node._loop_thread = threading.current_thread()
+    node._kek = kek
+    # Rebinds the swap tables to this test's fresh db file regardless of
+    # whatever _initialised was left at by another test module; see
+    # trade_storage.py and the fresh_db fixtures elsewhere.
+    trade_storage.init_tables()
+    return node, udp
 
 
 def fresh_state():
@@ -213,7 +258,7 @@ class TestSimpleAccessors:
         node, _, __, gossip, *_ = node_env
         gossip.mark_seen.return_value = False
         result = node.mark_tx_seen("abc")
-        gossip.mark_seen.assert_called_once_with("abc")
+        gossip.mark_seen.assert_called_once_with("abc", gossip_mod.KIND_TX)
         assert result is False
 
     def test_get_info_returns_expected_keys(self, node_env):
@@ -545,6 +590,135 @@ class TestHandleInboundTx:
         assert node.mempool.size() == 1
         gossip.relay.assert_called_once()
         assert gossip.relay.call_args.kwargs["stemming"] is False
+
+
+# ---------------------------------------------------------------------------
+# 10b. _handle_inbound_order
+# ---------------------------------------------------------------------------
+
+def _maker_identity(tmp_path, name="maker"):
+    sk, pk = crypto.generate_keypair()
+    path = str(tmp_path / f"{name}.key")
+    crypto.save_key(path, sk, pk, "pw")
+    kek = crypto.derive_kek(path, "pw")
+    _seed, xlm_pub = xlm_mod.generate_keypair()
+    return {"addr": crypto.public_key_to_address(pk), "pubkey": pk.hex(),
+            "keyfile": path, "kek": kek, "xlm": xlm_pub}
+
+
+def _signed_order(maker, **overrides):
+    order = market_mod.build_order(
+        maker_lapse_addr=maker["addr"], maker_xlm_addr=maker["xlm"],
+        direction=overrides.pop("direction", "sell"),
+        lapse_total=overrides.pop("lapse_total", 10 * TICKS_PER_LAPSE),
+        price_stroops_per_lapse=overrides.pop("price", 1000),
+        expiry_block=overrides.pop("expiry_block", 50_000),
+        pubkey_hex=maker["pubkey"])
+    order.update(overrides)
+    return market_mod.sign_order(order, maker["keyfile"], maker["kek"])
+
+
+class TestHandleInboundOrder:
+    """The propagation bug this closes: a node used to mark an order
+    'seen' the moment it decided to skip re-verifying a duplicate, using
+    the very cache gossip._fluff consults to decide whether it has
+    already flooded the item. The first inbound copy at any node poisoned
+    its own later flood, so an order reached at most one hop from wherever
+    it entered the network. Invisible with a mocked gossip (no real dedup
+    memory) and untested against node.py's real call sequence, which is
+    why these drive an actual Gossip object end to end."""
+
+    def test_new_order_is_relayed_onward(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        node._handle_inbound_order(
+            {"order": order, "sender": "1.2.3.4:1", "stemming": False})
+        assert market_mod.get_order(order["order_id"]) is not None
+        udp.send_order.assert_called_once()
+        peers = udp.send_order.call_args.kwargs["peers"]
+        assert peers == ["5.6.7.8:1"], "must reach the other peer, not just log the order"
+
+    def test_a_duplicate_from_elsewhere_is_not_reflooded_or_reverified(
+            self, node_env_real_gossip, tmp_path):
+        """Ordinary gossip dedup, not the bug this class exists to catch:
+        once this node has genuinely flooded an item, a second copy from a
+        different peer must not trigger another flood (that way lies an
+        infinite reflooding storm), and must cost no re-verification. The
+        stranding case (known but never yet flooded) is the one below."""
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        node._handle_inbound_order(
+            {"order": order, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_order.reset_mock()
+
+        # A second, independent node forwards us the same order.
+        node._handle_inbound_order(
+            {"order": order, "sender": "5.6.7.8:1", "stemming": False})
+        udp.send_order.assert_not_called()
+        assert market_mod.get_order(order["order_id"]) is not None
+
+    def test_own_order_echoing_back_still_reaches_other_peers(
+            self, node_env_real_gossip, tmp_path):
+        """The origin-stranding case: this node stored its own order (as
+        market_routes._place_order does before publish_order), and a copy
+        of it now arrives back from a peer. It must still be flooded to
+        this node's other peers, or nobody reachable only through the
+        origin ever sees their own order."""
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        market_mod.store_order(order)   # as if this node were the maker
+
+        node._handle_inbound_order(
+            {"order": order, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_order.assert_called_once()
+        assert udp.send_order.call_args.kwargs["peers"] == ["5.6.7.8:1"]
+
+    def test_invalid_order_is_not_relayed(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        order["lapse_total"] = 999 * TICKS_PER_LAPSE   # breaks the signature
+        node._handle_inbound_order(
+            {"order": order, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_order.assert_not_called()
+        assert market_mod.get_order(order["order_id"]) is None
+
+    def test_a_genuine_cancellation_is_relayed_and_repeats_are_cheap(
+            self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        market_mod.store_order(order)
+        cancel = market_mod.cancellation_for(
+            order["order_id"], maker["pubkey"], maker["keyfile"], maker["kek"])
+
+        node._handle_inbound_order(
+            {"order": cancel, "sender": "1.2.3.4:1", "stemming": False})
+        assert market_mod.get_order(order["order_id"]).cancelled is True
+        udp.send_order.assert_called_once()
+
+        # A repeat from elsewhere costs no re-verification and, since this
+        # node already flooded it once, no second flood either.
+        udp.send_order.reset_mock()
+        node._handle_inbound_order(
+            {"order": cancel, "sender": "5.6.7.8:1", "stemming": False})
+        udp.send_order.assert_not_called()
+
+    def test_stem_hop_forwards_to_one_peer_only(
+            self, node_env_real_gossip, tmp_path, monkeypatch):
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 0.0)  # always stem
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        node._handle_inbound_order(
+            {"order": order, "sender": "1.2.3.4:1", "stemming": True})
+        assert market_mod.get_order(order["order_id"]) is not None
+        udp.send_order.assert_called_once()
+        assert len(udp.send_order.call_args.kwargs["peers"]) == 1
+        assert udp.send_order.call_args.kwargs["stemming"] is True
 
 
 # ---------------------------------------------------------------------------

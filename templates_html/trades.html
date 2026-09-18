@@ -4,6 +4,18 @@
 {% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 
+{% if worker.state in ('stopped', 'locked', 'paused') %}
+  <div class="alert alert-err">
+    <strong>{{ {"stopped": "Worker stopped", "locked": "Wallet locked",
+                "paused": "Stellar unreachable"}[worker.state] }}:</strong>
+    {{ worker.message }}
+  </div>
+{% elif worker.state == 'ok' and active %}
+  <p class="stat-sub" style="margin-bottom:.6rem">
+    Swap worker running normally &middot; {{ worker.passes }} pass{{ "es" if worker.passes != 1 }} so far.
+  </p>
+{% endif %}
+
 <h2>Trades</h2>
 
 {% if active %}

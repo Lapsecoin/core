@@ -19,7 +19,7 @@ import market
 import storage as storage_mod
 import trade_storage
 import xlm as xlm_mod
-from trade_storage import Order
+from trade_storage import Increment, LEG_SETTLED, Order, Trade
 
 
 LAPSE = 100_000_000
@@ -254,6 +254,107 @@ class TestOrderHash:
     def test_different_orders_differ(self, maker):
         assert market.order_hash(signed_order(maker)) != \
                market.order_hash(signed_order(maker))
+
+
+class TestAlreadyKnown:
+    """Backing market_routes/node's pre-verification dedup. Must answer
+    from stored state, not from gossip's own seen-cache: the two track
+    different things, and conflating them is what silently drops an order
+    past its first hop (see node._handle_inbound_order)."""
+
+    def test_unknown_order_is_not_known(self, maker):
+        assert market.already_known(signed_order(maker)) is False
+
+    def test_stored_order_is_known(self, maker):
+        order = signed_order(maker)
+        market.store_order(order)
+        assert market.already_known(order) is True
+
+    def test_unrelated_order_is_still_unknown(self, maker):
+        order = signed_order(maker)
+        market.store_order(order)
+        assert market.already_known(signed_order(maker)) is False
+
+    def test_uncancelled_order_cancellation_is_not_known(self, maker):
+        order = signed_order(maker)
+        market.store_order(order)
+        cancel = market.cancellation_for(order["order_id"], maker["pubkey"],
+                                         maker["keyfile"], maker["kek"])
+        assert market.already_known(cancel) is False
+
+    def test_applied_cancellation_is_known(self, maker):
+        order = signed_order(maker)
+        market.store_order(order)
+        cancel = market.cancellation_for(order["order_id"], maker["pubkey"],
+                                         maker["keyfile"], maker["kek"])
+        market.apply_cancellation(order["order_id"], maker["addr"])
+        assert market.already_known(cancel) is True
+
+    def test_forged_cancellation_for_an_uncancelled_order_is_not_known(self, maker):
+        """A fake cancellation naming a real order_id must still go through
+        full verification: 'known' can only mean this node itself already
+        applied it, never that the order_id merely exists."""
+        order = signed_order(maker)
+        market.store_order(order)
+        forged = {"cancel": order["order_id"], "pubkey": maker["pubkey"],
+                  "signature": "00" * 32}
+        assert market.already_known(forged) is False
+
+    def test_non_dict_is_not_known(self):
+        assert market.already_known("not an order") is False
+        assert market.already_known(None) is False
+
+
+class TestOrdersByMaker:
+    """The maker's own management view, distinct from open_orders (a
+    taker's view of what is available): it must still show an order that
+    is fully delivered, since the maker still wants to see it."""
+
+    def test_shows_only_this_makers_orders(self, maker, tmp_path):
+        market.store_order(signed_order(maker))
+        other_sk, other_pk = crypto.generate_keypair()
+        other_path = str(tmp_path / "other.key")
+        crypto.save_key(other_path, other_sk, other_pk, "pw")
+        other_kek = crypto.derive_kek(other_path, "pw")
+        _seed, other_xlm = xlm_mod.generate_keypair()
+        other = {"addr": crypto.public_key_to_address(other_pk),
+                 "pubkey": other_pk.hex(), "keyfile": other_path,
+                 "kek": other_kek, "xlm": other_xlm}
+        market.store_order(signed_order(other))
+
+        rows = market.orders_by_maker(maker["addr"], current_height=100)
+        assert [r.maker_lapse_addr for r in rows] == [maker["addr"]]
+
+    def test_cancelled_orders_are_excluded(self, maker):
+        order = signed_order(maker)
+        market.store_order(order)
+        market.apply_cancellation(order["order_id"], maker["addr"])
+        assert market.orders_by_maker(maker["addr"], current_height=100) == []
+
+    def test_expired_orders_are_excluded(self, maker):
+        market.store_order(signed_order(maker, expiry_block=200))
+        assert market.orders_by_maker(maker["addr"], current_height=300) == []
+
+    def test_fully_delivered_order_still_shows(self, maker):
+        """Unlike open_orders, which drops it once nothing remains."""
+        order = signed_order(maker, lapse_total=1 * LAPSE)
+        market.store_order(order)
+        Trade.create(
+            session_id="s1", order_id=order["order_id"], role="maker",
+            my_lapse_addr=maker["addr"], my_xlm_addr=maker["xlm"],
+            peer_lapse_addr="taker.addr", peer_xlm_addr="GTAKER",
+            i_send="lapse", lapse_total=1 * LAPSE, xlm_total=1 * XLM,
+            increment_count=1, confirm_depth=2,
+            status="completed", created_at=0, updated_at=0)
+        Increment.create(
+            id="s1:1", session_id="s1", n=1,
+            lapse_amount=1 * LAPSE, xlm_amount=1 * XLM, i_move_first=False,
+            out_state=LEG_SETTLED, in_state=LEG_SETTLED, created_at=0)
+
+        assert market.open_orders(current_height=100) == []
+        rows = market.orders_by_maker(maker["addr"], current_height=100)
+        assert len(rows) == 1
+        assert rows[0].order_id == order["order_id"]
 
 
 class TestDepth:

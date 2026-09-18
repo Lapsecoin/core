@@ -309,6 +309,7 @@ def register(app, node, csrf_token):
         return render_template("trades.html", title="Trades",
                                active=active, history=history[:50],
                                peers=peers, now=time.time(),
+                               worker=_worker_view(node),
                                alert_ok="", alert_err="")
 
 
@@ -511,13 +512,46 @@ def _trade_view(row, cap, peer_trust):
     }
 
 
+def _worker_view(node):
+    """What the swap worker is doing right now, for the Trades page.
+
+    Without this a trade that is not progressing looks identical whether
+    the wallet is locked, Horizon is unreachable, or the counterparty
+    genuinely stopped answering. Those need different reactions from the
+    user, so the state has to be visible rather than inferred from silence.
+    """
+    worker = getattr(node, "swap_worker", None)
+    if worker is None:
+        return {"state": "off", "message": "", "last_error": "", "passes": 0}
+
+    status = worker.status()
+    if not status["enabled"]:
+        return {"state": "off", "message": "", "last_error": "", "passes": 0}
+    if not status["running"]:
+        return {"state": "stopped",
+                "message": "The swap worker is not running. Restart this "
+                           "node to resume trading.",
+                "last_error": status["last_error"], "passes": status["passes"]}
+    if not status["unlocked"]:
+        return {"state": "locked",
+                "message": "Your wallet is locked, so no trade can send its "
+                           "next step. Unlock this node to keep them moving.",
+                "last_error": status["last_error"], "passes": status["passes"]}
+    now = time.time()
+    if status["paused_until"] > now:
+        wait = int(status["paused_until"] - now)
+        message = f"Stellar's network could not be reached; retrying in {wait}s."
+        if status["last_error"]:
+            message += f" ({status['last_error']})"
+        return {"state": "paused", "message": message,
+                "last_error": status["last_error"], "passes": status["passes"]}
+    return {"state": "ok", "message": "Running normally.",
+            "last_error": status["last_error"], "passes": status["passes"]}
+
+
 def _my_orders(node, height):
     rows = []
-    for row in (market_mod.Order.select()
-                .where(market_mod.Order.maker_lapse_addr == node.addr,
-                       market_mod.Order.cancelled == False,      # noqa: E712
-                       market_mod.Order.expiry_block > height)
-                .order_by(market_mod.Order.received_at.desc())):
+    for row in market_mod.orders_by_maker(node.addr, height):
         rows.append({
             "order_id": row.order_id,
             "direction": row.direction,
