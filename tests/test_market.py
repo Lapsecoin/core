@@ -133,6 +133,39 @@ class TestSigning:
             market.verify_order(order, current_height=100)
 
 
+class TestAdmissionRunsBeforeTheSignatureCheck:
+    """Dedup already runs first (node._handle_inbound_order, via
+    market.already_known), which is right; the expensive check should
+    come last. These bounds are the other half of that: a maker already
+    at capacity, or a book already at its ceiling, must be refused
+    before this node ever pays for a FALCON verification, not after."""
+
+    def test_a_maker_already_at_its_cap_is_refused_pre_signature(self, maker):
+        for i in range(market.MAX_ORDERS_PER_MAKER):
+            market.store_order(signed_order(maker, order_id=f"order-{i}"))
+        # A freshly, correctly signed order, from the same maker, who is
+        # simply out of room.
+        with pytest.raises(market.OrderRejected, match="limit"):
+            market.verify_order(signed_order(maker, order_id="one-more"),
+                                current_height=100)
+
+    def test_a_full_book_is_refused_pre_signature(self, maker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_ORDERS_TOTAL", 1)
+        market.store_order(signed_order(maker, order_id="order-0"))
+        with pytest.raises(market.OrderRejected, match="full"):
+            market.verify_order(signed_order(maker, order_id="order-1"),
+                                current_height=100)
+
+    def test_admission_does_not_let_a_forged_order_through(self, maker):
+        """Passing the cheap check changes nothing about the signature
+        requirement: refusing early can only reject work that would have
+        failed anyway, never admit something that would not have passed."""
+        order = signed_order(maker)
+        order["lapse_total"] = 999 * LAPSE   # breaks the signature
+        with pytest.raises(market.OrderRejected, match="signature"):
+            market.verify_order(order, current_height=100)
+
+
 class TestValidation:
     def test_missing_fields_refused(self, maker):
         order = signed_order(maker)
@@ -246,6 +279,19 @@ class TestStorage:
             market.store_order(signed_order(maker))
         with pytest.raises(market.OrderRejected, match="limit"):
             market.store_order(signed_order(maker))
+
+    def test_the_book_itself_has_a_ceiling(self, maker, monkeypatch):
+        """Independent of the per-maker cap: many addresses cost nothing
+        to mint, so the book needs its own bound too. store_order does
+        not itself check signatures, so distinct makers can be simulated
+        here just by varying the claimed address."""
+        monkeypatch.setattr(market, "MAX_ORDERS_TOTAL", 3)
+        for i in range(3):
+            order = signed_order(maker, order_id=f"order-{i}")
+            order["maker_lapse_addr"] = f"maker-{i}.addr"
+            market.store_order(order)
+        with pytest.raises(market.OrderRejected, match="full"):
+            market.store_order(signed_order(maker, order_id="one-too-many"))
 
     def test_expired_orders_are_excluded(self, maker):
         market.store_order(signed_order(maker, expiry_block=200))
@@ -552,6 +598,26 @@ class TestClaims:
             market.verify_claim("not a claim")
 
 
+class TestClaimAdmissionRunsBeforeTheSignatureCheck:
+    def test_a_taker_already_at_its_cap_is_refused_pre_signature(self, taker):
+        for i in range(market.MAX_CLAIMS_PER_TAKER):
+            market.store_claim(signed_claim(taker, session_id=f"s{i}" * 4))
+        with pytest.raises(market.ClaimRejected, match="limit"):
+            market.verify_claim(signed_claim(taker, session_id="overflow" * 2))
+
+    def test_a_full_claim_book_is_refused_pre_signature(self, taker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_CLAIMS_TOTAL", 1)
+        market.store_claim(signed_claim(taker, session_id="a" * 16))
+        with pytest.raises(market.ClaimRejected, match="full"):
+            market.verify_claim(signed_claim(taker, session_id="b" * 16))
+
+    def test_admission_does_not_let_a_forged_claim_through(self, taker):
+        claim = signed_claim(taker)
+        claim["lapse_total"] = 999 * LAPSE
+        with pytest.raises(market.ClaimRejected, match="signature"):
+            market.verify_claim(claim)
+
+
 class TestClaimStorage:
     def test_store_and_read_back(self, taker):
         claim = signed_claim(taker)
@@ -568,6 +634,13 @@ class TestClaimStorage:
             market.store_claim(signed_claim(taker, session_id=f"s{i}" * 4))
         with pytest.raises(market.ClaimRejected, match="limit"):
             market.store_claim(signed_claim(taker, session_id="overflow" * 2))
+
+    def test_the_claim_book_itself_has_a_ceiling(self, taker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_CLAIMS_TOTAL", 2)
+        market.store_claim(signed_claim(taker, session_id="a" * 16))
+        market.store_claim(signed_claim(taker, session_id="b" * 16))
+        with pytest.raises(market.ClaimRejected, match="full"):
+            market.store_claim(signed_claim(taker, session_id="c" * 16))
 
     def test_claims_for_order_scopes_by_order(self, taker):
         market.store_claim(signed_claim(taker, order_id="order-a", session_id="a" * 16))

@@ -55,6 +55,16 @@ SIGNED_FIELDS = (
 MAX_ORDERS_PER_MAKER = 20
 MAX_EXPIRY_HORIZON_BLOCKS = 100_000      # ~4.5 months at two minutes
 
+# The book's own ceiling, independent of any one maker. A maker is free:
+# generate a keypair, post twenty orders, generate another. The per-maker
+# cap alone bounds nothing against that, only how much any single address
+# can claim; this bounds the book itself regardless of how many addresses
+# an attacker is willing to mint. Generous relative to any real market
+# this feature is likely to see for a long time, so it costs nothing
+# against genuine usage and only ever fires against sustained abuse that
+# outpaces expiry and pruning.
+MAX_ORDERS_TOTAL = 50_000
+
 
 class OrderRejected(Exception):
     """An order that will not be stored or relayed, and why."""
@@ -170,8 +180,37 @@ def verify_order(order, current_height=None):
             # in every node's book indefinitely.
             raise OrderRejected("expiry is too far ahead")
 
+    # Last, and cheaper than the signature check that follows but not as
+    # cheap as everything above it: two database counts. Checked against
+    # the address the order merely claims to be from, which is safe even
+    # though nothing has proven that claim yet, since refusing early here
+    # can only reject work that would have been rejected anyway (a forged
+    # address still fails the signature check right after this), while a
+    # genuine maker already at its own limit is refused without this node
+    # ever paying for that check.
+    _check_admission(order["maker_lapse_addr"])
+
     _verify_signature(order)
     return True
+
+
+def _check_admission(maker_lapse_addr):
+    """Refuse before the expensive check rather than after it. Raises
+    OrderRejected. store_order enforces the per-maker limit again as the
+    actual gate before a write; this exists purely so a maker already at
+    capacity, or a book already at its own ceiling, costs this node a
+    database count instead of a FALCON verification."""
+    ensure_tables()
+    if Order.select().count() >= MAX_ORDERS_TOTAL:
+        raise OrderRejected(f"the order book is full (limit {MAX_ORDERS_TOTAL})")
+    live = (Order.select()
+            .where(Order.maker_lapse_addr == maker_lapse_addr,
+                   Order.cancelled == False)  # noqa: E712
+            .count())
+    if live >= MAX_ORDERS_PER_MAKER:
+        raise OrderRejected(
+            f"maker already has {live} live orders here "
+            f"(limit {MAX_ORDERS_PER_MAKER})")
 
 
 def _verify_signature(order):
@@ -243,6 +282,8 @@ def store_order(order):
     if existing is not None:
         return False
 
+    if Order.select().count() >= MAX_ORDERS_TOTAL:
+        raise OrderRejected(f"the order book is full (limit {MAX_ORDERS_TOTAL})")
     live = (Order.select()
             .where(Order.maker_lapse_addr == order["maker_lapse_addr"],
                    Order.cancelled == False)  # noqa: E712
@@ -499,6 +540,13 @@ CLAIM_SIGNED_FIELDS = (
 # that a valid signature implies good faith.
 MAX_CLAIMS_PER_TAKER = 20
 
+# The claim table's own ceiling, mirroring MAX_ORDERS_TOTAL for the same
+# reason: a per-address cap alone bounds nothing against an attacker
+# willing to mint addresses. Smaller than the order book's, since claims
+# are pruned within the hour (CLAIM_MAX_AGE_SECONDS) while orders can
+# live for months, so sustained abuse has far less time to accumulate.
+MAX_CLAIMS_TOTAL = 10_000
+
 # How long an unmatched claim is kept. The claim and the payment it
 # precedes propagate over two independent channels (gossip and a public
 # chain) at very different speeds, so this has to be generous relative to
@@ -584,8 +632,27 @@ def verify_claim(claim):
     if not xlm_mod.is_valid_address(claim["taker_xlm_addr"]):
         raise ClaimRejected("taker_xlm_addr is not a valid Stellar address")
 
+    # Last, and cheaper than the signature check that follows: see
+    # market._check_admission's reasoning, applied to claims instead of
+    # orders. store_claim enforces the per-taker limit again as the
+    # actual gate before a write.
+    _check_claim_admission(claim["taker_lapse_addr"])
+
     _verify_claim_signature(claim)
     return True
+
+
+def _check_claim_admission(taker_lapse_addr):
+    ensure_tables()
+    if Claim.select().count() >= MAX_CLAIMS_TOTAL:
+        raise ClaimRejected(f"the claim book is full (limit {MAX_CLAIMS_TOTAL})")
+    live = (Claim.select()
+            .where(Claim.taker_lapse_addr == taker_lapse_addr)
+            .count())
+    if live >= MAX_CLAIMS_PER_TAKER:
+        raise ClaimRejected(
+            f"taker already has {live} live claims here "
+            f"(limit {MAX_CLAIMS_PER_TAKER})")
 
 
 def _verify_claim_signature(claim):
@@ -613,6 +680,8 @@ def store_claim(claim):
     if Claim.get_or_none(Claim.session_id == claim["session_id"]) is not None:
         return False
 
+    if Claim.select().count() >= MAX_CLAIMS_TOTAL:
+        raise ClaimRejected(f"the claim book is full (limit {MAX_CLAIMS_TOTAL})")
     live = (Claim.select()
             .where(Claim.taker_lapse_addr == claim["taker_lapse_addr"])
             .count())
