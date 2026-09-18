@@ -101,6 +101,69 @@ DRAW_WINDOW_SECONDS = Setting(
          "height continues throughout.",
 )
 
+# How deep a LapseCoin payment must be buried before a swap treats it as
+# settled.
+#
+# The floor is two and the page will not accept less, which is not
+# caution but a property of this chain. A height keeps accepting a better
+# same-height block for the whole draw window above, so the tip changes
+# hands as a matter of routine (Node._reorg_to_sibling) and the node only
+# bothers recording a reorg at all once it replaced two blocks or more
+# (node.REORG_NOTABLE_DEPTH), because one is ordinary traffic. A payment
+# accepted at depth one can therefore be un-accepted by the chain working
+# exactly as designed, and in a swap that means reciprocating a payment
+# that no longer exists.
+#
+# Raising it costs time and nothing else: each step waits for this many
+# blocks, so the whole trade lengthens roughly in proportion. Worth doing
+# for a large trade, pointless for a small one, which is why it is a
+# setting rather than a constant.
+#
+# Snapshotted onto a trade when it starts, so changing this never moves
+# the goalposts on a trade already running.
+SWAP_CONFIRM_DEPTH = Setting(
+    "swap_confirm_depth", 2, int, minimum=2,
+    label="Swap confirmation depth (blocks)",
+    help="How many blocks must bury a LapseCoin payment before a swap "
+         "counts it as settled. Two is the minimum and the default: the "
+         "draw window means the newest block routinely changes hands, so "
+         "a single confirmation can be undone by the chain behaving "
+         "normally. Higher is safer and slower; each step waits this many "
+         "blocks.",
+)
+
+# The most this node will have outstanding in one step of a swap with a
+# counterparty it has no history with, in stroops (10,000,000 to the XLM).
+#
+# This is the number that decides how much a stranger can actually take
+# from you: a swap is delivered in steps and a step is only sent once the
+# previous one settled, so the worst case is exactly one step. Lowering it
+# makes that worst case smaller and the trade longer, since the same total
+# is delivered in more pieces.
+#
+# Trust raises this per counterparty and never removes it, and the trade
+# is refused outright rather than made riskier if it cannot be split
+# finely enough (see swap.plan).
+SWAP_STRANGER_CAP_STROOPS = Setting(
+    "swap_stranger_cap_stroops", 50_000_000, int, minimum=1_000,
+    label="Maximum exposure per step (stroops)",
+    help="The most that can be outstanding at any moment when trading "
+         "with someone you have no history with. 10,000,000 stroops is 1 "
+         "XLM. This is your worst case if a stranger takes a payment and "
+         "walks away. Lower is safer and splits a trade into more steps.",
+)
+
+# Whether this node runs swaps at all. Off by default: a node that only
+# wants to follow the chain should not be reaching out to Horizon or
+# holding a second wallet, and turning this on is a deliberate act.
+SWAP_ENABLED = Setting(
+    "swap_enabled", False, bool,
+    label="Enable peer-to-peer swaps",
+    help="Trade LAPSE for XLM directly with peers. Off by default. When "
+         "off this node still relays other people's orders but posts "
+         "none, holds no Stellar wallet and contacts no Stellar service.",
+)
+
 # Two settings used to live here alongside this one: a switch to advertise
 # a separate address instead of this node's own, and an env-only override
 # naming any address at all. Both existed because a node had to tell its
@@ -109,7 +172,8 @@ DRAW_WINDOW_SECONDS = Setting(
 # Node._handle_inbound_alive), so neither has anything left to do: there
 # is no advertised address to make private, and no second key to hold the
 # proceeds.
-ALL = [DRAW_WINDOW_SECONDS]
+ALL = [DRAW_WINDOW_SECONDS, SWAP_ENABLED, SWAP_CONFIRM_DEPTH,
+       SWAP_STRANGER_CAP_STROOPS]
 
 
 # How long a value read from storage is reused before going back to the

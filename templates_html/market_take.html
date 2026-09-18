@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+
+<h2>{{ "Buy" if taking_side == "buy" else "Sell" }} LAPSE</h2>
+
+<div class="card" style="margin-bottom:.6rem">
+  <div class="card-title">The offer</div>
+  <table class="kv-table">
+    <tr>
+      <td>{{ "Seller" if taking_side == "buy" else "Buyer" }}</td>
+      <td class="hash">{{ order.maker_lapse_addr }}</td>
+    </tr>
+    <tr><td>Price</td><td>{{ fmt_price(order.price_stroops_per_lapse) }} XLM per LAPSE</td></tr>
+    <tr><td>Available</td><td>{{ fmt_lapse_dp(remaining, 4) }}</td></tr>
+    {% if order.min_fill %}
+      <tr><td>Smallest fill</td><td>{{ fmt_lapse_dp(order.min_fill, 4) }}</td></tr>
+    {% endif %}
+    <tr>
+      <td>Track record</td>
+      <td>
+        {% if trust.known and trust.score > 0 %}
+          <span style="color:var(--gain)">
+            {{ trust.completed_count }} completed trade{{ '' if trust.completed_count == 1 else 's' }}
+          </span>
+          <div class="stat-sub">
+            Their address has been on the chain a while and holds a balance,
+            which is what makes that record worth something: a fresh address
+            with no funds counts for nothing here however long its history
+            claims to be.
+          </div>
+        {% elif trust.abandoned_count %}
+          <span style="color:var(--loss); font-weight:bold">
+            Took a payment and did not reciprocate
+          </span>
+          <div class="stat-sub">
+            This happened once and is not forgiven by later trades. You can
+            still deal with them, but the steps will be as small as this
+            node allows.
+          </div>
+        {% else %}
+          <span style="color:var(--ink-dim)">No history with this node</span>
+          <div class="stat-sub">
+            Normal for a new market. It only means the trade is delivered in
+            smaller pieces.
+          </div>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+</div>
+
+{% if too_large %}
+  <div class="card">
+    <div class="card-title">Too large to do safely right now</div>
+    <p style="font-size:.92rem">
+      Filling all of this would mean putting more at stake in a single step
+      than this node is willing to risk with this counterparty. The most it
+      will do with them at the moment is
+      <strong>{{ fmt_lapse_dp(max_safe_lapse, 4) }}</strong>.
+    </p>
+    <p style="font-size:.92rem; margin-top:.4rem">
+      You can take that much now, or raise the per-step limit in
+      <a href="/settings">Settings</a> if you have your own reason to.
+      Trading with them successfully also raises it on its own.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <div class="card-title">How much</div>
+  <form method="post" id="take-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <div class="form-row">
+      <label for="amount">Amount</label>
+      <input id="amount" type="text" name="amount_lapse" inputmode="decimal"
+             value="{{ default_fill }}" required autocomplete="off"
+             data-max="{{ max_fill_lapse }}"
+             data-price="{{ price_xlm }}">
+      <span>LAPSE</span>
+      <div class="stat-sub">At most {{ fmt_lapse_dp(max_fill_ticks, 4) }} here.</div>
+    </div>
+
+    <div class="form-row">
+      <label>{{ "You pay" if taking_side == "buy" else "You receive" }}</label>
+      <div class="stat-value" id="total-line">&mdash;</div>
+    </div>
+
+    <div class="form-row">
+      <label>Delivered in</label>
+      <div>
+        <span id="step-line">{{ planned_steps }} steps</span>
+        <div class="stat-sub">
+          The trade is split into pieces and each one only goes after the
+          last has confirmed, so at no point is more than
+          <strong id="risk-line">{{ fmt_xlm(step_cap_stroops) }} XLM</strong>
+          of yours outstanding. That is the most you can lose if they walk
+          away, whatever the total is.
+        </div>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Expect it to take</label>
+      <div>
+        about {{ fmt_duration(eta_seconds) }}
+        <div class="stat-sub">
+          Each step waits {{ confirm_depth }} LapseCoin blocks to confirm,
+          which is what a step costs. The Stellar side settles in about five
+          seconds and does not add to this.
+        </div>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label for="take_pass">Passphrase</label>
+      <input id="take_pass" type="password" name="passphrase" required>
+    </div>
+
+    <div style="padding-top:.5rem">
+      <button type="submit">Start trade</button>
+      <a href="/market" class="btn-sm" style="margin-left:.5rem">Back</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function () {
+  var amount = document.getElementById("amount");
+  var total  = document.getElementById("total-line");
+  if (!amount || !total) return;
+  var price = parseFloat(amount.dataset.price);
+
+  function recalc() {
+    var a = parseFloat(amount.value);
+    if (!isFinite(a) || a <= 0 || !isFinite(price)) {
+      total.textContent = "—";
+      return;
+    }
+    total.textContent = (a * price).toFixed(7) + " XLM";
+  }
+
+  amount.addEventListener("input", recalc);
+  recalc();
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+
+<h2>Trades</h2>
+
+{% if active %}
+  {% for t in active %}
+  <div class="card" style="margin-bottom:.7rem">
+    <div class="card-title">
+      {{ "Buying" if t.i_receive_lapse else "Selling" }}
+      {{ fmt_lapse_dp(t.lapse_total, 4) }}
+      for {{ fmt_xlm(t.xlm_total) }} XLM
+      <span style="float:right; font-weight:normal;
+                   color:{{ 'var(--loss)' if t.status == 'stalled' else 'var(--live)' }}">
+        {{ "Waiting" if t.status == 'stalled' else "In progress" }}
+      </span>
+    </div>
+
+    <div class="progress" title="{{ t.done_steps }} of {{ t.increment_count }} steps delivered">
+      <div class="progress-fill" style="width: {{ t.pct }}%"></div>
+    </div>
+    <p class="stat-sub" style="margin-top:.25rem">
+      {{ t.done_steps }} of {{ t.increment_count }} steps delivered
+      &middot; {{ fmt_lapse_dp(t.delivered_lapse, 4) }} so far
+    </p>
+
+    {% if t.status == 'stalled' %}
+      <p style="font-size:.9rem; margin-top:.4rem; color:var(--ink-dim)">
+        The other side has not moved for a while. Nothing is lost and
+        nothing is being blamed yet: a node restarting or a slow connection
+        looks exactly like this. The trade picks up by itself if they come
+        back.
+        {% if t.at_risk %}
+          Your exposure while you wait is {{ fmt_xlm(t.at_risk) }} XLM, which
+          is one step and the most this can cost you.
+        {% endif %}
+      </p>
+    {% endif %}
+
+    <table class="kv-table" style="font-size:.88rem; margin-top:.4rem">
+      <tr><td>Counterparty</td><td class="hash">{{ t.peer_lapse_addr }}</td></tr>
+      <tr><td>Started</td><td>{{ fmt_duration(now - t.created_at) }} ago</td></tr>
+      <tr><td>Most at risk</td><td>{{ fmt_xlm(t.step_cap) }} XLM (one step)</td></tr>
+    </table>
+
+    <details style="margin-top:.4rem">
+      <summary class="stat-sub" style="cursor:pointer">Step detail</summary>
+      <div class="table-wrap" style="margin-top:.3rem">
+        <table style="font-size:.82rem; min-width:420px">
+          <thead>
+            <tr><th>#</th><th>LAPSE</th><th>XLM</th><th>You send</th><th>They send</th></tr>
+          </thead>
+          <tbody>
+            {% for s in t.steps %}
+            <tr>
+              <td>{{ s.n }}{% if s.i_move_first %} <span class="stat-sub">(you first)</span>{% endif %}</td>
+              <td>{{ fmt_lapse_dp(s.lapse_amount, 4) }}</td>
+              <td>{{ fmt_xlm(s.xlm_amount) }}</td>
+              <td>{{ leg_label(s.out_state)|safe }}</td>
+              <td>{{ leg_label(s.in_state)|safe }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </div>
+  {% endfor %}
+{% else %}
+  <p style="color:var(--ink-dim); font-style:italic; margin-bottom:.7rem">
+    No trades running. Start one from the <a href="/market">Market</a>.
+  </p>
+{% endif %}
+
+<h2>History</h2>
+{% if history %}
+<div class="table-wrap">
+<table class="stacked">
+  <thead>
+    <tr><th>Side</th><th>Amount</th><th>Counterparty</th><th>Outcome</th><th>When</th></tr>
+  </thead>
+  <tbody>
+    {% for t in history %}
+    <tr>
+      <td data-label="Side">{{ "Bought" if t.i_receive_lapse else "Sold" }}</td>
+      <td data-label="Amount">{{ fmt_lapse_dp(t.delivered_lapse, 4) }}</td>
+      <td data-label="Counterparty">{{ short_addr(t.peer_lapse_addr) }}</td>
+      <td data-label="Outcome">
+        {% if t.status == 'completed' %}
+          <span style="color:var(--gain)">Completed</span>
+        {% elif t.status == 'abandoned' %}
+          <span style="color:var(--loss)">They walked away</span>
+          <div class="stat-sub">after step {{ t.done_steps }}</div>
+        {% else %}
+          {{ t.status }}
+        {% endif %}
+      </td>
+      <td data-label="When">{{ fmt_duration(now - t.updated_at) }} ago</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+  <p style="color:var(--ink-dim); font-style:italic">Nothing yet.</p>
+{% endif %}
+
+<h2>People you have traded with</h2>
+{% if peers %}
+<div class="table-wrap">
+<table class="stacked" style="font-size:.9rem">
+  <thead>
+    <tr><th>Address</th><th>Standing</th><th>Completed</th><th>Volume</th><th>Walked away</th></tr>
+  </thead>
+  <tbody>
+    {% for p in peers %}
+    <tr>
+      <td data-label="Address">{{ short_addr(p.addr) }}</td>
+      <td data-label="Standing">
+        {% if p.abandoned_count %}
+          <span style="color:var(--loss); font-weight:bold">None</span>
+        {% elif p.score > 0 %}
+          <span style="color:var(--gain); font-weight:bold">{{ "%.1f"|format(p.score) }}</span>
+        {% else %}
+          <span style="color:var(--ink-dim)">&mdash;</span>
+        {% endif %}
+      </td>
+      <td data-label="Completed">{{ p.completed_count }}</td>
+      <td data-label="Volume">{{ fmt_lapse_dp(p.completed_lapse, 2) }}</td>
+      <td data-label="Walked away">{{ p.abandoned_count or "no" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="stat-sub" style="margin-top:.4rem">
+  Standing decides only how large a single step may be with someone, never
+  whether a trade is safe. A stranger can still trade here; the pieces are
+  just smaller. A score of zero next to a real record means the address is
+  too new or holds too little for that record to count, which is what stops
+  a reputation being rebuilt for free on a throwaway address.
+</p>
+{% else %}
+  <p style="color:var(--ink-dim); font-style:italic">Nobody yet.</p>
+{% endif %}
+
+<style>
+  .progress { background: var(--paper-2); border: 1px solid var(--rule-lt);
+              height: 10px; overflow: hidden; }
+  .progress-fill { background: var(--gain); height: 100%; }
+  .leg-done { color: var(--gain); }
+  .leg-wait { color: var(--live); }
+  .leg-idle { color: var(--rule-lt); }
+</style>
+
+{% endblock %}

@@ -671,6 +671,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "peers": "peers", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
             "settings": "settings",
+            "market": "market", "market_take": "market", "trades": "trades",
         }.get(endpoint)
         return {"is_private": is_private,
                 "private_port": private_port,
@@ -1317,6 +1318,11 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                     ctx["outputs_value"] = ""
                     ctx["memo_value"] = ""
         return render_template("send.html", **ctx)
+
+    # Market and Trades live in their own module: this file is already long
+    # and a node with swaps off never reaches any of it.
+    import market_routes
+    market_routes.register(app, node, csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+
+{% if not swap_enabled %}
+  <div class="card">
+    <div class="card-title">Swaps are off</div>
+    <p style="font-size:.92rem">
+      Trading LAPSE for XLM directly with peers is disabled on this node.
+      Turn it on in <a href="/settings">Settings</a>. While it is off this
+      node still relays other people's orders, but posts none and contacts
+      no Stellar service.
+    </p>
+  </div>
+{% else %}
+
+{# ---------------------------------------------------------------- price #}
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Best price to buy</div>
+    <div class="stat-value">
+      {% if best.best_sell %}{{ fmt_price(best.best_sell) }}{% else %}&mdash;{% endif %}
+    </div>
+    <div class="stat-sub">
+      {% if best.best_sell %}XLM per LAPSE{% else %}nobody is selling{% endif %}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Best price to sell</div>
+    <div class="stat-value">
+      {% if best.best_buy %}{{ fmt_price(best.best_buy) }}{% else %}&mdash;{% endif %}
+    </div>
+    <div class="stat-sub">
+      {% if best.best_buy %}XLM per LAPSE{% else %}nobody is buying{% endif %}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Available to buy</div>
+    <div class="stat-value">{{ fmt_lapse_dp(best.sell_depth, 2) }}</div>
+    <div class="stat-sub">across {{ depth.sells|length }} order{{ '' if depth.sells|length == 1 else 's' }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Wanted</div>
+    <div class="stat-value">{{ fmt_lapse_dp(best.buy_depth, 2) }}</div>
+    <div class="stat-sub">across {{ depth.buys|length }} order{{ '' if depth.buys|length == 1 else 's' }}</div>
+  </div>
+</div>
+
+{% if xlm_usd %}
+  <p class="stat-sub" style="margin:-.25rem 0 .6rem">
+    XLM is about ${{ "%.4f"|format(xlm_usd) }} right now, so
+    {% if best.best_sell %}
+      buying 1 LAPSE costs roughly ${{ "%.4f"|format(best.best_sell / 10000000 * xlm_usd) }}.
+    {% else %}
+      a LAPSE price cannot be shown until someone posts an order.
+    {% endif %}
+    That figure comes from a public price feed and is for orientation only;
+    it never affects a trade.
+  </p>
+{% endif %}
+
+{# ------------------------------------------------------------ your wallet #}
+<div class="card" style="margin-bottom:.6rem">
+  <div class="card-title">Your trading wallet</div>
+  {% if not xlm_addr %}
+    <p style="font-size:.92rem; margin-bottom:.5rem">
+      Trading needs a Stellar address to receive XLM at. Generating one is
+      free and happens entirely on this machine; the key is encrypted with
+      your passphrase and never leaves it.
+    </p>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="create_xlm_wallet">
+      <div class="form-row">
+        <label for="wallet_pass">Passphrase</label>
+        <input id="wallet_pass" type="password" name="passphrase" required>
+      </div>
+      <div style="padding-top:.5rem">
+        <button type="submit">Create Stellar address</button>
+      </div>
+    </form>
+  {% else %}
+    <table class="kv-table">
+      <tr><td>LAPSE</td><td class="hash">{{ lapse_addr }}</td></tr>
+      <tr><td>Balance</td><td>{{ fmt_lapse_dp(lapse_balance) }}</td></tr>
+      <tr><td>Stellar</td><td class="hash">{{ xlm_addr }}</td></tr>
+      <tr>
+        <td>XLM available</td>
+        <td>
+          {% if xlm_account_exists %}
+            {{ fmt_xlm(xlm_spendable) }} XLM
+            {% if xlm_locked %}
+              <span class="stat-sub">({{ fmt_xlm(xlm_locked) }} held as the account reserve, not spendable)</span>
+            {% endif %}
+          {% else %}
+            <span style="color:var(--ink-dim)">
+              Not funded yet. You can still sell LAPSE: the buyer's first
+              payment creates the account for you and you pay nothing.
+            </span>
+          {% endif %}
+        </td>
+      </tr>
+    </table>
+  {% endif %}
+</div>
+
+{% if xlm_addr %}
+{# ------------------------------------------------------------- buy / sell #}
+<h2>Buy and sell</h2>
+<div class="card">
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab is-active" data-side="buy" role="tab">Buy LAPSE</button>
+    <button type="button" class="tab" data-side="sell" role="tab">Sell LAPSE</button>
+  </div>
+
+  <form method="post" id="order-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="place_order">
+    <input type="hidden" name="direction" id="direction" value="buy">
+
+    <div class="form-row">
+      <label for="amount">Amount</label>
+      <input id="amount" type="text" name="amount_lapse" inputmode="decimal"
+             placeholder="0.00" required autocomplete="off">
+      <span>LAPSE</span>
+    </div>
+
+    <div class="form-row">
+      <label for="price">Price</label>
+      <input id="price" type="text" name="price_xlm" inputmode="decimal"
+             placeholder="0.0000000" required autocomplete="off"
+             value="{{ suggested_price }}">
+      <span>XLM each</span>
+      <div class="stat-sub">
+        {% if best.best_sell or best.best_buy %}
+          Prefilled with the best price on the book. Change it to whatever
+          you are willing to trade at.
+        {% else %}
+          The book is empty, so there is no reference price yet. Whatever
+          you pick here is the first quote anyone sees.
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Total</label>
+      <div class="stat-value" id="total-line">&mdash;</div>
+    </div>
+
+    <details style="margin:.4rem 0">
+      <summary class="stat-sub" style="cursor:pointer">More options</summary>
+      <div class="form-row">
+        <label for="min_fill">Smallest fill</label>
+        <input id="min_fill" type="text" name="min_fill_lapse" inputmode="decimal"
+               placeholder="0" autocomplete="off">
+        <span>LAPSE</span>
+        <div class="stat-sub">Refuse anyone wanting to take less than this. Leave blank for no minimum.</div>
+      </div>
+      <div class="form-row">
+        <label for="expiry_hours">Expires in</label>
+        <input id="expiry_hours" type="number" name="expiry_hours" min="1"
+               max="720" value="168">
+        <span>hours</span>
+        <div class="stat-sub">
+          The order disappears by itself after this. It exists to be filled
+          and then be gone, not to sit advertised.
+        </div>
+      </div>
+    </details>
+
+    <div class="form-row">
+      <label for="order_pass">Passphrase</label>
+      <input id="order_pass" type="password" name="passphrase" required>
+    </div>
+
+    <div style="padding-top:.5rem">
+      <button type="submit" id="submit-btn">Place buy order</button>
+    </div>
+  </form>
+</div>
+
+{# --------------------------------------------------------- your own orders #}
+{% if my_orders %}
+<h2>Your open orders</h2>
+<div class="table-wrap">
+<table class="stacked">
+  <thead>
+    <tr><th>Side</th><th>Amount</th><th>Left</th><th>Price</th><th>Expires</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for o in my_orders %}
+    <tr>
+      <td data-label="Side">
+        <span style="font-weight:bold; color:{{ 'var(--gain)' if o.direction == 'buy' else 'var(--loss)' }}">
+          {{ 'Buying' if o.direction == 'buy' else 'Selling' }}
+        </span>
+      </td>
+      <td data-label="Amount">{{ fmt_lapse_dp(o.lapse_total, 2) }}</td>
+      <td data-label="Left">{{ fmt_lapse_dp(o.remaining, 2) }}</td>
+      <td data-label="Price">{{ fmt_price(o.price_stroops_per_lapse) }} XLM</td>
+      <td data-label="Expires">
+        {% if o.blocks_left > 0 %}~{{ fmt_duration(o.blocks_left * 120) }}{% else %}expired{% endif %}
+      </td>
+      <td data-label="">
+        <form method="post" style="display:inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="action" value="cancel_order">
+          <input type="hidden" name="order_id" value="{{ o.order_id }}">
+          <input type="password" name="passphrase" placeholder="passphrase"
+                 required style="width:11rem; display:inline-block; margin-right:.3rem">
+          <button type="submit" class="btn-sm">Cancel</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endif %}
+
+{# ------------------------------------------------------------ the book #}
+<h2>Order book</h2>
+{% if not depth.sells and not depth.buys %}
+  <p style="color:var(--ink-dim); font-style:italic">
+    Nobody has posted an order yet. On a new coin that is the normal
+    starting point rather than a fault: the first order posted is also the
+    first price this market has ever had.
+  </p>
+{% else %}
+<div class="book">
+  <div class="book-side">
+    <h3>On sale</h3>
+    {% if depth.sells %}
+    <div class="table-wrap">
+    <table class="stacked">
+      <thead><tr><th>Price</th><th>Available</th><th>Seller</th><th></th></tr></thead>
+      <tbody>
+        {% for e in depth.sells %}
+        <tr>
+          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
+          <td data-label="Available">{{ fmt_lapse_dp(e.remaining, 2) }}</td>
+          <td data-label="Seller">{{ short_addr(e.maker) }}{{ trust_badge(e.maker)|safe }}</td>
+          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Buy</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      <p class="stat-sub" style="font-style:italic">Nobody is selling.</p>
+    {% endif %}
+  </div>
+
+  <div class="book-side">
+    <h3>Wanted</h3>
+    {% if depth.buys %}
+    <div class="table-wrap">
+    <table class="stacked">
+      <thead><tr><th>Price</th><th>Wanted</th><th>Buyer</th><th></th></tr></thead>
+      <tbody>
+        {% for e in depth.buys %}
+        <tr>
+          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
+          <td data-label="Wanted">{{ fmt_lapse_dp(e.remaining, 2) }}</td>
+          <td data-label="Buyer">{{ short_addr(e.maker) }}{{ trust_badge(e.maker)|safe }}</td>
+          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Sell</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      <p class="stat-sub" style="font-style:italic">Nobody is buying.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<style>
+  .tabs { display: flex; gap: .4rem; margin-bottom: .5rem;
+          border-bottom: 1px solid var(--rule-lt); }
+  .tab { background: var(--paper); color: var(--ink-dim);
+         border: 1px solid var(--rule-lt); border-bottom: none;
+         padding: .3rem 1rem; font-size: .85rem; cursor: pointer; }
+  .tab.is-active { color: var(--ink); font-weight: bold;
+                   border-color: var(--rule); background: var(--paper-2); }
+  .book { display: flex; flex-wrap: wrap; gap: 1.2rem; }
+  .book-side { flex: 1 1 320px; min-width: 0; }
+  .trust-badge { font-size: .72rem; margin-left: .25rem; }
+</style>
+
+<script>
+(function () {
+  var PRICE_DP = 7, STROOPS = 10000000;
+  var amount = document.getElementById("amount");
+  var price  = document.getElementById("price");
+  var total  = document.getElementById("total-line");
+  var dirIn  = document.getElementById("direction");
+  var btn    = document.getElementById("submit-btn");
+  if (!amount || !price || !total) return;
+
+  function recalc() {
+    var a = parseFloat(amount.value), p = parseFloat(price.value);
+    if (!isFinite(a) || !isFinite(p) || a <= 0 || p <= 0) {
+      total.textContent = "—";
+      return;
+    }
+    var xlm = a * p;
+    var verb = dirIn.value === "buy" ? "You pay" : "You receive";
+    total.textContent = verb + " " + xlm.toFixed(PRICE_DP) + " XLM";
+  }
+
+  [amount, price].forEach(function (el) {
+    el.addEventListener("input", recalc);
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll(".tab"), function (tab) {
+    tab.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".tab"), function (t) {
+        t.classList.remove("is-active");
+      });
+      tab.classList.add("is-active");
+      dirIn.value = tab.dataset.side;
+      btn.textContent = tab.dataset.side === "buy"
+        ? "Place buy order" : "Place sell order";
+      recalc();
+    });
+  });
+
+  recalc();
+})();
+</script>
+
+{% endif %}
+{% endblock %}
