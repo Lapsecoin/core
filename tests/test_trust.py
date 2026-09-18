@@ -180,6 +180,149 @@ class TestRecords:
         assert scores["peer"] > 0.0
 
 
+class FakeStorage:
+    def __init__(self, heights_by_addr=None):
+        self.heights_by_addr = heights_by_addr or {}
+
+    def get_tx_heights_for_addr(self, addr):
+        return self.heights_by_addr.get(addr, [])
+
+
+class FakeState:
+    def __init__(self, balances=None):
+        self.balances = balances or {}
+
+    def get_balance(self, addr):
+        return self.balances.get(addr, 0)
+
+
+class FakeView:
+    def __init__(self, height, balances=None):
+        self.chain = [{"height": height}]
+        self.state = FakeState(balances)
+
+
+class FakeNode:
+    """Just enough of a running node for the chain-facts helpers below:
+    a tip height, a balance table, and an address-history index."""
+
+    def __init__(self, addr, height=0, heights_by_addr=None, balances=None):
+        self.addr = addr
+        self.storage = FakeStorage(heights_by_addr)
+        self.view = FakeView(height, balances)
+
+
+class TestAddressAgeBlocks:
+    def test_never_seen_address_is_age_zero(self):
+        node = FakeNode("me", height=1000)
+        assert trust.address_age_blocks(node, "stranger") == 0
+
+    def test_age_is_blocks_since_first_seen(self):
+        node = FakeNode("me", height=1000,
+                        heights_by_addr={"peer": [(400, "h1"), (600, "h2")]})
+        assert trust.address_age_blocks(node, "peer") == 600
+
+    def test_age_is_never_negative(self):
+        """A height read mid-reorg must not report negative age."""
+        node = FakeNode("me", height=100, heights_by_addr={"peer": [(500, "h")]})
+        assert trust.address_age_blocks(node, "peer") == 0
+
+
+class TestStakeLookupFor:
+    def test_returns_age_and_balance(self):
+        node = FakeNode("me", height=1000,
+                        heights_by_addr={"peer": [(200, "h")]},
+                        balances={"peer": 5 * LAPSE})
+        lookup = trust.stake_lookup_for(node)
+        assert lookup("peer") == (800, 5 * LAPSE)
+
+
+class TestMutualScores:
+    """Feeds swap.opening_mover, so both halves have to be derivable from
+    data neither side can lie about: shared settlement history and public
+    stake, never anything the counterparty merely claims about itself."""
+
+    def test_strangers_score_zero_both_ways(self):
+        node = FakeNode("me", height=AGED, balances={"peer": FUNDED})
+        mine, theirs = trust.mutual_scores(node, "peer")
+        assert mine == 0.0
+        assert theirs == 0.0
+
+    def test_shared_history_is_weighted_by_each_sides_own_stake(self):
+        """The completed-trade component is the same shared fact either
+        way; only whose stake it is multiplied by differs."""
+        trust.record_completed("peer", 50 * LAPSE)
+        node = FakeNode(
+            "me", height=AGED,
+            heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
+            balances={"peer": FUNDED, "me": FUNDED // 4})
+        mine, theirs = trust.mutual_scores(node, "peer")
+        # Same history component, different stake multiplier, so the two
+        # scores move together but are not required to be equal.
+        assert mine > 0.0
+        assert theirs > 0.0
+        assert mine != theirs
+
+    def test_richer_peer_scores_higher_from_my_side(self):
+        trust.record_completed("peer", 50 * LAPSE)
+        node = FakeNode(
+            "me", height=AGED,
+            heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
+            balances={"peer": FUNDED, "me": FUNDED})
+        mine, _theirs = trust.mutual_scores(node, "peer")
+
+        node_poor_peer = FakeNode(
+            "me", height=AGED,
+            heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
+            balances={"peer": FUNDED // 100, "me": FUNDED})
+        mine_poor, _ = trust.mutual_scores(node_poor_peer, "peer")
+        assert mine > mine_poor
+
+    def test_a_recorded_abandonment_zeroes_both_sides(self):
+        """This node's own record of the peer having abandoned it is the
+        only signal either side of the pair can act on; there is no
+        channel carrying the reverse (see the docstring on mutual_scores),
+        so it is applied to both rather than only to my_trust_of_peer."""
+        trust.record_completed("peer", 50 * LAPSE)
+        trust.record_abandonment("peer")
+        node = FakeNode(
+            "me", height=AGED,
+            heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
+            balances={"peer": FUNDED, "me": FUNDED})
+        mine, theirs = trust.mutual_scores(node, "peer")
+        assert mine == 0.0
+        assert theirs == 0.0
+
+    def test_feeds_opening_mover_consistently_from_both_perspectives(self):
+        """The taker and the maker each call this from their own node
+        about the other, and must land on complementary answers without
+        exchanging anything: swap it, the caller becomes the peer.
+
+        Both nodes' PeerRecord tables get the same completed-trade count
+        under the other's address, which is the property that makes this
+        work at all: a jointly-completed trade produces exactly that on
+        both sides, since each side only records it once its own inbound
+        leg actually settled (see swap_engine._complete).
+        """
+        import swap
+        trust.record_completed("peer", 50 * LAPSE)    # taker's record of maker
+        trust.record_completed("taker", 50 * LAPSE)   # maker's record of taker
+        taker_node = FakeNode(
+            "taker", height=AGED,
+            heights_by_addr={"peer": [(0, "h")], "taker": [(0, "h")]},
+            balances={"peer": FUNDED, "taker": FUNDED // 10})
+        taker_i_open = swap.opening_mover(*trust.mutual_scores(taker_node, "peer"))
+
+        maker_node = FakeNode(
+            "peer", height=AGED,
+            heights_by_addr={"taker": [(0, "h")], "peer": [(0, "h")]},
+            balances={"taker": FUNDED // 10, "peer": FUNDED})
+        maker_i_open = swap.opening_mover(*trust.mutual_scores(maker_node, "taker"))
+
+        assert taker_i_open is True    # taker is the poorer, less established side
+        assert maker_i_open is False   # and the maker correctly agrees it is not maker
+
+
 class TestNegativeAndOddInputs:
     def test_negative_volume_does_not_create_standing(self):
         now = time.time()

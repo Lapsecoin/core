@@ -503,6 +503,50 @@ def test_a_peer_below_the_protocol_floor_is_not_ponged():
     assert udp._send_one.call_count == 1
 
 
+def test_claim_dispatch_forwards_the_stem_flag():
+    on_claim = MagicMock()
+    udp = _make_transport(MagicMock())
+    udp._on_claim = on_claim
+    claim = {"session_id": "s" * 16}
+    udp._dispatch(peer_udp.MT_CLAIM, 501, {"claim": claim, "stemming": True},
+                 ("1.2.3.4", 5000))
+    on_claim.assert_called_once_with(claim, "1.2.3.4:5000", True)
+
+
+def test_claim_dispatch_dedups_by_msg_id():
+    on_claim = MagicMock()
+    udp = _make_transport(MagicMock())
+    udp._on_claim = on_claim
+    msg = {"claim": {"session_id": "s" * 16}, "stemming": False}
+    udp._dispatch(peer_udp.MT_CLAIM, 502, msg, ("1.2.3.4", 5000))
+    udp._dispatch(peer_udp.MT_CLAIM, 502, msg, ("1.2.3.4", 5000))
+    assert on_claim.call_count == 1
+
+
+def test_claim_dropped_when_no_callback_is_set():
+    """A node that never trades leaves _on_claim unset; the message must
+    be dropped quietly rather than raising on a None call."""
+    udp = _make_transport(MagicMock())
+    assert udp._on_claim is None
+    udp._dispatch(peer_udp.MT_CLAIM, 503, {"claim": {"session_id": "s" * 16}},
+                 ("1.2.3.4", 5000))  # must not raise
+
+
+def test_a_claim_on_the_wire_is_compressed_like_an_order():
+    import zlib
+    udp = _make_transport(MagicMock())
+    udp._on_claim = MagicMock()
+    claim = {"session_id": "s" * 16, "order_id": "o"}
+    payload = peer_udp._encode({"genesis": udp.genesis_hash, "claim": claim,
+                                "stemming": False})
+
+    udp._handle_datagram(
+        peer_udp._pack(peer_udp.MT_CLAIM, 4243, 0, 1, zlib.compress(payload)),
+        ("5.6.7.8", 9999))
+
+    udp._on_claim.assert_called_once_with(claim, "5.6.7.8:9999", False)
+
+
 def test_our_own_ping_advertises_the_protocol():
     assert peer_udp._protocol_ok({"proto": peer_udp.PROTOCOL_VERSION})
     assert not peer_udp._protocol_ok({})

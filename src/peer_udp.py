@@ -114,6 +114,14 @@ MT_BLOCK     = 0x0D
 # trades is unaffected by any of this.
 MT_ORDER     = 0x0F
 
+# A taker's signed claim on a fill: which addresses to pay, and how much,
+# for a session the maker cannot otherwise learn about (see market.py's
+# claim section). Same shape and same reasoning as MT_ORDER: carries no
+# funds, relayed unconditionally like a liveness note so the peer handing
+# it to you is not necessarily its author, and falls through _dispatch on
+# an older node with no protocol floor bump needed.
+MT_CLAIM     = 0x10
+
 # Level 1 rather than 6: on the wire this competes with pacing, not disk.
 # It reaches within about a point of the ratio at a third of the CPU, and
 # every hop pays the decompress, so the cheaper end is the right one here.
@@ -730,6 +738,7 @@ class UDPTransport:
         self._routable_pending: set = set()
         self._routable_lock = threading.Lock()
         self._on_order      = None  # set by main; swap orders from the network
+        self._on_claim      = None  # set by main; fill claims from the network
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -916,6 +925,13 @@ class UDPTransport:
         IP that posted it.
         """
         self._broadcast(MT_ORDER, {"order": order}, peers, stemming, "order")
+
+    def send_claim(self, claim: dict, peers=None, stemming: bool = False):
+        """Put a signed fill claim on the wire. Same propagation as an
+        order, for the same reason: signed by the taker, so relaying
+        cannot forge one, and travelling through relays keeps the
+        taker's trading address unlinked from the IP that posted it."""
+        self._broadcast(MT_CLAIM, {"claim": claim}, peers, stemming, "claim")
 
     def send_peers(self, addr: str, peers: list[str]):
         """Send peer list to addr."""
@@ -1171,7 +1187,7 @@ class UDPTransport:
         if complete is None:
             return
 
-        if msg_type in (MT_BLOCK, MT_TX, MT_ORDER):
+        if msg_type in (MT_BLOCK, MT_TX, MT_ORDER, MT_CLAIM):
             complete = _inflate(complete)
             if complete is None:
                 return
@@ -1285,6 +1301,18 @@ class UDPTransport:
                 # every node forwards. See Node._handle_inbound_order.
                 if isinstance(order, dict) and self._on_order:
                     self._on_order(order, sender_addr,
+                                   bool(data.get("stemming", False)))
+
+        elif msg_type == MT_CLAIM:
+            if self._is_new(msg_id):
+                self._pool.touch(sender_addr)
+                claim = data.get("claim")
+                # Same reasoning as MT_ORDER: handed up unverified, and
+                # relaying before the signature check would let anyone
+                # flood the network with junk every node forwards. See
+                # Node._handle_inbound_claim.
+                if isinstance(claim, dict) and self._on_claim:
+                    self._on_claim(claim, sender_addr,
                                    bool(data.get("stemming", False)))
 
         elif msg_type == MT_GETSYNC:
@@ -1579,6 +1607,14 @@ class UDPTransport:
         orders are dropped at _dispatch and cost nothing.
         """
         self._on_order = fn
+
+    def set_claim_callback(self, fn):
+        """fn(claim, sender_addr, stemming). Set by main after Node init.
+
+        Left unset on a node that does not trade, in which case inbound
+        claims are dropped at _dispatch and cost nothing.
+        """
+        self._on_claim = fn
 
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""

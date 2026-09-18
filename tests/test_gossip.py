@@ -237,7 +237,7 @@ def _build_network(adj):
     should be able to confuse one kind's traffic for another's.
     """
     outboxes = {gossip_mod.KIND_TX: [], gossip_mod.KIND_BLOCK: [],
-                gossip_mod.KIND_ORDER: []}
+                gossip_mod.KIND_ORDER: [], gossip_mod.KIND_CLAIM: []}
     nodes = {}
 
     def udp_for(me):
@@ -251,6 +251,9 @@ def _build_network(adj):
             def send_order(self, item, peers, stemming):
                 for p in peers:
                     outboxes[gossip_mod.KIND_ORDER].append((p, me, item, stemming))
+            def send_claim(self, item, peers, stemming):
+                for p in peers:
+                    outboxes[gossip_mod.KIND_CLAIM].append((p, me, item, stemming))
         return U()
 
     class Pool:
@@ -580,3 +583,36 @@ class TestOrderFloodDoesNotDegradeConsensusDelivery:
         _drain(nodes, outboxes[gossip_mod.KIND_TX], gossip_mod.KIND_TX,
               "atx", held)
         assert held == set(adj)
+
+    def test_claim_flood_does_not_degrade_order_or_block_delivery(self, monkeypatch):
+        """Claims are a fourth kind sharing the same infrastructure as
+        orders (see market.py's claim section); they need the identical
+        proof orders got, against both a legitimate order and a block."""
+        n = 8
+        adj = _mesh(n, extra_edges_per_node=2, seed=13)
+        nodes, outboxes = _build_network(adj)
+
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
+        flood_count = gossip_mod.CLAIM_SEEN_CACHE_SIZE + 500
+        for k in range(flood_count):
+            h = f"claim-{k}"
+            nodes[0].spread({"c": h}, gossip_mod.KIND_CLAIM, h)
+            _drain(nodes, outboxes[gossip_mod.KIND_CLAIM],
+                  gossip_mod.KIND_CLAIM, h, held={0})
+
+        for node in nodes.values():
+            assert len(node._seen[gossip_mod.KIND_CLAIM]) == \
+                gossip_mod.CLAIM_SEEN_CACHE_SIZE
+
+        monkeypatch.undo()
+        order_held = {1}
+        nodes[1].spread({"o": "an-order"}, gossip_mod.KIND_ORDER, "an-order")
+        _drain(nodes, outboxes[gossip_mod.KIND_ORDER], gossip_mod.KIND_ORDER,
+              "an-order", order_held)
+        assert order_held == set(adj)
+
+        block_held = {6}
+        nodes[6].spread({"h": "a-block"}, gossip_mod.KIND_BLOCK, "a-block")
+        _drain(nodes, outboxes[gossip_mod.KIND_BLOCK], gossip_mod.KIND_BLOCK,
+              "a-block", block_held)
+        assert block_held == set(adj)

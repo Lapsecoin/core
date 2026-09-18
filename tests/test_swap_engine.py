@@ -180,6 +180,130 @@ def settle_peer_leg(trade, inc, engine):
     adapter.deliver(from_addr, to_addr, memo, amount)
 
 
+class FakeMempool:
+    def __init__(self, txs=None):
+        self._txs = txs or []
+
+    def all_txs(self):
+        return list(self._txs)
+
+
+class FakeAddrStorage:
+    def __init__(self, heights_by_addr=None):
+        self.heights_by_addr = heights_by_addr or {}
+
+    def get_tx_heights_for_addr(self, addr):
+        return self.heights_by_addr.get(addr, [])
+
+
+class FakeView:
+    def __init__(self, chain):
+        self.chain = chain
+
+
+class FakeLapseNode:
+    """Just enough of a real Node for LapseAdapter.recent_incoming: a
+    mempool, a chain, and the address index that backs storage lookups.
+    """
+
+    def __init__(self, mempool_txs=None, chain=None, heights_by_addr=None):
+        self.mempool = FakeMempool(mempool_txs)
+        self.view = FakeView(chain if chain is not None else
+                             [{"height": 0, "transactions": []}])
+        self.storage = FakeAddrStorage(heights_by_addr)
+
+
+def _tx(from_addr, outputs, memo=None, nonce=1):
+    t = {"from": from_addr, "outputs": outputs, "nonce": nonce}
+    if memo is not None:
+        t["memo"] = memo
+    return t
+
+
+class TestLapseAdapterRecentIncoming:
+    """The maker's discovery raw material on the LapseCoin side: every
+    inbound payment, not a search for one already-expected memo."""
+
+    def test_finds_a_pending_mempool_payment(self):
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}],
+               memo="a1b2c3d4:e5f6a1b2:1")
+        node = FakeLapseNode(mempool_txs=[t])
+        adapter = swap_engine.LapseAdapter(node)
+        rows = adapter.recent_incoming("me.lapse")
+        assert rows == [("peer.lapse", "a1b2c3d4:e5f6a1b2:1", 5 * LAPSE,
+                         tx_mod.tx_hash(t), 0)]
+
+    def test_finds_a_confirmed_chain_payment_with_its_depth(self):
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}],
+               memo="tag")
+        h = tx_mod.tx_hash(t)
+        chain = [{"height": 0, "transactions": []},
+                 {"height": 1, "transactions": [t]},
+                 {"height": 2, "transactions": []}]
+        node = FakeLapseNode(chain=chain, heights_by_addr={"me.lapse": [(1, h)]})
+        adapter = swap_engine.LapseAdapter(node)
+        rows = adapter.recent_incoming("me.lapse")
+        assert rows == [("peer.lapse", "tag", 5 * LAPSE, h, 2)]
+
+    def test_outgoing_payment_is_not_incoming(self):
+        t = _tx("me.lapse", [{"to": "someone.else", "amount": 5 * LAPSE}])
+        node = FakeLapseNode(mempool_txs=[t])
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.recent_incoming("me.lapse") == []
+
+    def test_self_payment_is_excluded(self):
+        """Whatever it means, it is never a counterparty's step."""
+        t = _tx("me.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}])
+        node = FakeLapseNode(mempool_txs=[t])
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.recent_incoming("me.lapse") == []
+
+    def test_missing_memo_reports_none_not_a_crash(self):
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}])
+        node = FakeLapseNode(mempool_txs=[t])
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.recent_incoming("me.lapse")[0][1] is None
+
+    def test_a_pending_payment_is_not_duplicated_once_confirmed(self):
+        """The same transaction reachable through both the mempool and the
+        address index (a normal race between a fresh block and a mempool
+        that has not caught up yet) must appear once, not twice."""
+        import tx as tx_mod
+        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}], memo="tag")
+        h = tx_mod.tx_hash(t)
+        chain = [{"height": 0, "transactions": []},
+                 {"height": 1, "transactions": [t]}]
+        node = FakeLapseNode(mempool_txs=[t], chain=chain,
+                             heights_by_addr={"me.lapse": [(1, h)]})
+        adapter = swap_engine.LapseAdapter(node)
+        rows = adapter.recent_incoming("me.lapse")
+        assert len(rows) == 1
+        assert rows[0][4] == 0, "the mempool copy (depth 0) wins, not the stale chain one"
+
+    def test_no_history_is_an_empty_list(self):
+        node = FakeLapseNode()
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter.recent_incoming("me.lapse") == []
+
+    def test_multiple_payments_are_all_returned(self):
+        t1 = _tx("peer1.lapse", [{"to": "me.lapse", "amount": 1 * LAPSE}], memo="t1")
+        t2 = _tx("peer2.lapse", [{"to": "me.lapse", "amount": 2 * LAPSE}], memo="t2")
+        node = FakeLapseNode(mempool_txs=[t1, t2])
+        adapter = swap_engine.LapseAdapter(node)
+        rows = adapter.recent_incoming("me.lapse")
+        assert {r[0] for r in rows} == {"peer1.lapse", "peer2.lapse"}
+
+    def test_limit_caps_the_result(self):
+        txs = [_tx(f"peer{i}.lapse", [{"to": "me.lapse", "amount": 1 * LAPSE}],
+                   memo=f"t{i}", nonce=i)
+               for i in range(10)]
+        node = FakeLapseNode(mempool_txs=txs)
+        adapter = swap_engine.LapseAdapter(node)
+        assert len(adapter.recent_incoming("me.lapse", limit=3)) == 3
+
+
 class TestHappyPath:
     def test_first_mover_sends_then_waits(self):
         engine, lapse, _xlm = make_engine()
@@ -191,7 +315,7 @@ class TestHappyPath:
         inc = Increment.get(Increment.id == inc.id)
         assert inc.out_state == LEG_SETTLED
         assert inc.in_state != LEG_SETTLED
-        assert lapse.count_for(swap.session_tag(trade.session_id, 1)) == 1
+        assert lapse.count_for(swap.session_tag(trade.order_id, trade.session_id, 1)) == 1
 
     def test_second_mover_waits_before_sending(self):
         """The safe position: nothing is sent until the peer has paid."""
@@ -240,7 +364,7 @@ class TestCrashSafety:
     def test_crash_during_submit_does_not_double_pay(self):
         engine, lapse, _xlm = make_engine()
         trade = make_trade()
-        tag = swap.session_tag(trade.session_id, 1)
+        tag = swap.session_tag(trade.order_id, trade.session_id, 1)
 
         lapse.crash_on_submit = True
         with pytest.raises(Crash):
@@ -262,7 +386,7 @@ class TestCrashSafety:
         it did. The chain check before building is what covers it."""
         engine, lapse, _xlm = make_engine()
         trade = make_trade()
-        tag = swap.session_tag(trade.session_id, 1)
+        tag = swap.session_tag(trade.order_id, trade.session_id, 1)
 
         inc = Increment.get(Increment.id == f"{trade.session_id}:1")
         from_addr, to_addr, memo, amount = engine._out_terms(trade, inc)
@@ -282,7 +406,7 @@ class TestCrashSafety:
         """Even losing every trade row, the chain still says what was paid."""
         engine, lapse, _xlm = make_engine()
         trade = make_trade()
-        tag = swap.session_tag(trade.session_id, 1)
+        tag = swap.session_tag(trade.order_id, trade.session_id, 1)
 
         engine.advance(trade)
         assert lapse.count_for(tag) == 1
@@ -305,7 +429,7 @@ class TestCrashSafety:
     def test_repeated_advance_is_idempotent(self):
         engine, lapse, _xlm = make_engine()
         trade = make_trade()
-        tag = swap.session_tag(trade.session_id, 1)
+        tag = swap.session_tag(trade.order_id, trade.session_id, 1)
         for _ in range(10):
             engine.advance(trade)
         assert lapse.count_for(tag) == 1
@@ -315,7 +439,7 @@ class TestCrashSafety:
         be a no-op rather than a second payment."""
         engine, lapse, _xlm = make_engine()
         trade = make_trade()
-        tag = swap.session_tag(trade.session_id, 1)
+        tag = swap.session_tag(trade.order_id, trade.session_id, 1)
 
         engine.advance(trade)
         inc = Increment.get(Increment.id == f"{trade.session_id}:1")

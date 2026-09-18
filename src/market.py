@@ -34,8 +34,9 @@ import time
 import uuid
 
 import crypto
+import swap as swap_mod
 from crypto import canonical_json
-from trade_storage import Order, Trade, Increment, ensure_tables, LEG_SETTLED
+from trade_storage import Claim, Order, Trade, Increment, ensure_tables, LEG_SETTLED
 
 log = logging.getLogger("ec.market")
 
@@ -423,3 +424,193 @@ def best_prices(current_height, exclude_maker=None):
     return {"best_buy": best_buy, "best_sell": best_sell, "spread": spread,
             "buy_depth": sum(e["remaining"] for e in depth["buys"]),
             "sell_depth": sum(e["remaining"] for e in depth["sells"])}
+
+
+# ---------------------------------------------------------------------------
+# Fill claims: how a taker tells a maker where to pay, with no handshake
+# ---------------------------------------------------------------------------
+#
+# A maker discovers a trade from the sender of an incoming payment, but
+# that only ever reveals the taker's address on the chain the payment
+# arrived on. The other address, needed for the maker's own reciprocating
+# leg, has nowhere to go: Stellar's memo is 28 bytes and already spent on
+# the order and session reference, and nothing links a LapseCoin key to a
+# Stellar one (nothing should; see trust.mutual_scores on why that
+# pairing is not published for its own sake). So the taker also gossips a
+# claim, signed the same way an order is: proof of controlling the
+# address it names, nothing more. A maker matching a payment to a claim
+# still independently re-derives the schedule and checks it against its
+# own exposure cap before creating anything (swap_engine.discover_trades)
+# rather than trusting a single field of what a stranger sent it.
+
+CLAIM_SIGNED_FIELDS = (
+    "order_id", "session_id", "taker_lapse_addr", "taker_xlm_addr",
+    "lapse_total", "increment_count", "pubkey",
+)
+
+# A taker is as free to generate keypairs as a maker is, so claims need
+# their own bound, mirroring MAX_ORDERS_PER_MAKER, rather than trusting
+# that a valid signature implies good faith.
+MAX_CLAIMS_PER_TAKER = 20
+
+# How long an unmatched claim is kept. The claim and the payment it
+# precedes propagate over two independent channels (gossip and a public
+# chain) at very different speeds, so this has to be generous relative to
+# either; short enough that one nobody ever followed through on does not
+# accumulate forever.
+CLAIM_MAX_AGE_SECONDS = 3600
+
+
+class ClaimRejected(Exception):
+    """A claim that will not be stored or relayed, and why."""
+
+
+def build_claim(order_id, session_id, taker_lapse_addr, taker_xlm_addr,
+                lapse_total, increment_count, pubkey_hex):
+    """The unsigned body of a claim, in canonical field order."""
+    return {
+        "order_id": order_id,
+        "session_id": session_id,
+        "taker_lapse_addr": taker_lapse_addr,
+        "taker_xlm_addr": taker_xlm_addr,
+        "lapse_total": int(lapse_total),
+        "increment_count": int(increment_count),
+        "pubkey": pubkey_hex,
+    }
+
+
+def _claim_signing_bytes(claim):
+    return canonical_json({k: claim[k] for k in CLAIM_SIGNED_FIELDS})
+
+
+def sign_claim(claim, keyfile_path, kek):
+    """Sign a claim in place with the taker's LapseCoin key."""
+    signature = crypto.sign_with_keyfile(_claim_signing_bytes(claim), keyfile_path, kek)
+    claim["signature"] = signature.hex()
+    return claim
+
+
+def verify_claim(claim):
+    """Check a claim arriving from the network. Raises ClaimRejected.
+
+    Deliberately self-contained, the same division verify_order draws:
+    this checks only that the claim is well-formed and genuinely signed
+    by the address it names. Whether it makes sense against a *specific*
+    order (remaining size, exposure cap, min/max fill against this node's
+    own trust view of this taker) is for the maker's own discovery pass
+    to decide once it actually has that order and that view in hand (see
+    swap_engine.discover_trades); baking it in here would mean every peer
+    that merely relays this claim re-deriving business logic that applies
+    to, at most, the one node that posted the matching order.
+    """
+    if not isinstance(claim, dict):
+        raise ClaimRejected("not an object")
+
+    missing = [f for f in CLAIM_SIGNED_FIELDS if f not in claim]
+    if missing:
+        raise ClaimRejected(f"missing field(s): {missing}")
+    if "signature" not in claim:
+        raise ClaimRejected("missing signature")
+
+    unexpected = set(claim) - set(CLAIM_SIGNED_FIELDS) - {"signature"}
+    if unexpected:
+        raise ClaimRejected(f"unexpected field(s): {sorted(unexpected)}")
+
+    if not isinstance(claim["order_id"], str) or not claim["order_id"]:
+        raise ClaimRejected("order_id must be a non-empty string")
+    if not isinstance(claim["session_id"], str) or not claim["session_id"]:
+        raise ClaimRejected("session_id must be a non-empty string")
+
+    for field in ("lapse_total", "increment_count"):
+        if not isinstance(claim[field], int) or isinstance(claim[field], bool):
+            raise ClaimRejected(f"{field} must be an integer")
+    if claim["lapse_total"] <= 0:
+        raise ClaimRejected("lapse_total must be positive")
+    if not (swap_mod.MIN_INCREMENTS <= claim["increment_count"] <= swap_mod.MAX_INCREMENTS):
+        raise ClaimRejected(
+            f"increment_count must be between {swap_mod.MIN_INCREMENTS} "
+            f"and {swap_mod.MAX_INCREMENTS}")
+
+    if not crypto.is_valid_address(claim["taker_lapse_addr"]):
+        raise ClaimRejected("taker_lapse_addr is not a valid address")
+
+    import xlm as xlm_mod
+    if not xlm_mod.is_valid_address(claim["taker_xlm_addr"]):
+        raise ClaimRejected("taker_xlm_addr is not a valid Stellar address")
+
+    _verify_claim_signature(claim)
+    return True
+
+
+def _verify_claim_signature(claim):
+    try:
+        pubkey = bytes.fromhex(claim["pubkey"])
+        signature = bytes.fromhex(claim["signature"])
+    except (ValueError, TypeError):
+        raise ClaimRejected("pubkey and signature must be hex")
+    if crypto.public_key_to_address(pubkey) != claim["taker_lapse_addr"]:
+        raise ClaimRejected("pubkey does not match taker_lapse_addr")
+    if not crypto.verify(_claim_signing_bytes(claim), signature, pubkey):
+        raise ClaimRejected("signature does not verify")
+
+
+def claim_hash(claim):
+    """The dedup identity of a claim, over the signed content only, for
+    the same reason order_hash is: padding must not mint a new identity."""
+    body = {k: claim.get(k) for k in CLAIM_SIGNED_FIELDS}
+    return crypto.sha256_hex(canonical_json(body))
+
+
+def store_claim(claim):
+    """Persist a verified claim. Returns False if it was already known."""
+    ensure_tables()
+    if Claim.get_or_none(Claim.session_id == claim["session_id"]) is not None:
+        return False
+
+    live = (Claim.select()
+            .where(Claim.taker_lapse_addr == claim["taker_lapse_addr"])
+            .count())
+    if live >= MAX_CLAIMS_PER_TAKER:
+        raise ClaimRejected(
+            f"taker already has {live} live claims here "
+            f"(limit {MAX_CLAIMS_PER_TAKER})")
+
+    Claim.create(
+        session_id=claim["session_id"], order_id=claim["order_id"],
+        taker_lapse_addr=claim["taker_lapse_addr"],
+        taker_xlm_addr=claim["taker_xlm_addr"],
+        lapse_total=claim["lapse_total"],
+        increment_count=claim["increment_count"],
+        pubkey=claim["pubkey"], signature=claim["signature"],
+        received_at=time.time())
+    return True
+
+
+def get_claim(session_id):
+    ensure_tables()
+    return Claim.get_or_none(Claim.session_id == session_id)
+
+
+def claims_for_order(order_id):
+    """Every live claim against one order, for the maker's discovery pass."""
+    ensure_tables()
+    return list(Claim.select().where(Claim.order_id == order_id))
+
+
+def already_known_claim(claim):
+    """Whether this exact claim has already been verified and stored,
+    cheaply and without a signature check. Same role as already_known,
+    for the same reason: see its docstring."""
+    if not isinstance(claim, dict):
+        return False
+    ensure_tables()
+    return get_claim(claim.get("session_id", "")) is not None
+
+
+def prune_claims(now=None):
+    """Drop claims old enough that whatever they precede either already
+    happened (a Trade exists) or was never going to. Returns how many."""
+    ensure_tables()
+    now = time.time() if now is None else now
+    cutoff = now - CLAIM_MAX_AGE_SECONDS
+    return Claim.delete().where(Claim.received_at <= cutoff).execute()

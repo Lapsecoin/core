@@ -320,21 +320,19 @@ def transaction_succeeded(tx_hash):
     return bool(data and data.get("successful") is True)
 
 
-def find_payment(to_address, memo, min_stroops, from_address=None, limit=200):
-    """Look for a settled incoming payment matching what was agreed.
+def _iter_incoming_payments(to_address, limit=200):
+    """Every settled native payment or account-creation landing on
+    `to_address`, most recent first, as (sender, stroops, tx_hash).
 
-    This is the check that actually decides an increment, so it verifies
-    every term rather than trusting the counterparty's word that they
-    paid: the destination, the memo tying it to this session and
-    increment, the sending account, and an amount at or above what was
-    agreed. Over-payment passes, under-payment does not.
-
-    Returns the transaction hash, or None if no such payment has settled.
+    The shared core of find_payment and recent_incoming_payments: both
+    need the same walk over the same endpoint, filtered to the same two
+    record types and the same "did it actually settle" check, and differ
+    only in what they do with a candidate once found.
     """
     data = _get(f"/accounts/{to_address}/payments",
                 {"limit": min(limit, 200), "order": "desc"})
     if data is None:
-        return None
+        return
     for record in data.get("_embedded", {}).get("records", []):
         if record.get("type") not in ("payment", "create_account"):
             continue
@@ -352,14 +350,49 @@ def find_payment(to_address, memo, min_stroops, from_address=None, limit=200):
                 continue
             paid = str_to_stroops(record.get("starting_balance", "0"))
             sender = record.get("funder")
+        tx_hash = record.get("transaction_hash")
+        if not tx_hash:
+            continue
+        yield sender, paid, tx_hash
+
+
+def find_payment(to_address, memo, min_stroops, from_address=None, limit=200):
+    """Look for a settled incoming payment matching what was agreed.
+
+    This is the check that actually decides an increment, so it verifies
+    every term rather than trusting the counterparty's word that they
+    paid: the destination, the memo tying it to this session and
+    increment, the sending account, and an amount at or above what was
+    agreed. Over-payment passes, under-payment does not.
+
+    Returns the transaction hash, or None if no such payment has settled.
+    """
+    for sender, paid, tx_hash in _iter_incoming_payments(to_address, limit):
         if paid < min_stroops:
             continue
         if from_address and sender != from_address:
             continue
-        tx_hash = record.get("transaction_hash")
-        if tx_hash and _memo_matches(tx_hash, memo):
+        if _memo_matches(tx_hash, memo):
             return tx_hash
     return None
+
+
+def recent_incoming_payments(to_address, limit=200):
+    """Every settled incoming payment to `to_address`, most recent first,
+    with its memo. (sender, memo, stroops, tx_hash) tuples; memo is None
+    where Horizon reports none or a non-text one.
+
+    For discovery, not for checking one expected payment: scanning for
+    *any* payment whose memo might name one of this node's own orders
+    (see swap_engine.discover_trades), rather than find_payment's search
+    for one specific memo already known in advance.
+    """
+    out = []
+    for sender, paid, tx_hash in _iter_incoming_payments(to_address, limit):
+        tx = get_transaction(tx_hash)
+        memo = tx.get("memo") if tx and tx.get("memo_type") == "text" else None
+        out.append((sender, memo, paid, tx_hash))
+    return out
 
 
 def _memo_matches(tx_hash, memo):

@@ -215,7 +215,44 @@ class PeerRecord(_TradeBase):
     last_abandon_session = TextField(default="")
 
 
-TRADE_TABLES = [Order, Trade, Increment, PeerRecord]
+class Claim(_TradeBase):
+    """A taker's signed announcement of a fill it is about to pay for.
+
+    Exists for exactly one reason: a maker discovering a trade from an
+    incoming payment (see swap_engine.discover_trades) can read the
+    sender's address on whichever chain the payment arrived on, but has
+    no way to learn the taker's address on the *other* chain, since
+    nothing links a LapseCoin key to a Stellar one and nothing should
+    (see trust.mutual_scores on why that link is not published for its
+    own sake either). Stellar's memo is 28 bytes, already spent on the
+    order and session reference, with no room left for a second address.
+
+    So the taker also gossips this, exactly the way an order is gossiped:
+    signed with the same LapseCoin key that controls taker_lapse_addr, so
+    a relay cannot forge one and nobody can claim an address they do not
+    control. It proves exactly that and nothing more. A maker matching an
+    incoming payment to a claim still independently re-derives the whole
+    schedule and checks it against its own exposure cap before creating
+    anything (see swap_engine.discover_trades); the claim only ever
+    supplies an address and a stated fill size, both a claim to be
+    checked rather than a promise, same as an order.
+    """
+    session_id = TextField(primary_key=True)
+    order_id = TextField(index=True)
+    taker_lapse_addr = TextField()
+    taker_xlm_addr = TextField()
+    # The fill size the taker is committing to. xlm_total is not carried
+    # separately: it is deterministic from this and the order's own
+    # price, so conveying it too would just be a second number that could
+    # disagree with the first instead of one that cannot.
+    lapse_total = IntegerField()
+    increment_count = IntegerField()
+    pubkey = TextField()
+    signature = TextField()
+    received_at = FloatField()
+
+
+TRADE_TABLES = [Order, Trade, Increment, PeerRecord, Claim]
 
 _initialised = False
 

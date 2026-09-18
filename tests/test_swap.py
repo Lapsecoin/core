@@ -22,30 +22,44 @@ LAPSE = 100_000_000       # ticks per LAPSE
 
 
 class TestSessionTag:
+    ORDER_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
     def test_tag_roundtrips(self):
-        sid = swap.new_session_id("order-1", "a.b.c")
-        tag = swap.session_tag(sid, 7)
-        assert swap.parse_session_tag(tag) == (sid, 7)
+        sid = swap.new_session_id(self.ORDER_ID, "a.b.c")
+        tag = swap.session_tag(self.ORDER_ID, sid, 7)
+        assert swap.parse_session_tag(tag) == ("a1b2c3d4", sid[:8], 7)
 
     def test_session_ids_are_unique_per_fill(self):
-        a = swap.new_session_id("order-1", "a.b.c")
-        b = swap.new_session_id("order-1", "a.b.c")
+        a = swap.new_session_id(self.ORDER_ID, "a.b.c")
+        b = swap.new_session_id(self.ORDER_ID, "a.b.c")
         assert a != b
 
     def test_tag_fits_a_stellar_memo(self):
         """28 bytes is the hard limit; the id length is chosen for it."""
-        sid = swap.new_session_id("order-1", "a.b.c")
+        sid = swap.new_session_id(self.ORDER_ID, "a.b.c")
         for step in (1, 9, 20, 99):
-            assert len(swap.session_tag(sid, step).encode()) <= 28
+            assert len(swap.session_tag(self.ORDER_ID, sid, step).encode()) <= 28
+
+    def test_order_id_dashes_are_stripped_before_truncating(self):
+        """A plain slice would take a dash into the tag, or bury the
+        eighth real hex character one position further out, the moment an
+        id's dash does not land exactly at index 8 by accident."""
+        tag = swap.session_tag("ab-c1d2e3f4gh", "f" * 16, 1)
+        assert tag.startswith("abc1d2e3:")
 
     def test_rejects_non_tags(self):
-        for junk in ("", "no-colon", "abc:", ":5", "abc:notanumber", None, 42):
+        for junk in ("", "no-colon", "abc:def:", ":5", "abc:def:notanumber",
+                     None, 42, "short:tags:1", "a1b2c3d4:short:1",
+                     "a1b2c3d4:g1b2c3d4:1"):
             assert swap.parse_session_tag(junk) is None
 
-    def test_session_id_may_contain_no_colon_ambiguity(self):
-        """rpartition splits on the last colon, so a session id containing
-        one would still parse to the right step."""
-        assert swap.parse_session_tag("aa:bb:3") == ("aa:bb", 3)
+    def test_rejects_a_tag_with_the_wrong_field_count(self):
+        """A memo that merely looks tag-shaped (colon-joined) must not
+        parse just because it happens to have three fields of some kind;
+        each field's own shape is checked too (see the hex-length cases
+        above)."""
+        assert swap.parse_session_tag("a1b2c3d4:e5f6a1b2:1:extra") is None
+        assert swap.parse_session_tag("a1b2c3d4:e5f6a1b2") is None
 
 
 class TestExposureCap:
@@ -196,11 +210,14 @@ class TestPlan:
 
 class TestFirstMover:
     def test_less_established_side_opens(self):
-        # This node trusts the peer more than the peer trusts it, so the
-        # peer is the less established side here and opens.
+        # The peer is well established (score 5) and this node barely is
+        # (score 1), so this node is the less established side here, and
+        # opening_mover says True: this node opens.
         assert swap.opening_mover(my_trust_of_peer=5.0, peer_trust_of_me=1.0) is True
 
     def test_more_established_side_does_not_open(self):
+        # Reversed: this node is the well-established one now, so it does
+        # not open, the peer does.
         assert swap.opening_mover(my_trust_of_peer=1.0, peer_trust_of_me=5.0) is False
 
     def test_even_match_defers_to_the_caller(self):

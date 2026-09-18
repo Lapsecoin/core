@@ -160,6 +160,58 @@ class LapseAdapter:
                    if out.get("to") == to_addr)
         return paid >= min_amount
 
+    def recent_incoming(self, to_addr, limit=200):
+        """Every payment landing on `to_addr`, most recent first, as
+        (from_addr, memo, amount, tx_hash, confirmations).
+
+        For discovery, not for checking one already-expected payment (see
+        find_payment): scanning for any inbound payment whose memo might
+        name one of this node's own orders (see
+        swap_engine.discover_trades). The mempool is searched too, at
+        zero confirmations, for the same reason find_payment does: a
+        payment still settling must not be missed.
+
+        A self-payment (this node paying its own address) is excluded:
+        whatever it means, it is never a counterparty's step, and this is
+        the one place that distinction has to be made explicitly, since
+        nothing downstream of this list re-derives sender identity.
+        """
+        import tx as tx_mod
+
+        rows = []
+        seen_hashes = set()
+        for candidate in self.node.mempool.all_txs():
+            if candidate.get("from") == to_addr:
+                continue
+            paid = sum(o["amount"] for o in candidate.get("outputs", [])
+                       if o.get("to") == to_addr)
+            if paid <= 0:
+                continue
+            h = tx_mod.tx_hash(candidate)
+            seen_hashes.add(h)
+            rows.append((candidate.get("from"), candidate.get("memo"), paid, h, 0))
+
+        chain = self.node.view.chain
+        tip = chain[-1]["height"]
+        for block_height, tx_hash in self.node.storage.get_tx_heights_for_addr(to_addr):
+            if tx_hash in seen_hashes:
+                continue
+            if not 0 <= block_height < len(chain):
+                continue
+            for candidate in chain[block_height]["transactions"]:
+                if tx_mod.tx_hash(candidate) != tx_hash:
+                    continue
+                if candidate.get("from") == to_addr:
+                    break
+                paid = sum(o["amount"] for o in candidate.get("outputs", [])
+                           if o.get("to") == to_addr)
+                if paid <= 0:
+                    break
+                rows.append((candidate.get("from"), candidate.get("memo"),
+                            paid, tx_hash, tip - block_height + 1))
+                break
+        return rows[:limit]
+
     def confirmations(self, tx_hash):
         """Depth of a transaction, 0 while unconfirmed, None if unknown.
 
@@ -306,7 +358,7 @@ class Engine:
 
     def _out_terms(self, trade, inc):
         """(from, to, memo, amount) for the leg this node sends."""
-        memo = swap.session_tag(trade.session_id, inc.n)
+        memo = swap.session_tag(trade.order_id, trade.session_id, inc.n)
         if trade.i_send == "lapse":
             return (trade.my_lapse_addr, trade.peer_lapse_addr, memo,
                     inc.lapse_amount)
@@ -314,7 +366,7 @@ class Engine:
 
     def _in_terms(self, trade, inc):
         """(from, to, memo, amount) for the leg this node receives."""
-        memo = swap.session_tag(trade.session_id, inc.n)
+        memo = swap.session_tag(trade.order_id, trade.session_id, inc.n)
         if trade.i_send == "lapse":
             return (trade.peer_xlm_addr, trade.my_xlm_addr, memo,
                     inc.xlm_amount)

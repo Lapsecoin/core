@@ -63,6 +63,30 @@ def signed_order(maker, **overrides):
     return market.sign_order(order, maker["keyfile"], maker["kek"])
 
 
+@pytest.fixture(scope="module")
+def taker(tmp_path_factory):
+    """A second, independent FALCON keypair, standing in for whoever
+    fills an order."""
+    sk, pk = crypto.generate_keypair()
+    path = str(tmp_path_factory.mktemp("keys") / "taker.key")
+    crypto.save_key(path, sk, pk, "pw")
+    kek = crypto.derive_kek(path, "pw")
+    _seed, xlm_pub = xlm_mod.generate_keypair()
+    return {"addr": crypto.public_key_to_address(pk), "pubkey": pk.hex(),
+            "keyfile": path, "kek": kek, "xlm": xlm_pub}
+
+
+def signed_claim(taker, order_id="order-1", session_id="s" * 16, **overrides):
+    claim = market.build_claim(
+        order_id=order_id, session_id=session_id,
+        taker_lapse_addr=taker["addr"], taker_xlm_addr=taker["xlm"],
+        lapse_total=overrides.pop("lapse_total", 1 * LAPSE),
+        increment_count=overrides.pop("increment_count", 3),
+        pubkey_hex=taker["pubkey"])
+    claim.update(overrides)
+    return market.sign_claim(claim, taker["keyfile"], taker["kek"])
+
+
 class TestSigning:
     def test_signed_order_verifies(self, maker):
         assert market.verify_order(signed_order(maker), current_height=100)
@@ -355,6 +379,150 @@ class TestOrdersByMaker:
         rows = market.orders_by_maker(maker["addr"], current_height=100)
         assert len(rows) == 1
         assert rows[0].order_id == order["order_id"]
+
+
+class TestClaims:
+    """A claim only ever proves control of the LapseCoin address it
+    names. Everything about whether it makes sense against a specific
+    order is the maker's own job at discovery time, not checked here."""
+
+    def test_signed_claim_verifies(self, taker):
+        assert market.verify_claim(signed_claim(taker)) is True
+
+    def test_unsigned_claim_is_refused(self, taker):
+        claim = market.build_claim(
+            "order-1", "s" * 16, taker["addr"], taker["xlm"],
+            1 * LAPSE, 3, taker["pubkey"])
+        with pytest.raises(market.ClaimRejected, match="signature"):
+            market.verify_claim(claim)
+
+    @pytest.mark.parametrize("field,value", [
+        ("lapse_total", 5 * LAPSE),
+        ("increment_count", 7),
+        ("taker_xlm_addr", None),
+        ("session_id", "different-session"),
+    ])
+    def test_tampering_breaks_the_signature(self, taker, field, value):
+        claim = signed_claim(taker)
+        if value is None:
+            _seed, value = xlm_mod.generate_keypair()
+        claim[field] = value
+        with pytest.raises(market.ClaimRejected, match="signature"):
+            market.verify_claim(claim)
+
+    def test_claiming_someone_elses_lapse_address_is_refused(self, taker, maker):
+        """The one property that actually matters: a claim cannot redirect
+        a maker's reciprocation to an address the claimant does not
+        control."""
+        claim = signed_claim(taker)
+        claim["taker_lapse_addr"] = maker["addr"]
+        with pytest.raises(market.ClaimRejected, match="pubkey does not match"):
+            market.verify_claim(claim)
+
+    def test_extra_field_is_refused_not_ignored(self, taker):
+        claim = signed_claim(taker)
+        claim["surprise"] = "x"
+        with pytest.raises(market.ClaimRejected, match="unexpected"):
+            market.verify_claim(claim)
+
+    def test_missing_field_refused(self, taker):
+        claim = signed_claim(taker)
+        del claim["lapse_total"]
+        with pytest.raises(market.ClaimRejected, match="missing"):
+            market.verify_claim(claim)
+
+    def test_non_positive_lapse_total_refused(self, taker):
+        with pytest.raises(market.ClaimRejected):
+            market.verify_claim(signed_claim(taker, lapse_total=0))
+
+    def test_bool_is_not_an_integer(self, taker):
+        claim = signed_claim(taker)
+        claim["lapse_total"] = True
+        with pytest.raises(market.ClaimRejected, match="integer"):
+            market.verify_claim(claim)
+
+    @pytest.mark.parametrize("bad", [1, 21, 0, -1])
+    def test_increment_count_out_of_range_refused(self, taker, bad):
+        with pytest.raises(market.ClaimRejected, match="increment_count"):
+            market.verify_claim(signed_claim(taker, increment_count=bad))
+
+    def test_bad_lapse_address_refused(self, taker):
+        with pytest.raises(market.ClaimRejected):
+            market.verify_claim(signed_claim(taker, taker_lapse_addr="not.an.address"))
+
+    def test_bad_stellar_address_refused(self, taker):
+        with pytest.raises(market.ClaimRejected, match="Stellar"):
+            market.verify_claim(signed_claim(taker, taker_xlm_addr="GNOPE"))
+
+    def test_non_dict_refused(self):
+        with pytest.raises(market.ClaimRejected):
+            market.verify_claim("not a claim")
+
+
+class TestClaimStorage:
+    def test_store_and_read_back(self, taker):
+        claim = signed_claim(taker)
+        assert market.store_claim(claim) is True
+        assert market.get_claim(claim["session_id"]).lapse_total == 1 * LAPSE
+
+    def test_duplicate_session_is_not_stored_twice(self, taker):
+        claim = signed_claim(taker)
+        assert market.store_claim(claim) is True
+        assert market.store_claim(claim) is False
+
+    def test_one_taker_cannot_fill_the_claim_book(self, taker):
+        for i in range(market.MAX_CLAIMS_PER_TAKER):
+            market.store_claim(signed_claim(taker, session_id=f"s{i}" * 4))
+        with pytest.raises(market.ClaimRejected, match="limit"):
+            market.store_claim(signed_claim(taker, session_id="overflow" * 2))
+
+    def test_claims_for_order_scopes_by_order(self, taker):
+        market.store_claim(signed_claim(taker, order_id="order-a", session_id="a" * 16))
+        market.store_claim(signed_claim(taker, order_id="order-b", session_id="b" * 16))
+        rows = market.claims_for_order("order-a")
+        assert [r.session_id for r in rows] == ["a" * 16]
+
+    def test_prune_removes_old_claims(self, taker):
+        claim = signed_claim(taker)
+        market.store_claim(claim)
+        removed = market.prune_claims(now=time.time() + market.CLAIM_MAX_AGE_SECONDS + 1)
+        assert removed == 1
+        assert market.get_claim(claim["session_id"]) is None
+
+    def test_prune_leaves_recent_claims(self, taker):
+        claim = signed_claim(taker)
+        market.store_claim(claim)
+        assert market.prune_claims(now=time.time()) == 0
+        assert market.get_claim(claim["session_id"]) is not None
+
+
+class TestClaimHash:
+    def test_same_claim_same_hash(self, taker):
+        claim = signed_claim(taker)
+        assert market.claim_hash(claim) == market.claim_hash(dict(claim))
+
+    def test_padding_cannot_mint_a_new_identity(self, taker):
+        claim = signed_claim(taker)
+        padded = dict(claim, junk="x" * 1000)
+        assert market.claim_hash(padded) == market.claim_hash(claim)
+
+    def test_different_claims_differ(self, taker):
+        assert market.claim_hash(signed_claim(taker, session_id="a" * 16)) != \
+               market.claim_hash(signed_claim(taker, session_id="b" * 16))
+
+
+class TestAlreadyKnownClaim:
+    def test_unknown_claim_is_not_known(self, taker):
+        assert market.already_known_claim(signed_claim(taker)) is False
+
+    def test_stored_claim_is_known(self, taker):
+        claim = signed_claim(taker)
+        market.store_claim(claim)
+        assert market.already_known_claim(claim) is True
+
+    def test_non_dict_is_not_known(self):
+        assert market.already_known_claim("nope") is False
+        assert market.already_known_claim(None) is False
 
 
 class TestDepth:

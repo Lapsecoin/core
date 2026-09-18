@@ -106,31 +106,68 @@ def new_session_id(order_id, taker_lapse_addr, nonce=None):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def session_tag(session_id, n):
-    """What goes in the memo on both chains: "<session>:<step>".
+ORDER_TAG_LEN = 8
+SESSION_TAG_LEN = 8
 
-    Stellar's text memo allows 28 bytes. A 16-character session plus a
-    colon plus a step number stays inside that with room to spare, which
-    is why the id is truncated where it is.
+
+def session_tag(order_id, session_id, n):
+    """What goes in the memo on both chains: "<order8>:<session8>:<n>".
+
+    Stellar's text memo allows 28 bytes, which is the binding constraint:
+    8 hex characters of the order id, a colon, 8 of the session id,
+    another colon, and up to two digits of step number is 20 bytes with
+    room to spare.
+
+    The order prefix is what lets the maker recognise a payment as
+    belonging to one of its own open orders before any trade exists on
+    its side at all: without it, a fresh incoming payment carries nothing
+    to look up (see swap_engine.discover_trades). Both prefixes only need
+    to disambiguate within one node's own small set of live orders and
+    live sessions per order, not across the whole network, since a
+    payment is only ever read by the address it was actually sent to.
     """
-    tag = f"{session_id}:{n}"
+    order8 = order_id.replace("-", "")[:ORDER_TAG_LEN]
+    session8 = session_id[:SESSION_TAG_LEN]
+    tag = f"{order8}:{session8}:{n}"
     if len(tag.encode()) > 28:
         raise ValueError(f"session tag too long for a Stellar memo: {tag}")
     return tag
 
 
 def parse_session_tag(memo):
-    """Split a memo back into (session_id, step), or None if it is not one.
+    """Split a memo back into (order8, session8, step), or None if it is
+    not one.
 
     Used when reading either chain, so it has to be strict: anything that
     is merely memo-shaped must not be mistaken for a payment in a trade.
+    Both prefixes are validated as lowercase hex of the exact expected
+    length, since a memo that merely looks tag-shaped (three colon-joined
+    fields) must not be treated as a real reference to an order or
+    session it was never signed against.
     """
-    if not isinstance(memo, str) or ":" not in memo:
+    if not isinstance(memo, str):
         return None
-    session_id, _, step = memo.rpartition(":")
-    if not session_id or not step.isdigit():
+    parts = memo.split(":")
+    if len(parts) != 3:
         return None
-    return session_id, int(step)
+    order8, session8, step = parts
+    if not _is_hex_of_length(order8, ORDER_TAG_LEN):
+        return None
+    if not _is_hex_of_length(session8, SESSION_TAG_LEN):
+        return None
+    if not step.isdigit():
+        return None
+    return order8, session8, int(step)
+
+
+def _is_hex_of_length(s, length):
+    if len(s) != length:
+        return False
+    try:
+        int(s, 16)
+    except ValueError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------

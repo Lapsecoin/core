@@ -256,3 +256,40 @@ def stake_lookup_for(node):
                 node.view.state.get_balance(addr))
 
     return lookup
+
+
+def mutual_scores(node, peer_addr):
+    """(my_trust_of_peer, peer_trust_of_me), for swap.opening_mover.
+
+    Both halves have to be computable without anything the peer says,
+    since a self-reported score is exactly what a peer would inflate to
+    win the "opens second" side of the coin flip. The completed-trade
+    count between two specific addresses cannot be lied about this way:
+    both sides watched the same legs settle on the same public chains, so
+    this node's own PeerRecord for the peer already holds the number the
+    peer's own worker would compute too. Standing is public on both
+    sides too: anyone's address age and balance are chain facts, not
+    something told to you.
+
+    What is not available this way is whether the peer has privately
+    marked this node as a defector. That verdict lives only in the
+    peer's own local database, on purpose: there is no channel that
+    publishes it, because broadcasting it would let a false accusation
+    follow an innocent address everywhere. So the same shared record
+    (including whatever it says about the peer, from this node's own
+    honest history) stands in for both halves, weighted by each side's
+    own public stake, which is the most either side could verify about
+    the other without a channel this design deliberately does not have.
+    """
+    peer_age = address_age_blocks(node, peer_addr)
+    peer_balance = node.view.state.get_balance(peer_addr)
+    detail = get_detail(peer_addr, peer_age, peer_balance)
+    my_trust_of_peer = detail["score"]
+
+    my_age = address_age_blocks(node, node.addr)
+    my_balance = node.view.state.get_balance(node.addr)
+    peer_trust_of_me = score(
+        detail["completed_count"], detail["completed_lapse"],
+        detail["abandoned_count"], detail["last_completed_at"],
+        my_age, my_balance)
+    return my_trust_of_peer, peer_trust_of_me

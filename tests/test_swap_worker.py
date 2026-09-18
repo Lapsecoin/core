@@ -120,7 +120,7 @@ class TestOrdering:
         w.recover()
         inc = Increment.get(Increment.id == inc.id)
         assert inc.out_state == trade_storage.LEG_SETTLED
-        assert w.lapse.count_for(swap.session_tag(trade.session_id, 1)) == 1
+        assert w.lapse.count_for(swap.session_tag(trade.order_id, trade.session_id, 1)) == 1
 
     def test_pass_after_recovery_does_not_resend(self):
         w = Worker(FakeNode())
@@ -130,7 +130,7 @@ class TestOrdering:
         w.lapse.deliver(*terms)
         w.recover()
         w.run_once()
-        assert w.lapse.count_for(swap.session_tag(trade.session_id, 1)) == 1
+        assert w.lapse.count_for(swap.session_tag(trade.order_id, trade.session_id, 1)) == 1
 
 
 class TestDriving:
@@ -146,7 +146,7 @@ class TestDriving:
         trade = make_trade()
         for _ in range(10):
             w.run_once()
-        assert w.lapse.count_for(swap.session_tag(trade.session_id, 1)) == 1
+        assert w.lapse.count_for(swap.session_tag(trade.order_id, trade.session_id, 1)) == 1
 
     def test_finished_trades_are_left_alone(self):
         w = Worker(FakeNode())

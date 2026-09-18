@@ -722,6 +722,88 @@ class TestHandleInboundOrder:
 
 
 # ---------------------------------------------------------------------------
+# 10c. _handle_inbound_claim
+# ---------------------------------------------------------------------------
+
+def _signed_claim(taker, order_id="order-1", session_id="s" * 16, **overrides):
+    claim = market_mod.build_claim(
+        order_id=order_id, session_id=session_id,
+        taker_lapse_addr=taker["addr"], taker_xlm_addr=taker["xlm"],
+        lapse_total=overrides.pop("lapse_total", 1 * TICKS_PER_LAPSE),
+        increment_count=overrides.pop("increment_count", 3),
+        pubkey_hex=taker["pubkey"])
+    claim.update(overrides)
+    return market_mod.sign_claim(claim, taker["keyfile"], taker["kek"])
+
+
+class TestHandleInboundClaim:
+    """Same propagation contract as an order: verified once, relayed
+    either way, and a genuine duplicate costs no second flood."""
+
+    def test_new_claim_is_relayed_onward(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        claim = _signed_claim(taker)
+        node._handle_inbound_claim(
+            {"claim": claim, "sender": "1.2.3.4:1", "stemming": False})
+        assert market_mod.get_claim(claim["session_id"]) is not None
+        udp.send_claim.assert_called_once()
+        assert udp.send_claim.call_args.kwargs["peers"] == ["5.6.7.8:1"]
+
+    def test_invalid_claim_is_not_relayed(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        claim = _signed_claim(taker)
+        claim["lapse_total"] = 999 * TICKS_PER_LAPSE   # breaks the signature
+        node._handle_inbound_claim(
+            {"claim": claim, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_claim.assert_not_called()
+        assert market_mod.get_claim(claim["session_id"]) is None
+
+    def test_a_duplicate_from_elsewhere_is_not_reflooded_or_reverified(
+            self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        claim = _signed_claim(taker)
+        node._handle_inbound_claim(
+            {"claim": claim, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_claim.reset_mock()
+
+        node._handle_inbound_claim(
+            {"claim": claim, "sender": "5.6.7.8:1", "stemming": False})
+        udp.send_claim.assert_not_called()
+        assert market_mod.get_claim(claim["session_id"]) is not None
+
+    def test_own_claim_echoing_back_still_reaches_other_peers(
+            self, node_env_real_gossip, tmp_path):
+        """The origin-stranding case, exactly as for an order: this node
+        published its own claim (stored locally before ever fluffing it),
+        and a copy of it now arrives back from a peer."""
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        claim = _signed_claim(taker)
+        market_mod.store_claim(claim)
+
+        node._handle_inbound_claim(
+            {"claim": claim, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_claim.assert_called_once()
+        assert udp.send_claim.call_args.kwargs["peers"] == ["5.6.7.8:1"]
+
+    def test_stem_hop_forwards_to_one_peer_only(
+            self, node_env_real_gossip, tmp_path, monkeypatch):
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 0.0)
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        claim = _signed_claim(taker)
+        node._handle_inbound_claim(
+            {"claim": claim, "sender": "1.2.3.4:1", "stemming": True})
+        assert market_mod.get_claim(claim["session_id"]) is not None
+        udp.send_claim.assert_called_once()
+        assert len(udp.send_claim.call_args.kwargs["peers"]) == 1
+        assert udp.send_claim.call_args.kwargs["stemming"] is True
+
+
+# ---------------------------------------------------------------------------
 # 11. _evaluate_remote_chain
 # ---------------------------------------------------------------------------
 

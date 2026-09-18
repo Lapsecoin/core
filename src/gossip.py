@@ -69,6 +69,13 @@ SEEN_CACHE_SIZE = 50_000
 # market.MAX_ORDERS_PER_MAKER and the intake limits in market_routes.py).
 ORDER_SEEN_CACHE_SIZE = 20_000
 
+# Claims are rarer than orders (one per fill attempt, not one per standing
+# offer) and shorter-lived (market.CLAIM_MAX_AGE_SECONDS prunes them within
+# the hour), so a smaller budget than orders' still comfortably covers
+# genuine traffic while keeping the same isolation guarantee: a flood of
+# claims cannot touch the order, block or tx caches either.
+CLAIM_SEEN_CACHE_SIZE = 5_000
+
 # Probability that a stem hop forwards again instead of fluffing, giving a
 # geometric stem length with mean 1/(1-q) hops where the topology allows it.
 #
@@ -100,11 +107,13 @@ def _random_fraction():
 KIND_BLOCK = "block"
 KIND_TX    = "tx"
 KIND_ORDER = "order"
+KIND_CLAIM = "claim"
 
 _SEEN_CACHE_SIZES = {
     KIND_BLOCK: SEEN_CACHE_SIZE,
     KIND_TX: SEEN_CACHE_SIZE,
     KIND_ORDER: ORDER_SEEN_CACHE_SIZE,
+    KIND_CLAIM: CLAIM_SEEN_CACHE_SIZE,
 }
 
 
@@ -236,5 +245,13 @@ class Gossip:
             self.udp.send_block(item, peers=peers, stemming=stemming)
         elif kind == KIND_ORDER:
             self.udp.send_order(item, peers=peers, stemming=stemming)
-        else:
+        elif kind == KIND_CLAIM:
+            self.udp.send_claim(item, peers=peers, stemming=stemming)
+        elif kind == KIND_TX:
             self.udp.send_tx(item, peers=peers, stemming=stemming)
+        else:
+            # Falling through to send_tx here used to be how an unknown
+            # kind silently propagated as one; explicit is what makes
+            # adding a kind and forgetting this dispatch a loud failure
+            # instead of a mislabelled send.
+            raise ValueError(f"gossip: no transport method for kind {kind!r}")
