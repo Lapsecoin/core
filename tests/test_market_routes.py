@@ -745,3 +745,100 @@ class TestMyOrders:
         assert rows[0]["delivered"] == 5 * LAPSE
         assert rows[0]["pct_delivered"] == 50
         assert rows[0]["remaining"] == 5 * LAPSE
+
+
+class TestPendingRequests:
+    """The taker's own view of a fill request that has not yet become a
+    trade one way or the other: pure observability, nothing to click,
+    and gone from this list the moment it does become a trade."""
+
+    class _Node:
+        def __init__(self, addr):
+            self.addr = addr
+
+    def test_unanswered_request_shows_as_pending(self):
+        make_maker_order(order_id="o1", maker_lapse="maker.lapse", direction="sell")
+        market_mod.FillRequest.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            taker_lapse_addr="me.lapse", taker_xlm_addr="GME",
+            lapse_total=2 * LAPSE, pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        rows = market_routes._pending_requests(self._Node("me.lapse"))
+        assert len(rows) == 1
+        assert rows[0]["status"] == "pending"
+        assert rows[0]["maker_lapse_addr"] == "maker.lapse"
+        assert rows[0]["lapse_total"] == 2 * LAPSE
+
+    def test_accepted_response_shows_as_accepted(self):
+        make_maker_order(order_id="o1", maker_lapse="maker.lapse")
+        market_mod.FillRequest.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            taker_lapse_addr="me.lapse", taker_xlm_addr="GME",
+            lapse_total=2 * LAPSE, pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        market_mod.FillResponse.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            lapse_total=2 * LAPSE, accepted=True, increment_count=3,
+            reason="", maker_pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        rows = market_routes._pending_requests(self._Node("me.lapse"))
+        assert rows[0]["status"] == "accepted"
+
+    def test_declined_response_shows_the_reason(self):
+        make_maker_order(order_id="o1", maker_lapse="maker.lapse")
+        market_mod.FillRequest.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            taker_lapse_addr="me.lapse", taker_xlm_addr="GME",
+            lapse_total=2 * LAPSE, pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        market_mod.FillResponse.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            lapse_total=2 * LAPSE, accepted=False, increment_count=None,
+            reason="no room left", maker_pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        rows = market_routes._pending_requests(self._Node("me.lapse"))
+        assert rows[0]["status"] == "declined"
+        assert rows[0]["detail"] == "no room left"
+
+    def test_a_request_that_already_became_a_trade_is_excluded(self):
+        """Once check_fill_responses has opened the trade, this list is
+        not the place for it any more; the active trades list is."""
+        make_maker_order(order_id="o1", maker_lapse="maker.lapse")
+        market_mod.FillRequest.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            taker_lapse_addr="me.lapse", taker_xlm_addr="GME",
+            lapse_total=2 * LAPSE, pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        Trade.create(
+            session_id="s" * 16, order_id="o1", role="taker",
+            my_lapse_addr="me.lapse", my_xlm_addr="GME",
+            peer_lapse_addr="maker.lapse", peer_xlm_addr="GMAKER",
+            i_send="xlm", lapse_total=2 * LAPSE, xlm_total=2000 * XLM,
+            increment_count=3, confirm_depth=2, status="active",
+            created_at=time.time(), updated_at=time.time())
+        assert market_routes._pending_requests(self._Node("me.lapse")) == []
+
+    def test_someone_elses_requests_are_not_shown(self):
+        make_maker_order(order_id="o1", maker_lapse="maker.lapse")
+        market_mod.FillRequest.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            taker_lapse_addr="someone.else", taker_xlm_addr="GELSE",
+            lapse_total=2 * LAPSE, pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        assert market_routes._pending_requests(self._Node("me.lapse")) == []
+
+    def test_newest_request_first(self):
+        make_maker_order(order_id="o1", maker_lapse="maker.lapse")
+        market_mod.FillRequest.create(
+            request_id="old" * 6, order_id="o1", session_id="old" * 6,
+            taker_lapse_addr="me.lapse", taker_xlm_addr="GME",
+            lapse_total=1 * LAPSE, pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time() - 100)
+        market_mod.FillRequest.create(
+            request_id="new" * 6, order_id="o1", session_id="new" * 6,
+            taker_lapse_addr="me.lapse", taker_xlm_addr="GME",
+            lapse_total=1 * LAPSE, pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
+        rows = market_routes._pending_requests(self._Node("me.lapse"))
+        assert [r["order_id"] for r in rows] == ["o1", "o1"]
+        assert rows[0]["sent_at"] > rows[1]["sent_at"]

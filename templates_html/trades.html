@@ -16,6 +16,46 @@
   </p>
 {% endif %}
 
+{% if pending_requests %}
+<h2>Pending requests</h2>
+<p class="stat-sub" style="margin-bottom:.5rem">
+  Sent, waiting on the maker to answer. Nothing is paid yet: an accept
+  opens as a trade below within one worker pass, and a decline or a
+  request nobody ever answers costs you nothing.
+</p>
+<div class="table-wrap">
+<table class="stacked">
+  <thead>
+    <tr><th>Side</th><th>Amount</th><th>Maker</th><th>Sent</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    {% for r in pending_requests %}
+    <tr>
+      <td data-label="Side">
+        {% if r.direction %}
+          <span style="font-weight:bold; color:{{ 'var(--gain)' if r.direction == 'sell' else 'var(--loss)' }}">
+            {{ 'Buying' if r.direction == 'sell' else 'Selling' }}
+          </span>
+        {% else %}
+          <span class="stat-sub">order gone</span>
+        {% endif %}
+      </td>
+      <td data-label="Amount">{{ fmt_lapse_dp(r.lapse_total, 4) }}</td>
+      <td data-label="Maker" class="hash">{{ short_addr(r.maker_lapse_addr) if r.maker_lapse_addr else "—" }}</td>
+      <td data-label="Sent">{{ fmt_duration(now - r.sent_at) }} ago</td>
+      <td data-label="Status">
+        <span style="color:{{ {'pending': 'var(--live)', 'accepted': 'var(--gain)', 'declined': 'var(--loss)'}[r.status] }}">
+          {{ r.status|capitalize }}
+        </span>
+        <div class="stat-sub">{{ r.detail }}</div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
 <h2>Trades</h2>
 
 {% if active %}

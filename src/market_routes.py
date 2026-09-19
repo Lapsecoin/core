@@ -345,6 +345,7 @@ def register(app, node, csrf_token):
 
         return render_template("trades.html", title="Trades",
                                active=active, history=history[:50],
+                               pending_requests=_pending_requests(node),
                                peers=peers, now=time.time(),
                                worker=_worker_view(node),
                                alert_ok="", alert_err="")
@@ -760,6 +761,50 @@ def _trade_view(row, cap, peer_trust):
         "step_cap": max((s.xlm_amount for s in steps), default=0),
         "at_risk": at_risk,
     }
+
+
+def _pending_requests(node):
+    """This node's own outstanding fill requests, as a taker, that have
+    not yet become a trade one way or the other.
+
+    Deliberately the taker's own view only: the maker never gets a
+    matching list of its own, because there is nothing for the maker to
+    do with one. swap_engine.answer_fill_requests already decides every
+    live request against its own orders automatically, every worker
+    pass, the instant that pass runs; a maker-facing list of "requests
+    I have not gotten to yet" would show a state that resolves itself
+    within one poll interval and invites clicking on something that
+    was never a click's job to resolve.
+
+    A request that already became a trade (swap_engine.check_fill
+    _responses opened it) is excluded here on purpose: it belongs in the
+    active trades list once it exists, not in both.
+    """
+    ensure_tables()
+    rows = []
+    for req in market_mod.requests_by_taker(node.addr):
+        if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
+            continue
+        order_row = market_mod.get_order(req.order_id)
+        resp = market_mod.get_fill_response(req.request_id)
+        if resp is None:
+            status, detail = "pending", "Waiting on the maker to answer."
+        elif resp.accepted:
+            status, detail = "accepted", "Accepted; opening as a trade shortly."
+        else:
+            status = "declined"
+            detail = resp.reason or "Declined, no reason given."
+        rows.append({
+            "order_id": req.order_id,
+            "direction": order_row.direction if order_row else None,
+            "maker_lapse_addr": order_row.maker_lapse_addr if order_row else None,
+            "lapse_total": req.lapse_total,
+            "sent_at": req.received_at,
+            "status": status,
+            "detail": detail,
+        })
+    rows.sort(key=lambda r: -r["sent_at"])
+    return rows
 
 
 def _worker_view(node):
