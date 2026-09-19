@@ -32,12 +32,15 @@
           </div>
         {% elif trust.abandoned_count %}
           <span style="color:var(--loss); font-weight:bold">
-            Took a payment and did not reciprocate
+            Took a payment and has not reciprocated
           </span>
           <div class="stat-sub">
-            This happened once and is not forgiven by later trades. You can
-            still deal with them, but the steps will be as small as this
-            node allows.
+            As of the last check, a payment they owed on a past trade still
+            has not arrived. That is re-checked in the background, not
+            assumed forever: if it turns out they were simply offline and
+            it eventually shows up, this clears on its own. Until then you
+            can still deal with them, but the steps will be as small as
+            this node allows.
           </div>
         {% else %}
           <span style="color:var(--ink-dim)">No history with this node</span>

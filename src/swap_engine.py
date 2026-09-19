@@ -769,7 +769,9 @@ class Engine:
         trade.updated_at = time.time()
         trade.stalled_since = 0.0
         trade.save()
-        trust_mod.record_completed(trade.peer_lapse_addr, trade.lapse_total)
+        # Nothing else to update: trust reads completed/abandoned counts
+        # straight off Trade.status (see trust.local_tally), so this save
+        # is the entire effect on this peer's standing.
         log.info("[swap] %s completed: %d steps delivered",
                  trade.session_id, trade.increment_count)
 
@@ -844,13 +846,61 @@ class Engine:
                 trade.note = (f"step {inc.n}: paid and not reciprocated by "
                               f"height {inc.deadline_height + ABANDON_AFTER_BLOCKS}")
                 trade.save()
-                trust_mod.record_abandonment(
-                    trade.peer_lapse_addr, trade.session_id)
+                # Nothing else to update: trust reads completed/abandoned
+                # counts straight off Trade.status (trust.local_tally),
+                # so this save is the entire effect on this peer's
+                # standing, and it is exactly as reversible as the save
+                # itself: see recheck_abandoned below.
                 log.warning("[swap] %s abandoned by %s at step %d",
                             trade.session_id, trade.peer_lapse_addr[:24], inc.n)
                 return True
             return False
         return False
+
+    def recheck_abandoned(self, trade):
+        """Whether a trade this node already gave up on has, since then,
+        genuinely finished: the specific leg that was missing might have
+        arrived late, from a counterparty who was offline rather than
+        dishonest. Un-abandons it (back to TRADE_ACTIVE) the moment that
+        leg is found settled, and lets the ordinary advance() loop take
+        it the rest of the way, including any steps after the one that
+        stalled which never got a chance to run.
+
+        This is the entire redemption mechanism on this node's own side:
+        trust is derived straight from Trade.status (see
+        trust.local_tally), so flipping the status here is the whole
+        fix, not step one of a fix. See trust.verify_pending_receipts
+        for the matching half of this for a receipt gossiped about a
+        session this node was not itself a party to.
+
+        Read-only towards sending: this never builds or signs anything
+        on this node's own behalf, only asks the chain whether the
+        counterparty's leg now exists, which is safe to do even though
+        this node has already zeroed its own exposure toward them.
+        Returns True if it un-abandoned the trade.
+        """
+        if trade.status != TRADE_ABANDONED:
+            return False
+        stuck = (Increment.select()
+                .where(Increment.session_id == trade.session_id,
+                       Increment.out_state == LEG_SETTLED,
+                       Increment.in_state != LEG_SETTLED)
+                .order_by(Increment.n)
+                .first())
+        if stuck is None:
+            return False
+        self.check_inbound(trade, stuck)
+        stuck = Increment.get(Increment.id == stuck.id)
+        if stuck.in_state != LEG_SETTLED:
+            return False
+        trade.status = TRADE_ACTIVE
+        trade.stalled_since = 0.0
+        trade.updated_at = time.time()
+        trade.note = f"step {stuck.n}: settled late; abandonment reversed"
+        trade.save()
+        log.info("[swap] %s: step %d settled late; un-abandoning, trade resumes",
+                 trade.session_id, stuck.n)
+        return True
 
     @staticmethod
     def _peer_ever_reciprocated(trade):

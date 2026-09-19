@@ -52,7 +52,7 @@ import swap_engine
 import trade_storage
 import trust as trust_mod
 import xlm as xlm_mod
-from trade_storage import Trade, TRADE_ACTIVE, TRADE_STALLED
+from trade_storage import Trade, TRADE_ACTIVE, TRADE_STALLED, TRADE_ABANDONED
 
 log = logging.getLogger("ec.swap_worker")
 
@@ -292,6 +292,27 @@ class SwapWorker:
                 # One bad trade must not stop the others.
                 log.exception("[swap] %s could not be advanced",
                               trade.session_id)
+
+        # Redemption: an abandoned trade is not dropped, only lightly
+        # watched from here on, in case the leg that was missing arrives
+        # late from a counterparty who was genuinely offline rather than
+        # dishonest (see swap_engine.Engine.recheck_abandoned). Un-
+        # abandoning is the entire fix; the next pass's ordinary loop
+        # above picks a freshly-active trade back up on its own.
+        for trade in Trade.select().where(Trade.status == TRADE_ABANDONED):
+            try:
+                if engine.recheck_abandoned(trade):
+                    self._emit_receipts(engine, kek, trade)
+            except swap_engine.Unreachable as e:
+                self._last_error = str(e)
+                self._unreachable_until = time.time() + UNREACHABLE_BACKOFF_SECONDS
+                log.info("[swap] a chain is unreachable (%s); pausing %ds",
+                         e, UNREACHABLE_BACKOFF_SECONDS)
+                break
+            except Exception:
+                log.exception("[swap] %s: rechecking abandonment failed",
+                              trade.session_id)
+
         self._passes += 1
         return touched
 

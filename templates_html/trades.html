@@ -170,6 +170,38 @@
 </p>
 {% endif %}
 
+<h2>Your own standing</h2>
+<p class="stat-sub" style="margin-bottom:.4rem">
+  What this node itself can currently verify about your own address, the
+  same way it would compute anyone else's: completed trades from receipts
+  this node has checked against the chain, and any still-unresolved
+  "missed" claim. A different node may see a different picture if it has
+  verified different receipts, and this one keeps re-checking: a missed
+  claim is not permanent, it stops counting the moment the payment it
+  named actually shows up (see the pending count above).
+</p>
+<div class="card" style="margin-bottom:1rem">
+  <table class="kv-table">
+    <tr><td>Address</td><td class="hash">{{ my_addr }}</td></tr>
+    <tr>
+      <td>Standing</td>
+      <td>
+        {% if my_standing.abandoned_count %}
+          <span style="color:var(--loss); font-weight:bold">
+            {{ my_standing.abandoned_count }} currently unresolved "missed" claim{{ '' if my_standing.abandoned_count == 1 else 's' }}
+          </span>
+        {% elif my_standing.score > 0 %}
+          <span style="color:var(--gain); font-weight:bold">{{ "%.1f"|format(my_standing.score) }}</span>
+        {% else %}
+          <span style="color:var(--ink-dim)">Nothing verifiable yet</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr><td>Completed (verified)</td><td>{{ my_standing.completed_count }}</td></tr>
+    <tr><td>Volume (verified)</td><td>{{ fmt_lapse_dp(my_standing.completed_lapse, 2) }}</td></tr>
+  </table>
+</div>
+
 <h2>People you have traded with</h2>
 {% if peers %}
 <div class="table-wrap">

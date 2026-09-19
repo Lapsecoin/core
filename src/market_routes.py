@@ -28,7 +28,7 @@ import xlm as xlm_mod
 from flask import redirect, render_template, request
 from params import TICKS_PER_LAPSE
 from trade_storage import (
-    Increment, PeerRecord, Trade, ensure_tables,
+    Increment, Trade, ensure_tables,
     LEG_SETTLED, LEG_PENDING,
     TRADE_ACTIVE, TRADE_STALLED,
 )
@@ -337,10 +337,17 @@ def register(app, node, csrf_token):
             (active if row.status in (TRADE_ACTIVE, TRADE_STALLED)
              else history).append(view)
 
+        # Every address this node has ever traded with, not a separately
+        # maintained list: standing itself is derived straight from
+        # these same Trade rows (trust.local_tally), so there is nothing
+        # to keep in sync between "who do I know" and "what do I know
+        # about them".
+        known_addrs = {row.peer_lapse_addr for row in
+                       Trade.select(Trade.peer_lapse_addr).distinct()}
         peers = []
-        for record in PeerRecord.select():
-            detail = peer_trust(record.lapse_addr)
-            peers.append({"addr": record.lapse_addr, **detail})
+        for addr in known_addrs:
+            detail = peer_trust(addr)
+            peers.append({"addr": addr, **detail})
         peers.sort(key=lambda p: (-p["score"], p["addr"]))
 
         return render_template("trades.html", title="Trades",
@@ -349,6 +356,8 @@ def register(app, node, csrf_token):
                                peers=peers, now=time.time(),
                                worker=_worker_view(node),
                                receipts=_receipt_stats(),
+                               my_standing=peer_trust(node.addr),
+                               my_addr=node.addr,
                                alert_ok="", alert_err="")
 
 

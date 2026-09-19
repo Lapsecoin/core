@@ -79,8 +79,11 @@ TRADE_ACTIVE = "active"
 # exactly like this, so it carries no penalty and resumes on its own.
 TRADE_STALLED = "stalled"
 TRADE_COMPLETED = "completed"
-# Deadline missed by a wide margin with evidence the counterparty was
-# reachable throughout. Only this slashes; see trust.record_abandonment.
+# Deadline missed by a wide margin, by the chain's own clock; see
+# swap_engine.Engine.consider_abandonment. Only this slashes standing
+# (trust.local_tally reads it straight off this status), and it is not
+# permanent: a late, genuine settlement flips it back (see
+# swap_engine.Engine.recheck_abandoned).
 TRADE_ABANDONED = "abandoned"
 
 
@@ -212,24 +215,6 @@ class Increment(_TradeBase):
     deadline_height = IntegerField(default=0)
 
 
-class PeerRecord(_TradeBase):
-    """What this node has observed about a counterparty, for trust.
-
-    Independent per node and derived from public data, so nothing here
-    needs to be agreed with anyone. Two nodes may hold different numbers
-    and both be right about what they saw.
-    """
-    lapse_addr = TextField(primary_key=True)
-    completed_count = IntegerField(default=0)
-    completed_lapse = IntegerField(default=0)   # ticks, lifetime
-    abandoned_count = IntegerField(default=0)
-    last_completed_at = FloatField(default=0.0)
-    last_abandoned_at = FloatField(default=0.0)
-    # Evidence for a slash, kept so the number is explainable rather than
-    # a verdict with no stated reason.
-    last_abandon_session = TextField(default="")
-
-
 class FillRequest(_TradeBase):
     """A taker's proposal to fill part of an order, sent and answered
     before either side risks a single stroop.
@@ -352,8 +337,7 @@ class StepReceipt(_TradeBase):
     verified = BooleanField(null=True, default=None)
 
 
-TRADE_TABLES = [Order, Trade, Increment, PeerRecord, FillRequest, FillResponse,
-                StepReceipt]
+TRADE_TABLES = [Order, Trade, Increment, FillRequest, FillResponse, StepReceipt]
 
 _initialised = False
 

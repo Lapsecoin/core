@@ -26,7 +26,7 @@ import trade_storage
 import trust
 import xlm as xlm_mod
 from trade_storage import (
-    Increment, Trade, PeerRecord,
+    Increment, Trade,
     LEG_PENDING, LEG_INTENT, LEG_SUBMITTED, LEG_SETTLED, LEG_DEAD,
     TRADE_ABANDONED, TRADE_ACTIVE, TRADE_COMPLETED, TRADE_STALLED,
 )
@@ -483,8 +483,10 @@ class TestHappyPath:
             if inc is None:
                 break
             settle_peer_leg(trade, inc, engine)
-        row = PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse")
-        assert row.completed_count == 1
+        # Trust reads this straight off Trade.status now (trust.local_tally):
+        # a completed trade's own row is the entire credit.
+        assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_COMPLETED
+        assert trust.local_tally("peer.lapse")["completed_count"] == 1
 
 
 class TestAccountCreation:
@@ -789,8 +791,7 @@ class TestBlame:
         engine.advance(trade)
         trade = Trade.get(Trade.session_id == trade.session_id)
         assert trade.status == TRADE_STALLED
-        assert PeerRecord.get_or_none(PeerRecord.lapse_addr == "peer.lapse") is None \
-            or PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse").abandoned_count == 0
+        assert trust.local_tally("peer.lapse")["abandoned_count"] == 0
 
     def test_stall_clears_when_the_peer_comes_back(self):
         engine, _l, _x = make_engine()
@@ -834,7 +835,7 @@ class TestBlame:
         engine.advance(trade)            # we paid; they never reciprocated
         assert engine.consider_abandonment(self._stall(trade)) is True
         assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
-        assert PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse").abandoned_count == 1
+        assert trust.local_tally("peer.lapse")["abandoned_count"] == 1
 
     def test_no_blame_before_the_chain_height_margin_elapses(self):
         """The wall-clock stalled_since check is only ever a cheap
@@ -848,8 +849,7 @@ class TestBlame:
         lapse.current_height = inc.deadline_height  # right at the deadline, no margin yet
         engine.advance(trade)            # we paid; they never reciprocated
         assert engine.consider_abandonment(self._stall(trade)) is False
-        assert PeerRecord.get_or_none(
-            PeerRecord.lapse_addr == "peer.lapse") is None
+        assert trust.local_tally("peer.lapse")["abandoned_count"] == 0
 
     def test_no_blame_when_this_node_owes_the_move(self):
         engine, _l, _x = make_engine()
@@ -883,7 +883,7 @@ class TestBlame:
         _l.current_height += 10**6
         assert engine.consider_abandonment(self._stall(trade)) is True
         assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
-        assert PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse").abandoned_count == 1
+        assert trust.local_tally("peer.lapse")["abandoned_count"] == 1
 
     def test_acceptance_cannot_be_forged_by_the_accuser(self):
         """Only an inbound leg counts. Our own payments, however many,
@@ -893,6 +893,67 @@ class TestBlame:
         for _ in range(5):
             engine.advance(trade)
         assert engine._peer_ever_reciprocated(trade) is False
+
+
+class TestRecheckAbandoned:
+    """Redemption: a counterparty who was genuinely offline, not
+    dishonest, must be able to still complete the trade late and have
+    that be the whole fix, since trust reads straight off Trade.status."""
+
+    def _abandon(self, engine, trade):
+        engine.advance(trade)          # we pay; they never reciprocate
+        engine.lapse.current_height += 10**6
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        trade.status = TRADE_STALLED
+        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
+        trade.save()
+        assert engine.consider_abandonment(trade) is True
+        return Trade.get(Trade.session_id == trade.session_id)
+
+    def test_a_late_settlement_un_abandons_the_trade(self):
+        engine, lapse, _x = make_engine()
+        trade = make_trade()
+        trade = self._abandon(engine, trade)
+        assert trust.local_tally("peer.lapse")["abandoned_count"] == 1
+
+        first = Increment.get(Increment.id == f"{trade.session_id}:1")
+        settle_peer_leg(trade, first, engine)   # the missing leg finally lands
+        assert engine.recheck_abandoned(trade) is True
+
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        assert trade.status == TRADE_ACTIVE
+        assert trust.local_tally("peer.lapse")["abandoned_count"] == 0
+
+    def test_still_missing_leg_is_not_redeemed(self):
+        engine, _lapse, _x = make_engine()
+        trade = make_trade()
+        trade = self._abandon(engine, trade)
+        assert engine.recheck_abandoned(trade) is False
+        assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
+
+    def test_only_abandoned_trades_are_rechecked(self):
+        engine, _lapse, _x = make_engine()
+        trade = make_trade()
+        assert engine.recheck_abandoned(trade) is False
+
+    def test_redemption_lets_the_trade_finish_on_the_next_pass(self):
+        """Un-abandoning does not itself finish the trade, later steps
+        may never even have been attempted; it hands the trade back to
+        the ordinary loop to drive the rest."""
+        engine, lapse, _x = make_engine()
+        trade = make_trade(count=2)
+        trade = self._abandon(engine, trade)
+        first = Increment.get(Increment.id == f"{trade.session_id}:1")
+        settle_peer_leg(trade, first, engine)
+        engine.recheck_abandoned(trade)
+
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        for _ in range(6):
+            inc = engine.advance(trade)
+            if inc is None:
+                break
+            settle_peer_leg(trade, inc, engine)
+        assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_COMPLETED
 
 
 class TestReconcile:
@@ -1208,7 +1269,7 @@ class TestAnswerFillRequests:
         parallel."""
         node = FakeDiscoveryNode(tmp_path, balances={})
         make_order(maker_lapse=node.addr)
-        # No PeerRecord for either address and no chain history: every
+        # No trade history for either address and no chain history: every
         # trust score here is 0, which is the exact tie opening_mover
         # returns None for.
         req = make_request()

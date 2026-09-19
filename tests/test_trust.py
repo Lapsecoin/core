@@ -17,11 +17,31 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import storage as storage_mod
 import trade_storage
 import trust
-from trade_storage import PeerRecord
+from trade_storage import Trade, TRADE_COMPLETED, TRADE_ABANDONED
 
 
 LAPSE = 100_000_000
 DAY = 86_400
+
+_session_counter = [0]
+
+
+def make_trade(peer_addr, status, my_addr="me", lapse_total=50 * LAPSE,
+              session_id=None):
+    """A Trade row standing in for what used to be a record_completed/
+    record_abandonment call: local standing is now derived straight from
+    these (see trust.local_tally), so this is the one thing a test needs
+    to set up to control it."""
+    if session_id is None:
+        _session_counter[0] += 1
+        session_id = f"s-{_session_counter[0]}"
+    now = time.time()
+    return Trade.create(
+        session_id=session_id, order_id="o1", role="taker",
+        my_lapse_addr=my_addr, my_xlm_addr="GME", peer_lapse_addr=peer_addr,
+        peer_xlm_addr="GPEER", i_send="lapse", lapse_total=lapse_total,
+        xlm_total=1, increment_count=1, confirm_depth=2, status=status,
+        created_at=now, updated_at=now)
 
 
 @pytest.fixture(autouse=True)
@@ -126,23 +146,38 @@ class TestSlashing:
                            now=now) == 0.0
 
     def test_slashing_is_not_undone_by_more_trades(self):
-        trust.record_abandonment("bad.peer", "session-x")
+        """As long as an abandoned Trade row is still sitting there
+        unresolved, not just once, historically, in the past."""
+        make_trade("bad.peer", TRADE_ABANDONED, session_id="session-x")
         for _ in range(50):
-            trust.record_completed("bad.peer", 100 * LAPSE)
+            make_trade("bad.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
         assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
 
     def test_abandonment_records_its_evidence(self):
-        trust.record_abandonment("bad.peer", "session-abc")
+        make_trade("bad.peer", TRADE_ABANDONED, session_id="session-abc")
         detail = trust.get_detail("bad.peer", AGED, FUNDED)
         assert detail["abandoned_count"] == 1
         assert detail["last_abandon_session"] == "session-abc"
 
     def test_recovery_requires_a_new_address(self):
         """Which is the cost that makes the number mean anything."""
-        trust.record_abandonment("bad.peer")
-        trust.record_completed("fresh.peer", 100 * LAPSE)
+        make_trade("bad.peer", TRADE_ABANDONED)
+        make_trade("fresh.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
         assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
         assert trust.get_detail("fresh.peer", AGED, FUNDED)["score"] > 0.0
+
+    def test_a_late_settlement_lifts_the_slash(self):
+        """The whole point of deriving this from Trade.status rather than
+        an incremented counter: nothing needs reversing, a status flip
+        (see swap_engine.Engine.recheck_abandoned) is the entire fix."""
+        trade = make_trade("bad.peer", TRADE_ABANDONED, session_id="s-late")
+        assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
+
+        trade.status = TRADE_COMPLETED
+        trade.save()
+        detail = trust.get_detail("bad.peer", AGED, FUNDED)
+        assert detail["abandoned_count"] == 0
+        assert detail["score"] > 0.0
 
 
 class TestRecords:
@@ -153,15 +188,15 @@ class TestRecords:
         assert trust.get_detail("never.seen")["known"] is False
 
     def test_completed_accumulates(self):
-        trust.record_completed("peer", 10 * LAPSE)
-        trust.record_completed("peer", 5 * LAPSE)
-        row = PeerRecord.get(PeerRecord.lapse_addr == "peer")
-        assert row.completed_count == 2
-        assert row.completed_lapse == 15 * LAPSE
+        make_trade("peer", TRADE_COMPLETED, lapse_total=10 * LAPSE)
+        make_trade("peer", TRADE_COMPLETED, lapse_total=5 * LAPSE)
+        detail = trust.local_tally("peer")
+        assert detail["completed_count"] == 2
+        assert detail["completed_lapse"] == 15 * LAPSE
 
     def test_detail_explains_the_score(self):
         """A score with no stated reason is a verdict, not information."""
-        trust.record_completed("peer", 50 * LAPSE)
+        make_trade("peer", TRADE_COMPLETED)
         detail = trust.get_detail("peer", AGED, FUNDED)
         assert detail["history"] > 0
         assert detail["stake"] > 0
@@ -230,7 +265,7 @@ class TestMutualScores:
     def test_shared_history_is_weighted_by_each_sides_own_stake(self):
         """The completed-trade component is the same shared fact either
         way; only whose stake it is multiplied by differs."""
-        trust.record_completed("peer", 50 * LAPSE)
+        make_trade("peer", TRADE_COMPLETED)
         node = FakeNode(
             "me", height=AGED,
             heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
@@ -243,7 +278,7 @@ class TestMutualScores:
         assert mine != theirs
 
     def test_richer_peer_scores_higher_from_my_side(self):
-        trust.record_completed("peer", 50 * LAPSE)
+        make_trade("peer", TRADE_COMPLETED)
         node = FakeNode(
             "me", height=AGED,
             heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
@@ -262,8 +297,8 @@ class TestMutualScores:
         only signal either side of the pair can act on; there is no
         channel carrying the reverse (see the docstring on mutual_scores),
         so it is applied to both rather than only to my_trust_of_peer."""
-        trust.record_completed("peer", 50 * LAPSE)
-        trust.record_abandonment("peer")
+        make_trade("peer", TRADE_COMPLETED)
+        make_trade("peer", TRADE_ABANDONED)
         node = FakeNode(
             "me", height=AGED,
             heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
@@ -277,15 +312,18 @@ class TestMutualScores:
         about the other, and must land on complementary answers without
         exchanging anything: swap it, the caller becomes the peer.
 
-        Both nodes' PeerRecord tables get the same completed-trade count
-        under the other's address, which is the property that makes this
-        work at all: a jointly-completed trade produces exactly that on
-        both sides, since each side only records it once its own inbound
-        leg actually settled (see swap_engine._complete).
+        Both nodes derive the same completed-trade count for the other's
+        address, which is the property that makes this work at all: a
+        jointly-completed trade leaves each side its own Trade row for
+        it, since each side only completes its own once its own inbound
+        leg actually settled (see swap_engine._complete). Simulated here
+        as two Trade rows in one shared test database, one per node's
+        own local view (my_lapse_addr differs, peer_lapse_addr is what
+        local_tally actually keys off).
         """
         import swap
-        trust.record_completed("peer", 50 * LAPSE)    # taker's record of maker
-        trust.record_completed("taker", 50 * LAPSE)   # maker's record of taker
+        make_trade("peer", TRADE_COMPLETED, my_addr="taker")   # taker's own record of maker
+        make_trade("taker", TRADE_COMPLETED, my_addr="peer")   # maker's own record of taker
         taker_node = FakeNode(
             "taker", height=AGED,
             heights_by_addr={"peer": [(0, "h")], "taker": [(0, "h")]},
@@ -371,9 +409,8 @@ class TestNetworkTally:
         assert detail["known"] is True
 
     def test_network_and_local_history_add_together(self):
-        row = PeerRecord.create(lapse_addr="b", completed_count=2,
-                                completed_lapse=10 * LAPSE, abandoned_count=0,
-                                last_completed_at=time.time())
+        make_trade("b", TRADE_COMPLETED, lapse_total=6 * LAPSE)
+        make_trade("b", TRADE_COMPLETED, lapse_total=4 * LAPSE)
         make_receipt("r1", "a", "b", "s1", outcome="settled", amount=3 * LAPSE)
         detail = trust.get_detail("b", node=object())
         assert detail["completed_count"] == 3
@@ -406,3 +443,42 @@ class TestVerifyPendingReceipts:
         assert resolved == 0
         row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
         assert row.verified is None
+
+    def test_already_verified_missed_claims_are_rechecked(self, monkeypatch):
+        """Unlike settled, missed is not a monotonic fact: a late, honest
+        payment can falsify it at any time after it was first true. This
+        is the network-wide half of redemption, matching
+        swap_engine.Engine.recheck_abandoned's local half."""
+        import swap_engine
+        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=True)
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
+                            lambda engine, r: False)  # the payment showed up
+        resolved = trust.verify_pending_receipts(node=object(), limit=10)
+        assert resolved == 1
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        assert row.verified is False
+        # And the moment it flips, trust stops counting it.
+        assert trust._network_tally("b")[0] == 0
+
+    def test_already_verified_settled_claims_are_not_rechecked(self, monkeypatch):
+        """Settled is monotonic, so it is not worth the extra chain call
+        every pass: only unverified and previously-missed claims are
+        candidates."""
+        import swap_engine
+        make_receipt("r1", "a", "b", "s1", outcome="settled", verified=True)
+        calls = []
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
+                            lambda engine, r: calls.append(r.receipt_id) or True)
+        trust.verify_pending_receipts(node=object(), limit=10)
+        assert calls == []
+
+    def test_unverified_receipts_take_priority_over_rechecks(self, monkeypatch):
+        import swap_engine
+        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=True)
+        make_receipt("r2", "a", "b", "s2", outcome="settled", verified=None)
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
+                            lambda engine, r: True)
+        resolved = trust.verify_pending_receipts(node=object(), limit=1)
+        assert resolved == 1
+        row2 = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r2")
+        assert row2.verified is True

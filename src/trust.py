@@ -30,23 +30,34 @@ just no longer free, and pricing it is the achievable goal. Preventing it
 outright is not, without an identity system this design is right not to
 have.
 
-Slashing
---------
+Slashing, and why it is never permanent
+----------------------------------------
 One unreciprocated payment zeroes the score outright, rather than
-decrementing it. Recovering means aging and funding a fresh address,
-which is the cost that makes the number mean anything.
+decrementing it: a partial penalty would price honesty and dishonesty on
+the same curve, and they are not the same thing.
 
-What it does not do is fire on a timeout. A stalled trade is not a slash;
-see swap_engine.consider_abandonment for the margin and the reachability
-evidence required first. A peer whose node was restarting must never lose
-standing for it.
+What it does not do is fire on a mere timeout, or stay fired once the
+reason for it stops being true. A stalled trade is not a slash (see
+swap_engine.consider_abandonment for the margin required first), and
+this node is never the last word on whether one happened: standing here
+is computed fresh from this node's own Trade rows every time it is
+asked, never incremented and stored. A trade this node marked abandoned
+that later, genuinely, settles (a node that was offline for entirely
+mundane reasons, paying what it always owed, late) is simply a Trade row
+whose status changed back (see swap_engine.recheck_abandoned); there is
+no separate counter to remember to also fix, because there is no counter
+at all. The same goes for a gossiped step receipt claiming a payment
+never arrived: that claim is re-checked against the chain on the same
+schedule as an unverified one (see verify_pending_receipts), not
+accepted once and then trusted forever, because whether it never arrived
+is true only until the moment it does.
 """
 
 import logging
 import math
 import time
 
-from trade_storage import PeerRecord, ensure_tables
+from trade_storage import ensure_tables
 
 log = logging.getLogger("ec.trust")
 
@@ -128,13 +139,45 @@ def score(completed_count, completed_ticks, abandoned_count,
 
 
 # ---------------------------------------------------------------------------
-# Stored records
+# Local history: derived from this node's own Trade rows, never stored
 # ---------------------------------------------------------------------------
+#
+# There used to be a PeerRecord table here, incremented once per completed
+# or abandoned trade and read back as the answer. That is exactly the
+# design this module's own docstring now warns against: an incremented
+# counter has no way to notice that the trade it counted against later
+# resolved differently (a late payment settling what looked abandoned),
+# so "abandoned" became a fact this node could assert once and never
+# revisit. A Trade row's own `status` is already the one place that
+# outcome lives, and it already changes when the truth does (see
+# swap_engine.recheck_abandoned); querying it fresh means there is
+# nothing left over to fall out of sync with it.
 
-def _record(addr):
-    ensure_tables()
-    row, _created = PeerRecord.get_or_create(lapse_addr=addr)
-    return row
+def local_tally(addr):
+    """This node's own completed/abandoned counts and volumes against
+    addr, computed fresh from Trade rows every call rather than read
+    back from a running total. Cheap: a node's own trade history with
+    one counterparty is small by construction (see MAX_ORDERS_PER_MAKER
+    and friends bounding the market generally), so this is a couple of
+    indexed queries, not a scan.
+    """
+    from trade_storage import Trade, TRADE_COMPLETED, TRADE_ABANDONED
+
+    completed = list(Trade.select()
+                     .where(Trade.peer_lapse_addr == addr,
+                            Trade.status == TRADE_COMPLETED))
+    abandoned = list(Trade.select()
+                     .where(Trade.peer_lapse_addr == addr,
+                            Trade.status == TRADE_ABANDONED)
+                     .order_by(Trade.updated_at.desc()))
+    return {
+        "completed_count": len(completed),
+        "completed_lapse": sum(t.lapse_total for t in completed),
+        "last_completed_at": max((t.updated_at for t in completed), default=0.0),
+        "abandoned_count": len(abandoned),
+        "last_abandoned_at": abandoned[0].updated_at if abandoned else 0.0,
+        "last_abandon_session": abandoned[0].session_id if abandoned else "",
+    }
 
 
 def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None):
@@ -155,14 +198,14 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
     than being guessed at.
     """
     ensure_tables()
-    row = PeerRecord.get_or_none(PeerRecord.lapse_addr == addr)
-    completed_count = row.completed_count if row else 0
-    completed_lapse = row.completed_lapse if row else 0
-    abandoned_count = row.abandoned_count if row else 0
-    last_completed_at = row.last_completed_at if row else 0.0
-    last_abandoned_at = row.last_abandoned_at if row else 0.0
-    last_abandon_session = row.last_abandon_session if row else ""
-    known = row is not None
+    local = local_tally(addr)
+    completed_count = local["completed_count"]
+    completed_lapse = local["completed_lapse"]
+    abandoned_count = local["abandoned_count"]
+    last_completed_at = local["last_completed_at"]
+    last_abandoned_at = local["last_abandoned_at"]
+    last_abandon_session = local["last_abandon_session"]
+    known = bool(completed_count or abandoned_count)
 
     # Broken out from the merged totals below so a caller (see
     # market_take.html's Track record card) can say plainly which part
@@ -204,9 +247,10 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
 def _network_tally(addr):
     """(abandoned, completed_count, completed_lapse, last_completed_at)
     from already-verified step receipts naming addr, excluding any
-    session this node already has a local Trade row for (see PeerRecord:
-    those are already counted above, and counting them again from a
-    receipt this node itself likely emitted would double them).
+    session this node already has a local Trade row for (see
+    local_tally: those are already counted above, and counting them
+    again from a receipt this node itself likely emitted would double
+    them).
 
     Deliberately DB-only: this runs on every trust lookup, including from
     a page render, so it must never itself make a network call. Turning
@@ -245,29 +289,53 @@ def _network_tally(addr):
 
 
 def verify_pending_receipts(node, limit=20):
-    """Chain-check up to `limit` not-yet-verified receipts, any address,
-    and cache the verdict. The only place a receipt's `verified` column
-    is ever set; see _network_tally for why every trust lookup only ever
+    """Chain-check up to `limit` receipts, any address, and cache the
+    verdict. See _network_tally for why every trust lookup only ever
     reads that cache rather than triggering this itself.
+
+    Two different queues, because "settled" and "missed" are not the
+    same kind of claim. A settled claim is monotonic: once a payment is
+    confirmed, it does not later un-happen (barring a reorg, and an
+    active trade already re-checks its own legs against that
+    continuously; a third party's settled receipt is not re-chased here,
+    which is an accepted, narrower gap than the one this function
+    exists to close). A missed claim is not monotonic: "the payment has
+    not arrived" is true only until the moment it does, and a node that
+    was genuinely offline rather than dishonest can make it false at any
+    time by finally sending what it owed. So unverified receipts (either
+    outcome) are checked first, and any spare budget goes to re-checking
+    already-verified "missed" claims, oldest-checked first, rather than
+    trusting that verdict forever. That re-check is the network-wide
+    half of redemption; swap_engine.recheck_abandoned is the local half,
+    for the node this payment was actually owed to.
 
     Meant to be called once per swap-worker pass, the same cadence
     everything else about trades already runs on, not from a request
     path: this is the one place in the step-receipts design that does
     real chain I/O (a Horizon call for an XLM leg is possible here), and
     bounding it per pass is what keeps that cost predictable instead of
-    proportional to how many receipts happen to be sitting unverified.
-    Returns how many were resolved (true or false); an outage leaves the
-    rest for the next pass rather than raising.
+    proportional to how many receipts happen to be sitting around.
+    Returns how many were resolved; an outage leaves a receipt exactly
+    as it was for the next pass to try again, never guessed at.
     """
     import swap_engine as swap_engine_mod
     from trade_storage import StepReceipt, ensure_tables as _ensure
 
     _ensure()
     engine = _lightweight_engine(node)
+
+    pending = list(StepReceipt.select()
+                  .where(StepReceipt.verified.is_null())
+                  .limit(limit))
+    remaining = limit - len(pending)
+    if remaining > 0:
+        pending += list(StepReceipt.select()
+                        .where(StepReceipt.outcome == "missed",
+                               StepReceipt.verified == True)  # noqa: E712
+                        .order_by(StepReceipt.received_at)
+                        .limit(remaining))
+
     resolved = 0
-    pending = (StepReceipt.select()
-              .where(StepReceipt.verified.is_null())
-              .limit(limit))
     for r in pending:
         try:
             r.verified = swap_engine_mod.verify_receipt_against_chain(engine, r)
@@ -297,35 +365,6 @@ def _lightweight_engine(node):
     return adapters
 
 
-def record_completed(addr, ticks):
-    ensure_tables()
-    row = _record(addr)
-    row.completed_count += 1
-    row.completed_lapse += max(ticks, 0)
-    row.last_completed_at = time.time()
-    row.save()
-    return row
-
-
-def record_abandonment(addr, session_id=""):
-    """Register that a peer took a payment and did not reciprocate.
-
-    Called only from swap_engine.consider_abandonment, which requires a
-    wide margin past the deadline and evidence the peer was reachable
-    throughout. Nothing else should call this: a timeout on its own is not
-    proof of anything, and this is not recoverable by waiting.
-    """
-    ensure_tables()
-    row = _record(addr)
-    row.abandoned_count += 1
-    row.last_abandoned_at = time.time()
-    row.last_abandon_session = session_id
-    row.save()
-    log.warning("[trust] %s marked as having abandoned a trade (session %s); "
-                "standing zeroed", addr[:24], session_id or "?")
-    return row
-
-
 # ---------------------------------------------------------------------------
 # Chain facts
 # ---------------------------------------------------------------------------
@@ -352,10 +391,10 @@ def mutual_scores(node, peer_addr):
     win the "opens second" side of the coin flip. The completed-trade
     count between two specific addresses cannot be lied about this way:
     both sides watched the same legs settle on the same public chains, so
-    this node's own PeerRecord for the peer already holds the number the
-    peer's own worker would compute too. Standing is public on both
-    sides too: anyone's address age and balance are chain facts, not
-    something told to you.
+    this node's own Trade rows against the peer (see local_tally) already
+    hold the number the peer's own node would derive too. Standing is
+    public on both sides too: anyone's address age and balance are chain
+    facts, not something told to you.
 
     A defection is no longer only a private opinion, either: get_detail's
     node argument folds in any gossiped step receipt this node can
@@ -363,10 +402,11 @@ def mutual_scores(node, peer_addr):
     section), for sessions between this pair that this node was not
     itself party to. That is a checked fact, not the peer's word, so
     trusting it here carries none of the risk a bare broadcast opinion
-    would: a false claim fails verification regardless of who signed it.
-    Bilateral history (this node's own PeerRecord for the peer) and
-    network-verified history are simply added together before either
-    half of this function reads them.
+    would: a false claim fails verification regardless of who signed it,
+    and, unlike this node's own Trade rows, is re-checked periodically
+    rather than trusted forever (see verify_pending_receipts). Bilateral
+    history and network-verified history are simply added together
+    before either half of this function reads them.
     """
     peer_age = address_age_blocks(node, peer_addr)
     peer_balance = node.view.state.get_balance(peer_addr)

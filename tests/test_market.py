@@ -18,7 +18,6 @@ import crypto
 import market
 import storage as storage_mod
 import trade_storage
-import trust as trust_mod
 import xlm as xlm_mod
 from trade_storage import Increment, LEG_SETTLED, Order, Trade
 
@@ -1068,7 +1067,11 @@ class TestTicker:
         node = _TickerNode(
             balances={trusted: 10**15},
             heights_by_addr={trusted: [(1, "h")]})
-        trust_mod.record_completed(trusted, 50 * LAPSE)
+        # Prior standing, at the same per-unit price as the sample below
+        # so it does not itself skew the median: trust is now read
+        # straight off completed Trade rows (trust.local_tally), so
+        # establishing it is just another one of those.
+        _completed_trade("trusted-history", trusted, 50 * LAPSE, 50 * 100_000 * XLM)
 
         low_price = 100 * XLM * 100_000_000 // (1 * LAPSE)
         high_price = 100_000 * XLM * 100_000_000 // (1 * LAPSE)
