@@ -455,10 +455,6 @@ def main():
         _offer({"type": "order", "order": order,
                 "sender": sender_addr, "stemming": stemming}, "order")
 
-    def on_claim(claim, sender_addr, stemming=False):
-        _offer({"type": "claim", "claim": claim,
-                "sender": sender_addr, "stemming": stemming}, "claim")
-
     def on_fill_request(request, sender_addr, stemming=False):
         _offer({"type": "fill_request", "fill_request": request,
                 "sender": sender_addr, "stemming": stemming}, "fill request")
@@ -530,7 +526,6 @@ def main():
                 LOCAL_VERSION, node.cs.cumulative_iterations)
 
     udp.set_order_callback(on_order)
-    udp.set_claim_callback(on_claim)
     udp.set_fill_request_callback(on_fill_request)
     udp.set_fill_response_callback(on_fill_response)
     udp.set_chain_provider(_chain_provider)

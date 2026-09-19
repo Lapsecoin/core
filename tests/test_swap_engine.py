@@ -171,14 +171,6 @@ class FakeChain:
     def count_for(self, memo):
         return sum(1 for p in self.payments if p["memo"] == memo)
 
-    def recent_incoming(self, to_addr, limit=200):
-        """The discovery half of this fake: every payment landing on
-        `to_addr`, most recent first, mirroring the real adapters'
-        recent_incoming (see swap_engine.LapseAdapter/XLMAdapter)."""
-        rows = [(p["from"], p["memo"], p["amount"], p["hash"], self.depth)
-                for p in reversed(self.payments) if p["to"] == to_addr]
-        return rows[:limit]
-
 
 def make_trade(i_send="lapse", count=3, confirm_depth=2, role="taker"):
     now = time.time()
@@ -243,7 +235,7 @@ class FakeView:
 
 
 class FakeLapseNode:
-    """Just enough of a real Node for LapseAdapter.recent_incoming: a
+    """Just enough of a real Node for LapseAdapter.find_payment: a
     mempool, a chain, and the address index that backs storage lookups.
     """
 
@@ -260,90 +252,6 @@ def _tx(from_addr, outputs, memo=None, nonce=1):
     if memo is not None:
         t["memo"] = memo
     return t
-
-
-class TestLapseAdapterRecentIncoming:
-    """The maker's discovery raw material on the LapseCoin side: every
-    inbound payment, not a search for one already-expected memo."""
-
-    def test_finds_a_pending_mempool_payment(self):
-        import tx as tx_mod
-        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}],
-               memo="a1b2c3d4:e5f6a1b2:1")
-        node = FakeLapseNode(mempool_txs=[t])
-        adapter = swap_engine.LapseAdapter(node)
-        rows = adapter.recent_incoming("me.lapse")
-        assert rows == [("peer.lapse", "a1b2c3d4:e5f6a1b2:1", 5 * LAPSE,
-                         tx_mod.tx_hash(t), 0)]
-
-    def test_finds_a_confirmed_chain_payment_with_its_depth(self):
-        import tx as tx_mod
-        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}],
-               memo="tag")
-        h = tx_mod.tx_hash(t)
-        chain = [{"height": 0, "transactions": []},
-                 {"height": 1, "transactions": [t]},
-                 {"height": 2, "transactions": []}]
-        node = FakeLapseNode(chain=chain, heights_by_addr={"me.lapse": [(1, h)]})
-        adapter = swap_engine.LapseAdapter(node)
-        rows = adapter.recent_incoming("me.lapse")
-        assert rows == [("peer.lapse", "tag", 5 * LAPSE, h, 2)]
-
-    def test_outgoing_payment_is_not_incoming(self):
-        t = _tx("me.lapse", [{"to": "someone.else", "amount": 5 * LAPSE}])
-        node = FakeLapseNode(mempool_txs=[t])
-        adapter = swap_engine.LapseAdapter(node)
-        assert adapter.recent_incoming("me.lapse") == []
-
-    def test_self_payment_is_excluded(self):
-        """Whatever it means, it is never a counterparty's step."""
-        t = _tx("me.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}])
-        node = FakeLapseNode(mempool_txs=[t])
-        adapter = swap_engine.LapseAdapter(node)
-        assert adapter.recent_incoming("me.lapse") == []
-
-    def test_missing_memo_reports_none_not_a_crash(self):
-        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}])
-        node = FakeLapseNode(mempool_txs=[t])
-        adapter = swap_engine.LapseAdapter(node)
-        assert adapter.recent_incoming("me.lapse")[0][1] is None
-
-    def test_a_pending_payment_is_not_duplicated_once_confirmed(self):
-        """The same transaction reachable through both the mempool and the
-        address index (a normal race between a fresh block and a mempool
-        that has not caught up yet) must appear once, not twice."""
-        import tx as tx_mod
-        t = _tx("peer.lapse", [{"to": "me.lapse", "amount": 5 * LAPSE}], memo="tag")
-        h = tx_mod.tx_hash(t)
-        chain = [{"height": 0, "transactions": []},
-                 {"height": 1, "transactions": [t]}]
-        node = FakeLapseNode(mempool_txs=[t], chain=chain,
-                             heights_by_addr={"me.lapse": [(1, h)]})
-        adapter = swap_engine.LapseAdapter(node)
-        rows = adapter.recent_incoming("me.lapse")
-        assert len(rows) == 1
-        assert rows[0][4] == 0, "the mempool copy (depth 0) wins, not the stale chain one"
-
-    def test_no_history_is_an_empty_list(self):
-        node = FakeLapseNode()
-        adapter = swap_engine.LapseAdapter(node)
-        assert adapter.recent_incoming("me.lapse") == []
-
-    def test_multiple_payments_are_all_returned(self):
-        t1 = _tx("peer1.lapse", [{"to": "me.lapse", "amount": 1 * LAPSE}], memo="t1")
-        t2 = _tx("peer2.lapse", [{"to": "me.lapse", "amount": 2 * LAPSE}], memo="t2")
-        node = FakeLapseNode(mempool_txs=[t1, t2])
-        adapter = swap_engine.LapseAdapter(node)
-        rows = adapter.recent_incoming("me.lapse")
-        assert {r[0] for r in rows} == {"peer1.lapse", "peer2.lapse"}
-
-    def test_limit_caps_the_result(self):
-        txs = [_tx(f"peer{i}.lapse", [{"to": "me.lapse", "amount": 1 * LAPSE}],
-                   memo=f"t{i}", nonce=i)
-               for i in range(10)]
-        node = FakeLapseNode(mempool_txs=txs)
-        adapter = swap_engine.LapseAdapter(node)
-        assert len(adapter.recent_incoming("me.lapse", limit=3)) == 3
 
 
 class TestLapseAdapterFindPayment:
@@ -1103,6 +1011,27 @@ class TestAnswerFillRequests:
         assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
         trade = Trade.get(Trade.session_id == req.session_id)
         assert trade.i_send == "xlm"
+
+    def test_a_second_order_cannot_promise_the_same_unspent_balance_twice(self, tmp_path):
+        """A chain balance backs every trade this node has already
+        accepted, not just the one currently being decided: two 'sell'
+        orders together asking for more LAPSE than this node actually
+        holds must not both be accepted just because neither request
+        alone exceeds the raw balance (see _pending_send_total)."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(order_id="order-a", direction="sell", maker_lapse=node.addr)
+        make_order(order_id="order-b", direction="sell", maker_lapse=node.addr)
+        make_request(order_id="order-a", session_id="a" * 16, lapse_total=6 * LAPSE)
+        make_request(order_id="order-b", session_id="b" * 16, lapse_total=6 * LAPSE)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = 10 * LAPSE   # enough for one, not both
+
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        accepted = [r for r in node.publish_fill_response_calls if r["accepted"]]
+        rejected = [r for r in node.publish_fill_response_calls if not r["accepted"]]
+        assert len(accepted) == 1
+        assert len(rejected) == 1
+        assert Trade.select().count() == 1
 
     def test_a_maker_who_cannot_fund_the_lapse_leg_is_refused(self, tmp_path):
         """A signed request alone must never be enough to commit this

@@ -146,10 +146,9 @@ class LapseAdapter:
         chain = self.node.view.chain
         tip = chain[-1]["height"]
         # Looks up by the exact memo (this step's own session tag) rather
-        # than walking every transaction from_addr has ever made: unlike
-        # recent_incoming's discovery scan, this call already knows
-        # precisely which payment it is checking for (see
-        # storage.Storage.get_tx_by_addr_and_memo).
+        # than walking every transaction from_addr has ever made: this
+        # call already knows precisely which payment it is checking for
+        # (see storage.Storage.get_tx_by_addr_and_memo).
         for block_height, tx_hash in self.node.storage.get_tx_by_addr_and_memo(from_addr, memo):
             if not 0 <= block_height < len(chain):
                 continue
@@ -169,58 +168,6 @@ class LapseAdapter:
         paid = sum(out["amount"] for out in candidate.get("outputs", [])
                    if out.get("to") == to_addr)
         return paid >= min_amount
-
-    def recent_incoming(self, to_addr, limit=200):
-        """Every payment landing on `to_addr`, most recent first, as
-        (from_addr, memo, amount, tx_hash, confirmations).
-
-        For discovery, not for checking one already-expected payment (see
-        find_payment): scanning for any inbound payment whose memo might
-        name one of this node's own orders (see
-        swap_engine.discover_trades). The mempool is searched too, at
-        zero confirmations, for the same reason find_payment does: a
-        payment still settling must not be missed.
-
-        A self-payment (this node paying its own address) is excluded:
-        whatever it means, it is never a counterparty's step, and this is
-        the one place that distinction has to be made explicitly, since
-        nothing downstream of this list re-derives sender identity.
-        """
-        import tx as tx_mod
-
-        rows = []
-        seen_hashes = set()
-        for candidate in self.node.mempool.all_txs():
-            if candidate.get("from") == to_addr:
-                continue
-            paid = sum(o["amount"] for o in candidate.get("outputs", [])
-                       if o.get("to") == to_addr)
-            if paid <= 0:
-                continue
-            h = tx_mod.tx_hash(candidate)
-            seen_hashes.add(h)
-            rows.append((candidate.get("from"), candidate.get("memo"), paid, h, 0))
-
-        chain = self.node.view.chain
-        tip = chain[-1]["height"]
-        for block_height, tx_hash in self.node.storage.get_tx_heights_for_addr(to_addr):
-            if tx_hash in seen_hashes:
-                continue
-            if not 0 <= block_height < len(chain):
-                continue
-            for candidate in chain[block_height]["transactions"]:
-                if tx_mod.tx_hash(candidate) != tx_hash:
-                    continue
-                if candidate.get("from") == to_addr:
-                    break
-                paid = sum(o["amount"] for o in candidate.get("outputs", [])
-                           if o.get("to") == to_addr)
-                if paid <= 0:
-                    break
-                rows.append((candidate.get("from"), candidate.get("memo"),
-                            paid, tx_hash, tip - block_height + 1))
-                break
-        return rows[:limit]
 
     def confirmations(self, tx_hash):
         """Depth of a transaction, 0 while unconfirmed, None if unknown.
@@ -352,20 +299,6 @@ class XLMAdapter:
             return 10**9 if xlm_mod.transaction_succeeded(tx_hash) else None
         except xlm_mod.XLMUnreachable as e:
             raise Unreachable(str(e)) from e
-
-    def recent_incoming(self, to_addr, limit=200):
-        """Every payment landing on `to_addr`, most recent first, as
-        (from_addr, memo, amount, tx_hash, confirmations). See
-        LapseAdapter.recent_incoming; this is the XLM half discovery
-        needs. Confirmations is always the same large constant find_payment
-        already reports, since Stellar is final on inclusion.
-        """
-        try:
-            rows = xlm_mod.recent_incoming_payments(to_addr, limit)
-        except xlm_mod.XLMUnreachable as e:
-            raise Unreachable(str(e)) from e
-        return [(sender, memo, amount, tx_hash, 10**9)
-                for sender, memo, amount, tx_hash in rows]
 
     def build(self, to_addr, amount, memo, seed, create_account=False):
         try:
@@ -954,6 +887,33 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth)
     return accepted
 
 
+def _pending_send_total(asset):
+    """Everything this node has already promised to send on one asset,
+    across every trade still running on it, whether maker or taker.
+
+    A balance read alone is not enough to decide a second order: it is
+    the same account backing every trade this node has open, and a
+    balance check that only looks at the chain would let two accepted
+    orders each pass a solvency check against the same, unspent stroops,
+    committing this node to send more than it holds. Every accept is
+    itself a Trade row the instant it happens (see _answer_one), so
+    summing every active or stalled trade's own unsettled obligation on
+    this asset, including ones this very pass just created, is exactly
+    what keeps that from happening.
+    """
+    total = 0
+    for trade in Trade.select().where(
+            Trade.status.in_([TRADE_ACTIVE, TRADE_STALLED]),
+            Trade.i_send == asset):
+        owed = trade.lapse_total if asset == "lapse" else trade.xlm_total
+        sent = 0
+        for inc in Increment.select().where(Increment.session_id == trade.session_id,
+                                            Increment.out_state == LEG_SETTLED):
+            sent += inc.lapse_amount if asset == "lapse" else inc.xlm_amount
+        total += max(owed - sent, 0)
+    return total
+
+
 def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
                 order_row, req):
     """Decide one fill request against one order. Returns True if it was
@@ -1009,12 +969,19 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
         have, need = engine.lapse.balance(node.addr), req.lapse_total
     else:
         have, need = engine.xlm.balance(my_xlm_addr), xlm_total
-    if have < need:
+    # A chain balance alone is not this node's own to promise again: it
+    # already backs every trade already accepted, this pass and earlier,
+    # that has not yet actually sent (see _pending_send_total). Without
+    # this, two of this node's own orders on the same asset could each
+    # pass this check against the same unspent stroops and this node
+    # would end up committed to sending more than it holds.
+    already_owed = _pending_send_total(maker_i_send)
+    if have - already_owed < need:
         log.warning(
             "[swap] refusing fill request %s from %s: this node cannot "
-            "fund its own %s leg (has %d, needs %d)",
+            "fund its own %s leg (has %d, %d already owed elsewhere, needs %d)",
             req.request_id[:16], req.taker_lapse_addr[:24],
-            maker_i_send, have, need)
+            maker_i_send, have, already_owed, need)
         respond(False, reason="the maker cannot currently fund this fill")
         return False
 

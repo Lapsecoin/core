@@ -1136,8 +1136,6 @@ class Node:
             self._handle_inbound_tx(msg)
         elif t == "order":
             self._handle_inbound_order(msg)
-        elif t == "claim":
-            self._handle_inbound_claim(msg)
         elif t == "fill_request":
             self._handle_inbound_fill_request(msg)
         elif t == "fill_response":
@@ -1498,56 +1496,10 @@ class Node:
         """Put this node's own order or cancellation onto the network."""
         self._spread(item, gossip_mod.KIND_ORDER, market_mod.order_hash(item))
 
-    def _handle_inbound_claim(self, msg):
-        """Verify a taker's fill claim, store it, and pass it on.
-
-        Same shape and same reasoning as _handle_inbound_order: verified
-        before relaying so a flood of junk costs one signature check and
-        goes no further, and relayed either way so gossip's own flood
-        logic is the only thing deciding whether this node has already
-        sent it onward (see market.already_known_claim).
-
-        Nothing here touches consensus, and nothing here creates a trade:
-        a claim only ever supplies an address and a stated fill size for
-        whichever of this node's own orders it happens to name, if any.
-        Turning one into a trade is swap_engine.discover_trades' job,
-        once it also has a settled payment to match against it.
-        """
-        item = msg["claim"]
-        sender = msg.get("sender")
-        stemming = msg.get("stemming", False)
-
-        try:
-            item_hash = market_mod.claim_hash(item)
-        except Exception:
-            log.debug("[market] ignoring an unreadable claim")
-            return
-
-        self._note_echo(item_hash, sender)
-
-        if not market_mod.already_known_claim(item):
-            try:
-                market_mod.verify_claim(item)
-                market_mod.store_claim(item)
-            except market_mod.ClaimRejected as e:
-                log.debug("[market] rejected a claim from %s: %s", sender, e)
-                return
-            except Exception:
-                log.warning("[market] failed to handle an inbound claim",
-                            exc_info=True)
-                return
-
-        self.gossip.relay(item, gossip_mod.KIND_CLAIM, item_hash,
-                          sender, stemming=stemming)
-
-    def publish_claim(self, item):
-        """Put this node's own fill claim onto the network."""
-        self._spread(item, gossip_mod.KIND_CLAIM, market_mod.claim_hash(item))
-
     def _handle_inbound_fill_request(self, msg):
         """Verify a taker's fill request, store it, and pass it on.
 
-        Same shape and same reasoning as _handle_inbound_claim: verified
+        Same shape and same reasoning as _handle_inbound_order: verified
         before relaying so a flood of junk costs one signature check and
         goes no further, relayed either way so gossip's own flood logic
         is the only thing deciding whether this node has already sent it
@@ -1591,7 +1543,7 @@ class Node:
 
     def _handle_inbound_fill_response(self, msg):
         """Verify a maker's answer to a fill request, store it, and pass
-        it on. Same shape and same reasoning as _handle_inbound_claim.
+        it on. Same shape and same reasoning as _handle_inbound_fill_request.
 
         Verified here only at the level any relay can check: that it is
         well-formed and genuinely signed by *someone*. Whether it was

@@ -69,17 +69,13 @@ SEEN_CACHE_SIZE = 50_000
 # market.MAX_ORDERS_PER_MAKER and the intake limits in market_routes.py).
 ORDER_SEEN_CACHE_SIZE = 20_000
 
-# Claims are rarer than orders (one per fill attempt, not one per standing
-# offer) and shorter-lived (market.CLAIM_MAX_AGE_SECONDS prunes them within
-# the hour), so a smaller budget than orders' still comfortably covers
-# genuine traffic while keeping the same isolation guarantee: a flood of
-# claims cannot touch the order, block or tx caches either.
-CLAIM_SEEN_CACHE_SIZE = 5_000
-
-# Fill requests and responses (see market.py's handshake section) are the
-# same rarity and lifetime as claims, one per fill attempt, pruned within
-# the hour, and get the same isolation treatment: their own budgets so a
-# flood of either can never touch the order, claim, block or tx caches.
+# Fill requests and responses (see market.py's handshake section) are
+# rarer than orders (one per fill attempt, not one per standing offer)
+# and shorter-lived (market.FILL_REQUEST_MAX_AGE_SECONDS /
+# FILL_RESPONSE_MAX_AGE_SECONDS prune them within the hour), so a smaller
+# budget than orders' still comfortably covers genuine traffic while
+# keeping the same isolation guarantee: a flood of either can never touch
+# the order, block or tx caches, or each other's.
 FILL_REQUEST_SEEN_CACHE_SIZE = 5_000
 FILL_RESPONSE_SEEN_CACHE_SIZE = 5_000
 
@@ -114,7 +110,6 @@ def _random_fraction():
 KIND_BLOCK = "block"
 KIND_TX    = "tx"
 KIND_ORDER = "order"
-KIND_CLAIM = "claim"
 KIND_FILL_REQUEST  = "fill_request"
 KIND_FILL_RESPONSE = "fill_response"
 
@@ -122,7 +117,6 @@ _SEEN_CACHE_SIZES = {
     KIND_BLOCK: SEEN_CACHE_SIZE,
     KIND_TX: SEEN_CACHE_SIZE,
     KIND_ORDER: ORDER_SEEN_CACHE_SIZE,
-    KIND_CLAIM: CLAIM_SEEN_CACHE_SIZE,
     KIND_FILL_REQUEST: FILL_REQUEST_SEEN_CACHE_SIZE,
     KIND_FILL_RESPONSE: FILL_RESPONSE_SEEN_CACHE_SIZE,
 }
@@ -256,8 +250,6 @@ class Gossip:
             self.udp.send_block(item, peers=peers, stemming=stemming)
         elif kind == KIND_ORDER:
             self.udp.send_order(item, peers=peers, stemming=stemming)
-        elif kind == KIND_CLAIM:
-            self.udp.send_claim(item, peers=peers, stemming=stemming)
         elif kind == KIND_FILL_REQUEST:
             self.udp.send_fill_request(item, peers=peers, stemming=stemming)
         elif kind == KIND_FILL_RESPONSE:

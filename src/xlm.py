@@ -327,10 +327,9 @@ def _iter_incoming_payments(to_address, limit=200):
     """Every settled native payment or account-creation landing on
     `to_address`, most recent first, as (sender, stroops, tx_hash).
 
-    The shared core of find_payment and recent_incoming_payments: both
-    need the same walk over the same endpoint, filtered to the same two
-    record types and the same "did it actually settle" check, and differ
-    only in what they do with a candidate once found.
+    find_payment's own walk over this endpoint, filtered to the two
+    record types that can move XLM to an address and the "did it
+    actually settle" check.
     """
     data = _get(f"/accounts/{to_address}/payments",
                 {"limit": min(limit, 200), "order": "desc"})
@@ -378,24 +377,6 @@ def find_payment(to_address, memo, min_stroops, from_address=None, limit=200):
         if _memo_matches(tx_hash, memo):
             return tx_hash
     return None
-
-
-def recent_incoming_payments(to_address, limit=200):
-    """Every settled incoming payment to `to_address`, most recent first,
-    with its memo. (sender, memo, stroops, tx_hash) tuples; memo is None
-    where Horizon reports none or a non-text one.
-
-    For discovery, not for checking one expected payment: scanning for
-    *any* payment whose memo might name one of this node's own orders
-    (see swap_engine.discover_trades), rather than find_payment's search
-    for one specific memo already known in advance.
-    """
-    out = []
-    for sender, paid, tx_hash in _iter_incoming_payments(to_address, limit):
-        tx = get_transaction(tx_hash)
-        memo = tx.get("memo") if tx and tx.get("memo_type") == "text" else None
-        out.append((sender, memo, paid, tx_hash))
-    return out
 
 
 def _memo_matches(tx_hash, memo):

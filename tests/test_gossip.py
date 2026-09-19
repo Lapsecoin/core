@@ -237,7 +237,7 @@ def _build_network(adj):
     should be able to confuse one kind's traffic for another's.
     """
     outboxes = {gossip_mod.KIND_TX: [], gossip_mod.KIND_BLOCK: [],
-                gossip_mod.KIND_ORDER: [], gossip_mod.KIND_CLAIM: [],
+                gossip_mod.KIND_ORDER: [],
                 gossip_mod.KIND_FILL_REQUEST: [], gossip_mod.KIND_FILL_RESPONSE: []}
     nodes = {}
 
@@ -252,9 +252,6 @@ def _build_network(adj):
             def send_order(self, item, peers, stemming):
                 for p in peers:
                     outboxes[gossip_mod.KIND_ORDER].append((p, me, item, stemming))
-            def send_claim(self, item, peers, stemming):
-                for p in peers:
-                    outboxes[gossip_mod.KIND_CLAIM].append((p, me, item, stemming))
             def send_fill_request(self, item, peers, stemming):
                 for p in peers:
                     outboxes[gossip_mod.KIND_FILL_REQUEST].append((p, me, item, stemming))
@@ -490,13 +487,13 @@ class TestDeliveryUnderRealRandomness:
     # _forward/_fluff never branch on kind (see gossip.Gossip._forward and
     # ._fluff: kind is only used to pick the seen-cache and, in _send, the
     # wire method); the delivery guarantee below is provably the same
-    # walk for a tx, a block, an order, a claim, or the fill-request/
-    # response handshake pair. Proven here for all six rather than argued
-    # from the source, so any of them gaining a kind-specific branch
-    # later that quietly weakens its delivery would fail these tests,
-    # not just look correct on inspection.
+    # walk for a tx, a block, an order, or the fill-request/response
+    # handshake pair. Proven here for all five rather than argued from
+    # the source, so any of them gaining a kind-specific branch later
+    # that quietly weakens its delivery would fail these tests, not just
+    # look correct on inspection.
     KINDS = (gossip_mod.KIND_TX, gossip_mod.KIND_BLOCK,
-            gossip_mod.KIND_ORDER, gossip_mod.KIND_CLAIM,
+            gossip_mod.KIND_ORDER,
             gossip_mod.KIND_FILL_REQUEST, gossip_mod.KIND_FILL_RESPONSE)
 
     def test_full_delivery_at_3_nodes(self):
@@ -607,25 +604,26 @@ class TestOrderFloodDoesNotDegradeConsensusDelivery:
               "atx", held)
         assert held == set(adj)
 
-    def test_claim_flood_does_not_degrade_order_or_block_delivery(self, monkeypatch):
-        """Claims are a fourth kind sharing the same infrastructure as
-        orders (see market.py's claim section); they need the identical
-        proof orders got, against both a legitimate order and a block."""
+    def test_fill_request_flood_does_not_degrade_order_or_block_delivery(self, monkeypatch):
+        """Fill requests are another kind sharing the same infrastructure
+        as orders (see market.py's fill-request section); they need the
+        identical proof orders got, against both a legitimate order and
+        a block."""
         n = 8
         adj = _mesh(n, extra_edges_per_node=2, seed=13)
         nodes, outboxes = _build_network(adj)
 
         monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
-        flood_count = gossip_mod.CLAIM_SEEN_CACHE_SIZE + 500
+        flood_count = gossip_mod.FILL_REQUEST_SEEN_CACHE_SIZE + 500
         for k in range(flood_count):
-            h = f"claim-{k}"
-            nodes[0].spread({"c": h}, gossip_mod.KIND_CLAIM, h)
-            _drain(nodes, outboxes[gossip_mod.KIND_CLAIM],
-                  gossip_mod.KIND_CLAIM, h, held={0})
+            h = f"fill-request-{k}"
+            nodes[0].spread({"c": h}, gossip_mod.KIND_FILL_REQUEST, h)
+            _drain(nodes, outboxes[gossip_mod.KIND_FILL_REQUEST],
+                  gossip_mod.KIND_FILL_REQUEST, h, held={0})
 
         for node in nodes.values():
-            assert len(node._seen[gossip_mod.KIND_CLAIM]) == \
-                gossip_mod.CLAIM_SEEN_CACHE_SIZE
+            assert len(node._seen[gossip_mod.KIND_FILL_REQUEST]) == \
+                gossip_mod.FILL_REQUEST_SEEN_CACHE_SIZE
 
         monkeypatch.undo()
         order_held = {1}

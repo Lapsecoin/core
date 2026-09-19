@@ -263,9 +263,9 @@ class Storage:
 
         A swap step's find_payment already knows precisely which memo it
         is looking for (its own session tag), so it has no reason to walk
-        every transaction an address has ever made the way discovery's
-        recent_incoming does; this is the (addr, memo) index that lets it
-        go straight there instead (see AddrIndex.memo).
+        every transaction an address has ever made; this is the
+        (addr, memo) index that lets it go straight there instead (see
+        AddrIndex.memo).
         """
         rows = (AddrIndex
                 .select(AddrIndex.block_height, AddrIndex.tx_hash)

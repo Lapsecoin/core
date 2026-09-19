@@ -39,7 +39,7 @@ import trust as trust_mod
 from crypto import canonical_json
 from params import TICKS_PER_LAPSE
 from trade_storage import (
-    Claim, FillRequest, FillResponse, Order, Trade, Increment,
+    FillRequest, FillResponse, Order, Trade, Increment,
     ensure_tables, LEG_SETTLED, TRADE_COMPLETED,
 )
 
@@ -396,12 +396,11 @@ def validate_fill(order_row, lapse_total):
     """Check a proposed fill size against an order's own terms. Raises
     OrderRejected with a human-readable reason if it does not fit.
 
-    Shared by the taker's own request (market_routes._start_trade) and
-    the maker's independent re-check of a claim
-    (swap_engine.discover_trades): the same three bounds apply to a fill
-    regardless of which side proposes it, and a maker must never take a
-    taker's word that its own order permits what a claim states, any
-    more than a taker's own request is trusted without this check.
+    Shared by the taker's own request (market_routes._open_trade) and
+    the maker's independent re-check of it (swap_engine.answer_fill_requests):
+    the same three bounds apply to a fill regardless of which side
+    proposes it, and a maker must never take a taker's word that its own
+    order permits what a request states.
     """
     if lapse_total <= 0:
         raise OrderRejected("fill amount must be positive")
@@ -570,8 +569,8 @@ def best_prices(current_height, exclude_maker=None):
 # Wash trading (a maker and taker under one operator's control, trading
 # with themselves) is cheap here and impossible to rule out; there is no
 # escrow or fee that makes it cost anything. A signed order and a signed
-# claim stand behind every Trade row already (see the module docstring
-# and the claim section above), so nothing further is required to "count"
+# fill request/response stand behind every Trade row already (see the
+# fill-request section below), so nothing further is required to "count"
 # a trade, but that alone does not stop wash trading between two
 # addresses controlled by the same person. What actually blunts it: a
 # median rather than a mean, since a handful of self-traded outliers can
@@ -646,235 +645,17 @@ def ticker_price(node, limit=200):
 
 
 # ---------------------------------------------------------------------------
-# Fill claims: how a taker tells a maker where to pay, with no handshake
-# ---------------------------------------------------------------------------
-#
-# A maker discovers a trade from the sender of an incoming payment, but
-# that only ever reveals the taker's address on the chain the payment
-# arrived on. The other address, needed for the maker's own reciprocating
-# leg, has nowhere to go: Stellar's memo is 28 bytes and already spent on
-# the order and session reference, and nothing links a LapseCoin key to a
-# Stellar one (nothing should; see trust.mutual_scores on why that
-# pairing is not published for its own sake). So the taker also gossips a
-# claim, signed the same way an order is: proof of controlling the
-# address it names, nothing more. A maker matching a payment to a claim
-# still independently re-derives the schedule and checks it against its
-# own exposure cap before creating anything (swap_engine.discover_trades)
-# rather than trusting a single field of what a stranger sent it.
-
-CLAIM_SIGNED_FIELDS = (
-    "order_id", "session_id", "taker_lapse_addr", "taker_xlm_addr",
-    "lapse_total", "increment_count", "pubkey",
-)
-
-# A taker is as free to generate keypairs as a maker is, so claims need
-# their own bound, mirroring MAX_ORDERS_PER_MAKER, rather than trusting
-# that a valid signature implies good faith.
-MAX_CLAIMS_PER_TAKER = 20
-
-# The claim table's own ceiling, mirroring MAX_ORDERS_TOTAL for the same
-# reason: a per-address cap alone bounds nothing against an attacker
-# willing to mint addresses. Smaller than the order book's, since claims
-# are pruned within the hour (CLAIM_MAX_AGE_SECONDS) while orders can
-# live for months, so sustained abuse has far less time to accumulate.
-MAX_CLAIMS_TOTAL = 10_000
-
-# How long an unmatched claim is kept. The claim and the payment it
-# precedes propagate over two independent channels (gossip and a public
-# chain) at very different speeds, so this has to be generous relative to
-# either; short enough that one nobody ever followed through on does not
-# accumulate forever.
-CLAIM_MAX_AGE_SECONDS = 3600
-
-
-class ClaimRejected(Exception):
-    """A claim that will not be stored or relayed, and why."""
-
-
-def build_claim(order_id, session_id, taker_lapse_addr, taker_xlm_addr,
-                lapse_total, increment_count, pubkey_hex):
-    """The unsigned body of a claim, in canonical field order."""
-    return {
-        "order_id": order_id,
-        "session_id": session_id,
-        "taker_lapse_addr": taker_lapse_addr,
-        "taker_xlm_addr": taker_xlm_addr,
-        "lapse_total": int(lapse_total),
-        "increment_count": int(increment_count),
-        "pubkey": pubkey_hex,
-    }
-
-
-def _claim_signing_bytes(claim):
-    return canonical_json({k: claim[k] for k in CLAIM_SIGNED_FIELDS})
-
-
-def sign_claim(claim, keyfile_path, kek):
-    """Sign a claim in place with the taker's LapseCoin key."""
-    signature = crypto.sign_with_keyfile(_claim_signing_bytes(claim), keyfile_path, kek)
-    claim["signature"] = signature.hex()
-    return claim
-
-
-def verify_claim(claim):
-    """Check a claim arriving from the network. Raises ClaimRejected.
-
-    Deliberately self-contained, the same division verify_order draws:
-    this checks only that the claim is well-formed and genuinely signed
-    by the address it names. Whether it makes sense against a *specific*
-    order (remaining size, exposure cap, min/max fill against this node's
-    own trust view of this taker) is for the maker's own discovery pass
-    to decide once it actually has that order and that view in hand (see
-    swap_engine.discover_trades); baking it in here would mean every peer
-    that merely relays this claim re-deriving business logic that applies
-    to, at most, the one node that posted the matching order.
-    """
-    if not isinstance(claim, dict):
-        raise ClaimRejected("not an object")
-
-    missing = [f for f in CLAIM_SIGNED_FIELDS if f not in claim]
-    if missing:
-        raise ClaimRejected(f"missing field(s): {missing}")
-    if "signature" not in claim:
-        raise ClaimRejected("missing signature")
-
-    unexpected = set(claim) - set(CLAIM_SIGNED_FIELDS) - {"signature"}
-    if unexpected:
-        raise ClaimRejected(f"unexpected field(s): {sorted(unexpected)}")
-
-    if not isinstance(claim["order_id"], str) or not claim["order_id"]:
-        raise ClaimRejected("order_id must be a non-empty string")
-    if not isinstance(claim["session_id"], str) or not claim["session_id"]:
-        raise ClaimRejected("session_id must be a non-empty string")
-
-    for field in ("lapse_total", "increment_count"):
-        if not isinstance(claim[field], int) or isinstance(claim[field], bool):
-            raise ClaimRejected(f"{field} must be an integer")
-    if claim["lapse_total"] <= 0:
-        raise ClaimRejected("lapse_total must be positive")
-    if not (swap_mod.MIN_INCREMENTS <= claim["increment_count"] <= swap_mod.MAX_INCREMENTS):
-        raise ClaimRejected(
-            f"increment_count must be between {swap_mod.MIN_INCREMENTS} "
-            f"and {swap_mod.MAX_INCREMENTS}")
-
-    if not crypto.is_valid_address(claim["taker_lapse_addr"]):
-        raise ClaimRejected("taker_lapse_addr is not a valid address")
-
-    import xlm as xlm_mod
-    if not xlm_mod.is_valid_address(claim["taker_xlm_addr"]):
-        raise ClaimRejected("taker_xlm_addr is not a valid Stellar address")
-
-    # Last, and cheaper than the signature check that follows: see
-    # market._check_admission's reasoning, applied to claims instead of
-    # orders. store_claim enforces the per-taker limit again as the
-    # actual gate before a write.
-    _check_claim_admission(claim["taker_lapse_addr"])
-
-    _verify_claim_signature(claim)
-    return True
-
-
-def _check_claim_admission(taker_lapse_addr):
-    ensure_tables()
-    if Claim.select().count() >= MAX_CLAIMS_TOTAL:
-        raise ClaimRejected(f"the claim book is full (limit {MAX_CLAIMS_TOTAL})")
-    live = (Claim.select()
-            .where(Claim.taker_lapse_addr == taker_lapse_addr)
-            .count())
-    if live >= MAX_CLAIMS_PER_TAKER:
-        raise ClaimRejected(
-            f"taker already has {live} live claims here "
-            f"(limit {MAX_CLAIMS_PER_TAKER})")
-
-
-def _verify_claim_signature(claim):
-    try:
-        pubkey = bytes.fromhex(claim["pubkey"])
-        signature = bytes.fromhex(claim["signature"])
-    except (ValueError, TypeError):
-        raise ClaimRejected("pubkey and signature must be hex")
-    if crypto.public_key_to_address(pubkey) != claim["taker_lapse_addr"]:
-        raise ClaimRejected("pubkey does not match taker_lapse_addr")
-    if not crypto.verify(_claim_signing_bytes(claim), signature, pubkey):
-        raise ClaimRejected("signature does not verify")
-
-
-def claim_hash(claim):
-    """The dedup identity of a claim, over the signed content only, for
-    the same reason order_hash is: padding must not mint a new identity."""
-    body = {k: claim.get(k) for k in CLAIM_SIGNED_FIELDS}
-    return crypto.sha256_hex(canonical_json(body))
-
-
-def store_claim(claim):
-    """Persist a verified claim. Returns False if it was already known."""
-    ensure_tables()
-    if Claim.get_or_none(Claim.session_id == claim["session_id"]) is not None:
-        return False
-
-    if Claim.select().count() >= MAX_CLAIMS_TOTAL:
-        raise ClaimRejected(f"the claim book is full (limit {MAX_CLAIMS_TOTAL})")
-    live = (Claim.select()
-            .where(Claim.taker_lapse_addr == claim["taker_lapse_addr"])
-            .count())
-    if live >= MAX_CLAIMS_PER_TAKER:
-        raise ClaimRejected(
-            f"taker already has {live} live claims here "
-            f"(limit {MAX_CLAIMS_PER_TAKER})")
-
-    Claim.create(
-        session_id=claim["session_id"], order_id=claim["order_id"],
-        taker_lapse_addr=claim["taker_lapse_addr"],
-        taker_xlm_addr=claim["taker_xlm_addr"],
-        lapse_total=claim["lapse_total"],
-        increment_count=claim["increment_count"],
-        pubkey=claim["pubkey"], signature=claim["signature"],
-        received_at=time.time())
-    return True
-
-
-def get_claim(session_id):
-    ensure_tables()
-    return Claim.get_or_none(Claim.session_id == session_id)
-
-
-def claims_for_order(order_id):
-    """Every live claim against one order, for the maker's discovery pass."""
-    ensure_tables()
-    return list(Claim.select().where(Claim.order_id == order_id))
-
-
-def already_known_claim(claim):
-    """Whether this exact claim has already been verified and stored,
-    cheaply and without a signature check. Same role as already_known,
-    for the same reason: see its docstring."""
-    if not isinstance(claim, dict):
-        return False
-    ensure_tables()
-    return get_claim(claim.get("session_id", "")) is not None
-
-
-def prune_claims(now=None):
-    """Drop claims old enough that whatever they precede either already
-    happened (a Trade exists) or was never going to. Returns how many."""
-    ensure_tables()
-    now = time.time() if now is None else now
-    cutoff = now - CLAIM_MAX_AGE_SECONDS
-    return Claim.delete().where(Claim.received_at <= cutoff).execute()
-
-
-# ---------------------------------------------------------------------------
 # Fill requests and responses: agree before a stroop moves, not after
 # ---------------------------------------------------------------------------
 #
-# The claim section above exists to solve one problem: a maker discovering
-# a trade only from an incoming payment has no way to learn the taker's
-# address on the *other* chain. Solving only that problem left a bigger one
-# in place: the taker sends a real first payment on a schedule it derived
-# itself, speculatively, before the maker has looked at it at all. If the
-# maker's own remaining size or exposure cap does not actually leave room
-# for it, the taker's payment lands into a trade that will never be
-# created, and nothing pays it back.
+# A taker used to send a real first payment on a schedule it derived
+# itself, speculatively, before the maker had looked at it at all. If the
+# maker's own remaining size or exposure cap did not actually leave room
+# for it, the taker's payment landed into a trade that would never be
+# created, and nothing paid it back. That design also needed a second,
+# separate message (a claim) just to carry the taker's address on
+# whichever chain the payment did not arrive on, since a maker learning
+# of a trade only from an incoming payment has no other way to learn it.
 #
 # A request and a response, both gossiped exactly like an order (dandelion
 # stem/fluff, not a direct connection to a specific peer, so nothing here
@@ -883,8 +664,8 @@ def prune_claims(now=None):
 # capacity it just promised the instant it accepts. Two takers racing the
 # same order are now arbitrated by the one node that actually knows the
 # truth about it, not by whichever one's payment happens to land first.
-# This also removes the reason a claim's address exchange was needed in
-# the first place, and the reason step 1 used to be forced onto the taker
+# The request already carries both of the taker's addresses, so no
+# separate claim is needed, and step 1 is no longer forced onto the taker
 # regardless of trust (see swap_engine's module docstring and
 # market_routes._open_trade): the maker now learns a trade exists, and
 # agrees to it, before either side has sent anything.
@@ -899,11 +680,11 @@ FILL_RESPONSE_SIGNED_FIELDS = (
     "accepted", "increment_count", "reason", "maker_pubkey",
 )
 
-# Same bounds and same reasoning as the claim book's (MAX_CLAIMS_PER_TAKER
-# / MAX_CLAIMS_TOTAL): a taker is as free to mint keypairs as a maker is,
-# so a per-address cap alone bounds nothing against one willing to do
-# that, and the book itself needs its own ceiling regardless of how many
-# addresses an attacker mints.
+# Mirrors MAX_ORDERS_PER_MAKER / MAX_ORDERS_TOTAL for the same reason:
+# a taker is as free to mint keypairs as a maker is, so a per-address
+# cap alone bounds nothing against one willing to do that, and the book
+# itself needs its own ceiling regardless of how many addresses an
+# attacker mints.
 MAX_FILL_REQUESTS_PER_TAKER = 20
 MAX_FILL_REQUESTS_TOTAL = 10_000
 FILL_REQUEST_MAX_AGE_SECONDS = 3600
@@ -949,8 +730,9 @@ def verify_fill_request(req):
     """Check a fill request arriving from the network. Raises
     FillRequestRejected.
 
-    Self-contained the same way verify_claim is: only whether this is
-    well-formed and genuinely signed by the address it names. Whether it
+    Deliberately self-contained, the same division verify_order draws:
+    only whether this is well-formed and genuinely signed by the
+    address it names. Whether it
     fits a *specific* order (remaining size, this node's own exposure
     cap for this taker) is for whichever node actually holds that
     order's maker key to decide (see node._handle_inbound_fill_request);
@@ -989,7 +771,7 @@ def verify_fill_request(req):
         raise FillRequestRejected("taker_xlm_addr is not a valid Stellar address")
 
     # Last, and cheaper than the signature check that follows: same
-    # reasoning as market._check_claim_admission.
+    # reasoning as market._check_admission.
     _check_fill_request_admission(req["taker_lapse_addr"])
 
     _verify_fill_request_signature(req)
@@ -1068,9 +850,19 @@ def get_fill_request(request_id):
 
 
 def requests_for_order(order_id):
-    """Every live fill request against one order, for the maker to act on."""
+    """Every live fill request against one order, oldest first, for the
+    maker to act on.
+
+    First-come-first-served: capacity shrinks as each one is answered
+    (see market.reserved_ticks), so processing order decides who gets
+    what is left when several requests together exceed it. Oldest first
+    is the only ordering that cannot be gamed by a later request racing
+    to be seen before an earlier, honestly-first one.
+    """
     ensure_tables()
-    return list(FillRequest.select().where(FillRequest.order_id == order_id))
+    return list(FillRequest.select()
+               .where(FillRequest.order_id == order_id)
+               .order_by(FillRequest.received_at))
 
 
 def requests_by_taker(taker_lapse_addr):
@@ -1125,7 +917,7 @@ def verify_fill_response(resp, expected_maker_addr=None):
 
     expected_maker_addr is None for a plain relay check (any peer
     forwarding this cannot know or verify who was supposed to send it,
-    the same division verify_claim draws). A taker acting on a response
+    the same division verify_order draws). A taker acting on a response
     to its *own* outstanding request must always pass its order's real
     maker_lapse_addr here: without this check, anyone could sign a
     well-formed 'accepted' response with their own key for someone

@@ -595,8 +595,9 @@ def _auto_fill(node, xlm_keyfile_path, height, depth, stranger_cap_val):
     checked with a full dry-run planning pass (_plan_auto_fill) *before*
     a single trade opens: unlike a real exchange's matching engine,
     opening a trade here is not a reversible ledger entry, it is a
-    signed claim published to the whole network and a Trade row this
-    node's own worker starts trying to pay into. There is no cheap way
+    signed fill request sent to the whole network and, once the maker
+    accepts, a Trade row this node's own worker starts trying to pay
+    into. There is no cheap way
     to undo the first three trades of a sweep upon discovering the
     fourth can't happen; the only sound order is decide once, on a plan
     that changes nothing, then execute exactly that plan.
@@ -652,9 +653,9 @@ def _auto_fill(node, xlm_keyfile_path, height, depth, stranger_cap_val):
         except (ValueError, market_mod.OrderRejected,
                market_mod.FillRequestRejected, swap_mod.TradeTooLarge) as e:
             # The plan said this was safe; something changed between
-            # planning and here (the order was cancelled, a claim cap
-            # was hit by something else). Move on rather than lose the
-            # rest of an otherwise-good plan over one stale slice.
+            # planning and here (the order was cancelled, a fill request
+            # cap was hit by something else). Move on rather than lose
+            # the rest of an otherwise-good plan over one stale slice.
             skipped.append((order_row.order_id, str(e)))
             continue
         fills.append({"session_id": session_id, "lapse": take_ticks,
@@ -789,10 +790,10 @@ def _my_orders(node, height):
             "lapse_total": row.lapse_total,
             "remaining": max(row.lapse_total - delivered - reserved, 0),
             "delivered": delivered,
-            # Claimed but not yet settled: someone has committed to this
-            # much (see market.reserved_ticks) but nothing has actually
-            # moved for it yet, which is a different thing to tell a
-            # maker than "delivered" is.
+            # Accepted but not yet settled: someone has committed to
+            # this much (see market.reserved_ticks) but nothing has
+            # actually moved for it yet, which is a different thing to
+            # tell a maker than "delivered" is.
             "reserved": reserved,
             "pct_delivered": int(delivered * 100 / row.lapse_total) if row.lapse_total else 0,
             "price_stroops_per_lapse": row.price_stroops_per_lapse,

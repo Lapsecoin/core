@@ -272,10 +272,9 @@ class TestHorizonReads:
 class _RoutedResponses:
     """Routes distinct Horizon endpoints to distinct canned payloads.
 
-    find_payment and recent_incoming_payments each make one call for the
-    payments list and then one more per candidate to check its memo, so a
-    single static response (the pattern above) cannot exercise them; each
-    path needs its own answer.
+    find_payment makes one call for the payments list and then one more
+    per candidate to check its memo, so a single static response (the
+    pattern above) cannot exercise it; each path needs its own answer.
     """
 
     def __init__(self, routes):
@@ -414,59 +413,6 @@ class TestFindPayment:
         monkeypatch.setattr(xlm._session, "get", routed)
         assert xlm.find_payment("GTO", "tag1", 1 * xlm.STROOPS_PER_XLM) == "tx-ok"
         assert ("/transactions/tx-under", None) not in routed.calls
-
-
-class TestRecentIncomingPayments:
-    """Discovery's raw material: every settled inbound payment with its
-    memo, not a search for one already-known memo."""
-
-    def test_returns_sender_memo_amount_and_hash(self, monkeypatch):
-        routes = {
-            "/accounts/GTO/payments": _payments_page([
-                _payment_record("GTO", "GFROM", "5.0000000", "tx1")]),
-            "/transactions/tx1": {"memo_type": "text", "memo": "a1b2c3d4:e5f6a1b2:1"},
-        }
-        monkeypatch.setattr(xlm._session, "get", _RoutedResponses(routes))
-        rows = xlm.recent_incoming_payments("GTO")
-        assert rows == [("GFROM", "a1b2c3d4:e5f6a1b2:1", 5 * xlm.STROOPS_PER_XLM, "tx1")]
-
-    def test_memo_is_none_when_absent(self, monkeypatch):
-        routes = {
-            "/accounts/GTO/payments": _payments_page([
-                _payment_record("GTO", "GFROM", "5.0000000", "tx1")]),
-            "/transactions/tx1": {},
-        }
-        monkeypatch.setattr(xlm._session, "get", _RoutedResponses(routes))
-        assert xlm.recent_incoming_payments("GTO")[0][1] is None
-
-    def test_memo_is_none_when_not_text(self, monkeypatch):
-        routes = {
-            "/accounts/GTO/payments": _payments_page([
-                _payment_record("GTO", "GFROM", "5.0000000", "tx1")]),
-            "/transactions/tx1": {"memo_type": "id", "memo": "12345"},
-        }
-        monkeypatch.setattr(xlm._session, "get", _RoutedResponses(routes))
-        assert xlm.recent_incoming_payments("GTO")[0][1] is None
-
-    def test_failed_and_outgoing_and_non_native_records_are_excluded(self, monkeypatch):
-        routes = {
-            "/accounts/GTO/payments": _payments_page([
-                _payment_record("GTO", "GFROM", "1.0000000", "tx-failed",
-                                successful=False),
-                _payment_record("GELSEWHERE", "GTO", "1.0000000", "tx-outgoing"),
-                _payment_record("GTO", "GFROM", "1.0000000", "tx-other-asset",
-                                asset="credit_alphanum4"),
-                _payment_record("GTO", "GFROM", "2.0000000", "tx-good"),
-            ]),
-            "/transactions/tx-good": {"memo_type": "text", "memo": "tag"},
-        }
-        monkeypatch.setattr(xlm._session, "get", _RoutedResponses(routes))
-        rows = xlm.recent_incoming_payments("GTO")
-        assert [r[3] for r in rows] == ["tx-good"]
-
-    def test_no_account_returns_empty(self, monkeypatch):
-        monkeypatch.setattr(xlm._session, "get", lambda *a, **k: _FakeResponse(404))
-        assert xlm.recent_incoming_payments("GTO") == []
 
 
 class TestSubmitIdempotency:
