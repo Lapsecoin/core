@@ -277,7 +277,7 @@
 <div class="table-wrap">
 <table class="stacked">
   <thead>
-    <tr><th>Side</th><th>Amount</th><th>Left</th><th>Price</th><th>Expires</th><th></th></tr>
+    <tr><th>Side</th><th>Amount</th><th>Progress</th><th>Left</th><th>Price</th><th>Expires</th><th></th></tr>
   </thead>
   <tbody>
     {% for o in my_orders %}
@@ -288,6 +288,13 @@
         </span>
       </td>
       <td data-label="Amount">{{ fmt_lapse_dp(o.lapse_total, 2) }}</td>
+      <td data-label="Progress">
+        <div class="progress" style="width:6rem"
+             title="{{ fmt_lapse_dp(o.delivered, 2) }} delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} claimed and awaiting payment{% endif %}">
+          <div class="progress-fill" style="width: {{ o.pct_delivered }}%"></div>
+        </div>
+        <span class="stat-sub">{{ o.pct_delivered }}% delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} claimed{% endif %}</span>
+      </td>
       <td data-label="Left">{{ fmt_lapse_dp(o.remaining, 2) }}</td>
       <td data-label="Price">{{ fmt_price(o.price_stroops_per_lapse) }} XLM</td>
       <td data-label="Expires">
@@ -380,6 +387,9 @@
   .book { display: flex; flex-wrap: wrap; gap: 1.2rem; }
   .book-side { flex: 1 1 320px; min-width: 0; }
   .trust-badge { font-size: .72rem; margin-left: .25rem; }
+  .progress { background: var(--paper-2); border: 1px solid var(--rule-lt);
+              height: 10px; overflow: hidden; }
+  .progress-fill { background: var(--gain); height: 100%; }
 </style>
 
 <script>

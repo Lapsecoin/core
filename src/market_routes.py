@@ -823,11 +823,20 @@ def _worker_view(node):
 def _my_orders(node, height):
     rows = []
     for row in market_mod.orders_by_maker(node.addr, height):
+        delivered = market_mod.delivered_ticks(row.order_id)
+        reserved = market_mod.reserved_ticks(row.order_id)
         rows.append({
             "order_id": row.order_id,
             "direction": row.direction,
             "lapse_total": row.lapse_total,
-            "remaining": market_mod.remaining_ticks(row),
+            "remaining": max(row.lapse_total - delivered - reserved, 0),
+            "delivered": delivered,
+            # Claimed but not yet settled: someone has committed to this
+            # much (see market.reserved_ticks) but nothing has actually
+            # moved for it yet, which is a different thing to tell a
+            # maker than "delivered" is.
+            "reserved": reserved,
+            "pct_delivered": int(delivered * 100 / row.lapse_total) if row.lapse_total else 0,
             "price_stroops_per_lapse": row.price_stroops_per_lapse,
             "blocks_left": max(row.expiry_block - height, 0),
         })

@@ -712,3 +712,58 @@ class TestAutoFillMessage:
         assert "2.0000 LAPSE" in msg
         assert "5.0000 LAPSE" in msg
         assert "nothing was traded" in msg
+
+
+class TestMyOrders:
+    """The maker's own progress view: how much of an order has actually
+    settled versus merely been claimed and not yet paid for, since those
+    are different things to tell someone managing their own order."""
+
+    class _Node:
+        def __init__(self, addr):
+            self.addr = addr
+
+    def test_untouched_order_shows_zero_progress(self):
+        make_maker_order(order_id="o1", maker_lapse="me.lapse",
+                         lapse_total=10 * LAPSE)
+        rows = market_routes._my_orders(self._Node("me.lapse"), height=100)
+        assert len(rows) == 1
+        assert rows[0]["delivered"] == 0
+        assert rows[0]["reserved"] == 0
+        assert rows[0]["pct_delivered"] == 0
+        assert rows[0]["remaining"] == 10 * LAPSE
+
+    def test_an_outstanding_claim_shows_as_reserved_not_delivered(self):
+        make_maker_order(order_id="o1", maker_lapse="me.lapse",
+                         lapse_total=10 * LAPSE)
+        market_mod.Claim.create(
+            order_id="o1", session_id="s" * 16, taker_lapse_addr="taker.lapse",
+            taker_xlm_addr="GTAKER", lapse_total=4 * LAPSE, increment_count=3,
+            pubkey="ab" * 10, signature="cd" * 10, received_at=time.time())
+        rows = market_routes._my_orders(self._Node("me.lapse"), height=100)
+
+        assert rows[0]["delivered"] == 0
+        assert rows[0]["reserved"] == 4 * LAPSE
+        assert rows[0]["remaining"] == 6 * LAPSE
+        assert rows[0]["pct_delivered"] == 0
+
+    def test_a_settled_step_shows_as_delivered_percentage(self):
+        order = make_maker_order(order_id="o1", maker_lapse="me.lapse",
+                                 lapse_total=10 * LAPSE)
+        Trade.create(
+            session_id="s" * 16, order_id="o1", role="maker",
+            my_lapse_addr="me.lapse", my_xlm_addr="GME",
+            peer_lapse_addr="taker.lapse", peer_xlm_addr="GTAKER",
+            i_send="lapse", lapse_total=5 * LAPSE, xlm_total=5000 * XLM,
+            increment_count=1, confirm_depth=1, status="active",
+            created_at=time.time(), updated_at=time.time())
+        Increment.create(
+            id="s" * 16 + ":1", session_id="s" * 16, n=1,
+            lapse_amount=5 * LAPSE, xlm_amount=5000 * XLM,
+            i_move_first=True, out_state="settled", in_state="settled",
+            created_at=time.time(), deadline_at=time.time() + 3600)
+        rows = market_routes._my_orders(self._Node("me.lapse"), height=100)
+
+        assert rows[0]["delivered"] == 5 * LAPSE
+        assert rows[0]["pct_delivered"] == 50
+        assert rows[0]["remaining"] == 5 * LAPSE
