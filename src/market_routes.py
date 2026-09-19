@@ -232,7 +232,7 @@ def register(app, node, csrf_token):
             xlm_spendable=_spendable(xlm_addr),
             xlm_locked=_locked(xlm_addr),
             xlm_usd=xlm_mod.get_xlm_usd(),
-            suggested_price=_suggested_price(best),
+            suggested_price=_suggested_price(best, ticker),
             my_orders=_my_orders(node, height),
             csrf_token=csrf_token)
 
@@ -255,6 +255,7 @@ def register(app, node, csrf_token):
 
         # The taker's side is the opposite of the maker's.
         taking_side = "buy" if row.direction == "sell" else "sell"
+        maker_xlm_unfunded = _maker_xlm_unfunded(row, _account_exists)
         max_fill_ticks = min(remaining, row.max_fill or remaining)
         max_safe_stroops = swap_mod.max_safe_trade_stroops(cap)
         max_safe_lapse = swap_mod.lapse_for_xlm(max_safe_stroops,
@@ -297,6 +298,8 @@ def register(app, node, csrf_token):
             too_large=too_large, max_safe_lapse=max_safe_lapse,
             confirm_depth=confirm_depth(),
             eta_seconds=planned_steps * confirm_depth() * LAPSE_BLOCK_SECONDS,
+            maker_xlm_unfunded=maker_xlm_unfunded,
+            account_min_xlm=fmt_xlm(xlm_mod.ACCOUNT_MIN_BALANCE_STROOPS),
             alert_err=alert_err, csrf_token=csrf_token)
 
     # -- Trades --------------------------------------------------------
@@ -637,8 +640,32 @@ def _planned_steps(ticks, order_row, cap):
         return swap_mod.MAX_INCREMENTS
 
 
-def _suggested_price(best):
-    price = best["best_sell"] or best["best_buy"]
+def _maker_xlm_unfunded(order_row, account_exists):
+    """Whether a taker filling this order is about to pay for creating
+    the maker's Stellar account, on top of the agreed amount.
+
+    A maker selling LAPSE means the taker pays XLM (see _start_trade),
+    and the first payment to a maker address with no account yet costs
+    at least the network minimum regardless of the agreed step (see
+    swap_engine._xlm_send_amount). Only true on a definite "no account"
+    (account_exists returns False), never on "unknown" (None, an
+    unreachable Horizon), so a transient outage never reads to a taker
+    as a cost that may not even exist.
+    """
+    taker_pays_xlm = order_row.direction == "sell"
+    return taker_pays_xlm and account_exists(order_row.maker_xlm_addr) is False
+
+
+def _suggested_price(best, ticker=None):
+    """What to prefill the order form's price field with.
+
+    Top of book wins when there is one, since it is a live, standing
+    offer. An empty book falls back to this node's own ticker (see
+    market.ticker_price) rather than leaving a new poster with nothing:
+    a stale trade price is still a better starting point than a blank
+    field, as long as the page says which one it is (see market.html).
+    """
+    price = best["best_sell"] or best["best_buy"] or ticker
     return fmt_xlm(price) if price else ""
 
 

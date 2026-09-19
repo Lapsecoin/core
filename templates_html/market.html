@@ -149,9 +149,14 @@
         {% if best.best_sell or best.best_buy %}
           Prefilled with the best price on the book. Change it to whatever
           you are willing to trade at.
+        {% elif ticker %}
+          The book is empty, so this is prefilled from this node's own
+          last traded price instead, not a live quote. Change it to
+          whatever you are willing to trade at.
         {% else %}
-          The book is empty, so there is no reference price yet. Whatever
-          you pick here is the first quote anyone sees.
+          The book is empty and this node has no trade history either, so
+          there is no reference price yet. Whatever you pick here is the
+          first quote anyone sees.
         {% endif %}
       </div>
     </div>

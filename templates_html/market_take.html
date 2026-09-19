@@ -51,6 +51,20 @@
   </table>
 </div>
 
+{% if maker_xlm_unfunded %}
+  <div class="card">
+    <div class="card-title">Your first payment may cost slightly more</div>
+    <p style="font-size:.92rem">
+      The seller's Stellar address has no account behind it yet, so a
+      plain payment cannot reach it; your first step creates the account
+      instead, which needs at least <strong>{{ account_min_xlm }} XLM</strong>
+      regardless of what that step was scheduled for. This only ever
+      happens once, on the very first payment to them, and costs at most
+      the gap between the scheduled amount and that minimum.
+    </p>
+  </div>
+{% endif %}
+
 {% if too_large %}
   <div class="card">
     <div class="card-title">Too large to do safely right now</div>

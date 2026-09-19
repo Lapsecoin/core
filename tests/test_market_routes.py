@@ -442,3 +442,56 @@ class TestPlaceOrder:
         with pytest.raises(ValueError, match="XLM"):
             self._call(node, {"direction": "buy", "amount_lapse": "1",
                               "price_xlm": "0.0001"})
+
+
+class TestSuggestedPrice:
+    """What prefills the order form's price field (plan item 5.2's
+    ticker feeding into order placement, not just the Market page's
+    display)."""
+
+    def test_top_of_book_wins_when_present(self):
+        best = {"best_sell": 1000, "best_buy": 900}
+        assert market_routes._suggested_price(best, ticker=500) == \
+            market_routes.fmt_xlm(1000)
+
+    def test_falls_back_to_the_ticker_when_the_book_is_empty(self):
+        best = {"best_sell": None, "best_buy": None}
+        assert market_routes._suggested_price(best, ticker=777) == \
+            market_routes.fmt_xlm(777)
+
+    def test_blank_when_neither_exists(self):
+        best = {"best_sell": None, "best_buy": None}
+        assert market_routes._suggested_price(best, ticker=None) == ""
+
+    def test_ticker_is_optional_for_backward_compatible_callers(self):
+        best = {"best_sell": None, "best_buy": None}
+        assert market_routes._suggested_price(best) == ""
+
+
+class TestMakerXlmUnfunded:
+    """The market_take warning: a taker paying XLM into a seller's
+    never-funded account pays the network minimum, not just the agreed
+    step, on the very first payment."""
+
+    class _Order:
+        def __init__(self, direction, maker_xlm_addr="GMAKER"):
+            self.direction = direction
+            self.maker_xlm_addr = maker_xlm_addr
+
+    def test_sell_order_into_an_unfunded_maker_warns(self):
+        order = self._Order("sell")
+        assert market_routes._maker_xlm_unfunded(order, lambda addr: False) is True
+
+    def test_sell_order_into_a_funded_maker_does_not_warn(self):
+        order = self._Order("sell")
+        assert market_routes._maker_xlm_unfunded(order, lambda addr: True) is False
+
+    def test_unknown_horizon_state_never_warns(self):
+        """A transient Horizon outage must not present a cost that might
+        not even exist."""
+        order = self._Order("sell")
+        assert market_routes._maker_xlm_unfunded(order, lambda addr: None) is False
+
+    def test_buy_order_never_warns_taker_pays_lapse_not_xlm(self):
+        order = self._Order("buy")
+        assert market_routes._maker_xlm_unfunded(order, lambda addr: False) is False
