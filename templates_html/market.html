@@ -140,7 +140,7 @@
     </div>
 
     <details style="margin:.4rem 0">
-      <summary class="stat-sub" style="cursor:pointer">Set a price limit (optional)</summary>
+      <summary class="stat-sub" style="cursor:pointer">Set a price limit or a minimum fill (optional)</summary>
       <div class="form-row">
         <label for="auto-max-price">No worse than</label>
         <input id="auto-max-price" type="text" name="max_price_xlm" inputmode="decimal"
@@ -151,6 +151,18 @@
           real exchange's market order. Set this only if you would rather
           not trade at all than pay more (buying) or accept less (selling)
           than a specific price.
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="auto-min-total">At least</label>
+        <input id="auto-min-total" type="text" name="min_total_lapse" inputmode="decimal"
+               placeholder="blank = take whatever fills" autocomplete="off">
+        <span>LAPSE, or nothing at all</span>
+        <div class="stat-sub">
+          If the book cannot supply at least this much on acceptable terms,
+          nothing is traded, rather than leaving you with a token amount
+          you did not actually want. Once a trade opens it cannot be
+          cheaply undone, so this is checked before any of them do.
         </div>
       </div>
     </details>

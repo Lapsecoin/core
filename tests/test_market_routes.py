@@ -525,8 +525,10 @@ class TestAutoFill:
 
         assert result["filled"] == 2 * LAPSE
         assert result["remaining"] == 0
-        assert len(result["sessions"]) == 1
-        trade = Trade.get(Trade.session_id == result["sessions"][0])
+        assert len(result["fills"]) == 1
+        assert result["fills"][0]["lapse"] == 2 * LAPSE
+        assert result["fills"][0]["price"] == 1000
+        trade = Trade.get(Trade.session_id == result["fills"][0]["session_id"])
         assert trade.peer_lapse_addr == "maker1.lapse"
 
     def test_a_price_limit_excludes_worse_priced_orders(self, tmp_path):
@@ -544,9 +546,9 @@ class TestAutoFill:
 
         assert result["filled"] == 10 * LAPSE   # all of the cheap order
         assert result["remaining"] == 5 * LAPSE
-        assert len(result["sessions"]) == 1
+        assert len(result["fills"]) == 1
         assert Trade.select().count() == 1
-        trade = Trade.get(Trade.session_id == result["sessions"][0])
+        trade = Trade.get(Trade.session_id == result["fills"][0]["session_id"])
         assert trade.peer_lapse_addr == "maker1.lapse"
 
     def test_splits_across_orders_once_one_counterpartys_cap_is_reached(self, tmp_path):
@@ -569,7 +571,7 @@ class TestAutoFill:
 
         assert result["filled"] == requested_lapse
         assert result["remaining"] == 0
-        assert len(result["sessions"]) == 2
+        assert len(result["fills"]) == 2
         assert Trade.select().count() == 2
         peers = {t.peer_lapse_addr for t in Trade.select()}
         assert peers == {"maker1.lapse", "maker2.lapse"}
@@ -579,7 +581,7 @@ class TestAutoFill:
         result = self._call(node, {"direction": "buy", "amount_lapse": "5"})
         assert result["filled"] == 0
         assert result["remaining"] == 5 * LAPSE
-        assert result["sessions"] == []
+        assert result["fills"] == []
         assert Trade.select().count() == 0
 
     def test_wrong_passphrase_raises_once_rather_than_looping(self, tmp_path):
@@ -604,7 +606,7 @@ class TestAutoFill:
 
         assert result["filled"] == 0
         assert result["remaining"] == 1 * LAPSE
-        assert result["sessions"] == []
+        assert result["fills"] == []
         assert result["skipped"]
         assert Trade.select().count() == 0
 
@@ -620,32 +622,93 @@ class TestAutoFill:
         node.view.state.balances[node.addr] = 10**12   # enough LAPSE to sell
         result = self._call(node, {"direction": "sell", "amount_lapse": "2"})
 
-        assert len(result["sessions"]) == 1
-        trade = Trade.get(Trade.session_id == result["sessions"][0])
+        assert len(result["fills"]) == 1
+        trade = Trade.get(Trade.session_id == result["fills"][0]["session_id"])
         assert trade.peer_lapse_addr == "maker2.lapse"
+
+    def test_a_minimum_below_what_the_book_can_supply_trades_nothing_at_all(self, tmp_path):
+        """The whole point of the minimum: a sweep that would only ever
+        get you a token amount should refuse outright rather than open
+        a trade you didn't actually want, since an opened trade cannot
+        be cheaply undone (it is a claim already published, not a
+        pending order this node can just forget)."""
+        make_maker_order(order_id="only", direction="sell", price=1000,
+                         lapse_total=2 * LAPSE, maker_lapse="maker1.lapse",
+                         maker_xlm="GMAKER1")
+        node = TakerNode(tmp_path)
+        result = self._call(node, {"direction": "buy", "amount_lapse": "10",
+                                   "min_total_lapse": "5"})
+
+        assert result["min_not_met"] is True
+        assert result["filled"] == 0
+        assert result["fills"] == []
+        assert Trade.select().count() == 0, \
+            "nothing may be opened once the minimum cannot be met"
+
+    def test_a_minimum_the_book_can_meet_still_trades_normally(self, tmp_path):
+        make_maker_order(order_id="only", direction="sell", price=1000,
+                         lapse_total=10 * LAPSE, maker_lapse="maker1.lapse",
+                         maker_xlm="GMAKER1")
+        node = TakerNode(tmp_path)
+        result = self._call(node, {"direction": "buy", "amount_lapse": "3",
+                                   "min_total_lapse": "2"})
+
+        assert result["min_not_met"] is False
+        assert result["filled"] == 3 * LAPSE
+        assert Trade.select().count() == 1
 
 
 class TestAutoFillMessage:
+    def _fill(self, session_id, lapse, price):
+        return {"session_id": session_id, "lapse": lapse, "price": price,
+                "maker": "maker.lapse"}
+
     def test_full_fill_single_trade(self):
         msg = market_routes._auto_fill_message(
-            {"filled": 2 * LAPSE, "remaining": 0, "sessions": ["s1"], "skipped": []})
+            {"filled": 2 * LAPSE, "remaining": 0,
+             "fills": [self._fill("s1", 2 * LAPSE, 1000)], "skipped": []})
         assert "2.0000 LAPSE" in msg
         assert "1 trade" in msg
         assert "trades" not in msg
 
     def test_full_fill_pluralizes_multiple_trades(self):
         msg = market_routes._auto_fill_message(
-            {"filled": 2 * LAPSE, "remaining": 0, "sessions": ["s1", "s2"], "skipped": []})
+            {"filled": 2 * LAPSE, "remaining": 0,
+             "fills": [self._fill("s1", 1 * LAPSE, 1000),
+                      self._fill("s2", 1 * LAPSE, 1000)], "skipped": []})
         assert "2 trades" in msg
+
+    def test_different_prices_are_reported_as_separate_tiers(self):
+        """The 'bought a at x, b at y' shape the report should have,
+        rather than one blended average that hides what actually
+        happened at each price."""
+        msg = market_routes._auto_fill_message(
+            {"filled": 5 * LAPSE, "remaining": 0,
+             "fills": [self._fill("s1", 2 * LAPSE, 1000),
+                      self._fill("s2", 3 * LAPSE, 2000)], "skipped": []})
+        assert "2.0000 LAPSE at" in msg
+        assert "3.0000 LAPSE at" in msg
+        assert msg.index("2.0000") < msg.index("3.0000")
 
     def test_partial_fill_mentions_what_is_left(self):
         msg = market_routes._auto_fill_message(
-            {"filled": 1 * LAPSE, "remaining": 1 * LAPSE, "sessions": ["s1"], "skipped": []})
+            {"filled": 1 * LAPSE, "remaining": 1 * LAPSE,
+             "fills": [self._fill("s1", 1 * LAPSE, 1000)], "skipped": []})
         assert "1.0000 LAPSE" in msg
         assert "could not be filled" in msg
 
     def test_zero_fill_suggests_a_standing_order(self):
         msg = market_routes._auto_fill_message(
-            {"filled": 0, "remaining": 5 * LAPSE, "sessions": [], "skipped": []})
+            {"filled": 0, "remaining": 5 * LAPSE, "fills": [], "skipped": []})
         assert "Nothing could be filled" in msg
         assert "resting order" in msg
+
+    def test_min_not_met_explains_why_nothing_traded(self):
+        msg = market_routes._auto_fill_message({
+            "min_not_met": True, "would_have_filled": 2 * LAPSE,
+            "min_total": 5 * LAPSE, "filled": 0, "remaining": 10 * LAPSE,
+            "fills": [], "skipped": [],
+        })
+        assert "2.0000 LAPSE" in msg
+        assert "5.0000 LAPSE" in msg
+        assert "nothing was traded" in msg
