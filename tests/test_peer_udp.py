@@ -547,6 +547,92 @@ def test_a_claim_on_the_wire_is_compressed_like_an_order():
     udp._on_claim.assert_called_once_with(claim, "5.6.7.8:9999", False)
 
 
+def test_fill_request_dispatch_forwards_the_stem_flag():
+    on_req = MagicMock()
+    udp = _make_transport(MagicMock())
+    udp._on_fill_request = on_req
+    req = {"request_id": "r" * 16}
+    udp._dispatch(peer_udp.MT_FILL_REQUEST, 601,
+                 {"fill_request": req, "stemming": True}, ("1.2.3.4", 5000))
+    on_req.assert_called_once_with(req, "1.2.3.4:5000", True)
+
+
+def test_fill_request_dispatch_dedups_by_msg_id():
+    on_req = MagicMock()
+    udp = _make_transport(MagicMock())
+    udp._on_fill_request = on_req
+    msg = {"fill_request": {"request_id": "r" * 16}, "stemming": False}
+    udp._dispatch(peer_udp.MT_FILL_REQUEST, 602, msg, ("1.2.3.4", 5000))
+    udp._dispatch(peer_udp.MT_FILL_REQUEST, 602, msg, ("1.2.3.4", 5000))
+    assert on_req.call_count == 1
+
+
+def test_fill_request_dropped_when_no_callback_is_set():
+    udp = _make_transport(MagicMock())
+    assert udp._on_fill_request is None
+    udp._dispatch(peer_udp.MT_FILL_REQUEST, 603,
+                 {"fill_request": {"request_id": "r" * 16}},
+                 ("1.2.3.4", 5000))  # must not raise
+
+
+def test_a_fill_request_on_the_wire_is_compressed_like_a_claim():
+    import zlib
+    udp = _make_transport(MagicMock())
+    udp._on_fill_request = MagicMock()
+    req = {"request_id": "r" * 16, "order_id": "o"}
+    payload = peer_udp._encode({"genesis": udp.genesis_hash, "fill_request": req,
+                                "stemming": False})
+
+    udp._handle_datagram(
+        peer_udp._pack(peer_udp.MT_FILL_REQUEST, 4244, 0, 1, zlib.compress(payload)),
+        ("5.6.7.8", 9999))
+
+    udp._on_fill_request.assert_called_once_with(req, "5.6.7.8:9999", False)
+
+
+def test_fill_response_dispatch_forwards_the_stem_flag():
+    on_resp = MagicMock()
+    udp = _make_transport(MagicMock())
+    udp._on_fill_response = on_resp
+    resp = {"request_id": "r" * 16}
+    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 701,
+                 {"fill_response": resp, "stemming": True}, ("1.2.3.4", 5000))
+    on_resp.assert_called_once_with(resp, "1.2.3.4:5000", True)
+
+
+def test_fill_response_dispatch_dedups_by_msg_id():
+    on_resp = MagicMock()
+    udp = _make_transport(MagicMock())
+    udp._on_fill_response = on_resp
+    msg = {"fill_response": {"request_id": "r" * 16}, "stemming": False}
+    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 702, msg, ("1.2.3.4", 5000))
+    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 702, msg, ("1.2.3.4", 5000))
+    assert on_resp.call_count == 1
+
+
+def test_fill_response_dropped_when_no_callback_is_set():
+    udp = _make_transport(MagicMock())
+    assert udp._on_fill_response is None
+    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 703,
+                 {"fill_response": {"request_id": "r" * 16}},
+                 ("1.2.3.4", 5000))  # must not raise
+
+
+def test_a_fill_response_on_the_wire_is_compressed_like_a_claim():
+    import zlib
+    udp = _make_transport(MagicMock())
+    udp._on_fill_response = MagicMock()
+    resp = {"request_id": "r" * 16, "order_id": "o"}
+    payload = peer_udp._encode({"genesis": udp.genesis_hash, "fill_response": resp,
+                                "stemming": False})
+
+    udp._handle_datagram(
+        peer_udp._pack(peer_udp.MT_FILL_RESPONSE, 4245, 0, 1, zlib.compress(payload)),
+        ("5.6.7.8", 9999))
+
+    udp._on_fill_response.assert_called_once_with(resp, "5.6.7.8:9999", False)
+
+
 def test_our_own_ping_advertises_the_protocol():
     assert peer_udp._protocol_ok({"proto": peer_udp.PROTOCOL_VERSION})
     assert not peer_udp._protocol_ok({})

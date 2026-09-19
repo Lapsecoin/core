@@ -733,13 +733,14 @@ class TestMyOrders:
         assert rows[0]["pct_delivered"] == 0
         assert rows[0]["remaining"] == 10 * LAPSE
 
-    def test_an_outstanding_claim_shows_as_reserved_not_delivered(self):
+    def test_an_accepted_fill_response_shows_as_reserved_not_delivered(self):
         make_maker_order(order_id="o1", maker_lapse="me.lapse",
                          lapse_total=10 * LAPSE)
-        market_mod.Claim.create(
-            order_id="o1", session_id="s" * 16, taker_lapse_addr="taker.lapse",
-            taker_xlm_addr="GTAKER", lapse_total=4 * LAPSE, increment_count=3,
-            pubkey="ab" * 10, signature="cd" * 10, received_at=time.time())
+        market_mod.FillResponse.create(
+            request_id="r" * 16, order_id="o1", session_id="s" * 16,
+            lapse_total=4 * LAPSE, accepted=True, increment_count=3,
+            reason="", maker_pubkey="ab" * 10, signature="cd" * 10,
+            received_at=time.time())
         rows = market_routes._my_orders(self._Node("me.lapse"), height=100)
 
         assert rows[0]["delivered"] == 0

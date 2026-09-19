@@ -237,7 +237,8 @@ def _build_network(adj):
     should be able to confuse one kind's traffic for another's.
     """
     outboxes = {gossip_mod.KIND_TX: [], gossip_mod.KIND_BLOCK: [],
-                gossip_mod.KIND_ORDER: [], gossip_mod.KIND_CLAIM: []}
+                gossip_mod.KIND_ORDER: [], gossip_mod.KIND_CLAIM: [],
+                gossip_mod.KIND_FILL_REQUEST: [], gossip_mod.KIND_FILL_RESPONSE: []}
     nodes = {}
 
     def udp_for(me):
@@ -254,6 +255,12 @@ def _build_network(adj):
             def send_claim(self, item, peers, stemming):
                 for p in peers:
                     outboxes[gossip_mod.KIND_CLAIM].append((p, me, item, stemming))
+            def send_fill_request(self, item, peers, stemming):
+                for p in peers:
+                    outboxes[gossip_mod.KIND_FILL_REQUEST].append((p, me, item, stemming))
+            def send_fill_response(self, item, peers, stemming):
+                for p in peers:
+                    outboxes[gossip_mod.KIND_FILL_RESPONSE].append((p, me, item, stemming))
         return U()
 
     class Pool:
@@ -483,12 +490,14 @@ class TestDeliveryUnderRealRandomness:
     # _forward/_fluff never branch on kind (see gossip.Gossip._forward and
     # ._fluff: kind is only used to pick the seen-cache and, in _send, the
     # wire method); the delivery guarantee below is provably the same
-    # walk for a tx, a block, an order or a claim. Proven here for all
-    # four rather than argued from the source, so an order or claim
-    # gaining a kind-specific branch later that quietly weakens its
-    # delivery would fail these tests, not just look correct on inspection.
+    # walk for a tx, a block, an order, a claim, or the fill-request/
+    # response handshake pair. Proven here for all six rather than argued
+    # from the source, so any of them gaining a kind-specific branch
+    # later that quietly weakens its delivery would fail these tests,
+    # not just look correct on inspection.
     KINDS = (gossip_mod.KIND_TX, gossip_mod.KIND_BLOCK,
-            gossip_mod.KIND_ORDER, gossip_mod.KIND_CLAIM)
+            gossip_mod.KIND_ORDER, gossip_mod.KIND_CLAIM,
+            gossip_mod.KIND_FILL_REQUEST, gossip_mod.KIND_FILL_RESPONSE)
 
     def test_full_delivery_at_3_nodes(self):
         adj = _ring(3)

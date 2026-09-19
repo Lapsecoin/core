@@ -39,7 +39,8 @@ import trust as trust_mod
 from crypto import canonical_json
 from params import TICKS_PER_LAPSE
 from trade_storage import (
-    Claim, Order, Trade, Increment, ensure_tables, LEG_SETTLED, TRADE_COMPLETED,
+    Claim, FillRequest, FillResponse, Order, Trade, Increment,
+    ensure_tables, LEG_SETTLED, TRADE_COMPLETED,
 )
 
 log = logging.getLogger("ec.market")
@@ -351,33 +352,39 @@ def delivered_ticks(order_id):
 
 
 def reserved_ticks(order_id):
-    """How much of an order is spoken for by a claim this node has no
-    completed-trade record for.
+    """How much of an order is spoken for by an accepted fill response
+    this node has no completed-trade record for.
 
     delivered_ticks alone is only accurate for this order's own maker:
     it counts Trade rows, and a node only ever has a Trade row for a
     fill it was itself a party to. A node that is neither the maker nor
     any taker of this order has zero such rows regardless of how much
     of it strangers have actually filled, and would otherwise report
-    the order as fully untouched forever. Claims fix this because,
-    unlike trades, they are gossiped to the whole network exactly like
-    an order is (see market.Claim, node._handle_inbound_claim): any
-    node can see every live claim against any order, not only its own.
+    the order as fully untouched forever. An accepted fill response
+    fixes this because, unlike a Trade row, it is gossiped to the whole
+    network exactly like an order is (see market.FillResponse,
+    node._handle_inbound_fill_response): any node can see every live
+    response against any order, not only its own.
 
-    Deliberately conservative, on purpose: a claim this node has not
-    itself settled counts for its full declared lapse_total even if
-    part or all of it later turns out to have been abandoned, until it
-    ages out of the claim book (see CLAIM_MAX_AGE_SECONDS). That can
-    undercount what is really still available; it can never overcount
-    it. Overcounting is the unsafe direction, it is what would let a
-    taker sign and pay for a fill the maker was always going to refuse,
-    with nothing to give the payment back.
+    Only *accepted* responses count: unlike the old claim-based design,
+    the maker has already looked at this specific fill and explicitly
+    committed to it before the response ever went out, so there is no
+    reason to also count a pending, unanswered request "just in case" -
+    that used to be the only signal available and had to be treated
+    conservatively for exactly that reason. It still cannot overcount
+    an order that will genuinely be honoured: an accepted response is
+    the maker's own attested exposure, and this node's own copy of it
+    ages out (see FILL_RESPONSE_MAX_AGE_SECONDS) the same way a claim's
+    did if the trade it names is not the one this node ever settles.
     """
     ensure_tables()
     known_sessions = {t.session_id for t in
                       Trade.select(Trade.session_id).where(Trade.order_id == order_id)}
-    return sum(c.lapse_total for c in claims_for_order(order_id)
-              if c.session_id not in known_sessions)
+    responses = (FillResponse.select()
+                .where(FillResponse.order_id == order_id,
+                       FillResponse.accepted == True))          # noqa: E712
+    return sum(r.lapse_total for r in responses
+              if r.session_id not in known_sessions)
 
 
 def remaining_ticks(order_row):
@@ -854,3 +861,362 @@ def prune_claims(now=None):
     now = time.time() if now is None else now
     cutoff = now - CLAIM_MAX_AGE_SECONDS
     return Claim.delete().where(Claim.received_at <= cutoff).execute()
+
+
+# ---------------------------------------------------------------------------
+# Fill requests and responses: agree before a stroop moves, not after
+# ---------------------------------------------------------------------------
+#
+# The claim section above exists to solve one problem: a maker discovering
+# a trade only from an incoming payment has no way to learn the taker's
+# address on the *other* chain. Solving only that problem left a bigger one
+# in place: the taker sends a real first payment on a schedule it derived
+# itself, speculatively, before the maker has looked at it at all. If the
+# maker's own remaining size or exposure cap does not actually leave room
+# for it, the taker's payment lands into a trade that will never be
+# created, and nothing pays it back.
+#
+# A request and a response, both gossiped exactly like an order (dandelion
+# stem/fluff, not a direct connection to a specific peer, so nothing here
+# reveals whose IP maps to which address any more than an order already
+# does), let the maker decide *before* anything moves and reserve the
+# capacity it just promised the instant it accepts. Two takers racing the
+# same order are now arbitrated by the one node that actually knows the
+# truth about it, not by whichever one's payment happens to land first.
+# This also removes the reason a claim's address exchange was needed in
+# the first place, and the reason step 1 used to be forced onto the taker
+# regardless of trust (see swap_engine's module docstring and
+# market_routes._open_trade): the maker now learns a trade exists, and
+# agrees to it, before either side has sent anything.
+
+FILL_REQUEST_SIGNED_FIELDS = (
+    "request_id", "order_id", "session_id", "taker_lapse_addr",
+    "taker_xlm_addr", "lapse_total", "pubkey",
+)
+
+FILL_RESPONSE_SIGNED_FIELDS = (
+    "request_id", "order_id", "session_id", "lapse_total",
+    "accepted", "increment_count", "reason", "maker_pubkey",
+)
+
+# Same bounds and same reasoning as the claim book's (MAX_CLAIMS_PER_TAKER
+# / MAX_CLAIMS_TOTAL): a taker is as free to mint keypairs as a maker is,
+# so a per-address cap alone bounds nothing against one willing to do
+# that, and the book itself needs its own ceiling regardless of how many
+# addresses an attacker mints.
+MAX_FILL_REQUESTS_PER_TAKER = 20
+MAX_FILL_REQUESTS_TOTAL = 10_000
+FILL_REQUEST_MAX_AGE_SECONDS = 3600
+
+MAX_FILL_RESPONSES_TOTAL = 10_000
+FILL_RESPONSE_MAX_AGE_SECONDS = 3600
+
+
+class FillRequestRejected(Exception):
+    """A fill request that will not be stored or relayed, and why."""
+
+
+class FillResponseRejected(Exception):
+    """A fill response that will not be stored or relayed, and why."""
+
+
+def build_fill_request(order_id, session_id, taker_lapse_addr, taker_xlm_addr,
+                       lapse_total, pubkey_hex):
+    """The unsigned body of a fill request, in canonical field order."""
+    return {
+        "request_id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "session_id": session_id,
+        "taker_lapse_addr": taker_lapse_addr,
+        "taker_xlm_addr": taker_xlm_addr,
+        "lapse_total": int(lapse_total),
+        "pubkey": pubkey_hex,
+    }
+
+
+def _fill_request_signing_bytes(req):
+    return canonical_json({k: req[k] for k in FILL_REQUEST_SIGNED_FIELDS})
+
+
+def sign_fill_request(req, keyfile_path, kek):
+    """Sign a fill request in place with the taker's LapseCoin key."""
+    signature = crypto.sign_with_keyfile(_fill_request_signing_bytes(req), keyfile_path, kek)
+    req["signature"] = signature.hex()
+    return req
+
+
+def verify_fill_request(req):
+    """Check a fill request arriving from the network. Raises
+    FillRequestRejected.
+
+    Self-contained the same way verify_claim is: only whether this is
+    well-formed and genuinely signed by the address it names. Whether it
+    fits a *specific* order (remaining size, this node's own exposure
+    cap for this taker) is for whichever node actually holds that
+    order's maker key to decide (see node._handle_inbound_fill_request);
+    every other peer that merely relays this is not in a position to
+    judge that and must not be made to.
+    """
+    if not isinstance(req, dict):
+        raise FillRequestRejected("not an object")
+
+    missing = [f for f in FILL_REQUEST_SIGNED_FIELDS if f not in req]
+    if missing:
+        raise FillRequestRejected(f"missing field(s): {missing}")
+    if "signature" not in req:
+        raise FillRequestRejected("missing signature")
+
+    unexpected = set(req) - set(FILL_REQUEST_SIGNED_FIELDS) - {"signature"}
+    if unexpected:
+        raise FillRequestRejected(f"unexpected field(s): {sorted(unexpected)}")
+
+    if not isinstance(req["request_id"], str) or not req["request_id"]:
+        raise FillRequestRejected("request_id must be a non-empty string")
+    if not isinstance(req["order_id"], str) or not req["order_id"]:
+        raise FillRequestRejected("order_id must be a non-empty string")
+    if not isinstance(req["session_id"], str) or not req["session_id"]:
+        raise FillRequestRejected("session_id must be a non-empty string")
+    if not isinstance(req["lapse_total"], int) or isinstance(req["lapse_total"], bool):
+        raise FillRequestRejected("lapse_total must be an integer")
+    if req["lapse_total"] <= 0:
+        raise FillRequestRejected("lapse_total must be positive")
+
+    if not crypto.is_valid_address(req["taker_lapse_addr"]):
+        raise FillRequestRejected("taker_lapse_addr is not a valid address")
+
+    import xlm as xlm_mod
+    if not xlm_mod.is_valid_address(req["taker_xlm_addr"]):
+        raise FillRequestRejected("taker_xlm_addr is not a valid Stellar address")
+
+    # Last, and cheaper than the signature check that follows: same
+    # reasoning as market._check_claim_admission.
+    _check_fill_request_admission(req["taker_lapse_addr"])
+
+    _verify_fill_request_signature(req)
+    return True
+
+
+def _check_fill_request_admission(taker_lapse_addr):
+    ensure_tables()
+    if FillRequest.select().count() >= MAX_FILL_REQUESTS_TOTAL:
+        raise FillRequestRejected(
+            f"the request book is full (limit {MAX_FILL_REQUESTS_TOTAL})")
+    live = (FillRequest.select()
+            .where(FillRequest.taker_lapse_addr == taker_lapse_addr)
+            .count())
+    if live >= MAX_FILL_REQUESTS_PER_TAKER:
+        raise FillRequestRejected(
+            f"taker already has {live} live requests here "
+            f"(limit {MAX_FILL_REQUESTS_PER_TAKER})")
+
+
+def _verify_fill_request_signature(req):
+    try:
+        pubkey = bytes.fromhex(req["pubkey"])
+        signature = bytes.fromhex(req["signature"])
+    except (ValueError, TypeError):
+        raise FillRequestRejected("pubkey and signature must be hex")
+    if crypto.public_key_to_address(pubkey) != req["taker_lapse_addr"]:
+        raise FillRequestRejected("pubkey does not match taker_lapse_addr")
+    if not crypto.verify(_fill_request_signing_bytes(req), signature, pubkey):
+        raise FillRequestRejected("signature does not verify")
+
+
+def fill_request_hash(req):
+    body = {k: req.get(k) for k in FILL_REQUEST_SIGNED_FIELDS}
+    return crypto.sha256_hex(canonical_json(body))
+
+
+def already_known_fill_request(req):
+    if not isinstance(req, dict):
+        return False
+    ensure_tables()
+    rid = req.get("request_id")
+    if not isinstance(rid, str):
+        return False
+    return FillRequest.get_or_none(FillRequest.request_id == rid) is not None
+
+
+def store_fill_request(req):
+    """Persist a verified fill request. Returns False if already known."""
+    ensure_tables()
+    if FillRequest.get_or_none(FillRequest.request_id == req["request_id"]) is not None:
+        return False
+
+    if FillRequest.select().count() >= MAX_FILL_REQUESTS_TOTAL:
+        raise FillRequestRejected(
+            f"the request book is full (limit {MAX_FILL_REQUESTS_TOTAL})")
+    live = (FillRequest.select()
+            .where(FillRequest.taker_lapse_addr == req["taker_lapse_addr"])
+            .count())
+    if live >= MAX_FILL_REQUESTS_PER_TAKER:
+        raise FillRequestRejected(
+            f"taker already has {live} live requests here "
+            f"(limit {MAX_FILL_REQUESTS_PER_TAKER})")
+
+    FillRequest.create(
+        request_id=req["request_id"], order_id=req["order_id"],
+        session_id=req["session_id"], taker_lapse_addr=req["taker_lapse_addr"],
+        taker_xlm_addr=req["taker_xlm_addr"], lapse_total=req["lapse_total"],
+        pubkey=req["pubkey"], signature=req["signature"], received_at=time.time())
+    return True
+
+
+def get_fill_request(request_id):
+    ensure_tables()
+    return FillRequest.get_or_none(FillRequest.request_id == request_id)
+
+
+def requests_for_order(order_id):
+    """Every live fill request against one order, for the maker to act on."""
+    ensure_tables()
+    return list(FillRequest.select().where(FillRequest.order_id == order_id))
+
+
+def prune_fill_requests(now=None):
+    ensure_tables()
+    now = time.time() if now is None else now
+    cutoff = now - FILL_REQUEST_MAX_AGE_SECONDS
+    return FillRequest.delete().where(FillRequest.received_at <= cutoff).execute()
+
+
+def build_fill_response(request_id, order_id, session_id, lapse_total, accepted,
+                        maker_pubkey_hex, increment_count=None, reason=""):
+    """The unsigned body of a fill response, in canonical field order.
+
+    increment_count must be given when accepting (it is the schedule
+    length the maker is committing to) and must be omitted otherwise;
+    verify_fill_response enforces that pairing on the way back in.
+    """
+    return {
+        "request_id": request_id,
+        "order_id": order_id,
+        "session_id": session_id,
+        "lapse_total": int(lapse_total),
+        "accepted": bool(accepted),
+        "increment_count": int(increment_count) if increment_count is not None else None,
+        "reason": reason,
+        "maker_pubkey": maker_pubkey_hex,
+    }
+
+
+def _fill_response_signing_bytes(resp):
+    return canonical_json({k: resp[k] for k in FILL_RESPONSE_SIGNED_FIELDS})
+
+
+def sign_fill_response(resp, keyfile_path, kek):
+    """Sign a fill response in place with the maker's LapseCoin key."""
+    signature = crypto.sign_with_keyfile(_fill_response_signing_bytes(resp), keyfile_path, kek)
+    resp["signature"] = signature.hex()
+    return resp
+
+
+def verify_fill_response(resp, expected_maker_addr=None):
+    """Check a fill response arriving from the network. Raises
+    FillResponseRejected.
+
+    expected_maker_addr is None for a plain relay check (any peer
+    forwarding this cannot know or verify who was supposed to send it,
+    the same division verify_claim draws). A taker acting on a response
+    to its *own* outstanding request must always pass its order's real
+    maker_lapse_addr here: without this check, anyone could sign a
+    well-formed 'accepted' response with their own key for someone
+    else's order and have it mistaken for that order's actual maker
+    agreeing, since a signature alone only proves who signed it, not
+    that they were the right one to.
+    """
+    if not isinstance(resp, dict):
+        raise FillResponseRejected("not an object")
+
+    missing = [f for f in FILL_RESPONSE_SIGNED_FIELDS if f not in resp]
+    if missing:
+        raise FillResponseRejected(f"missing field(s): {missing}")
+    if "signature" not in resp:
+        raise FillResponseRejected("missing signature")
+
+    unexpected = set(resp) - set(FILL_RESPONSE_SIGNED_FIELDS) - {"signature"}
+    if unexpected:
+        raise FillResponseRejected(f"unexpected field(s): {sorted(unexpected)}")
+
+    if not isinstance(resp["request_id"], str) or not resp["request_id"]:
+        raise FillResponseRejected("request_id must be a non-empty string")
+    if not isinstance(resp["order_id"], str) or not resp["order_id"]:
+        raise FillResponseRejected("order_id must be a non-empty string")
+    if not isinstance(resp["session_id"], str) or not resp["session_id"]:
+        raise FillResponseRejected("session_id must be a non-empty string")
+    if not isinstance(resp["lapse_total"], int) or isinstance(resp["lapse_total"], bool):
+        raise FillResponseRejected("lapse_total must be an integer")
+    if resp["lapse_total"] <= 0:
+        raise FillResponseRejected("lapse_total must be positive")
+    if not isinstance(resp["accepted"], bool):
+        raise FillResponseRejected("accepted must be a boolean")
+
+    if resp["accepted"]:
+        if not isinstance(resp["increment_count"], int) or isinstance(resp["increment_count"], bool):
+            raise FillResponseRejected("increment_count must be an integer when accepted")
+        if not (swap_mod.MIN_INCREMENTS <= resp["increment_count"] <= swap_mod.MAX_INCREMENTS):
+            raise FillResponseRejected(
+                f"increment_count must be between {swap_mod.MIN_INCREMENTS} "
+                f"and {swap_mod.MAX_INCREMENTS}")
+    elif resp["increment_count"] is not None:
+        raise FillResponseRejected("increment_count must be null when not accepted")
+
+    if not isinstance(resp["reason"], str):
+        raise FillResponseRejected("reason must be a string")
+
+    try:
+        pubkey = bytes.fromhex(resp["maker_pubkey"])
+        signature = bytes.fromhex(resp["signature"])
+    except (ValueError, TypeError):
+        raise FillResponseRejected("pubkey and signature must be hex")
+
+    maker_addr = crypto.public_key_to_address(pubkey)
+    if expected_maker_addr is not None and maker_addr != expected_maker_addr:
+        raise FillResponseRejected("not signed by the maker this request was sent to")
+    if not crypto.verify(_fill_response_signing_bytes(resp), signature, pubkey):
+        raise FillResponseRejected("signature does not verify")
+    return True
+
+
+def fill_response_hash(resp):
+    body = {k: resp.get(k) for k in FILL_RESPONSE_SIGNED_FIELDS}
+    return crypto.sha256_hex(canonical_json(body))
+
+
+def already_known_fill_response(resp):
+    if not isinstance(resp, dict):
+        return False
+    ensure_tables()
+    rid = resp.get("request_id")
+    if not isinstance(rid, str):
+        return False
+    return FillResponse.get_or_none(FillResponse.request_id == rid) is not None
+
+
+def store_fill_response(resp):
+    """Persist a verified fill response. Returns False if already known."""
+    ensure_tables()
+    if FillResponse.get_or_none(FillResponse.request_id == resp["request_id"]) is not None:
+        return False
+    if FillResponse.select().count() >= MAX_FILL_RESPONSES_TOTAL:
+        raise FillResponseRejected(
+            f"the response book is full (limit {MAX_FILL_RESPONSES_TOTAL})")
+    FillResponse.create(
+        request_id=resp["request_id"], order_id=resp["order_id"],
+        session_id=resp["session_id"], lapse_total=resp["lapse_total"],
+        accepted=resp["accepted"], increment_count=resp["increment_count"],
+        reason=resp["reason"], maker_pubkey=resp["maker_pubkey"],
+        signature=resp["signature"], received_at=time.time())
+    return True
+
+
+def get_fill_response(request_id):
+    ensure_tables()
+    return FillResponse.get_or_none(FillResponse.request_id == request_id)
+
+
+def prune_fill_responses(now=None):
+    ensure_tables()
+    now = time.time() if now is None else now
+    cutoff = now - FILL_RESPONSE_MAX_AGE_SECONDS
+    return FillResponse.delete().where(FillResponse.received_at <= cutoff).execute()

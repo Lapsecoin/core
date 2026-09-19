@@ -804,6 +804,148 @@ class TestHandleInboundClaim:
 
 
 # ---------------------------------------------------------------------------
+# 10d. _handle_inbound_fill_request / _handle_inbound_fill_response
+# ---------------------------------------------------------------------------
+
+def _signed_fill_request(taker, order_id="order-1", session_id="s" * 16, **overrides):
+    req = market_mod.build_fill_request(
+        order_id=order_id, session_id=session_id,
+        taker_lapse_addr=taker["addr"], taker_xlm_addr=taker["xlm"],
+        lapse_total=overrides.pop("lapse_total", 1 * TICKS_PER_LAPSE),
+        pubkey_hex=taker["pubkey"])
+    req.update(overrides)
+    return market_mod.sign_fill_request(req, taker["keyfile"], taker["kek"])
+
+
+def _signed_fill_response(maker, request_id="r" * 16, order_id="order-1",
+                          session_id="s" * 16, accepted=True, **overrides):
+    resp = market_mod.build_fill_response(
+        request_id=request_id, order_id=order_id, session_id=session_id,
+        lapse_total=overrides.pop("lapse_total", 1 * TICKS_PER_LAPSE), accepted=accepted,
+        maker_pubkey_hex=maker["pubkey"],
+        increment_count=overrides.pop("increment_count", 3 if accepted else None),
+        reason=overrides.pop("reason", "" if accepted else "no room"))
+    resp.update(overrides)
+    return market_mod.sign_fill_response(resp, maker["keyfile"], maker["kek"])
+
+
+class TestHandleInboundFillRequest:
+    """Same propagation contract as a claim: verified once, relayed
+    either way, and a genuine duplicate costs no second flood."""
+
+    def test_new_request_is_relayed_onward(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        req = _signed_fill_request(taker)
+        node._handle_inbound_fill_request(
+            {"fill_request": req, "sender": "1.2.3.4:1", "stemming": False})
+        assert market_mod.get_fill_request(req["request_id"]) is not None
+        udp.send_fill_request.assert_called_once()
+        assert udp.send_fill_request.call_args.kwargs["peers"] == ["5.6.7.8:1"]
+
+    def test_invalid_request_is_not_relayed(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        req = _signed_fill_request(taker)
+        req["lapse_total"] = 999 * TICKS_PER_LAPSE   # breaks the signature
+        node._handle_inbound_fill_request(
+            {"fill_request": req, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_fill_request.assert_not_called()
+        assert market_mod.get_fill_request(req["request_id"]) is None
+
+    def test_a_duplicate_from_elsewhere_is_not_reflooded_or_reverified(
+            self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        req = _signed_fill_request(taker)
+        node._handle_inbound_fill_request(
+            {"fill_request": req, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_fill_request.reset_mock()
+
+        node._handle_inbound_fill_request(
+            {"fill_request": req, "sender": "5.6.7.8:1", "stemming": False})
+        udp.send_fill_request.assert_not_called()
+        assert market_mod.get_fill_request(req["request_id"]) is not None
+
+    def test_stem_hop_forwards_to_one_peer_only(
+            self, node_env_real_gossip, tmp_path, monkeypatch):
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 0.0)
+        node, udp = node_env_real_gossip
+        taker = _maker_identity(tmp_path, name="taker")
+        req = _signed_fill_request(taker)
+        node._handle_inbound_fill_request(
+            {"fill_request": req, "sender": "1.2.3.4:1", "stemming": True})
+        assert market_mod.get_fill_request(req["request_id"]) is not None
+        udp.send_fill_request.assert_called_once()
+        assert len(udp.send_fill_request.call_args.kwargs["peers"]) == 1
+        assert udp.send_fill_request.call_args.kwargs["stemming"] is True
+
+
+class TestHandleInboundFillResponse:
+    def test_new_response_is_relayed_onward(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path, name="maker")
+        resp = _signed_fill_response(maker)
+        node._handle_inbound_fill_response(
+            {"fill_response": resp, "sender": "1.2.3.4:1", "stemming": False})
+        assert market_mod.get_fill_response(resp["request_id"]) is not None
+        udp.send_fill_response.assert_called_once()
+        assert udp.send_fill_response.call_args.kwargs["peers"] == ["5.6.7.8:1"]
+
+    def test_invalid_response_is_not_relayed(self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path, name="maker")
+        resp = _signed_fill_response(maker)
+        resp["lapse_total"] = 999 * TICKS_PER_LAPSE   # breaks the signature
+        node._handle_inbound_fill_response(
+            {"fill_response": resp, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_fill_response.assert_not_called()
+        assert market_mod.get_fill_response(resp["request_id"]) is None
+
+    def test_relay_never_checks_which_maker_it_should_be_from(
+            self, node_env_real_gossip, tmp_path):
+        """A relay cannot know or verify who was supposed to answer a
+        given request; only the taker waiting on its own outstanding
+        request checks that (see market.verify_fill_response's
+        expected_maker_addr). A validly self-signed response from
+        *anyone* still relays."""
+        node, udp = node_env_real_gossip
+        stranger = _maker_identity(tmp_path, name="stranger")
+        resp = _signed_fill_response(stranger)
+        node._handle_inbound_fill_response(
+            {"fill_response": resp, "sender": "1.2.3.4:1", "stemming": False})
+        assert market_mod.get_fill_response(resp["request_id"]) is not None
+        udp.send_fill_response.assert_called_once()
+
+    def test_a_duplicate_from_elsewhere_is_not_reflooded_or_reverified(
+            self, node_env_real_gossip, tmp_path):
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path, name="maker")
+        resp = _signed_fill_response(maker)
+        node._handle_inbound_fill_response(
+            {"fill_response": resp, "sender": "1.2.3.4:1", "stemming": False})
+        udp.send_fill_response.reset_mock()
+
+        node._handle_inbound_fill_response(
+            {"fill_response": resp, "sender": "5.6.7.8:1", "stemming": False})
+        udp.send_fill_response.assert_not_called()
+        assert market_mod.get_fill_response(resp["request_id"]) is not None
+
+    def test_stem_hop_forwards_to_one_peer_only(
+            self, node_env_real_gossip, tmp_path, monkeypatch):
+        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 0.0)
+        node, udp = node_env_real_gossip
+        maker = _maker_identity(tmp_path, name="maker")
+        resp = _signed_fill_response(maker)
+        node._handle_inbound_fill_response(
+            {"fill_response": resp, "sender": "1.2.3.4:1", "stemming": True})
+        assert market_mod.get_fill_response(resp["request_id"]) is not None
+        udp.send_fill_response.assert_called_once()
+        assert len(udp.send_fill_response.call_args.kwargs["peers"]) == 1
+        assert udp.send_fill_response.call_args.kwargs["stemming"] is True
+
+
+# ---------------------------------------------------------------------------
 # 11. _evaluate_remote_chain
 # ---------------------------------------------------------------------------
 

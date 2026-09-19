@@ -1138,6 +1138,10 @@ class Node:
             self._handle_inbound_order(msg)
         elif t == "claim":
             self._handle_inbound_claim(msg)
+        elif t == "fill_request":
+            self._handle_inbound_fill_request(msg)
+        elif t == "fill_response":
+            self._handle_inbound_fill_response(msg)
 
     def _spread(self, item, kind, item_hash):
         """Originate an item and remember it until we see it come back from
@@ -1539,6 +1543,96 @@ class Node:
     def publish_claim(self, item):
         """Put this node's own fill claim onto the network."""
         self._spread(item, gossip_mod.KIND_CLAIM, market_mod.claim_hash(item))
+
+    def _handle_inbound_fill_request(self, msg):
+        """Verify a taker's fill request, store it, and pass it on.
+
+        Same shape and same reasoning as _handle_inbound_claim: verified
+        before relaying so a flood of junk costs one signature check and
+        goes no further, relayed either way so gossip's own flood logic
+        is the only thing deciding whether this node has already sent it
+        onward. Nothing here decides whether the request should be
+        accepted; that happens only for a request naming one of this
+        node's own orders, in swap_engine's periodic pass over the
+        request book, once it has this node's own current view of that
+        order's remaining size and its own trust in this specific taker.
+        """
+        item = msg["fill_request"]
+        sender = msg.get("sender")
+        stemming = msg.get("stemming", False)
+
+        try:
+            item_hash = market_mod.fill_request_hash(item)
+        except Exception:
+            log.debug("[market] ignoring an unreadable fill request")
+            return
+
+        self._note_echo(item_hash, sender)
+
+        if not market_mod.already_known_fill_request(item):
+            try:
+                market_mod.verify_fill_request(item)
+                market_mod.store_fill_request(item)
+            except market_mod.FillRequestRejected as e:
+                log.debug("[market] rejected a fill request from %s: %s", sender, e)
+                return
+            except Exception:
+                log.warning("[market] failed to handle an inbound fill request",
+                            exc_info=True)
+                return
+
+        self.gossip.relay(item, gossip_mod.KIND_FILL_REQUEST, item_hash,
+                          sender, stemming=stemming)
+
+    def publish_fill_request(self, item):
+        """Put this node's own fill request onto the network."""
+        self._spread(item, gossip_mod.KIND_FILL_REQUEST,
+                    market_mod.fill_request_hash(item))
+
+    def _handle_inbound_fill_response(self, msg):
+        """Verify a maker's answer to a fill request, store it, and pass
+        it on. Same shape and same reasoning as _handle_inbound_claim.
+
+        Verified here only at the level any relay can check: that it is
+        well-formed and genuinely signed by *someone*. Whether it was
+        signed by the *right* someone (the actual maker of the order it
+        answers) is not checkable at relay time by a node that may not
+        even have that order, and is exactly the check the waiting
+        taker itself must make before treating an acceptance as real
+        (see market.verify_fill_response's expected_maker_addr and
+        swap_engine's handling of a taker's own outstanding request).
+        """
+        item = msg["fill_response"]
+        sender = msg.get("sender")
+        stemming = msg.get("stemming", False)
+
+        try:
+            item_hash = market_mod.fill_response_hash(item)
+        except Exception:
+            log.debug("[market] ignoring an unreadable fill response")
+            return
+
+        self._note_echo(item_hash, sender)
+
+        if not market_mod.already_known_fill_response(item):
+            try:
+                market_mod.verify_fill_response(item)
+                market_mod.store_fill_response(item)
+            except market_mod.FillResponseRejected as e:
+                log.debug("[market] rejected a fill response from %s: %s", sender, e)
+                return
+            except Exception:
+                log.warning("[market] failed to handle an inbound fill response",
+                            exc_info=True)
+                return
+
+        self.gossip.relay(item, gossip_mod.KIND_FILL_RESPONSE, item_hash,
+                          sender, stemming=stemming)
+
+    def publish_fill_response(self, item):
+        """Put this node's own answer to a fill request onto the network."""
+        self._spread(item, gossip_mod.KIND_FILL_RESPONSE,
+                    market_mod.fill_response_hash(item))
 
     def _handle_inbound_tx(self, msg):
         """Route an inbound tx: validate, admit to the mempool, propagate.

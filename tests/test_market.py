@@ -88,6 +88,28 @@ def signed_claim(taker, order_id="order-1", session_id="s" * 16, **overrides):
     return market.sign_claim(claim, taker["keyfile"], taker["kek"])
 
 
+def signed_fill_request(taker, order_id="order-1", session_id="s" * 16, **overrides):
+    req = market.build_fill_request(
+        order_id=order_id, session_id=session_id,
+        taker_lapse_addr=taker["addr"], taker_xlm_addr=taker["xlm"],
+        lapse_total=overrides.pop("lapse_total", 1 * LAPSE),
+        pubkey_hex=taker["pubkey"])
+    req.update(overrides)
+    return market.sign_fill_request(req, taker["keyfile"], taker["kek"])
+
+
+def signed_fill_response(maker, request_id="r" * 16, order_id="order-1",
+                         session_id="s" * 16, accepted=True, **overrides):
+    resp = market.build_fill_response(
+        request_id=request_id, order_id=order_id, session_id=session_id,
+        lapse_total=overrides.pop("lapse_total", 1 * LAPSE), accepted=accepted,
+        maker_pubkey_hex=maker["pubkey"],
+        increment_count=overrides.pop("increment_count", 3 if accepted else None),
+        reason=overrides.pop("reason", "" if accepted else "no room"))
+    resp.update(overrides)
+    return market.sign_fill_response(resp, maker["keyfile"], maker["kek"])
+
+
 class TestSigning:
     def test_signed_order_verifies(self, maker):
         assert market.verify_order(signed_order(maker), current_height=100)
@@ -311,57 +333,73 @@ class TestStorage:
         assert market.remaining_ticks(row) == 10 * LAPSE
 
 
-class TestRemainingReflectsNetworkKnownClaims:
+def _accepted_response(order_id, session_id, lapse_total, request_id=None):
+    trade_storage.FillResponse.create(
+        request_id=request_id or session_id, order_id=order_id,
+        session_id=session_id, lapse_total=lapse_total, accepted=True,
+        increment_count=3, reason="", maker_pubkey="ab" * 10,
+        signature="cd" * 10, received_at=time.time())
+
+
+class TestRemainingReflectsNetworkKnownResponses:
     """A node that is neither an order's maker nor any of its takers has
     no local Trade row for it at all, however much of it has actually
-    been filled by strangers. Claims are gossiped to the whole network
-    exactly like orders are, so a node that has merely relayed one
-    (never traded on it) still has to see it here, or a taker relying on
-    this node's view of "remaining" could sign and pay for a fill the
-    order's real maker will simply refuse."""
+    been filled by strangers. An accepted fill response is gossiped to
+    the whole network exactly like an order is, so a node that has
+    merely relayed one (never traded on it) still has to see it here, or
+    a taker relying on this node's view of "remaining" could sign and
+    pay for a fill the order's real maker will simply refuse."""
 
-    def test_a_claim_this_node_never_traded_on_still_reduces_remaining(self, maker, taker):
+    def test_a_response_this_node_never_traded_on_still_reduces_remaining(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
         assert market.remaining_ticks(row) == 10 * LAPSE
 
-        # A claim this node only ever saw over gossip: no Trade row here
-        # for it, on either side, the way a genuine third party's node
-        # would have none either.
-        market.store_claim(signed_claim(taker, order_id=order["order_id"],
-                                        lapse_total=4 * LAPSE))
+        # A response this node only ever saw over gossip: no Trade row
+        # here for it, on either side, the way a genuine third party's
+        # node would have none either.
+        _accepted_response(order["order_id"], "s" * 16, 4 * LAPSE)
         assert market.remaining_ticks(row) == 6 * LAPSE
 
-    def test_multiple_unrelated_claims_all_reduce_it(self, maker, taker):
+    def test_multiple_unrelated_responses_all_reduce_it(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        market.store_claim(signed_claim(taker, order_id=order["order_id"],
-                                        session_id="s1" * 8, lapse_total=3 * LAPSE))
-        market.store_claim(signed_claim(taker, order_id=order["order_id"],
-                                        session_id="s2" * 8, lapse_total=2 * LAPSE))
+        _accepted_response(order["order_id"], "s1" * 8, 3 * LAPSE)
+        _accepted_response(order["order_id"], "s2" * 8, 2 * LAPSE)
         assert market.remaining_ticks(row) == 5 * LAPSE
 
-    def test_a_claim_against_a_different_order_does_not_count(self, maker, taker):
+    def test_an_unaccepted_response_does_not_count(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        market.store_claim(signed_claim(taker, order_id="some-other-order"))
+        trade_storage.FillResponse.create(
+            request_id="r1", order_id=order["order_id"], session_id="s" * 16,
+            lapse_total=4 * LAPSE, accepted=False, increment_count=None,
+            reason="not enough remaining", maker_pubkey="ab" * 10,
+            signature="cd" * 10, received_at=time.time())
         assert market.remaining_ticks(row) == 10 * LAPSE
 
-    def test_a_locally_tracked_trades_own_claim_is_not_double_counted(self, maker, taker):
+    def test_a_response_against_a_different_order_does_not_count(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response("some-other-order", "s" * 16, 4 * LAPSE)
+        assert market.remaining_ticks(row) == 10 * LAPSE
+
+    def test_a_locally_tracked_trades_own_response_is_not_double_counted(self, maker, taker):
         """The maker's own accurate delivered_ticks must not also have
-        that same claim's full amount subtracted a second time as
+        that same response's full amount subtracted a second time as
         'reserved', which would make an order's own maker undercount
         its remaining size for no reason."""
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        claim = signed_claim(taker, order_id=order["order_id"], lapse_total=4 * LAPSE)
-        market.store_claim(claim)
+        session_id = "s" * 16
+        _accepted_response(order["order_id"], session_id, 4 * LAPSE)
         Trade.create(
-            session_id=claim["session_id"], order_id=order["order_id"], role="maker",
+            session_id=session_id, order_id=order["order_id"], role="maker",
             my_lapse_addr=maker["addr"], my_xlm_addr=maker["xlm"],
             peer_lapse_addr=taker["addr"], peer_xlm_addr=taker["xlm"],
             i_send="lapse", lapse_total=4 * LAPSE, xlm_total=4000 * XLM,
@@ -369,8 +407,8 @@ class TestRemainingReflectsNetworkKnownClaims:
             status=trade_storage.TRADE_ACTIVE,
             created_at=time.time(), updated_at=time.time())
         # Nothing settled yet, so delivered_ticks is 0 for this trade,
-        # but it must not ALSO be treated as an unrelated reserved claim
-        # once this node recognizes it as its own trade's claim.
+        # but it must not ALSO be treated as an unrelated reserved
+        # response once this node recognizes it as its own trade's.
         assert market.remaining_ticks(row) == 10 * LAPSE
 
 
@@ -753,6 +791,266 @@ class TestAlreadyKnownClaim:
     def test_non_dict_is_not_known(self):
         assert market.already_known_claim("nope") is False
         assert market.already_known_claim(None) is False
+
+
+class TestFillRequests:
+    """A fill request only ever proves control of the LapseCoin address
+    it names. Whether it makes sense against a specific order (remaining
+    size, this node's own exposure cap for this taker) is the maker's
+    job when it actually decides how to answer, not checked here."""
+
+    def test_signed_request_verifies(self, taker):
+        assert market.verify_fill_request(signed_fill_request(taker)) is True
+
+    def test_unsigned_request_is_refused(self, taker):
+        req = market.build_fill_request(
+            "order-1", "s" * 16, taker["addr"], taker["xlm"], 1 * LAPSE, taker["pubkey"])
+        with pytest.raises(market.FillRequestRejected, match="signature"):
+            market.verify_fill_request(req)
+
+    @pytest.mark.parametrize("field,value", [
+        ("lapse_total", 5 * LAPSE),
+        ("taker_xlm_addr", None),
+        ("session_id", "different-session"),
+    ])
+    def test_tampering_breaks_the_signature(self, taker, field, value):
+        req = signed_fill_request(taker)
+        if value is None:
+            _seed, value = xlm_mod.generate_keypair()
+        req[field] = value
+        with pytest.raises(market.FillRequestRejected, match="signature"):
+            market.verify_fill_request(req)
+
+    def test_requesting_from_someone_elses_lapse_address_is_refused(self, taker, maker):
+        req = signed_fill_request(taker)
+        req["taker_lapse_addr"] = maker["addr"]
+        with pytest.raises(market.FillRequestRejected, match="pubkey does not match"):
+            market.verify_fill_request(req)
+
+    def test_extra_field_is_refused_not_ignored(self, taker):
+        req = signed_fill_request(taker)
+        req["surprise"] = "x"
+        with pytest.raises(market.FillRequestRejected, match="unexpected"):
+            market.verify_fill_request(req)
+
+    def test_missing_field_refused(self, taker):
+        req = signed_fill_request(taker)
+        del req["lapse_total"]
+        with pytest.raises(market.FillRequestRejected, match="missing"):
+            market.verify_fill_request(req)
+
+    def test_non_positive_lapse_total_refused(self, taker):
+        with pytest.raises(market.FillRequestRejected):
+            market.verify_fill_request(signed_fill_request(taker, lapse_total=0))
+
+    def test_bool_is_not_an_integer(self, taker):
+        req = signed_fill_request(taker)
+        req["lapse_total"] = True
+        with pytest.raises(market.FillRequestRejected, match="integer"):
+            market.verify_fill_request(req)
+
+    def test_bad_lapse_address_refused(self, taker):
+        with pytest.raises(market.FillRequestRejected):
+            market.verify_fill_request(signed_fill_request(taker, taker_lapse_addr="not.an.address"))
+
+    def test_bad_stellar_address_refused(self, taker):
+        with pytest.raises(market.FillRequestRejected, match="Stellar"):
+            market.verify_fill_request(signed_fill_request(taker, taker_xlm_addr="GNOPE"))
+
+    def test_non_dict_refused(self):
+        with pytest.raises(market.FillRequestRejected):
+            market.verify_fill_request("not a request")
+
+
+class TestFillRequestAdmissionRunsBeforeTheSignatureCheck:
+    def test_a_taker_already_at_its_cap_is_refused_pre_signature(self, taker):
+        for i in range(market.MAX_FILL_REQUESTS_PER_TAKER):
+            market.store_fill_request(signed_fill_request(taker, session_id=f"s{i}" * 4))
+        with pytest.raises(market.FillRequestRejected, match="limit"):
+            market.verify_fill_request(signed_fill_request(taker, session_id="overflow" * 2))
+
+    def test_a_full_request_book_is_refused_pre_signature(self, taker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_FILL_REQUESTS_TOTAL", 1)
+        market.store_fill_request(signed_fill_request(taker, session_id="a" * 16))
+        with pytest.raises(market.FillRequestRejected, match="full"):
+            market.verify_fill_request(signed_fill_request(taker, session_id="b" * 16))
+
+    def test_admission_does_not_let_a_forged_request_through(self, taker):
+        req = signed_fill_request(taker)
+        req["lapse_total"] = 999 * LAPSE
+        with pytest.raises(market.FillRequestRejected, match="signature"):
+            market.verify_fill_request(req)
+
+
+class TestFillRequestStorage:
+    def test_store_and_read_back(self, taker):
+        req = signed_fill_request(taker)
+        assert market.store_fill_request(req) is True
+        assert market.get_fill_request(req["request_id"]).lapse_total == 1 * LAPSE
+
+    def test_duplicate_request_id_is_not_stored_twice(self, taker):
+        req = signed_fill_request(taker)
+        assert market.store_fill_request(req) is True
+        assert market.store_fill_request(req) is False
+
+    def test_one_taker_cannot_fill_the_request_book(self, taker):
+        for i in range(market.MAX_FILL_REQUESTS_PER_TAKER):
+            market.store_fill_request(signed_fill_request(taker, session_id=f"s{i}" * 4))
+        with pytest.raises(market.FillRequestRejected, match="limit"):
+            market.store_fill_request(signed_fill_request(taker, session_id="overflow" * 2))
+
+    def test_the_request_book_itself_has_a_ceiling(self, taker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_FILL_REQUESTS_TOTAL", 2)
+        market.store_fill_request(signed_fill_request(taker, session_id="a" * 16))
+        market.store_fill_request(signed_fill_request(taker, session_id="b" * 16))
+        with pytest.raises(market.FillRequestRejected, match="full"):
+            market.store_fill_request(signed_fill_request(taker, session_id="c" * 16))
+
+    def test_requests_for_order_scopes_by_order(self, taker):
+        market.store_fill_request(signed_fill_request(taker, order_id="order-a", session_id="a" * 16))
+        market.store_fill_request(signed_fill_request(taker, order_id="order-b", session_id="b" * 16))
+        rows = market.requests_for_order("order-a")
+        assert [r.session_id for r in rows] == ["a" * 16]
+
+    def test_prune_removes_old_requests(self, taker):
+        req = signed_fill_request(taker)
+        market.store_fill_request(req)
+        removed = market.prune_fill_requests(now=time.time() + market.FILL_REQUEST_MAX_AGE_SECONDS + 1)
+        assert removed == 1
+        assert market.get_fill_request(req["request_id"]) is None
+
+    def test_prune_leaves_recent_requests(self, taker):
+        req = signed_fill_request(taker)
+        market.store_fill_request(req)
+        assert market.prune_fill_requests(now=time.time()) == 0
+        assert market.get_fill_request(req["request_id"]) is not None
+
+
+class TestAlreadyKnownFillRequest:
+    def test_unknown_request_is_not_known(self, taker):
+        assert market.already_known_fill_request(signed_fill_request(taker)) is False
+
+    def test_stored_request_is_known(self, taker):
+        req = signed_fill_request(taker)
+        market.store_fill_request(req)
+        assert market.already_known_fill_request(req) is True
+
+    def test_non_dict_is_not_known(self):
+        assert market.already_known_fill_request("nope") is False
+        assert market.already_known_fill_request(None) is False
+
+
+class TestFillResponses:
+    def test_signed_accept_verifies(self, maker):
+        assert market.verify_fill_response(signed_fill_response(maker, accepted=True)) is True
+
+    def test_signed_reject_verifies(self, maker):
+        assert market.verify_fill_response(signed_fill_response(maker, accepted=False)) is True
+
+    def test_expected_maker_addr_matching_passes(self, maker):
+        resp = signed_fill_response(maker)
+        assert market.verify_fill_response(resp, expected_maker_addr=maker["addr"]) is True
+
+    def test_signed_by_the_wrong_party_is_refused(self, maker, taker):
+        """A stranger cannot sign their own 'acceptance' of someone
+        else's order and have it mistaken for that order's real maker
+        agreeing: the caller acting on a response must always check the
+        signer against the order's own known maker address."""
+        resp = signed_fill_response(taker)   # signed by the wrong key entirely
+        with pytest.raises(market.FillResponseRejected, match="not signed by the maker"):
+            market.verify_fill_response(resp, expected_maker_addr=maker["addr"])
+
+    def test_unsigned_response_is_refused(self, maker):
+        resp = market.build_fill_response(
+            "r" * 16, "order-1", "s" * 16, 1 * LAPSE, True, maker["pubkey"], increment_count=3)
+        with pytest.raises(market.FillResponseRejected, match="signature"):
+            market.verify_fill_response(resp)
+
+    def test_tampering_breaks_the_signature(self, maker):
+        resp = signed_fill_response(maker)
+        resp["lapse_total"] = 5 * LAPSE
+        with pytest.raises(market.FillResponseRejected, match="signature"):
+            market.verify_fill_response(resp)
+
+    def test_accepted_without_increment_count_is_refused(self, maker):
+        resp = signed_fill_response(maker, accepted=True)
+        resp["increment_count"] = None
+        with pytest.raises(market.FillResponseRejected, match="integer"):
+            market.verify_fill_response(resp)
+
+    def test_rejected_with_an_increment_count_is_refused(self, maker):
+        resp = signed_fill_response(maker, accepted=False)
+        resp["increment_count"] = 3
+        with pytest.raises(market.FillResponseRejected, match="null"):
+            market.verify_fill_response(resp)
+
+    @pytest.mark.parametrize("bad", [1, 21, 0, -1])
+    def test_increment_count_out_of_range_refused(self, maker, bad):
+        with pytest.raises(market.FillResponseRejected, match="increment_count"):
+            market.verify_fill_response(signed_fill_response(maker, accepted=True, increment_count=bad))
+
+    def test_extra_field_is_refused_not_ignored(self, maker):
+        resp = signed_fill_response(maker)
+        resp["surprise"] = "x"
+        with pytest.raises(market.FillResponseRejected, match="unexpected"):
+            market.verify_fill_response(resp)
+
+    def test_missing_field_refused(self, maker):
+        resp = signed_fill_response(maker)
+        del resp["reason"]
+        with pytest.raises(market.FillResponseRejected, match="missing"):
+            market.verify_fill_response(resp)
+
+    def test_non_dict_refused(self):
+        with pytest.raises(market.FillResponseRejected):
+            market.verify_fill_response("not a response")
+
+
+class TestFillResponseStorage:
+    def test_store_and_read_back(self, maker):
+        resp = signed_fill_response(maker, request_id="req1" * 4)
+        assert market.store_fill_response(resp) is True
+        assert market.get_fill_response("req1" * 4).lapse_total == 1 * LAPSE
+
+    def test_duplicate_request_id_is_not_stored_twice(self, maker):
+        resp = signed_fill_response(maker, request_id="req1" * 4)
+        assert market.store_fill_response(resp) is True
+        assert market.store_fill_response(resp) is False
+
+    def test_the_response_book_itself_has_a_ceiling(self, maker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_FILL_RESPONSES_TOTAL", 2)
+        market.store_fill_response(signed_fill_response(maker, request_id="a" * 16))
+        market.store_fill_response(signed_fill_response(maker, request_id="b" * 16))
+        with pytest.raises(market.FillResponseRejected, match="full"):
+            market.store_fill_response(signed_fill_response(maker, request_id="c" * 16))
+
+    def test_prune_removes_old_responses(self, maker):
+        resp = signed_fill_response(maker, request_id="req1" * 4)
+        market.store_fill_response(resp)
+        removed = market.prune_fill_responses(
+            now=time.time() + market.FILL_RESPONSE_MAX_AGE_SECONDS + 1)
+        assert removed == 1
+        assert market.get_fill_response("req1" * 4) is None
+
+    def test_prune_leaves_recent_responses(self, maker):
+        resp = signed_fill_response(maker, request_id="req1" * 4)
+        market.store_fill_response(resp)
+        assert market.prune_fill_responses(now=time.time()) == 0
+        assert market.get_fill_response("req1" * 4) is not None
+
+
+class TestAlreadyKnownFillResponse:
+    def test_unknown_response_is_not_known(self, maker):
+        assert market.already_known_fill_response(signed_fill_response(maker)) is False
+
+    def test_stored_response_is_known(self, maker):
+        resp = signed_fill_response(maker)
+        market.store_fill_response(resp)
+        assert market.already_known_fill_response(resp) is True
+
+    def test_non_dict_is_not_known(self):
+        assert market.already_known_fill_response("nope") is False
+        assert market.already_known_fill_response(None) is False
 
 
 class TestDepth:

@@ -76,6 +76,13 @@ ORDER_SEEN_CACHE_SIZE = 20_000
 # claims cannot touch the order, block or tx caches either.
 CLAIM_SEEN_CACHE_SIZE = 5_000
 
+# Fill requests and responses (see market.py's handshake section) are the
+# same rarity and lifetime as claims, one per fill attempt, pruned within
+# the hour, and get the same isolation treatment: their own budgets so a
+# flood of either can never touch the order, claim, block or tx caches.
+FILL_REQUEST_SEEN_CACHE_SIZE = 5_000
+FILL_RESPONSE_SEEN_CACHE_SIZE = 5_000
+
 # Probability that a stem hop forwards again instead of fluffing, giving a
 # geometric stem length with mean 1/(1-q) hops where the topology allows it.
 #
@@ -108,12 +115,16 @@ KIND_BLOCK = "block"
 KIND_TX    = "tx"
 KIND_ORDER = "order"
 KIND_CLAIM = "claim"
+KIND_FILL_REQUEST  = "fill_request"
+KIND_FILL_RESPONSE = "fill_response"
 
 _SEEN_CACHE_SIZES = {
     KIND_BLOCK: SEEN_CACHE_SIZE,
     KIND_TX: SEEN_CACHE_SIZE,
     KIND_ORDER: ORDER_SEEN_CACHE_SIZE,
     KIND_CLAIM: CLAIM_SEEN_CACHE_SIZE,
+    KIND_FILL_REQUEST: FILL_REQUEST_SEEN_CACHE_SIZE,
+    KIND_FILL_RESPONSE: FILL_RESPONSE_SEEN_CACHE_SIZE,
 }
 
 
@@ -247,6 +258,10 @@ class Gossip:
             self.udp.send_order(item, peers=peers, stemming=stemming)
         elif kind == KIND_CLAIM:
             self.udp.send_claim(item, peers=peers, stemming=stemming)
+        elif kind == KIND_FILL_REQUEST:
+            self.udp.send_fill_request(item, peers=peers, stemming=stemming)
+        elif kind == KIND_FILL_RESPONSE:
+            self.udp.send_fill_response(item, peers=peers, stemming=stemming)
         elif kind == KIND_TX:
             self.udp.send_tx(item, peers=peers, stemming=stemming)
         else:

@@ -122,6 +122,15 @@ MT_ORDER     = 0x0F
 # an older node with no protocol floor bump needed.
 MT_CLAIM     = 0x10
 
+# The handshake pair (see market.py's fill-request/response section):
+# a taker's proposal to fill part of an order, and the maker's signed
+# accept-or-reject answer, both gossiped exactly like MT_CLAIM and for
+# the same reasons - carries no funds, relayed unconditionally so the
+# peer handing it to you is not necessarily its author, falls through
+# _dispatch on an older node with no protocol floor bump needed.
+MT_FILL_REQUEST  = 0x11
+MT_FILL_RESPONSE = 0x12
+
 # Level 1 rather than 6: on the wire this competes with pacing, not disk.
 # It reaches within about a point of the ratio at a third of the CPU, and
 # every hop pays the decompress, so the cheaper end is the right one here.
@@ -739,6 +748,8 @@ class UDPTransport:
         self._routable_lock = threading.Lock()
         self._on_order      = None  # set by main; swap orders from the network
         self._on_claim      = None  # set by main; fill claims from the network
+        self._on_fill_request  = None  # set by main; fill requests from the network
+        self._on_fill_response = None  # set by main; fill responses from the network
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -932,6 +943,23 @@ class UDPTransport:
         cannot forge one, and travelling through relays keeps the
         taker's trading address unlinked from the IP that posted it."""
         self._broadcast(MT_CLAIM, {"claim": claim}, peers, stemming, "claim")
+
+    def send_fill_request(self, request: dict, peers=None, stemming: bool = False):
+        """Put a signed fill request on the wire. Same propagation as a
+        claim: signed by the taker proposing the fill, broadcast rather
+        than sent to a specific peer, so nothing here reveals whose IP
+        maps to whichever maker address the request names."""
+        self._broadcast(MT_FILL_REQUEST, {"fill_request": request}, peers,
+                        stemming, "fill request")
+
+    def send_fill_response(self, response: dict, peers=None, stemming: bool = False):
+        """Put a maker's signed answer to a fill request on the wire.
+        Same propagation as the request it answers, for the same reason:
+        the maker does not know the taker's IP either, only its address,
+        so the answer has to travel the same broadcast path the question
+        did."""
+        self._broadcast(MT_FILL_RESPONSE, {"fill_response": response}, peers,
+                        stemming, "fill response")
 
     def send_peers(self, addr: str, peers: list[str]):
         """Send peer list to addr."""
@@ -1187,7 +1215,8 @@ class UDPTransport:
         if complete is None:
             return
 
-        if msg_type in (MT_BLOCK, MT_TX, MT_ORDER, MT_CLAIM):
+        if msg_type in (MT_BLOCK, MT_TX, MT_ORDER, MT_CLAIM,
+                       MT_FILL_REQUEST, MT_FILL_RESPONSE):
             complete = _inflate(complete)
             if complete is None:
                 return
@@ -1314,6 +1343,26 @@ class UDPTransport:
                 if isinstance(claim, dict) and self._on_claim:
                     self._on_claim(claim, sender_addr,
                                    bool(data.get("stemming", False)))
+
+        elif msg_type == MT_FILL_REQUEST:
+            if self._is_new(msg_id):
+                self._pool.touch(sender_addr)
+                request = data.get("fill_request")
+                # Same reasoning as MT_CLAIM: handed up unverified, and
+                # relaying before the signature check would let anyone
+                # flood the network with junk every node forwards. See
+                # Node._handle_inbound_fill_request.
+                if isinstance(request, dict) and self._on_fill_request:
+                    self._on_fill_request(request, sender_addr,
+                                          bool(data.get("stemming", False)))
+
+        elif msg_type == MT_FILL_RESPONSE:
+            if self._is_new(msg_id):
+                self._pool.touch(sender_addr)
+                response = data.get("fill_response")
+                if isinstance(response, dict) and self._on_fill_response:
+                    self._on_fill_response(response, sender_addr,
+                                           bool(data.get("stemming", False)))
 
         elif msg_type == MT_GETSYNC:
             self._handle_getsync(msg_id, data, sender)
@@ -1615,6 +1664,18 @@ class UDPTransport:
         claims are dropped at _dispatch and cost nothing.
         """
         self._on_claim = fn
+
+    def set_fill_request_callback(self, fn):
+        """fn(request, sender_addr, stemming). Set by main after Node init.
+
+        Left unset on a node that does not trade, in which case inbound
+        fill requests are dropped at _dispatch and cost nothing.
+        """
+        self._on_fill_request = fn
+
+    def set_fill_response_callback(self, fn):
+        """fn(response, sender_addr, stemming). Set by main after Node init."""
+        self._on_fill_response = fn
 
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""
