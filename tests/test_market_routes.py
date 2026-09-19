@@ -495,3 +495,157 @@ class TestMakerXlmUnfunded:
     def test_buy_order_never_warns_taker_pays_lapse_not_xlm(self):
         order = self._Order("buy")
         assert market_routes._maker_xlm_unfunded(order, lambda addr: False) is False
+
+
+class TestAutoFill:
+    """The market-order half of the market (raised directly by the user:
+    trading should not require reading the book and copying an
+    order_id). _auto_fill sweeps the best-priced compatible orders and
+    fills as much as is safe, without any order being chosen by hand."""
+
+    def _call(self, node, form, height=1000, depth=2, stranger_cap=5 * XLM):
+        fake_request = FakeRequest({"passphrase": node.passphrase, **form})
+        original = market_routes.request
+        market_routes.request = fake_request
+        try:
+            return market_routes._auto_fill(
+                node, node.xlm_keyfile, height, depth, stranger_cap)
+        finally:
+            market_routes.request = original
+
+    def test_fills_the_single_best_priced_order_first(self, tmp_path):
+        make_maker_order(order_id="cheap", direction="sell", price=1000,
+                         lapse_total=10 * LAPSE, maker_lapse="maker1.lapse",
+                         maker_xlm="GMAKER1")
+        make_maker_order(order_id="pricey", direction="sell", price=2000,
+                         lapse_total=10 * LAPSE, maker_lapse="maker2.lapse",
+                         maker_xlm="GMAKER2")
+        node = TakerNode(tmp_path)
+        result = self._call(node, {"direction": "buy", "amount_lapse": "2"})
+
+        assert result["filled"] == 2 * LAPSE
+        assert result["remaining"] == 0
+        assert len(result["sessions"]) == 1
+        trade = Trade.get(Trade.session_id == result["sessions"][0])
+        assert trade.peer_lapse_addr == "maker1.lapse"
+
+    def test_a_price_limit_excludes_worse_priced_orders(self, tmp_path):
+        make_maker_order(order_id="cheap", direction="sell", price=1000,
+                         lapse_total=10 * LAPSE, maker_lapse="maker1.lapse",
+                         maker_xlm="GMAKER1")
+        make_maker_order(order_id="pricey", direction="sell", price=2000,
+                         lapse_total=10 * LAPSE, maker_lapse="maker2.lapse",
+                         maker_xlm="GMAKER2")
+        node = TakerNode(tmp_path)
+        # 1500 stroops/tick: between the two orders' prices, so only the
+        # cheaper one qualifies.
+        result = self._call(node, {"direction": "buy", "amount_lapse": "15",
+                                   "max_price_xlm": "0.00015"})
+
+        assert result["filled"] == 10 * LAPSE   # all of the cheap order
+        assert result["remaining"] == 5 * LAPSE
+        assert len(result["sessions"]) == 1
+        assert Trade.select().count() == 1
+        trade = Trade.get(Trade.session_id == result["sessions"][0])
+        assert trade.peer_lapse_addr == "maker1.lapse"
+
+    def test_splits_across_orders_once_one_counterpartys_cap_is_reached(self, tmp_path):
+        tiny_cap = 10_000
+        max_safe_lapse = swap_mod.lapse_for_xlm(
+            swap_mod.max_safe_trade_stroops(
+                swap_mod.exposure_cap_stroops(0, tiny_cap)), 1000)
+        make_maker_order(order_id="m1", direction="sell", price=1000,
+                         lapse_total=max_safe_lapse * 3, maker_lapse="maker1.lapse",
+                         maker_xlm="GMAKER1")
+        make_maker_order(order_id="m2", direction="sell", price=1000,
+                         lapse_total=max_safe_lapse * 3, maker_lapse="maker2.lapse",
+                         maker_xlm="GMAKER2")
+        node = TakerNode(tmp_path)
+        requested_lapse = max_safe_lapse * 2
+        result = self._call(
+            node, {"direction": "buy",
+                  "amount_lapse": str(requested_lapse / LAPSE)},
+            stranger_cap=tiny_cap)
+
+        assert result["filled"] == requested_lapse
+        assert result["remaining"] == 0
+        assert len(result["sessions"]) == 2
+        assert Trade.select().count() == 2
+        peers = {t.peer_lapse_addr for t in Trade.select()}
+        assert peers == {"maker1.lapse", "maker2.lapse"}
+
+    def test_nothing_on_the_book_reports_zero_filled_not_an_error(self, tmp_path):
+        node = TakerNode(tmp_path)
+        result = self._call(node, {"direction": "buy", "amount_lapse": "5"})
+        assert result["filled"] == 0
+        assert result["remaining"] == 5 * LAPSE
+        assert result["sessions"] == []
+        assert Trade.select().count() == 0
+
+    def test_wrong_passphrase_raises_once_rather_than_looping(self, tmp_path):
+        make_maker_order(direction="sell", price=1000, lapse_total=10 * LAPSE)
+        node = TakerNode(tmp_path)
+        fake_request = FakeRequest({"passphrase": "wrong", "direction": "buy",
+                                    "amount_lapse": "1"})
+        original = market_routes.request
+        market_routes.request = fake_request
+        try:
+            with pytest.raises(ValueError, match="passphrase"):
+                market_routes._auto_fill(node, node.xlm_keyfile, 1000, 2, 5 * XLM)
+        finally:
+            market_routes.request = original
+        assert Trade.select().count() == 0
+
+    def test_a_slice_below_an_orders_own_minimum_fill_is_skipped(self, tmp_path):
+        make_maker_order(direction="sell", price=1000, lapse_total=10 * LAPSE,
+                         min_fill=5 * LAPSE)
+        node = TakerNode(tmp_path)
+        result = self._call(node, {"direction": "buy", "amount_lapse": "1"})
+
+        assert result["filled"] == 0
+        assert result["remaining"] == 1 * LAPSE
+        assert result["sessions"] == []
+        assert result["skipped"]
+        assert Trade.select().count() == 0
+
+    def test_selling_matches_against_the_best_buy_order_first(self, tmp_path):
+        """For a seller, the best price is the *highest* standing bid."""
+        make_maker_order(order_id="low", direction="buy", price=1000,
+                         lapse_total=10 * LAPSE, maker_lapse="maker1.lapse",
+                         maker_xlm="GMAKER1")
+        make_maker_order(order_id="high", direction="buy", price=2000,
+                         lapse_total=10 * LAPSE, maker_lapse="maker2.lapse",
+                         maker_xlm="GMAKER2")
+        node = TakerNode(tmp_path)
+        node.view.state.balances[node.addr] = 10**12   # enough LAPSE to sell
+        result = self._call(node, {"direction": "sell", "amount_lapse": "2"})
+
+        assert len(result["sessions"]) == 1
+        trade = Trade.get(Trade.session_id == result["sessions"][0])
+        assert trade.peer_lapse_addr == "maker2.lapse"
+
+
+class TestAutoFillMessage:
+    def test_full_fill_single_trade(self):
+        msg = market_routes._auto_fill_message(
+            {"filled": 2 * LAPSE, "remaining": 0, "sessions": ["s1"], "skipped": []})
+        assert "2.0000 LAPSE" in msg
+        assert "1 trade" in msg
+        assert "trades" not in msg
+
+    def test_full_fill_pluralizes_multiple_trades(self):
+        msg = market_routes._auto_fill_message(
+            {"filled": 2 * LAPSE, "remaining": 0, "sessions": ["s1", "s2"], "skipped": []})
+        assert "2 trades" in msg
+
+    def test_partial_fill_mentions_what_is_left(self):
+        msg = market_routes._auto_fill_message(
+            {"filled": 1 * LAPSE, "remaining": 1 * LAPSE, "sessions": ["s1"], "skipped": []})
+        assert "1.0000 LAPSE" in msg
+        assert "could not be filled" in msg
+
+    def test_zero_fill_suggests_a_standing_order(self):
+        msg = market_routes._auto_fill_message(
+            {"filled": 0, "remaining": 5 * LAPSE, "sessions": [], "skipped": []})
+        assert "Nothing could be filled" in msg
+        assert "resting order" in msg

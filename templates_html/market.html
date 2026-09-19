@@ -119,8 +119,68 @@
 </div>
 
 {% if xlm_addr %}
-{# ------------------------------------------------------------- buy / sell #}
-<h2>Buy and sell</h2>
+{# ------------------------------------------------------------- trade now #}
+<h2>Trade now</h2>
+<div class="card">
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab is-active" data-side="buy" role="tab">Buy LAPSE</button>
+    <button type="button" class="tab" data-side="sell" role="tab">Sell LAPSE</button>
+  </div>
+
+  <form method="post" id="auto-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="auto_fill">
+    <input type="hidden" name="direction" id="auto-direction" value="buy">
+
+    <div class="form-row">
+      <label for="auto-amount">Amount</label>
+      <input id="auto-amount" type="text" name="amount_lapse" inputmode="decimal"
+             placeholder="0.00" required autocomplete="off">
+      <span>LAPSE</span>
+    </div>
+
+    <details style="margin:.4rem 0">
+      <summary class="stat-sub" style="cursor:pointer">Set a price limit (optional)</summary>
+      <div class="form-row">
+        <label for="auto-max-price">No worse than</label>
+        <input id="auto-max-price" type="text" name="max_price_xlm" inputmode="decimal"
+               placeholder="blank = accept the best available" autocomplete="off">
+        <span>XLM each</span>
+        <div class="stat-sub">
+          Leave blank to take whatever is currently on offer, exactly like a
+          real exchange's market order. Set this only if you would rather
+          not trade at all than pay more (buying) or accept less (selling)
+          than a specific price.
+        </div>
+      </div>
+    </details>
+
+    <div class="form-row">
+      <label for="auto_pass">Passphrase</label>
+      <input id="auto_pass" type="password" name="passphrase" required>
+    </div>
+
+    <div style="padding-top:.5rem">
+      <button type="submit" id="auto-submit" data-buy-label="Buy now"
+              data-sell-label="Sell now">Buy now</button>
+    </div>
+    <p class="stat-sub" style="margin-top:.5rem">
+      Fills automatically against the best-priced orders already on the
+      book, splitting across as many as needed. Each slice is still capped
+      by how much this node will safely risk with that specific
+      counterparty (see <a href="/settings">Settings</a>); a thin book or a
+      tight cap can mean only part of this fills, which is reported rather
+      than treated as an error. Nothing here is chosen by hand.
+    </p>
+  </form>
+</div>
+
+{# --------------------------------------------------------- resting order #}
+<h2>Or, post a standing order</h2>
+<p class="stat-sub" style="margin-top:-.3rem">
+  For when you are not in a hurry: this waits in the book at your price
+  until somebody (or your own next "Trade now") fills it, or it expires.
+</p>
 <div class="card">
   <div class="tabs" role="tablist">
     <button type="button" class="tab is-active" data-side="buy" role="tab">Buy LAPSE</button>
@@ -193,7 +253,8 @@
     </div>
 
     <div style="padding-top:.5rem">
-      <button type="submit" id="submit-btn">Place buy order</button>
+      <button type="submit" id="submit-btn" data-buy-label="Place buy order"
+              data-sell-label="Place sell order">Place buy order</button>
     </div>
   </form>
 </div>
@@ -311,13 +372,41 @@
 
 <script>
 (function () {
-  var PRICE_DP = 7, STROOPS = 10000000;
+  // Each .tabs group lives in its own card, alongside its own hidden
+  // "direction" input and its own submit button; scoped per-card so the
+  // "Trade now" and "post a standing order" forms toggle independently
+  // instead of one click flipping both.
+  Array.prototype.forEach.call(document.querySelectorAll(".tabs"), function (group) {
+    var card = group.closest(".card");
+    if (!card) return;
+    var dirIn = card.querySelector('input[name="direction"]');
+    var btn   = card.querySelector('button[type="submit"]');
+    var tabs  = group.querySelectorAll(".tab");
+    var buyLabel  = btn ? (btn.dataset.buyLabel  || btn.textContent) : "";
+    var sellLabel = btn ? (btn.dataset.sellLabel || btn.textContent) : "";
+
+    Array.prototype.forEach.call(tabs, function (tab) {
+      tab.addEventListener("click", function () {
+        Array.prototype.forEach.call(tabs, function (t) {
+          t.classList.remove("is-active");
+        });
+        tab.classList.add("is-active");
+        if (dirIn) dirIn.value = tab.dataset.side;
+        if (btn) btn.textContent = tab.dataset.side === "buy" ? buyLabel : sellLabel;
+        card.dispatchEvent(new CustomEvent("side-changed", {detail: tab.dataset.side}));
+      });
+    });
+  });
+})();
+
+(function () {
+  // The resting-order form's live total, tied to its own card only.
+  var PRICE_DP = 7;
   var amount = document.getElementById("amount");
   var price  = document.getElementById("price");
   var total  = document.getElementById("total-line");
   var dirIn  = document.getElementById("direction");
-  var btn    = document.getElementById("submit-btn");
-  if (!amount || !price || !total) return;
+  if (!amount || !price || !total || !dirIn) return;
 
   function recalc() {
     var a = parseFloat(amount.value), p = parseFloat(price.value);
@@ -330,23 +419,9 @@
     total.textContent = verb + " " + xlm.toFixed(PRICE_DP) + " XLM";
   }
 
-  [amount, price].forEach(function (el) {
-    el.addEventListener("input", recalc);
-  });
-
-  Array.prototype.forEach.call(document.querySelectorAll(".tab"), function (tab) {
-    tab.addEventListener("click", function () {
-      Array.prototype.forEach.call(document.querySelectorAll(".tab"), function (t) {
-        t.classList.remove("is-active");
-      });
-      tab.classList.add("is-active");
-      dirIn.value = tab.dataset.side;
-      btn.textContent = tab.dataset.side === "buy"
-        ? "Place buy order" : "Place sell order";
-      recalc();
-    });
-  });
-
+  [amount, price].forEach(function (el) { el.addEventListener("input", recalc); });
+  var card = document.getElementById("order-form").closest(".card");
+  if (card) card.addEventListener("side-changed", recalc);
   recalc();
 })();
 </script>
