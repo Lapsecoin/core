@@ -480,35 +480,49 @@ class TestDeliveryUnderRealRandomness:
 
     TRIALS = 30
 
+    # _forward/_fluff never branch on kind (see gossip.Gossip._forward and
+    # ._fluff: kind is only used to pick the seen-cache and, in _send, the
+    # wire method); the delivery guarantee below is provably the same
+    # walk for a tx, a block, an order or a claim. Proven here for all
+    # four rather than argued from the source, so an order or claim
+    # gaining a kind-specific branch later that quietly weakens its
+    # delivery would fail these tests, not just look correct on inspection.
+    KINDS = (gossip_mod.KIND_TX, gossip_mod.KIND_BLOCK,
+            gossip_mod.KIND_ORDER, gossip_mod.KIND_CLAIM)
+
     def test_full_delivery_at_3_nodes(self):
         adj = _ring(3)
-        for trial in range(self.TRIALS):
-            for origin in adj:
-                held = _propagate(adj, origin, item_hash=f"t{trial}-{origin}")
-                assert held == set(adj), (
-                    f"trial {trial} from node {origin} reached only {held}")
+        for kind in self.KINDS:
+            for trial in range(self.TRIALS):
+                for origin in adj:
+                    held = _propagate(adj, origin, kind=kind,
+                                      item_hash=f"{kind}-t{trial}-{origin}")
+                    assert held == set(adj), (
+                        f"{kind} trial {trial} from node {origin} reached only {held}")
 
     def test_full_delivery_at_100_nodes(self):
-        for trial in range(self.TRIALS):
-            adj = _mesh(100, extra_edges_per_node=3, seed=trial)
-            origin = trial % 100
-            held = _propagate(adj, origin, item_hash=f"t{trial}")
-            assert held == set(adj), (
-                f"trial {trial} from node {origin} reached "
-                f"{len(held)}/100 nodes")
+        for kind in self.KINDS:
+            for trial in range(self.TRIALS):
+                adj = _mesh(100, extra_edges_per_node=3, seed=trial)
+                origin = trial % 100
+                held = _propagate(adj, origin, kind=kind, item_hash=f"{kind}-t{trial}")
+                assert held == set(adj), (
+                    f"{kind} trial {trial} from node {origin} reached "
+                    f"{len(held)}/100 nodes")
 
     def test_full_delivery_on_a_sparser_100_node_graph(self):
         """Fewer extra edges than the main scale test: closer to a network
         of nodes with few peers each, where the stem rule's dead-end clause
         (fluff rather than strand when the only peer is the predecessor)
         carries more of the weight."""
-        for trial in range(self.TRIALS):
-            adj = _mesh(100, extra_edges_per_node=1, seed=1000 + trial)
-            origin = trial % 100
-            held = _propagate(adj, origin, item_hash=f"s{trial}")
-            assert held == set(adj), (
-                f"trial {trial} from node {origin} reached "
-                f"{len(held)}/100 nodes on the sparse graph")
+        for kind in self.KINDS:
+            for trial in range(self.TRIALS):
+                adj = _mesh(100, extra_edges_per_node=1, seed=1000 + trial)
+                origin = trial % 100
+                held = _propagate(adj, origin, kind=kind, item_hash=f"{kind}-s{trial}")
+                assert held == set(adj), (
+                    f"{kind} trial {trial} from node {origin} reached "
+                    f"{len(held)}/100 nodes on the sparse graph")
 
 
 class TestOrderFloodDoesNotDegradeConsensusDelivery:
