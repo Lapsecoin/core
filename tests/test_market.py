@@ -311,6 +311,69 @@ class TestStorage:
         assert market.remaining_ticks(row) == 10 * LAPSE
 
 
+class TestRemainingReflectsNetworkKnownClaims:
+    """A node that is neither an order's maker nor any of its takers has
+    no local Trade row for it at all, however much of it has actually
+    been filled by strangers. Claims are gossiped to the whole network
+    exactly like orders are, so a node that has merely relayed one
+    (never traded on it) still has to see it here, or a taker relying on
+    this node's view of "remaining" could sign and pay for a fill the
+    order's real maker will simply refuse."""
+
+    def test_a_claim_this_node_never_traded_on_still_reduces_remaining(self, maker, taker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        assert market.remaining_ticks(row) == 10 * LAPSE
+
+        # A claim this node only ever saw over gossip: no Trade row here
+        # for it, on either side, the way a genuine third party's node
+        # would have none either.
+        market.store_claim(signed_claim(taker, order_id=order["order_id"],
+                                        lapse_total=4 * LAPSE))
+        assert market.remaining_ticks(row) == 6 * LAPSE
+
+    def test_multiple_unrelated_claims_all_reduce_it(self, maker, taker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        market.store_claim(signed_claim(taker, order_id=order["order_id"],
+                                        session_id="s1" * 8, lapse_total=3 * LAPSE))
+        market.store_claim(signed_claim(taker, order_id=order["order_id"],
+                                        session_id="s2" * 8, lapse_total=2 * LAPSE))
+        assert market.remaining_ticks(row) == 5 * LAPSE
+
+    def test_a_claim_against_a_different_order_does_not_count(self, maker, taker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        market.store_claim(signed_claim(taker, order_id="some-other-order"))
+        assert market.remaining_ticks(row) == 10 * LAPSE
+
+    def test_a_locally_tracked_trades_own_claim_is_not_double_counted(self, maker, taker):
+        """The maker's own accurate delivered_ticks must not also have
+        that same claim's full amount subtracted a second time as
+        'reserved', which would make an order's own maker undercount
+        its remaining size for no reason."""
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        claim = signed_claim(taker, order_id=order["order_id"], lapse_total=4 * LAPSE)
+        market.store_claim(claim)
+        Trade.create(
+            session_id=claim["session_id"], order_id=order["order_id"], role="maker",
+            my_lapse_addr=maker["addr"], my_xlm_addr=maker["xlm"],
+            peer_lapse_addr=taker["addr"], peer_xlm_addr=taker["xlm"],
+            i_send="lapse", lapse_total=4 * LAPSE, xlm_total=4000 * XLM,
+            increment_count=1, confirm_depth=1,
+            status=trade_storage.TRADE_ACTIVE,
+            created_at=time.time(), updated_at=time.time())
+        # Nothing settled yet, so delivered_ticks is 0 for this trade,
+        # but it must not ALSO be treated as an unrelated reserved claim
+        # once this node recognizes it as its own trade's claim.
+        assert market.remaining_ticks(row) == 10 * LAPSE
+
+
 class TestOrderHash:
     def test_same_order_same_hash(self, maker):
         order = signed_order(maker)

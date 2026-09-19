@@ -350,8 +350,39 @@ def delivered_ticks(order_id):
     return sum(r.lapse_amount for r in rows)
 
 
+def reserved_ticks(order_id):
+    """How much of an order is spoken for by a claim this node has no
+    completed-trade record for.
+
+    delivered_ticks alone is only accurate for this order's own maker:
+    it counts Trade rows, and a node only ever has a Trade row for a
+    fill it was itself a party to. A node that is neither the maker nor
+    any taker of this order has zero such rows regardless of how much
+    of it strangers have actually filled, and would otherwise report
+    the order as fully untouched forever. Claims fix this because,
+    unlike trades, they are gossiped to the whole network exactly like
+    an order is (see market.Claim, node._handle_inbound_claim): any
+    node can see every live claim against any order, not only its own.
+
+    Deliberately conservative, on purpose: a claim this node has not
+    itself settled counts for its full declared lapse_total even if
+    part or all of it later turns out to have been abandoned, until it
+    ages out of the claim book (see CLAIM_MAX_AGE_SECONDS). That can
+    undercount what is really still available; it can never overcount
+    it. Overcounting is the unsafe direction, it is what would let a
+    taker sign and pay for a fill the maker was always going to refuse,
+    with nothing to give the payment back.
+    """
+    ensure_tables()
+    known_sessions = {t.session_id for t in
+                      Trade.select(Trade.session_id).where(Trade.order_id == order_id)}
+    return sum(c.lapse_total for c in claims_for_order(order_id)
+              if c.session_id not in known_sessions)
+
+
 def remaining_ticks(order_row):
-    return max(order_row.lapse_total - delivered_ticks(order_row.order_id), 0)
+    committed = delivered_ticks(order_row.order_id) + reserved_ticks(order_row.order_id)
+    return max(order_row.lapse_total - committed, 0)
 
 
 def validate_fill(order_row, lapse_total):
