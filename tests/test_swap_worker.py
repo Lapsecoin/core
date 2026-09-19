@@ -341,11 +341,12 @@ class DiscoveryFakeNode(FakeNode):
 
 
 class TestDiscoveryWiring:
-    """run_once's own responsibility here is narrow: call discover_trades
-    with the right arguments when a wallet exists, skip it when one does
-    not, and never let either that or pruning stop trades already running
-    from being advanced. discover_trades' own correctness is
-    test_swap_engine.py's job, not this file's."""
+    """run_once's own responsibility here is narrow: call
+    answer_fill_requests and check_fill_responses with the right
+    arguments when a wallet exists, skip them when one does not, and
+    never let either that or pruning stop trades already running from
+    being advanced. Their own correctness is test_swap_engine.py's job,
+    not this file's."""
 
     def _worker_with_wallet(self, tmp_path, node=None):
         node = node or DiscoveryFakeNode()
@@ -360,7 +361,7 @@ class TestDiscoveryWiring:
             self, tmp_path, monkeypatch):
         w, pub = self._worker_with_wallet(tmp_path)
         calls = []
-        monkeypatch.setattr(swap_engine, "discover_trades",
+        monkeypatch.setattr(swap_engine, "answer_fill_requests",
                             lambda *a: calls.append(a) or 0)
         w.run_once()
         assert len(calls) == 1
@@ -370,23 +371,27 @@ class TestDiscoveryWiring:
         assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
         assert depth >= swap_engine.MIN_CONFIRM_DEPTH
 
+    def test_response_checking_runs_with_the_right_arguments(
+            self, tmp_path, monkeypatch):
+        w, _pub = self._worker_with_wallet(tmp_path)
+        calls = []
+        monkeypatch.setattr(swap_engine, "check_fill_responses",
+                            lambda *a: calls.append(a) or 0)
+        w.run_once()
+        assert len(calls) == 1
+        node, depth = calls[0]
+        assert node is w.node
+        assert depth >= swap_engine.MIN_CONFIRM_DEPTH
+
     def test_discovery_is_skipped_without_a_trading_wallet(self, monkeypatch):
         w = Worker(DiscoveryFakeNode())   # default xlm_keyfile is nonexistent
         calls = []
-        monkeypatch.setattr(swap_engine, "discover_trades",
+        monkeypatch.setattr(swap_engine, "answer_fill_requests",
+                            lambda *a: calls.append(a) or 0)
+        monkeypatch.setattr(swap_engine, "check_fill_responses",
                             lambda *a: calls.append(a) or 0)
         w.run_once()
         assert calls == []
-
-    def test_discovery_unreachable_pauses_the_whole_pass(self, tmp_path, monkeypatch):
-        w, _pub = self._worker_with_wallet(tmp_path)
-
-        def boom(*a):
-            raise swap_engine.Unreachable("horizon down")
-        monkeypatch.setattr(swap_engine, "discover_trades", boom)
-
-        assert w.run_once() == 0
-        assert w._unreachable_until > time.time()
 
     def test_a_discovery_bug_does_not_stop_existing_trades_advancing(
             self, tmp_path, monkeypatch):
@@ -395,7 +400,20 @@ class TestDiscoveryWiring:
 
         def boom(*a):
             raise ValueError("bug in discovery")
-        monkeypatch.setattr(swap_engine, "discover_trades", boom)
+        monkeypatch.setattr(swap_engine, "answer_fill_requests", boom)
+
+        w.run_once()
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        assert inc.out_state == trade_storage.LEG_SETTLED
+
+    def test_a_response_checking_bug_does_not_stop_existing_trades_advancing(
+            self, tmp_path, monkeypatch):
+        w, _pub = self._worker_with_wallet(tmp_path)
+        trade = make_trade()
+
+        def boom(*a):
+            raise ValueError("bug checking responses")
+        monkeypatch.setattr(swap_engine, "check_fill_responses", boom)
 
         w.run_once()
         inc = Increment.get(Increment.id == f"{trade.session_id}:1")
@@ -406,11 +424,14 @@ class TestDiscoveryWiring:
         calls = []
         monkeypatch.setattr(market_mod, "prune_expired",
                             lambda h: calls.append(("orders", h)))
-        monkeypatch.setattr(market_mod, "prune_claims",
-                            lambda: calls.append(("claims",)))
+        monkeypatch.setattr(market_mod, "prune_fill_requests",
+                            lambda: calls.append(("requests",)))
+        monkeypatch.setattr(market_mod, "prune_fill_responses",
+                            lambda: calls.append(("responses",)))
         w.run_once()
         assert ("orders", 100) in calls
-        assert ("claims",) in calls
+        assert ("requests",) in calls
+        assert ("responses",) in calls
 
     def test_a_pruning_bug_does_not_stop_existing_trades_advancing(
             self, tmp_path, monkeypatch):
@@ -426,14 +447,14 @@ class TestDiscoveryWiring:
         assert inc.out_state == trade_storage.LEG_SETTLED
 
     def test_discovery_runs_before_pruning(self, tmp_path, monkeypatch):
-        """A node that was offline longer than a claim's lifetime must get
-        at least one chance to discover it before pruning can remove it
-        (see market.CLAIM_MAX_AGE_SECONDS)."""
+        """A node that was offline longer than a request's lifetime must
+        get at least one chance to answer or check it before pruning can
+        remove it (see market.FILL_REQUEST_MAX_AGE_SECONDS)."""
         w, _pub = self._worker_with_wallet(tmp_path)
         order = []
-        monkeypatch.setattr(swap_engine, "discover_trades",
+        monkeypatch.setattr(swap_engine, "answer_fill_requests",
                             lambda *a: order.append("discover") or 0)
-        monkeypatch.setattr(market_mod, "prune_claims",
+        monkeypatch.setattr(market_mod, "prune_fill_requests",
                             lambda: order.append("prune"))
         w.run_once()
         assert order == ["discover", "prune"]

@@ -904,162 +904,127 @@ def reconcile_all(engine):
 
 
 # ---------------------------------------------------------------------------
-# Maker-side discovery
+# Maker-side: answering fill requests
 # ---------------------------------------------------------------------------
 #
-# There is no handshake and no separate "I accept" message. A maker learns
-# a trade exists the same way anything else here learns anything: by
-# reading a public chain. The taker always sends step 1 (see
-# market_routes._start_trade), because nothing else could ever tell the
-# maker a session exists in the first place; discovering that payment and
-# creating this side's mirror of the trade is what this does.
+# A maker decides before anything is paid, not after. A fill against one
+# of this node's own orders arrives as a signed FillRequest, gossiped the
+# same way an order or a block is (see market.py's fill-request section
+# and node._handle_inbound_fill_request): a broadcast, not a direct
+# connection, so answering it leaks nothing about either side's address
+# that gossiping the order itself did not already leak.
 #
-# A claim supplies the one thing the payment alone cannot: the taker's
-# address on whichever chain the payment did *not* arrive on. Everything
-# else is independently re-derived and re-checked against this node's own
-# rules, exactly as if a human had typed it into the take-order form:
-# the fill fits the order, the schedule it implies fits this node's own
-# exposure cap for this counterparty, and only a genuinely settled (or at
-# least broadcast) payment ever creates anything.
+# Publishing the answer IS the commitment. An accept reserves capacity
+# the instant it is published (market.reserved_ticks counts every
+# accepted response, not just ones this node happens to have paid into)
+# and opens this side's own Trade row right there, before either party
+# has sent a single stroop. There is no claim any more: a request already
+# carries the one thing a claim used to supply (the taker's address on
+# the other chain), and a maker that has explicitly agreed no longer
+# needs anything paid first to learn a session exists.
 
-def discover_trades(engine, node, my_xlm_addr, stranger_cap, confirm_depth):
-    """Look for fills against this node's own orders and create the
-    maker side of any that are ready. Returns how many were created.
+def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth):
+    """Decide every live fill request against this node's own orders.
+    Returns how many were accepted.
 
-    One Horizon call and one LapseCoin history scan at most per pass,
-    however many orders or claims are waiting: the incoming-payment lists
-    are fetched once each and matched against every pending claim in
-    memory, not re-fetched per claim, since Horizon is a rate-limited
-    public endpoint that every other trade this node runs is also
-    reading from in the same pass.
+    Nothing here waits on a chain except the two balance checks, so a
+    locked wallet or an unreachable one just leaves requests unanswered
+    for the next pass rather than risking a decision it cannot back.
     """
     ensure_tables()
     # Not orders_by_maker: that hides a cancelled or expired order, and a
-    # claim that arrived (and was already paid for) before this node
-    # cancelled its own order still deserves completion (see
-    # market.orders_by_maker_with_claims).
+    # request that arrived (and was already accepted) before this node
+    # cancelled its own order still deserves completion.
     my_orders = market_mod.orders_by_maker_with_claims(node.addr)
     if not my_orders:
         return 0
 
-    lapse_incoming = None
-    xlm_incoming = None
-    created = 0
+    accepted = 0
     for order_row in my_orders:
-        claims = market_mod.claims_for_order(order_row.order_id)
-        if not claims:
-            continue
-
-        # The maker's own direction says which asset the taker pays
-        # first: a "sell" order means the maker gives LAPSE, so the
-        # taker's step 1 is in XLM, and vice versa.
-        if order_row.direction == "sell":
-            if xlm_incoming is None:
-                xlm_incoming = engine.xlm.recent_incoming(my_xlm_addr)
-            incoming = xlm_incoming
-        else:
-            if lapse_incoming is None:
-                lapse_incoming = engine.lapse.recent_incoming(node.addr)
-            incoming = lapse_incoming
-
-        for claim in claims:
-            if Trade.get_or_none(Trade.session_id == claim.session_id) is not None:
+        for req in market_mod.requests_for_order(order_row.order_id):
+            if market_mod.get_fill_response(req.request_id) is not None:
                 continue
-            if _discover_one(engine, node, my_xlm_addr, stranger_cap,
-                             confirm_depth, order_row, claim, incoming):
-                created += 1
-    if created:
-        log.info("[swap] discovered %d new trade(s) as maker", created)
-    return created
+            if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
+                continue
+            if _answer_one(engine, node, my_xlm_addr, stranger_cap,
+                          confirm_depth, order_row, req):
+                accepted += 1
+    if accepted:
+        log.info("[swap] accepted %d new fill request(s) as maker", accepted)
+    return accepted
 
 
-def _discover_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
-                  order_row, claim, incoming):
-    """Try to turn one claim against one order into a maker-side trade.
-    Returns True if it created one.
+def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+                order_row, req):
+    """Decide one fill request against one order. Returns True if it was
+    accepted; a decline is still an answer, just not a trade.
 
-    Order matters, cheapest and least trusted first: the claim's own
-    shape was already checked before it was ever stored (market.verify_claim),
-    but whether it makes sense is not, so the fill is checked against the
-    order before anything else, the schedule it implies is checked
-    against this node's own exposure cap before that schedule is trusted
-    for anything, and only then is the incoming-payment list consulted
-    for evidence this was actually paid for.
+    Every request answered exactly once: the caller already filters out
+    anything with a stored response, so reaching here means this is the
+    first and only look this request gets.
     """
+    kek, _seed = engine.secrets()
+    if kek is None:
+        return False   # locked; leave it for the next pass to decide
+
+    def respond(is_accept, increment_count=None, reason=""):
+        resp = market_mod.build_fill_response(
+            request_id=req.request_id, order_id=order_row.order_id,
+            session_id=req.session_id, lapse_total=req.lapse_total,
+            accepted=is_accept, maker_pubkey_hex=node.pk_hex,
+            increment_count=increment_count, reason=reason)
+        market_mod.sign_fill_response(resp, node.keyfile, kek)
+        market_mod.store_fill_response(resp)
+        node.publish_fill_response(resp)
+
     try:
-        market_mod.validate_fill(order_row, claim.lapse_total)
+        market_mod.validate_fill(order_row, req.lapse_total)
     except market_mod.OrderRejected as e:
-        log.debug("[swap] claim %s does not fit order %s: %s",
-                 claim.session_id[:16], order_row.order_id, e)
+        respond(False, reason=str(e))
         return False
 
-    xlm_total = swap.xlm_for_lapse(claim.lapse_total,
+    xlm_total = swap.xlm_for_lapse(req.lapse_total,
                                    order_row.price_stroops_per_lapse)
-    try:
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total,
-                                       claim.increment_count)
-    except ValueError as e:
-        log.debug("[swap] claim %s has an inconsistent schedule: %s",
-                 claim.session_id[:16], e)
-        return False
 
-    # Never trust the taker's chosen step count for what it implies about
-    # risk: it decides how large a single step is, and a maker's safety
-    # depends on that being checked against its *own* trust view of this
-    # taker, not accepted because a stranger asserted it was fine.
+    # The maker builds the schedule itself now, from its own trust view
+    # of this taker, rather than checking one the taker proposed: nobody
+    # but the side actually at risk on a step gets to decide how large
+    # that step is.
     my_trust_of_taker, taker_trust_of_me = trust_mod.mutual_scores(
-        node, claim.taker_lapse_addr)
-    my_cap = swap.exposure_cap_stroops(my_trust_of_taker, stranger_cap)
-    worst_step = max(xlm for _lapse, xlm in schedule)
-    if worst_step > my_cap:
-        log.warning(
-            "[swap] refusing claim %s from %s: its schedule exposes %d "
-            "stroops, above this node's own %d-stroop cap for them",
-            claim.session_id[:16], claim.taker_lapse_addr[:24],
-            worst_step, my_cap)
+        node, req.taker_lapse_addr)
+    try:
+        schedule, count, _cap = swap.plan(
+            req.lapse_total, xlm_total, my_trust_of_taker,
+            stranger_cap=stranger_cap)
+    except swap.TradeTooLarge:
+        respond(False, reason=(
+            "more than this node will risk with this counterparty in one go"))
         return False
 
     # Which asset the maker sends is the mirror of the order's own
-    # direction, exactly as market_routes._start_trade derives the
+    # direction, exactly as market_routes._open_trade derives the
     # taker's from the same field.
     maker_i_send = "lapse" if order_row.direction == "sell" else "xlm"
-    step1_lapse, step1_xlm = schedule[0]
     if maker_i_send == "lapse":
-        taker_pay_addr, my_receive_addr = claim.taker_xlm_addr, my_xlm_addr
-        expected_amount = step1_xlm
-    else:
-        taker_pay_addr, my_receive_addr = claim.taker_lapse_addr, node.addr
-        expected_amount = step1_lapse
-
-    memo = swap.session_tag(order_row.order_id, claim.session_id, 1)
-    if not any(sender == taker_pay_addr and tag == memo and amount >= expected_amount
-              for sender, tag, amount, _tx_hash, _conf in incoming):
-        return False   # not paid (yet); tried again next pass
-
-    # The taker has already paid; nothing checked so far says this node
-    # can pay its own side back. Without this a maker who accepted an
-    # order it cannot fully cover commits to a trade here, unattended,
-    # that only surfaces the shortfall as a stall partway through, and a
-    # stall is what blame is measured from. Same principle as the
-    # taker's own check in market_routes._start_trade, just run on the
-    # side that never gets a form to reject it from.
-    if maker_i_send == "lapse":
-        have, need = engine.lapse.balance(node.addr), claim.lapse_total
+        have, need = engine.lapse.balance(node.addr), req.lapse_total
     else:
         have, need = engine.xlm.balance(my_xlm_addr), xlm_total
     if have < need:
         log.warning(
-            "[swap] refusing claim %s from %s: this node cannot fund its "
-            "own %s leg (has %d, needs %d)",
-            claim.session_id[:16], claim.taker_lapse_addr[:24],
+            "[swap] refusing fill request %s from %s: this node cannot "
+            "fund its own %s leg (has %d, needs %d)",
+            req.request_id[:16], req.taker_lapse_addr[:24],
             maker_i_send, have, need)
+        respond(False, reason="the maker cannot currently fund this fill")
         return False
 
     # opening_mover is computed from the same mutual, unforgeable data
     # either side of a dyad can derive on its own (trust.mutual_scores),
-    # so it lands on the same answer the taker already used without
-    # anything having to say so. Step 1 is still forced to the taker
-    # regardless, for the reason the module docstring above gives.
+    # so it lands on the same answer the taker independently derives for
+    # its own Trade row without anything having to say so. Nothing forces
+    # step one to either side any more: the reason it used to be forced
+    # to the taker (the maker had no other way to learn the trade
+    # existed) is gone now that the maker agrees before anything is paid.
     taker_i_open = swap.opening_mover(taker_trust_of_me, my_trust_of_taker)
     if taker_i_open is None:
         taker_i_open = True
@@ -1067,21 +1032,127 @@ def _discover_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
 
     now = time.time()
     Trade.create(
-        session_id=claim.session_id, order_id=order_row.order_id, role="maker",
+        session_id=req.session_id, order_id=order_row.order_id, role="maker",
         my_lapse_addr=node.addr, my_xlm_addr=my_xlm_addr,
-        peer_lapse_addr=claim.taker_lapse_addr, peer_xlm_addr=claim.taker_xlm_addr,
-        i_send=maker_i_send, lapse_total=claim.lapse_total, xlm_total=xlm_total,
-        increment_count=claim.increment_count, confirm_depth=confirm_depth,
+        peer_lapse_addr=req.taker_lapse_addr, peer_xlm_addr=req.taker_xlm_addr,
+        i_send=maker_i_send, lapse_total=req.lapse_total, xlm_total=xlm_total,
+        increment_count=count, confirm_depth=confirm_depth,
         status=TRADE_ACTIVE, created_at=now, updated_at=now)
 
     timeout = step_timeout_seconds(confirm_depth)
     for n, (lapse_amount, xlm_amount) in enumerate(schedule, start=1):
-        i_move_first = False if n == 1 else swap.i_move_first(n, maker_i_open)
+        i_move_first = swap.i_move_first(n, maker_i_open)
         Increment.create(
-            id=f"{claim.session_id}:{n}", session_id=claim.session_id, n=n,
+            id=f"{req.session_id}:{n}", session_id=req.session_id, n=n,
             lapse_amount=lapse_amount, xlm_amount=xlm_amount,
             i_move_first=i_move_first, created_at=now, deadline_at=now + timeout)
 
-    log.info("[swap] %s discovered: %d steps against %s (maker side)",
-             claim.session_id, claim.increment_count, claim.taker_lapse_addr[:24])
+    respond(True, increment_count=count)
+    log.info("[swap] %s accepted: %d steps against %s (maker side)",
+             req.session_id, count, req.taker_lapse_addr[:24])
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Taker-side: watching for an answer
+# ---------------------------------------------------------------------------
+#
+# The taker's own Trade row is opened here, once, when a genuine accept
+# from the actual maker turns up. Nothing is ever paid before this: a
+# request that is declined, or that nobody answers within
+# market.FILL_REQUEST_MAX_AGE_SECONDS, is simply pruned with nothing ever
+# having moved (see market.prune_fill_requests).
+
+def check_fill_responses(node, confirm_depth):
+    """Look at this node's own outstanding fill requests for an answer
+    and open the taker side of any that were accepted. Returns how many
+    were opened.
+    """
+    ensure_tables()
+    opened = 0
+    for req in market_mod.requests_by_taker(node.addr):
+        if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
+            continue
+        resp = market_mod.get_fill_response(req.request_id)
+        if resp is None:
+            continue
+        order_row = market_mod.get_order(req.order_id)
+        if order_row is None:
+            continue
+
+        # expected_maker_addr is not optional here: without it, anyone
+        # could sign a well-formed 'accepted' response with their own key
+        # and have it mistaken for this order's actual maker agreeing
+        # (see market.verify_fill_response).
+        try:
+            market_mod.verify_fill_response(
+                _response_dict(resp), expected_maker_addr=order_row.maker_lapse_addr)
+        except market_mod.FillResponseRejected as e:
+            log.warning("[swap] discarding a fill response for %s: %s",
+                       req.request_id[:16], e)
+            continue
+
+        if not resp.accepted:
+            log.info("[swap] fill request %s was declined: %s",
+                    req.request_id[:16], resp.reason or "no reason given")
+            continue
+
+        if _open_taker_trade(node, req, resp, order_row, confirm_depth):
+            opened += 1
+    if opened:
+        log.info("[swap] opened %d new trade(s) as taker", opened)
+    return opened
+
+
+def _response_dict(resp):
+    return {
+        "request_id": resp.request_id, "order_id": resp.order_id,
+        "session_id": resp.session_id, "lapse_total": resp.lapse_total,
+        "accepted": resp.accepted, "increment_count": resp.increment_count,
+        "reason": resp.reason, "maker_pubkey": resp.maker_pubkey,
+        "signature": resp.signature,
+    }
+
+
+def _open_taker_trade(node, req, resp, order_row, confirm_depth):
+    """Turn one accepted response into this side's own Trade. Returns
+    True if it was created.
+    """
+    xlm_total = swap.xlm_for_lapse(req.lapse_total,
+                                   order_row.price_stroops_per_lapse)
+    try:
+        schedule = swap.build_schedule(req.lapse_total, xlm_total,
+                                       resp.increment_count)
+    except ValueError as e:
+        log.warning(
+            "[swap] the maker's accepted step count for %s does not "
+            "build a usable schedule: %s", req.request_id[:16], e)
+        return False
+
+    i_send = "xlm" if order_row.direction == "sell" else "lapse"
+    i_open = swap.opening_mover(
+        *trust_mod.mutual_scores(node, order_row.maker_lapse_addr))
+    if i_open is None:
+        i_open = True   # an even match still needs somebody to start
+
+    now = time.time()
+    Trade.create(
+        session_id=req.session_id, order_id=req.order_id, role="taker",
+        my_lapse_addr=node.addr, my_xlm_addr=req.taker_xlm_addr,
+        peer_lapse_addr=order_row.maker_lapse_addr,
+        peer_xlm_addr=order_row.maker_xlm_addr,
+        i_send=i_send, lapse_total=req.lapse_total, xlm_total=xlm_total,
+        increment_count=resp.increment_count, confirm_depth=confirm_depth,
+        status=TRADE_ACTIVE, created_at=now, updated_at=now)
+
+    timeout = step_timeout_seconds(confirm_depth)
+    for n, (lapse_amount, xlm_amount) in enumerate(schedule, start=1):
+        i_move_first = swap.i_move_first(n, i_open)
+        Increment.create(
+            id=f"{req.session_id}:{n}", session_id=req.session_id, n=n,
+            lapse_amount=lapse_amount, xlm_amount=xlm_amount,
+            i_move_first=i_move_first, created_at=now, deadline_at=now + timeout)
+
+    log.info("[swap] %s opened: %d steps against %s (taker side)",
+             req.session_id, resp.increment_count, order_row.maker_lapse_addr[:24])
     return True

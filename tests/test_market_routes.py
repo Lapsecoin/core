@@ -5,10 +5,11 @@ Horizon is unreachable, or the counterparty genuinely vanished, so this
 checks that market_routes._worker_view tells those apart correctly from
 whatever swap_worker.status() reports.
 
-_start_trade is the taker's half of maker-side discovery (plan item
-1.1): it has to open a passphrase-sealed wallet, plan a schedule, force
-step 1 onto this side regardless of trust, and publish a claim the
-maker can later use, all without a running Flask app around it.
+_start_trade is the taker's half of the fill-request handshake: it has
+to open a passphrase-sealed wallet, check this side can fund the fill,
+and publish a signed fill request for the maker to answer, all without
+a running Flask app around it. Nothing is opened as a trade until the
+maker's own accept comes back (see swap_engine.check_fill_responses).
 """
 
 import os
@@ -163,12 +164,16 @@ class TakerNode:
         self.storage = _Storage(heights_by_addr)
         self.publish_claim_calls = []
         self.publish_order_calls = []
+        self.publish_fill_request_calls = []
 
     def publish_claim(self, claim):
         self.publish_claim_calls.append(claim)
 
     def publish_order(self, order):
         self.publish_order_calls.append(order)
+
+    def publish_fill_request(self, req):
+        self.publish_fill_request_calls.append(req)
 
 
 class FakeForm(dict):
@@ -205,61 +210,24 @@ class TestStartTrade:
         finally:
             market_routes.request = original
 
-    def test_creates_a_trade_and_matching_schedule(self, tmp_path):
+    def test_sends_a_fill_request_and_creates_no_trade_yet(self, tmp_path):
+        """Nothing is created until the maker explicitly agrees (see
+        swap_engine.check_fill_responses): _start_trade's whole job is
+        sending a signed request, not opening a trade on its own say-so."""
         node = TakerNode(tmp_path)
         order = make_maker_order(direction="sell", price=1000)
         session_id = self._call(node, order, {"amount_lapse": "1"})
 
-        trade = Trade.get(Trade.session_id == session_id)
-        assert trade.role == "taker"
-        assert trade.peer_lapse_addr == "maker.lapse"
-        assert trade.peer_xlm_addr == "GMAKER"
-        assert trade.i_send == "xlm"   # maker sells LAPSE, taker pays XLM
-        assert trade.lapse_total == 1 * LAPSE
-        steps = list(Increment.select()
-                    .where(Increment.session_id == session_id)
-                    .order_by(Increment.n))
-        assert len(steps) == trade.increment_count
-        assert sum(s.lapse_amount for s in steps) == 1 * LAPSE
-
-    def test_step_one_is_always_this_sides_move(self, tmp_path):
-        """Forced regardless of trust, since nothing else could ever tell
-        the maker this session exists (see swap_engine.discover_trades'
-        module docstring)."""
-        node = TakerNode(tmp_path, heights_by_addr={
-            "maker.lapse": [(0, "h")]}, balances={"maker.lapse": 10**12})
-        # Make the maker look extremely well-established relative to this
-        # taker, which under a pure trust rule would have the maker open.
-        order = make_maker_order()
-        session_id = self._call(node, order, {})
-        first = Increment.get(Increment.id == f"{session_id}:1")
-        assert first.i_move_first is True
-
-    def test_publishes_a_claim_matching_the_trade(self, tmp_path):
-        node = TakerNode(tmp_path)
-        order = make_maker_order(price=1000)
-        session_id = self._call(node, order, {"amount_lapse": "2"})
-
-        assert len(node.publish_claim_calls) == 1
-        claim = node.publish_claim_calls[0]
-        assert claim["session_id"] == session_id
-        assert claim["order_id"] == order.order_id
-        assert claim["taker_lapse_addr"] == node.addr
-        assert claim["taker_xlm_addr"] == node.xlm_addr
-        assert claim["lapse_total"] == 2 * LAPSE
-        assert market_mod.verify_claim(claim) is True
-        assert market_mod.get_claim(session_id) is not None
-
-    def test_claims_schedule_matches_the_trades_own(self, tmp_path):
-        """The maker rebuilds the exact same schedule from the claim (see
-        swap_engine.discover_trades); the claim's increment_count has to
-        be the one actually used, not a stale or re-derived guess."""
-        node = TakerNode(tmp_path)
-        order = make_maker_order(price=1000)
-        session_id = self._call(node, order, {"amount_lapse": "5"})
-        trade = Trade.get(Trade.session_id == session_id)
-        claim = node.publish_claim_calls[0]
-        assert claim["increment_count"] == trade.increment_count
+        assert Trade.select().count() == 0
+        assert len(node.publish_fill_request_calls) == 1
+        req = node.publish_fill_request_calls[0]
+        assert req["session_id"] == session_id
+        assert req["order_id"] == order.order_id
+        assert req["taker_lapse_addr"] == node.addr
+        assert req["taker_xlm_addr"] == node.xlm_addr
+        assert req["lapse_total"] == 1 * LAPSE
+        assert market_mod.verify_fill_request(req) is True
+        assert market_mod.get_fill_request(req["request_id"]) is not None
 
     def test_fill_larger_than_the_order_is_refused(self, tmp_path):
         node = TakerNode(tmp_path)
@@ -267,6 +235,7 @@ class TestStartTrade:
         with pytest.raises(market_mod.OrderRejected, match="left"):
             self._call(node, order, {"amount_lapse": "5"})
         assert Trade.select().count() == 0
+        assert node.publish_fill_request_calls == []
 
     def test_wrong_passphrase_is_refused_before_anything_is_created(self, tmp_path):
         node = TakerNode(tmp_path)
@@ -281,67 +250,34 @@ class TestStartTrade:
         finally:
             market_routes.request = original
         assert Trade.select().count() == 0
-        assert node.publish_claim_calls == []
+        assert node.publish_fill_request_calls == []
 
-    def test_claim_cap_hit_creates_no_orphaned_trade(self, tmp_path):
-        """The claim is built, signed and stored before the trade row: if
-        storing it fails (the per-taker cap), nothing must be created,
-        or this node would carry a trade the maker can never discover
-        for want of the address only a claim supplies."""
+    def test_fill_request_cap_hit_raises_and_publishes_nothing(self, tmp_path):
+        """The per-taker fill-request cap is the network's own admission
+        control; hitting it must not leave a request half-sent."""
         node = TakerNode(tmp_path)
-        for i in range(market_mod.MAX_CLAIMS_PER_TAKER):
-            filler = market_mod.build_claim(
+        for i in range(market_mod.MAX_FILL_REQUESTS_PER_TAKER):
+            filler = market_mod.build_fill_request(
                 order_id="other-order", session_id=f"filler{i}" * 4,
                 taker_lapse_addr=node.addr, taker_xlm_addr=node.xlm_addr,
-                lapse_total=1, increment_count=2, pubkey_hex=node.pk_hex)
+                lapse_total=1, pubkey_hex=node.pk_hex)
             filler["signature"] = "ab" * 10
-            market_mod.store_claim(filler)
+            market_mod.store_fill_request(filler)
         order = make_maker_order()
-        with pytest.raises(market_mod.ClaimRejected, match="limit"):
+        with pytest.raises(market_mod.FillRequestRejected, match="limit"):
             self._call(node, order, {"amount_lapse": "1"})
         assert Trade.select().count() == 0
-        assert Increment.select().count() == 0
-        assert node.publish_claim_calls == []
+        assert node.publish_fill_request_calls == []
 
     def test_a_buy_order_makes_the_taker_send_lapse(self, tmp_path):
+        """i_send is derived and checked here even though the trade
+        itself is not opened yet, so a fill nobody could pay for is
+        refused before a request ever reaches the maker."""
         node = TakerNode(tmp_path)
         node.view.state.balances[node.addr] = 10**12
         order = make_maker_order(direction="buy", price=1000)
-        session_id = self._call(node, order, {"amount_lapse": "1"})
-        trade = Trade.get(Trade.session_id == session_id)
-        assert trade.i_send == "lapse"
-
-    def test_opening_mover_actually_varies_step_two_with_trust(self, tmp_path):
-        """Not the literal old behaviour (i_open hardcoded True for every
-        step): with real shared history between this taker and this
-        maker, whichever side is the *more* established one must not
-        open step 2, and swapping which side that is must flip it.
-
-        A tie needs completed trades to even have a nonzero score (see
-        trust.score's Sybil defence: no history means no standing
-        whatever the balance), so both scenarios below seed identical
-        history and differ only in whose balance is larger.
-        """
-        def step_two_mover(taker_balance, maker_balance):
-            trade_storage.PeerRecord.delete().execute()
-            trust_mod.record_completed("maker.lapse", 50 * LAPSE)
-            node = TakerNode(
-                tmp_path, name=f"taker-{taker_balance}-{maker_balance}",
-                heights_by_addr={"maker.lapse": [(0, "h")]})
-            node.view = _View(1_000_000, balances={
-                node.addr: taker_balance, "maker.lapse": maker_balance})
-            node.storage = _Storage({"maker.lapse": [(0, "h")],
-                                     node.addr: [(0, "h")]})
-            order = make_maker_order(order_id=f"order-{taker_balance}-{maker_balance}")
-            session_id = self._call(node, order, {"amount_lapse": "1"})
-            trade = Trade.get(Trade.session_id == session_id)
-            assert trade.increment_count >= 2
-            return Increment.get(Increment.id == f"{session_id}:2").i_move_first
-
-        richer_taker = step_two_mover(taker_balance=10**12, maker_balance=1)
-        richer_maker = step_two_mover(taker_balance=1, maker_balance=10**12)
-        assert richer_taker != richer_maker, \
-            "step 2's mover must depend on which side trust favours"
+        self._call(node, order, {"amount_lapse": "1"})
+        assert len(node.publish_fill_request_calls) == 1
 
     def test_an_expired_order_cannot_be_filled(self, tmp_path):
         """market_take fetches the order by id directly, bypassing the
@@ -353,7 +289,7 @@ class TestStartTrade:
         with pytest.raises(market_mod.OrderRejected, match="expired"):
             self._call(node, order, {"amount_lapse": "1"})
         assert Trade.select().count() == 0
-        assert node.publish_claim_calls == []
+        assert node.publish_fill_request_calls == []
 
     def test_an_order_expiring_exactly_this_block_cannot_be_filled(self, tmp_path):
         node = TakerNode(tmp_path, height=1000)
@@ -363,14 +299,14 @@ class TestStartTrade:
 
     def test_a_taker_without_enough_xlm_is_refused(self, tmp_path, monkeypatch):
         """direction='sell' means the taker pays XLM; a taker who cannot
-        cover that leg must never reach a created trade (plan item 4.4)."""
+        cover that leg must never even send a request (plan item 4.4)."""
         monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 0)
         node = TakerNode(tmp_path)
         order = make_maker_order(direction="sell", price=1000)
         with pytest.raises(ValueError, match="XLM"):
             self._call(node, order, {"amount_lapse": "1"})
         assert Trade.select().count() == 0
-        assert node.publish_claim_calls == []
+        assert node.publish_fill_request_calls == []
 
     def test_a_taker_without_enough_lapse_is_refused(self, tmp_path):
         """direction='buy' means the taker pays LAPSE."""
@@ -379,7 +315,7 @@ class TestStartTrade:
         with pytest.raises(ValueError, match="LAPSE"):
             self._call(node, order, {"amount_lapse": "1"})
         assert Trade.select().count() == 0
-        assert node.publish_claim_calls == []
+        assert node.publish_fill_request_calls == []
 
     def test_a_taker_with_exactly_enough_xlm_is_not_refused(self, tmp_path, monkeypatch):
         order = make_maker_order(direction="sell", price=1000)
@@ -387,7 +323,8 @@ class TestStartTrade:
         monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: xlm_total)
         node = TakerNode(tmp_path)
         session_id = self._call(node, order, {"amount_lapse": "1"})
-        assert Trade.get(Trade.session_id == session_id) is not None
+        assert market_mod.get_fill_request(
+            node.publish_fill_request_calls[0]["request_id"]) is not None
 
 
 class TestPlaceOrder:
@@ -528,8 +465,9 @@ class TestAutoFill:
         assert len(result["fills"]) == 1
         assert result["fills"][0]["lapse"] == 2 * LAPSE
         assert result["fills"][0]["price"] == 1000
-        trade = Trade.get(Trade.session_id == result["fills"][0]["session_id"])
-        assert trade.peer_lapse_addr == "maker1.lapse"
+        req = trade_storage.FillRequest.get(
+            trade_storage.FillRequest.session_id == result["fills"][0]["session_id"])
+        assert req.order_id == "cheap"
 
     def test_a_price_limit_excludes_worse_priced_orders(self, tmp_path):
         make_maker_order(order_id="cheap", direction="sell", price=1000,
@@ -547,9 +485,10 @@ class TestAutoFill:
         assert result["filled"] == 10 * LAPSE   # all of the cheap order
         assert result["remaining"] == 5 * LAPSE
         assert len(result["fills"]) == 1
-        assert Trade.select().count() == 1
-        trade = Trade.get(Trade.session_id == result["fills"][0]["session_id"])
-        assert trade.peer_lapse_addr == "maker1.lapse"
+        assert trade_storage.FillRequest.select().count() == 1
+        req = trade_storage.FillRequest.get(
+            trade_storage.FillRequest.session_id == result["fills"][0]["session_id"])
+        assert req.order_id == "cheap"
 
     def test_splits_across_orders_once_one_counterpartys_cap_is_reached(self, tmp_path):
         tiny_cap = 10_000
@@ -572,9 +511,9 @@ class TestAutoFill:
         assert result["filled"] == requested_lapse
         assert result["remaining"] == 0
         assert len(result["fills"]) == 2
-        assert Trade.select().count() == 2
-        peers = {t.peer_lapse_addr for t in Trade.select()}
-        assert peers == {"maker1.lapse", "maker2.lapse"}
+        assert trade_storage.FillRequest.select().count() == 2
+        makers = {f["maker"] for f in result["fills"]}
+        assert makers == {"maker1.lapse", "maker2.lapse"}
 
     def test_nothing_on_the_book_reports_zero_filled_not_an_error(self, tmp_path):
         node = TakerNode(tmp_path)
@@ -623,8 +562,7 @@ class TestAutoFill:
         result = self._call(node, {"direction": "sell", "amount_lapse": "2"})
 
         assert len(result["fills"]) == 1
-        trade = Trade.get(Trade.session_id == result["fills"][0]["session_id"])
-        assert trade.peer_lapse_addr == "maker2.lapse"
+        assert result["fills"][0]["maker"] == "maker2.lapse"
 
     def test_a_minimum_below_what_the_book_can_supply_trades_nothing_at_all(self, tmp_path):
         """The whole point of the minimum: a sweep that would only ever
@@ -655,7 +593,7 @@ class TestAutoFill:
 
         assert result["min_not_met"] is False
         assert result["filled"] == 3 * LAPSE
-        assert Trade.select().count() == 1
+        assert trade_storage.FillRequest.select().count() == 1
 
 
 class TestAutoFillMessage:

@@ -969,11 +969,12 @@ class TestReconcile:
 
 
 # ---------------------------------------------------------------------------
-# Maker-side discovery
+# Maker-side: answering fill requests
 # ---------------------------------------------------------------------------
 
+import crypto
 import market as market_mod
-from trade_storage import Claim, Order
+from trade_storage import FillRequest, FillResponse, Order
 
 
 class _FakeState:
@@ -1000,14 +1001,39 @@ class _FakeView:
 
 
 class FakeDiscoveryNode:
-    """Just enough of a node for discover_trades: an address, a tip
-    height, and the chain facts trust.mutual_scores needs."""
+    """Just enough of a node for answer_fill_requests: a real FALCON
+    identity (a fill response is really signed, unlike the fake
+    signatures the requests these tests build carry, since the maker's
+    own commitment is exactly what is under test), a tip height, and the
+    chain facts trust.mutual_scores needs."""
 
-    def __init__(self, addr="maker.lapse", height=1000,
-                heights_by_addr=None, balances=None):
-        self.addr = addr
+    def __init__(self, tmp_path, height=1000, heights_by_addr=None,
+                balances=None, name="maker"):
+        sk, pk = crypto.generate_keypair()
+        self.passphrase = "correct horse"
+        self.keyfile = str(tmp_path / f"{name}.key")
+        crypto.save_key(self.keyfile, sk, pk, self.passphrase)
+        self.addr = crypto.public_key_to_address(pk)
+        self.pk_hex = pk.hex()
         self.view = _FakeView(height, balances)
         self.storage = _FakeStorage(heights_by_addr)
+        self.publish_fill_response_calls = []
+
+    def publish_fill_response(self, resp):
+        self.publish_fill_response_calls.append(resp)
+
+    def kek(self):
+        return crypto.derive_kek(self.keyfile, self.passphrase)
+
+
+def make_maker_engine(node, lapse=None, xlm=None):
+    """Like make_engine, but with the real kek this node's own key needs
+    to sign a fill response, rather than the placeholder make_engine
+    uses for tests that never sign anything."""
+    lapse = lapse or FakeChain("lapse", "me.lapse")
+    xlm = xlm or FakeChain("xlm", "GME")
+    kek = node.kek()
+    return swap_engine.Engine(lapse, xlm, lambda: (kek, "seed")), lapse, xlm
 
 
 def make_order(order_id="order-1", direction="sell", lapse_total=10 * LAPSE,
@@ -1022,310 +1048,203 @@ def make_order(order_id="order-1", direction="sell", lapse_total=10 * LAPSE,
         created_at=time.time(), received_at=time.time(), verified=True)
 
 
-def make_claim(order_id="order-1", session_id="s" * 16, taker_lapse="taker.lapse",
-               taker_xlm="GTAKER", lapse_total=1 * LAPSE, increment_count=3):
-    return Claim.create(
-        session_id=session_id, order_id=order_id,
-        taker_lapse_addr=taker_lapse, taker_xlm_addr=taker_xlm,
-        lapse_total=lapse_total, increment_count=increment_count,
+def make_request(order_id="order-1", session_id="s" * 16, taker_lapse="taker.lapse",
+                 taker_xlm="GTAKER", lapse_total=1 * LAPSE):
+    return FillRequest.create(
+        request_id=session_id, order_id=order_id,
+        session_id=session_id, taker_lapse_addr=taker_lapse,
+        taker_xlm_addr=taker_xlm, lapse_total=lapse_total,
         pubkey="ab" * 10, signature="cd" * 10, received_at=time.time())
 
 
-class TestDiscoverTrades:
-    """Turning a taker's claim plus a settled payment into the maker's
-    own mirror of a trade, with no handshake and no message telling this
-    node any of it happened beyond what is already public."""
+class TestAnswerFillRequests:
+    """Deciding a fill request against this node's own order, before a
+    single stroop moves: the maker builds its own schedule, checks it
+    can fund its own leg, and publishes a signed accept or reject the
+    instant it decides."""
 
-    def test_creates_a_trade_once_the_payment_settles(self):
-        """A 'sell' order: the maker gives LAPSE, so the taker's step 1
-        (and therefore discovery) is on the XLM side."""
-        make_order(direction="sell")
-        claim = make_claim()
-        engine, lapse, xlm = make_engine()
-        node = FakeDiscoveryNode()
+    def test_accepts_a_request_and_creates_the_maker_trade(self, tmp_path):
+        """A 'sell' order: the maker gives LAPSE, so this node pays that
+        leg and expects XLM back."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
 
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
-
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
-        trade = Trade.get(Trade.session_id == claim.session_id)
+        trade = Trade.get(Trade.session_id == req.session_id)
         assert trade.role == "maker"
         assert trade.i_send == "lapse"
         assert trade.peer_lapse_addr == "taker.lapse"
         assert trade.peer_xlm_addr == "GTAKER"
-        assert trade.lapse_total == claim.lapse_total
-        assert trade.xlm_total == xlm_total
+        assert trade.lapse_total == req.lapse_total
         steps = list(Increment.select()
-                    .where(Increment.session_id == claim.session_id)
+                    .where(Increment.session_id == req.session_id)
                     .order_by(Increment.n))
-        assert len(steps) == 3
-        assert steps[0].i_move_first is False, "the taker sent step 1, not this node"
+        assert len(steps) == trade.increment_count
+        assert sum(s.lapse_amount for s in steps) == req.lapse_total
 
-    def test_a_buy_order_watches_the_lapse_side(self):
-        make_order(direction="buy")
-        claim = make_claim()
-        engine, lapse, xlm = make_engine()
-        node = FakeDiscoveryNode()
+        assert len(node.publish_fill_response_calls) == 1
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is True
+        assert resp["request_id"] == req.request_id
+        assert market_mod.verify_fill_response(
+            resp, expected_maker_addr=node.addr) is True
 
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        lapse.deliver("taker.lapse", "maker.lapse", memo, schedule[0][0])
+    def test_a_buy_order_makes_the_maker_send_lapse_and_expect_xlm(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(direction="buy", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, xlm = make_maker_engine(node)
+        xlm.balances["GMAKER"] = swap.xlm_for_lapse(req.lapse_total, 1000)
 
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
-        trade = Trade.get(Trade.session_id == claim.session_id)
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        trade = Trade.get(Trade.session_id == req.session_id)
         assert trade.i_send == "xlm"
 
-    def test_a_maker_who_cannot_fund_the_lapse_leg_is_refused(self):
-        """The taker has already paid; that must not be enough on its own
-        to commit this node to a trade it cannot itself complete."""
-        make_order(direction="sell")
-        claim = make_claim()
-        engine, lapse, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
-        lapse.balances["maker.lapse"] = claim.lapse_total - 1
+    def test_a_maker_who_cannot_fund_the_lapse_leg_is_refused(self, tmp_path):
+        """A signed request alone must never be enough to commit this
+        node to a trade it cannot itself complete."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total - 1
 
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
         assert Trade.select().count() == 0
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is False
 
-    def test_a_maker_who_cannot_fund_the_xlm_leg_is_refused(self):
-        make_order(direction="buy")
-        claim = make_claim()
-        engine, lapse, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        lapse.deliver("taker.lapse", "maker.lapse", memo, schedule[0][0])
+    def test_a_maker_who_cannot_fund_the_xlm_leg_is_refused(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(direction="buy", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, xlm = make_maker_engine(node)
+        xlm_total = swap.xlm_for_lapse(req.lapse_total, 1000)
         xlm.balances["GMAKER"] = xlm_total - 1
 
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
         assert Trade.select().count() == 0
 
-    def test_a_maker_with_exactly_enough_is_not_refused(self):
+    def test_a_maker_with_exactly_enough_is_not_refused(self, tmp_path):
         """The boundary: exactly enough must still succeed, so this is not
         an off-by-one rejecting a maker who can actually pay."""
-        make_order(direction="sell")
-        claim = make_claim()
-        engine, lapse, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
-        lapse.balances["maker.lapse"] = claim.lapse_total
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
 
-    def test_no_claims_against_an_order_discovers_nothing(self):
-        make_order()
-        engine, _l, _x = make_engine()
-        node = FakeDiscoveryNode()
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+    def test_no_requests_against_an_order_answers_nothing(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(maker_lapse=node.addr)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
 
-    def test_a_cancelled_order_with_an_already_paid_claim_is_still_honoured(self):
-        """Cancelling withdraws what is unfilled, not what already has
-        money moving against it. A maker that cancelled an order between
-        a taker's payment and this node's own discovery pass must still
-        complete that one fill."""
-        order = make_order()
+    def test_a_cancelled_order_with_a_pending_request_is_still_honoured(self, tmp_path):
+        """Cancelling withdraws what is unfilled, not a request already in
+        flight against it when this node cancelled."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        order = make_order(maker_lapse=node.addr)
         order.cancelled = True
         order.save()
-        claim = make_claim()
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
 
-    def test_a_claim_naming_an_unknown_order_is_ignored(self):
-        make_claim(order_id="no-such-order")
-        engine, _l, _x = make_engine()
-        node = FakeDiscoveryNode()
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+    def test_a_request_naming_an_unknown_order_is_ignored(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_request(order_id="no-such-order")
+        engine, _lapse, _xlm = make_maker_engine(node)
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
 
-    def test_fill_larger_than_the_order_is_refused(self):
-        make_order(lapse_total=1 * LAPSE)
-        make_claim(lapse_total=5 * LAPSE)
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm.deliver("GTAKER", "GMAKER", "irrelevant", 10**9)  # even if "paid"
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+    def test_fill_larger_than_the_order_is_refused(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(lapse_total=1 * LAPSE, maker_lapse=node.addr)
+        make_request(lapse_total=5 * LAPSE)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = 5 * LAPSE
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
         assert Trade.select().count() == 0
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is False
 
-    def test_fill_below_min_fill_is_refused(self):
-        make_order(min_fill=5 * LAPSE)
-        make_claim(lapse_total=1 * LAPSE)
-        engine, _l, _x = make_engine()
-        node = FakeDiscoveryNode()
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+    def test_fill_below_min_fill_is_refused(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(min_fill=5 * LAPSE, maker_lapse=node.addr)
+        make_request(lapse_total=1 * LAPSE)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
 
-    def test_inconsistent_schedule_is_refused(self):
-        """increment_count is already range-checked at verify_claim time,
-        but a maker must not trust that every claim it stored passed
-        through that check honestly (or at all, from an old build)."""
-        make_order()
-        make_claim(lapse_total=1, increment_count=20)  # 1 tick, 20 steps
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+    def test_schedule_over_this_nodes_own_cap_is_refused(self, tmp_path):
+        """The maker builds its own schedule from its own trust view of
+        this taker, so a stranger cannot talk its way into a bigger step
+        than this node is willing to risk with them."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(lapse_total=1000 * LAPSE, price=1000, maker_lapse=node.addr)
+        make_request(lapse_total=1000 * LAPSE)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = 1000 * LAPSE
 
-    def test_schedule_over_this_nodes_own_cap_is_refused(self):
-        """Never trust the taker's own chosen step count for what it
-        implies about risk: a maker checks it against its own exposure
-        cap for this specific counterparty, not the taker's word that a
-        given count was safe."""
-        make_order(lapse_total=1000 * LAPSE, price=1000)
-        claim = make_claim(lapse_total=1000 * LAPSE, increment_count=2)  # huge steps
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 2)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
-
-        tiny_cap = 1000   # far below what a 2-step split of this trade needs
-        assert swap_engine.discover_trades(engine, node, "GMAKER", tiny_cap, 2) == 0
+        tiny_cap = 1000   # far below what any split of this trade needs
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", tiny_cap, 2) == 0
         assert Trade.select().count() == 0
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is False
 
-    def test_unpaid_claim_creates_nothing_yet(self):
-        make_order()
-        make_claim()
-        engine, _l, _x = make_engine()
-        node = FakeDiscoveryNode()
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
-        assert Trade.select().count() == 0
+    def test_an_already_answered_request_is_not_answered_twice(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
 
-    def test_payment_from_the_wrong_sender_does_not_match(self):
-        """The claim names taker.lapse/GTAKER; a payment from anyone else,
-        however well it otherwise matches, must not be attributed to it."""
-        make_order()
-        claim = make_claim()
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GSOMEONE_ELSE", "GMAKER", memo, schedule[0][1])
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
-
-    def test_underpayment_does_not_match(self):
-        make_order()
-        claim = make_claim()
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1] - 1)
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
-
-    def test_an_already_discovered_session_is_not_recreated(self):
-        make_order()
-        claim = make_claim()
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
-
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
         assert Trade.select().count() == 1
+        assert len(node.publish_fill_response_calls) == 1
 
-    def test_multiple_claims_against_one_order_are_each_considered(self):
-        make_order(lapse_total=10 * LAPSE)
-        claim_a = make_claim(session_id="a" * 16, taker_lapse="takerA",
-                             taker_xlm="GA", lapse_total=1 * LAPSE)
-        claim_b = make_claim(session_id="b" * 16, taker_lapse="takerB",
-                             taker_xlm="GB", lapse_total=1 * LAPSE)
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
+    def test_multiple_requests_against_one_order_are_each_considered(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(lapse_total=10 * LAPSE, maker_lapse=node.addr)
+        make_request(session_id="a" * 16, taker_lapse="takerA",
+                    taker_xlm="GA", lapse_total=1 * LAPSE)
+        make_request(session_id="b" * 16, taker_lapse="takerB",
+                    taker_xlm="GB", lapse_total=1 * LAPSE)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = 10 * LAPSE
 
-        xlm_total = swap.xlm_for_lapse(1 * LAPSE, 1000)
-        schedule = swap.build_schedule(1 * LAPSE, xlm_total, 3)
-        xlm.deliver("GA", "GMAKER", swap.session_tag("order-1", claim_a.session_id, 1),
-                   schedule[0][1])
-        xlm.deliver("GB", "GMAKER", swap.session_tag("order-1", claim_b.session_id, 1),
-                   schedule[0][1])
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 2
 
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 2
-
-    def test_incoming_payments_are_fetched_once_per_pass_not_per_claim(self):
-        """Horizon is a rate-limited public endpoint; fetching it once and
-        matching every pending claim against that one list in memory is
-        the whole point of recent_incoming over a per-claim find_payment."""
-        make_order(lapse_total=10 * LAPSE)
-        make_claim(session_id="a" * 16, taker_lapse="takerA", taker_xlm="GA",
-                  lapse_total=1 * LAPSE)
-        make_claim(session_id="b" * 16, taker_lapse="takerB", taker_xlm="GB",
-                  lapse_total=1 * LAPSE)
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-
-        calls = []
-        real_recent_incoming = xlm.recent_incoming
-        def counting_recent_incoming(*a, **kw):
-            calls.append(1)
-            return real_recent_incoming(*a, **kw)
-        xlm.recent_incoming = counting_recent_incoming
-
-        swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2)
-        assert len(calls) == 1
-
-    def test_step1_is_never_the_makers_own_move(self):
-        """Structural, not a matter of trust: nothing tells the maker a
-        session exists except the taker's own first payment, so the
-        maker can never be the one who owed step 1."""
-        make_order()
-        claim = make_claim()
-        engine, _l, xlm = make_engine()
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 3)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
-        swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2)
-        first = Increment.get(Increment.id == f"{claim.session_id}:1")
-        assert first.i_move_first is False
-
-    def test_a_tie_in_trust_never_makes_both_sides_believe_they_open(self):
+    def test_a_tie_in_trust_never_makes_both_sides_believe_they_open(self, tmp_path):
         """The unsafe reading of a tie: if the maker independently
         tie-broke its own opening_mover call the same way the taker's
         _start_trade does ('an even match still needs somebody to
-        start' -> True), both sides would believe they open and step 2
-        would deadlock. discover_trades must derive the maker's decision
-        as the negation of what the taker computed, never in parallel."""
-        make_order()
-        claim = make_claim(increment_count=4)   # needs step 2 to exist
-        engine, _l, xlm = make_engine()
+        start' -> True), both sides would believe they open and step 1
+        would deadlock. answer_fill_requests must derive the maker's
+        decision as the negation of what the taker computed, never in
+        parallel."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(maker_lapse=node.addr)
         # No PeerRecord for either address and no chain history: every
         # trust score here is 0, which is the exact tie opening_mover
         # returns None for.
-        node = FakeDiscoveryNode()
-        xlm_total = swap.xlm_for_lapse(claim.lapse_total, 1000)
-        schedule = swap.build_schedule(claim.lapse_total, xlm_total, 4)
-        memo = swap.session_tag("order-1", claim.session_id, 1)
-        xlm.deliver("GTAKER", "GMAKER", memo, schedule[0][1])
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.discover_trades(engine, node, "GMAKER", 5 * XLM, 2) == 1
-        second = Increment.get(Increment.id == f"{claim.session_id}:2")
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        first = Increment.get(Increment.id == f"{req.session_id}:1")
         # The taker's own _start_trade ties to i_open=True, which makes
-        # the taker NOT move first on step 2 (i_move_first(2, True) is
-        # False). The maker's step 2 must be the complement of that, or
-        # neither side would send: this is the one assertion that would
-        # catch the deadlock a naive, independently-tie-broken
-        # opening_mover call on the maker's side would produce.
-        assert second.i_move_first is True
+        # the taker move first on step 1. The maker's step 1 must be the
+        # complement of that, or neither side would send: this is the
+        # assertion that would catch the deadlock a naive,
+        # independently-tie-broken opening_mover call on the maker's
+        # side would produce.
+        assert first.i_move_first is False

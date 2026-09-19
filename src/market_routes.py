@@ -282,7 +282,7 @@ def register(app, node, csrf_token):
                         "counterparty in one go. The most it will do is "
                         f"{swap_mod.lapse_for_xlm(e.max_safe_stroops, row.price_stroops_per_lapse) / TICKS_PER_LAPSE:.4f} LAPSE.")
                 except (ValueError, market_mod.OrderRejected,
-                       market_mod.ClaimRejected) as e:
+                       market_mod.FillRequestRejected) as e:
                     alert_err = str(e)
                 except Exception as e:
                     log.warning("[market] starting a trade failed", exc_info=True)
@@ -429,7 +429,7 @@ def _cancel_order(node):
 
 
 def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
-    """Read the taker's form and open a trade against one order.
+    """Read the taker's form and send a fill request against one order.
 
     Thin on purpose: _open_trade is the reusable core, taking the amount
     and passphrase as plain arguments rather than reading request.form,
@@ -446,11 +446,16 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
 
 def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
                 lapse_total, passphrase):
-    """Create the trade and its step schedule, ready for the engine.
+    """Send a signed fill request against one order. Returns its
+    session_id.
 
-    Nothing is sent from here. The page's job ends at recording what was
-    agreed; the engine decides when each step actually goes, which is what
-    keeps sending on one path that is safe to interrupt.
+    Nothing is created here except the request itself: no Trade exists on
+    this side until the maker explicitly agrees (see
+    swap_engine.check_fill_responses), so nothing is ever paid on the
+    strength of this node's own say-so. depth is accepted for the
+    caller's convenience (every call site already has it to hand) but is
+    no longer used here; the trade that eventually opens reads its own
+    confirm depth fresh when it is created, on whichever side creates it.
     """
     if not passphrase:
         raise ValueError("a passphrase is required")
@@ -461,14 +466,14 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     # market_take fetches the order by id directly rather than through
     # open_orders(), which is the only place expiry is normally filtered,
     # so a stale link or a fill submitted right as an order ages out must
-    # be caught here too. Without this a trade outlives the order it was
+    # be caught here too. Without this a request outlives the order it was
     # supposedly filling.
     if order_row.expiry_block <= height:
         raise market_mod.OrderRejected("this order has expired")
 
     # Checked, not just used: a wrong passphrase here would otherwise
-    # surface as a trade that exists and cannot send, discovered only once
-    # a counterparty was already waiting on it.
+    # surface as a request this node can never act on when it is
+    # answered, discovered only once a counterparty was already waiting.
     try:
         kek = crypto_mod.derive_kek(node.keyfile, passphrase)
         crypto_mod.decrypt_secret_key(node.keyfile, kek=kek)
@@ -482,10 +487,9 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
                                        order_row.price_stroops_per_lapse)
 
     # A maker selling LAPSE means this node pays XLM; a maker buying LAPSE
-    # means this node pays LAPSE. Checked before anything is created: an
-    # unfunded trade only ever surfaces later as a stall, and a stall is
-    # what blame is measured from, so a fill nobody could ever have paid
-    # for must never reach that point.
+    # means this node pays LAPSE. Checked before anything is sent: a fill
+    # nobody could ever pay for should never reach the maker only to be
+    # discovered unfundable after it already agreed.
     i_send = "xlm" if order_row.direction == "sell" else "lapse"
     if i_send == "xlm":
         if xlm_total > _spendable(xlm_addr):
@@ -493,73 +497,27 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     elif lapse_total > node.view.state.get_balance(node.addr):
         raise ValueError("you do not hold that much LAPSE")
 
+    # A local, advisory check only: the real cap that matters is the
+    # maker's own, applied when it decides (swap_engine._answer_one).
+    # This exists so a taker sees "too large" immediately rather than
+    # waiting a full round trip to be told the same thing.
     detail = trust_mod.get_detail(
         order_row.maker_lapse_addr,
         trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
         node.view.state.get_balance(order_row.maker_lapse_addr))
-
-    schedule, count, _cap = swap_mod.plan(
-        lapse_total, xlm_total, detail["score"], stranger_cap=cap)
-
-    # Who would open if both sides already knew this trade existed. Fed
-    # by trust alone, never anything the maker says, so it cannot be
-    # gamed by a counterparty claiming to be more or less established
-    # than it is (see trust.mutual_scores).
-    i_open = swap_mod.opening_mover(
-        *trust_mod.mutual_scores(node, order_row.maker_lapse_addr))
-    if i_open is None:
-        i_open = True   # an even match still needs somebody to start
+    swap_mod.plan(lapse_total, xlm_total, detail["score"], stranger_cap=cap)
 
     session_id = swap_mod.new_session_id(order_row.order_id, node.addr)
-    now = time.time()
 
-    # Built, signed and stored before the trade itself: if this fails
-    # (the per-taker claim cap, see market.MAX_CLAIMS_PER_TAKER), nothing
-    # has been created yet. Doing it the other way round would risk an
-    # orphaned trade this node itself will still try to send steps into,
-    # that the maker can never discover for want of the one thing a claim
-    # supplies (see market.py's claim section).
-    claim = market_mod.build_claim(
+    req = market_mod.build_fill_request(
         order_id=order_row.order_id, session_id=session_id,
         taker_lapse_addr=node.addr, taker_xlm_addr=xlm_addr,
-        lapse_total=lapse_total, increment_count=count,
-        pubkey_hex=node.pk_hex)
-    market_mod.sign_claim(claim, node.keyfile, kek)
-    market_mod.store_claim(claim)
-
-    Trade.create(
-        session_id=session_id, order_id=order_row.order_id, role="taker",
-        my_lapse_addr=node.addr, my_xlm_addr=xlm_addr,
-        peer_lapse_addr=order_row.maker_lapse_addr,
-        peer_xlm_addr=order_row.maker_xlm_addr,
-        i_send=i_send,
-        lapse_total=lapse_total, xlm_total=xlm_total,
-        increment_count=count, confirm_depth=depth,
-        status=TRADE_ACTIVE, created_at=now, updated_at=now)
-
-    timeout = swap_engine.step_timeout_seconds(depth, LAPSE_BLOCK_SECONDS)
-    for n, (lapse_amount, xlm_amount) in enumerate(schedule, start=1):
-        # Step 1 is forced to this side regardless of i_open: the maker
-        # has no handshake and no way to learn a session exists except by
-        # seeing this node's own first payment land (see
-        # swap_engine.discover_trades), so the taker is always the one
-        # who has to send it. opening_mover's real effect starts at step
-        # 2, once both sides already know the trade exists and either
-        # could safely be the one waiting.
-        i_move_first = True if n == 1 else swap_mod.i_move_first(n, i_open)
-        Increment.create(
-            id=f"{session_id}:{n}", session_id=session_id, n=n,
-            lapse_amount=lapse_amount, xlm_amount=xlm_amount,
-            i_move_first=i_move_first,
-            created_at=now, deadline_at=now + timeout)
-
-    # Only now, with both rows safely on disk, put it on the network. A
-    # crash between here and the send below costs nothing new: the trade
-    # simply gets picked up, claim included, on the next worker pass.
-    node.publish_claim(claim)
-
-    log.info("[market] trade %s opened: %d steps against %s",
-             session_id, count, order_row.maker_lapse_addr[:24])
+        lapse_total=lapse_total, pubkey_hex=node.pk_hex)
+    market_mod.sign_fill_request(req, node.keyfile, kek)
+    market_mod.store_fill_request(req)
+    node.publish_fill_request(req)
+    log.info("[market] fill request %s sent against order %s",
+             session_id, order_row.order_id)
     return session_id
 
 
@@ -692,7 +650,7 @@ def _auto_fill(node, xlm_keyfile_path, height, depth, stranger_cap_val):
             session_id = _open_trade(node, order_row, height, xlm_keyfile_path,
                                      depth, stranger_cap_val, take_ticks, passphrase)
         except (ValueError, market_mod.OrderRejected,
-               market_mod.ClaimRejected, swap_mod.TradeTooLarge) as e:
+               market_mod.FillRequestRejected, swap_mod.TradeTooLarge) as e:
             # The plan said this was safe; something changed between
             # planning and here (the order was cancelled, a claim cap
             # was hit by something else). Move on rather than lose the

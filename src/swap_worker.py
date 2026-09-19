@@ -167,42 +167,41 @@ class SwapWorker:
 
         engine = self._engine()
 
-        # Before advancing anything already known: look for fills against
-        # this node's own orders. Run first so a session discovered this
-        # pass is picked up by the very same pass's advance loop below,
-        # rather than waiting a full poll interval to be noticed twice.
+        # Before advancing anything already known: decide every live fill
+        # request against this node's own orders, and check this node's
+        # own outstanding requests for an answer. Run first so a session
+        # opened this pass is picked up by the very same pass's advance
+        # loop below, rather than waiting a full poll interval to be
+        # noticed twice.
         my_xlm_addr = xlm_mod.load_public_key(self.xlm_keyfile)
         if my_xlm_addr is not None:
             try:
-                swap_engine.discover_trades(
+                swap_engine.answer_fill_requests(
                     engine, self.node, my_xlm_addr,
                     self.node.settings.get(settings_mod.SWAP_STRANGER_CAP_STROOPS),
                     max(self.node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
                         swap_engine.MIN_CONFIRM_DEPTH))
-            except swap_engine.Unreachable as e:
-                # Same treatment as an unreachable chain mid-trade: an
-                # outage says nothing about whether anyone has paid, so
-                # back off rather than hammering an endpoint already
-                # struggling, and try the rest of this pass next time.
-                self._last_error = str(e)
-                self._unreachable_until = time.time() + UNREACHABLE_BACKOFF_SECONDS
-                log.info("[swap] a chain is unreachable during discovery "
-                         "(%s); pausing %ds", e, UNREACHABLE_BACKOFF_SECONDS)
-                self._passes += 1
-                return 0
             except Exception:
-                # A discovery bug must not stop trades already running
-                # from being advanced.
-                log.exception("[swap] discovery pass failed")
+                # A bug answering requests must not stop trades already
+                # running from being advanced.
+                log.exception("[swap] answering fill requests failed")
+            try:
+                swap_engine.check_fill_responses(
+                    self.node,
+                    max(self.node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
+                        swap_engine.MIN_CONFIRM_DEPTH))
+            except Exception:
+                log.exception("[swap] checking fill responses failed")
 
-        # Housekeeping, run after discovery has had at least one chance
+        # Housekeeping, run after the above has had at least one chance
         # at whatever is currently pending: a node that was offline for
-        # longer than a claim's or an order's lifetime must not delete
+        # longer than a request's or an order's lifetime must not delete
         # either before this very pass has looked at them (see
-        # market.CLAIM_MAX_AGE_SECONDS and market.prune_expired).
+        # market.FILL_REQUEST_MAX_AGE_SECONDS and market.prune_expired).
         try:
             market_mod.prune_expired(self.node.view.height)
-            market_mod.prune_claims()
+            market_mod.prune_fill_requests()
+            market_mod.prune_fill_responses()
         except Exception:
             log.exception("[swap] pruning the order book failed")
 

@@ -446,20 +446,20 @@ def orders_by_maker(addr, current_height):
 
 
 def orders_by_maker_with_claims(addr):
-    """This maker's own orders that have at least one live claim against
-    them, regardless of whether the order itself is still open.
+    """This maker's own orders that have at least one live fill request
+    against them, regardless of whether the order itself is still open.
 
-    Discovery-specific (see swap_engine.discover_trades), and
-    deliberately not filtered by cancelled or expiry the way
-    orders_by_maker is: a claim that arrived, and was already paid for,
-    before this node cancelled its own order still deserves completion.
-    Cancelling withdraws what is unfilled, not what already has money
-    moving against it, and filtering this query the same way
-    orders_by_maker is would strand exactly that taker.
+    Used by swap_engine.answer_fill_requests, and deliberately not
+    filtered by cancelled or expiry the way orders_by_maker is: a
+    request that arrived (and was accepted) before this node cancelled
+    its own order still deserves completion. Cancelling withdraws what
+    is unfilled, not what already has an agreed fill against it, and
+    filtering this query the same way orders_by_maker is would strand
+    exactly that taker.
     """
     ensure_tables()
     order_ids = [row.order_id for row in
-                Claim.select(Claim.order_id).distinct()]
+                FillRequest.select(FillRequest.order_id).distinct()]
     if not order_ids:
         return []
     return list(Order.select()
@@ -1071,6 +1071,14 @@ def requests_for_order(order_id):
     """Every live fill request against one order, for the maker to act on."""
     ensure_tables()
     return list(FillRequest.select().where(FillRequest.order_id == order_id))
+
+
+def requests_by_taker(taker_lapse_addr):
+    """Every live fill request this node itself sent, for the taker side
+    to check for an answer."""
+    ensure_tables()
+    return list(FillRequest.select().where(
+        FillRequest.taker_lapse_addr == taker_lapse_addr))
 
 
 def prune_fill_requests(now=None):

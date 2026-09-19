@@ -583,8 +583,8 @@ class TestOrdersByMaker:
 
 class TestOrdersByMakerWithClaims:
     """Discovery's own view: unlike orders_by_maker, a cancelled or
-    expired order must still surface here if a claim (and therefore
-    possibly a real payment) is already waiting against it."""
+    expired order must still surface here if a fill request (and
+    therefore possibly an agreed fill) is already waiting against it."""
 
     def test_an_order_with_no_claims_is_absent(self, maker):
         market.store_order(signed_order(maker))
@@ -593,16 +593,18 @@ class TestOrdersByMakerWithClaims:
     def test_an_open_order_with_a_claim_shows(self, maker, taker):
         order = signed_order(maker)
         market.store_order(order)
-        market.store_claim(signed_claim(taker, order_id=order["order_id"]))
+        market.store_fill_request(
+            signed_fill_request(taker, order_id=order["order_id"]))
         rows = market.orders_by_maker_with_claims(maker["addr"])
         assert [r.order_id for r in rows] == [order["order_id"]]
 
     def test_a_cancelled_order_with_a_claim_still_shows(self, maker, taker):
         """A cancellation withdraws what is unfilled, not what already
-        has money moving against it (see market.py's own docstring)."""
+        has an agreed fill against it (see market.py's own docstring)."""
         order = signed_order(maker)
         market.store_order(order)
-        market.store_claim(signed_claim(taker, order_id=order["order_id"]))
+        market.store_fill_request(
+            signed_fill_request(taker, order_id=order["order_id"]))
         market.apply_cancellation(order["order_id"], maker["addr"])
         rows = market.orders_by_maker_with_claims(maker["addr"])
         assert [r.order_id for r in rows] == [order["order_id"]]
@@ -618,7 +620,8 @@ class TestOrdersByMakerWithClaims:
                  "kek": other_kek, "xlm": other_xlm}
         order = signed_order(other)
         market.store_order(order)
-        market.store_claim(signed_claim(taker, order_id=order["order_id"]))
+        market.store_fill_request(
+            signed_fill_request(taker, order_id=order["order_id"]))
         assert market.orders_by_maker_with_claims(maker["addr"]) == []
 
 
