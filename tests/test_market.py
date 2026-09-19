@@ -93,6 +93,8 @@ def signed_fill_response(maker, request_id="r" * 16, order_id="order-1",
         request_id=request_id, order_id=order_id, session_id=session_id,
         lapse_total=overrides.pop("lapse_total", 1 * LAPSE), accepted=accepted,
         maker_pubkey_hex=maker["pubkey"],
+        accepted_height=overrides.pop("accepted_height", 1000),
+        confirm_depth=overrides.pop("confirm_depth", 2),
         increment_count=overrides.pop("increment_count", 3 if accepted else None),
         reason=overrides.pop("reason", "" if accepted else "no room"))
     resp.update(overrides)
@@ -845,7 +847,8 @@ class TestFillResponses:
 
     def test_unsigned_response_is_refused(self, maker):
         resp = market.build_fill_response(
-            "r" * 16, "order-1", "s" * 16, 1 * LAPSE, True, maker["pubkey"], increment_count=3)
+            "r" * 16, "order-1", "s" * 16, 1 * LAPSE, True, maker["pubkey"],
+            accepted_height=1000, confirm_depth=2, increment_count=3)
         with pytest.raises(market.FillResponseRejected, match="signature"):
             market.verify_fill_response(resp)
 
@@ -1101,3 +1104,119 @@ class TestTicker:
             created_at=time.time(), updated_at=time.time())
         node = _TickerNode()
         assert market.ticker_price(node) is None
+
+
+# ---------------------------------------------------------------------------
+# Step receipts
+# ---------------------------------------------------------------------------
+
+def signed_receipt(reporter, other_addr, outcome="settled", **overrides):
+    addr_a, addr_b = sorted((reporter["addr"], other_addr))
+    receipt = market.build_receipt(
+        order_id=overrides.pop("order_id", "order-1"),
+        session_id=overrides.pop("session_id", "s" * 16),
+        n=overrides.pop("n", 1),
+        reporter_lapse_addr=overrides.pop("reporter_lapse_addr", reporter["addr"]),
+        addr_a=addr_a, addr_b=addr_b,
+        asset=overrides.pop("asset", "lapse"),
+        from_addr=overrides.pop("from_addr", reporter["addr"]),
+        to_addr=overrides.pop("to_addr", other_addr),
+        amount=overrides.pop("amount", 1 * LAPSE),
+        memo=overrides.pop("memo", "aaaaaaaa:bbbbbbbb:1"),
+        outcome=outcome,
+        tx_hash=overrides.pop("tx_hash", "tx1" if outcome == "settled" else ""),
+        deadline_height=overrides.pop("deadline_height", 1000),
+        checked_at_height=overrides.pop("checked_at_height", 1030),
+        pubkey_hex=reporter["pubkey"])
+    receipt.update(overrides)
+    return market.sign_receipt(receipt, reporter["keyfile"], reporter["kek"])
+
+
+class TestReceiptSigning:
+    def test_signed_settled_receipt_verifies(self, maker, taker):
+        assert market.verify_receipt(signed_receipt(maker, taker["addr"])) is True
+
+    def test_signed_missed_receipt_verifies(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"], outcome="missed")
+        assert market.verify_receipt(r) is True
+
+    def test_tampering_breaks_the_signature(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        r["amount"] = 5 * LAPSE
+        with pytest.raises(market.ReceiptRejected, match="signature"):
+            market.verify_receipt(r)
+
+    def test_reporter_must_be_one_of_the_two_addresses(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        addr_a, addr_b = sorted((maker["addr"], taker["addr"]))
+        # A third address masquerading as addr_a/addr_b without being one
+        # of them: forge the field, breaking the signature, which is the
+        # thing that actually has to fail here.
+        r["addr_a"], r["addr_b"] = addr_a, addr_b
+        r["reporter_lapse_addr"] = "not." + addr_a
+        with pytest.raises(market.ReceiptRejected):
+            market.verify_receipt(r)
+
+    def test_settled_outcome_requires_a_tx_hash(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"], outcome="settled", tx_hash="")
+        with pytest.raises(market.ReceiptRejected, match="tx_hash"):
+            market.verify_receipt(r)
+
+    def test_missed_outcome_must_not_carry_a_tx_hash(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"], outcome="missed", tx_hash="tx1")
+        with pytest.raises(market.ReceiptRejected, match="tx_hash"):
+            market.verify_receipt(r)
+
+    def test_unsorted_addresses_refused(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        hi, lo = max(r["addr_a"], r["addr_b"]), min(r["addr_a"], r["addr_b"])
+        r["addr_a"], r["addr_b"] = hi, lo
+        with pytest.raises(market.ReceiptRejected, match="sorted"):
+            market.verify_receipt(r)
+
+    def test_extra_field_is_refused_not_ignored(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        r["extra"] = "junk"
+        with pytest.raises(market.ReceiptRejected, match="unexpected"):
+            market.verify_receipt(r)
+
+
+class TestReceiptStorage:
+    def test_store_and_read_back(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        assert market.store_receipt(r) is True
+        rows = market.receipts_for_addr(maker["addr"])
+        assert len(rows) == 1
+        assert rows[0].verified is None   # unverified until trust checks it
+
+    def test_duplicate_receipt_id_is_not_stored_twice(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        assert market.store_receipt(r) is True
+        assert market.store_receipt(r) is False
+        assert len(market.receipts_for_addr(maker["addr"])) == 1
+
+    def test_findable_by_either_subject_address(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        market.store_receipt(r)
+        assert len(market.receipts_for_addr(maker["addr"])) == 1
+        assert len(market.receipts_for_addr(taker["addr"])) == 1
+
+    def test_already_known_receipt(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        assert market.already_known_receipt(r) is False
+        market.store_receipt(r)
+        assert market.already_known_receipt(r) is True
+
+    def test_the_receipt_store_has_a_ceiling(self, maker, taker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_RECEIPTS_TOTAL", 1)
+        market.store_receipt(signed_receipt(maker, taker["addr"], session_id="s1" * 8))
+        with pytest.raises(market.ReceiptRejected, match="full"):
+            market.store_receipt(signed_receipt(maker, taker["addr"], session_id="s2" * 8))
+
+    def test_wire_round_trip(self, maker, taker):
+        r = signed_receipt(maker, taker["addr"])
+        market.store_receipt(r)
+        row = market.receipts_for_addr(maker["addr"])[0]
+        wire = market.receipt_to_wire(row)
+        assert market.verify_receipt(wire) is True
+        assert wire == {k: r[k] for k in wire}

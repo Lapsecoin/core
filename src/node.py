@@ -1140,6 +1140,8 @@ class Node:
             self._handle_inbound_fill_request(msg)
         elif t == "fill_response":
             self._handle_inbound_fill_response(msg)
+        elif t == "receipt":
+            self._handle_inbound_receipt(msg)
 
     def _spread(self, item, kind, item_hash):
         """Originate an item and remember it until we see it come back from
@@ -1585,6 +1587,117 @@ class Node:
         """Put this node's own answer to a fill request onto the network."""
         self._spread(item, gossip_mod.KIND_FILL_RESPONSE,
                     market_mod.fill_response_hash(item))
+
+    def _handle_inbound_receipt(self, msg):
+        """Verify a step receipt's shape and signature, store it, and pass
+        it on. Same shape and same reasoning as _handle_inbound_fill_response.
+
+        Verified here only at the level any relay can check: well-formed
+        and genuinely signed by the address it names as reporter. Whether
+        the claim it makes actually holds up against chain data is a
+        separate, deliberately lazy question this node never asks unless
+        it later needs this specific address's trust (see market.py's
+        step-receipts section and trust.py); paying for a chain lookup
+        per relayed item here would be exactly the "watch everything"
+        cost this design avoids.
+        """
+        item = msg["receipt"]
+        sender = msg.get("sender")
+        stemming = msg.get("stemming", False)
+
+        try:
+            item_hash = market_mod.receipt_hash(item)
+        except Exception:
+            log.debug("[market] ignoring an unreadable receipt")
+            return
+
+        self._note_echo(item_hash, sender)
+
+        if not market_mod.already_known_receipt(item):
+            try:
+                market_mod.verify_receipt(item)
+                market_mod.store_receipt(item)
+            except market_mod.ReceiptRejected as e:
+                log.debug("[market] rejected a receipt from %s: %s", sender, e)
+                return
+            except Exception:
+                log.warning("[market] failed to handle an inbound receipt",
+                            exc_info=True)
+                return
+
+        self.gossip.relay(item, gossip_mod.KIND_RECEIPT, item_hash,
+                          sender, stemming=stemming)
+
+    def publish_receipt(self, item):
+        """Put this node's own step receipt onto the network."""
+        self._spread(item, gossip_mod.KIND_RECEIPT,
+                    market_mod.receipt_hash(item))
+
+    def _market_provider(self, kinds):
+        """What this node offers a peer's market backfill request
+        (peer_udp.MT_GET_MARKET): its current order book and/or known
+        step receipts, each as the exact signed dict gossip already
+        carries, capped the same way a chain sync page is (see
+        peer_udp.MAX_MARKET_ORDERS/MAX_MARKET_RECEIPTS). A node that
+        never trades still answers from an empty book rather than
+        refusing the request outright, the same courtesy MT_GETSYNC
+        extends to a node with no chain yet.
+        """
+        import peer_udp as peer_udp_mod
+        out = {"orders": [], "receipts": []}
+        if "order" in kinds:
+            out["orders"] = [market_mod.order_to_wire(r) for r in
+                             market_mod.recent_orders(peer_udp_mod.MAX_MARKET_ORDERS)]
+        if "receipt" in kinds:
+            out["receipts"] = [market_mod.receipt_to_wire(r) for r in
+                               market_mod.recent_receipts(peer_udp_mod.MAX_MARKET_RECEIPTS)]
+        return out
+
+    def backfill_market_from(self, peer_addr, timeout=8.0):
+        """Ask one peer for its order book and known receipts, and admit
+        whatever comes back through the exact same verify-then-store path
+        an inbound gossip message would (market.verify_order/store_order,
+        market.verify_receipt/store_receipt): backfilled data gets no
+        special trust for having arrived this way. Returns (orders_added,
+        receipts_added).
+
+        Best-effort and one-shot per call, not a continuous sync: see
+        peer_udp.request_market for why one page is not the same
+        guarantee chain sync gives. Meant to be tried a handful of times
+        against different peers while this node's own book looks thin,
+        not run forever.
+        """
+        # Node holds no direct transport reference of its own; gossip's
+        # is the one already wired up (see gossip.Gossip.__init__), the
+        # same way _spread/relay reach the wire through self.gossip
+        # rather than a udp attribute this class does not have.
+        resp = self.gossip.udp.request_market(peer_addr, timeout=timeout)
+        if resp is None:
+            return 0, 0
+        orders_added = 0
+        for order in resp.get("orders", []):
+            if not isinstance(order, dict) or market_mod.already_known(order):
+                continue
+            try:
+                market_mod.verify_order(order, current_height=self.view.height)
+                if market_mod.store_order(order):
+                    orders_added += 1
+            except market_mod.OrderRejected:
+                continue
+        receipts_added = 0
+        for receipt in resp.get("receipts", []):
+            if not isinstance(receipt, dict) or market_mod.already_known_receipt(receipt):
+                continue
+            try:
+                market_mod.verify_receipt(receipt)
+                if market_mod.store_receipt(receipt):
+                    receipts_added += 1
+            except market_mod.ReceiptRejected:
+                continue
+        if orders_added or receipts_added:
+            log.info("[market] backfilled %d order(s) and %d receipt(s) from %s",
+                     orders_added, receipts_added, peer_addr)
+        return orders_added, receipts_added
 
     def _handle_inbound_tx(self, msg):
         """Route an inbound tx: validate, admit to the mempool, propagate.

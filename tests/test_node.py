@@ -741,6 +741,8 @@ def _signed_fill_response(maker, request_id="r" * 16, order_id="order-1",
         request_id=request_id, order_id=order_id, session_id=session_id,
         lapse_total=overrides.pop("lapse_total", 1 * TICKS_PER_LAPSE), accepted=accepted,
         maker_pubkey_hex=maker["pubkey"],
+        accepted_height=overrides.pop("accepted_height", 1000),
+        confirm_depth=overrides.pop("confirm_depth", 2),
         increment_count=overrides.pop("increment_count", 3 if accepted else None),
         reason=overrides.pop("reason", "" if accepted else "no room"))
     resp.update(overrides)
@@ -2226,3 +2228,78 @@ class TestAwaitSpacing:
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# Market backfill: _market_provider and backfill_market_from
+# ---------------------------------------------------------------------------
+
+class TestMarketProvider:
+    def test_offers_the_current_book(self, node_env, tmp_path):
+        node, *_rest = node_env
+        trade_storage.init_tables()
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        market_mod.verify_order(order, current_height=0)
+        market_mod.store_order(order)
+
+        out = node._market_provider(["order", "receipt"])
+        assert out["orders"] == [market_mod.order_to_wire(market_mod.get_order(order["order_id"]))]
+        assert out["receipts"] == []
+
+    def test_only_the_requested_kinds_are_returned(self, node_env, tmp_path):
+        node, *_rest = node_env
+        trade_storage.init_tables()
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        market_mod.verify_order(order, current_height=0)
+        market_mod.store_order(order)
+
+        out = node._market_provider(["receipt"])
+        assert out["orders"] == []
+
+
+class TestBackfillMarketFrom:
+    def test_valid_orders_and_receipts_are_admitted(self, node_env, tmp_path):
+        node, *_rest = node_env
+        trade_storage.init_tables()
+        maker = _maker_identity(tmp_path)
+        taker = _maker_identity(tmp_path, name="taker")
+        order = _signed_order(maker)
+
+        addr_a, addr_b = sorted((maker["addr"], taker["addr"]))
+        receipt = market_mod.build_receipt(
+            order_id=order["order_id"], session_id="s" * 16, n=1,
+            reporter_lapse_addr=maker["addr"], addr_a=addr_a, addr_b=addr_b,
+            asset="lapse", from_addr=maker["addr"], to_addr=taker["addr"],
+            amount=1_000, memo="aaaaaaaa:bbbbbbbb:1", outcome="settled",
+            tx_hash="tx1", deadline_height=0, checked_at_height=0,
+            pubkey_hex=maker["pubkey"])
+        market_mod.sign_receipt(receipt, maker["keyfile"], maker["kek"])
+
+        node.gossip.udp.request_market.return_value = {
+            "orders": [order], "receipts": [receipt]}
+
+        orders_added, receipts_added = node.backfill_market_from("1.2.3.4:9000")
+        assert (orders_added, receipts_added) == (1, 1)
+        assert market_mod.get_order(order["order_id"]) is not None
+        assert len(market_mod.receipts_for_addr(maker["addr"])) == 1
+
+    def test_a_forged_order_is_not_admitted(self, node_env, tmp_path):
+        node, *_rest = node_env
+        trade_storage.init_tables()
+        maker = _maker_identity(tmp_path)
+        order = _signed_order(maker)
+        order["lapse_total"] = order["lapse_total"] * 2   # tamper after signing
+
+        node.gossip.udp.request_market.return_value = {
+            "orders": [order], "receipts": []}
+        orders_added, _receipts_added = node.backfill_market_from("1.2.3.4:9000")
+        assert orders_added == 0
+        assert market_mod.get_order(order["order_id"]) is None
+
+    def test_no_response_adds_nothing(self, node_env):
+        node, *_rest = node_env
+        trade_storage.init_tables()
+        node.gossip.udp.request_market.return_value = None
+        assert node.backfill_market_from("1.2.3.4:9000") == (0, 0)

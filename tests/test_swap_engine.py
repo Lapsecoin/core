@@ -84,6 +84,15 @@ class FakeChain:
         # whatever it is asked to send; see TestDiscoverTrades' solvency
         # tests for where this is actually made to matter.
         self.balances = {}
+        # Deliberately huge by default too, for the same reason: most
+        # tests do not care about the chain-anchored deadline and should
+        # read as "long past any of them" the way a big wall-clock age
+        # already implied before deadline_height existed. A test that
+        # cares sets this explicitly (see TestBlame).
+        self.current_height = 10**9
+
+    def height(self):
+        return self.current_height
 
     # -- reads ---------------------------------------------------------
 
@@ -172,15 +181,18 @@ class FakeChain:
         return sum(1 for p in self.payments if p["memo"] == memo)
 
 
-def make_trade(i_send="lapse", count=3, confirm_depth=2, role="taker"):
+def make_trade(i_send="lapse", count=3, confirm_depth=2, role="taker",
+              accepted_height=1000, my_lapse_addr="me.lapse",
+              peer_lapse_addr="peer.lapse"):
     now = time.time()
     session_id = swap.new_session_id("order-1", "taker.addr")
     trade = Trade.create(
         session_id=session_id, order_id="order-1", role=role,
-        my_lapse_addr="me.lapse", my_xlm_addr="GME",
-        peer_lapse_addr="peer.lapse", peer_xlm_addr="GPEER",
+        my_lapse_addr=my_lapse_addr, my_xlm_addr="GME",
+        peer_lapse_addr=peer_lapse_addr, peer_xlm_addr="GPEER",
         i_send=i_send, lapse_total=3 * LAPSE, xlm_total=3 * XLM,
         increment_count=count, confirm_depth=confirm_depth,
+        accepted_height=accepted_height,
         status=TRADE_ACTIVE, created_at=now, updated_at=now)
     schedule = swap.build_schedule(3 * LAPSE, 3 * XLM, count)
     for n, (lapse_amt, xlm_amt) in enumerate(schedule, start=1):
@@ -188,7 +200,9 @@ def make_trade(i_send="lapse", count=3, confirm_depth=2, role="taker"):
             id=f"{session_id}:{n}", session_id=session_id, n=n,
             lapse_amount=lapse_amt, xlm_amount=xlm_amt,
             i_move_first=swap.i_move_first(n, True),
-            created_at=now, deadline_at=now + 3600)
+            created_at=now, deadline_at=now + 3600,
+            deadline_height=(swap_engine.deadline_height(accepted_height, confirm_depth)
+                             if n == 1 else 0))
     return trade
 
 
@@ -232,6 +246,7 @@ class FakeAddrStorage:
 class FakeView:
     def __init__(self, chain):
         self.chain = chain
+        self.height = chain[-1]["height"] if chain else 0
 
 
 class FakeLapseNode:
@@ -803,12 +818,34 @@ class TestBlame:
         trade = make_trade()
         assert engine.consider_abandonment(self._stall(trade, age=10)) is False
 
-    def test_no_blame_without_an_acceptance_on_chain(self):
-        """The attack this closes: send somebody an unsolicited payment
-        tagged with a session they never agreed to, wait, and report them
-        as a defector. A step nobody answered proves nobody agreed."""
+    def test_blame_fires_on_first_step_defection_with_no_prior_reciprocation(self):
+        """The gap this closes: a Trade row here can only exist through a
+        verified, signed handshake (a FillRequest a real maker chose to
+        answer, or a FillResponse from the order's actual maker), so the
+        old worry, an attacker inventing a session out of thin air and
+        blaming the victim for not answering it, is already structurally
+        closed before this method is ever reached. Requiring the peer to
+        have reciprocated at least once besides used to mean a peer who
+        defects on the very first step they owe, the common case, could
+        never be blamed at all. Now the chain-anchored deadline alone
+        decides it."""
         engine, _l, _x = make_engine()
         trade = make_trade()
+        engine.advance(trade)            # we paid; they never reciprocated
+        assert engine.consider_abandonment(self._stall(trade)) is True
+        assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
+        assert PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse").abandoned_count == 1
+
+    def test_no_blame_before_the_chain_height_margin_elapses(self):
+        """The wall-clock stalled_since check is only ever a cheap
+        pre-filter; the verdict that actually matters is chain height
+        against deadline_height + ABANDON_AFTER_BLOCKS. A trade whose
+        wall clock looks overdue but whose chain has not actually moved
+        far enough must not be blamed yet."""
+        engine, lapse, _x = make_engine()
+        trade = make_trade(accepted_height=1000, confirm_depth=2)
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        lapse.current_height = inc.deadline_height  # right at the deadline, no margin yet
         engine.advance(trade)            # we paid; they never reciprocated
         assert engine.consider_abandonment(self._stall(trade)) is False
         assert PeerRecord.get_or_none(
@@ -838,6 +875,12 @@ class TestBlame:
         third = Increment.get(Increment.id == f"{trade.session_id}:3")
         engine.advance(trade)                   # we pay step 3, they vanish
 
+        # Steps 1 and 2 completing pushed step 3's deadline_height forward
+        # from whatever height the chain was at when each did (see
+        # _propagate_deadline); simulate the chain having actually moved
+        # well past it since, the same way _stall simulates wall-clock
+        # time having passed.
+        _l.current_height += 10**6
         assert engine.consider_abandonment(self._stall(trade)) is True
         assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
         assert PeerRecord.get(PeerRecord.lapse_addr == "peer.lapse").abandoned_count == 1
@@ -926,12 +969,16 @@ class FakeDiscoveryNode:
         self.view = _FakeView(height, balances)
         self.storage = _FakeStorage(heights_by_addr)
         self.publish_fill_response_calls = []
+        self.publish_receipt_calls = []
 
     def publish_fill_response(self, resp):
         self.publish_fill_response_calls.append(resp)
 
     def kek(self):
         return crypto.derive_kek(self.keyfile, self.passphrase)
+
+    def publish_receipt(self, receipt):
+        self.publish_receipt_calls.append(receipt)
 
 
 def make_maker_engine(node, lapse=None, xlm=None):
@@ -1177,3 +1224,131 @@ class TestAnswerFillRequests:
         # independently-tie-broken opening_mover call on the maker's
         # side would produce.
         assert first.i_move_first is False
+
+
+# ---------------------------------------------------------------------------
+# Step receipts: emission and chain verification
+# ---------------------------------------------------------------------------
+
+import market as market_mod2  # noqa: E402  (mirrors the market_mod import above)
+
+
+class TestEmitReceipts:
+    def test_settled_step_emits_a_receipt_for_each_leg(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        lapse = FakeChain("lapse", node.addr)
+        xlm = FakeChain("xlm", "GME")
+        trade = make_trade(i_send="lapse", count=2, my_lapse_addr=node.addr)
+        kek = node.kek()
+        engine = swap_engine.Engine(lapse, xlm, lambda: (kek, "seed"))
+
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        engine.advance(trade)             # we send our lapse leg
+        xlm.deliver(*engine._in_terms(trade, inc))   # they send theirs
+        engine.advance(trade)             # notice it settled
+
+        inc = Increment.get(Increment.id == inc.id)
+        assert inc.out_state == LEG_SETTLED and inc.in_state == LEG_SETTLED
+
+        emitted = swap_engine.emit_receipts_for_trade(engine, node, kek, trade)
+        assert emitted == 2
+        receipts = market_mod2.receipts_for_addr(node.addr)
+        assert {r.asset for r in receipts} == {"lapse", "xlm"}
+        assert all(r.outcome == "settled" for r in receipts)
+        assert all(r.tx_hash for r in receipts)
+        assert len(node.publish_receipt_calls) == 2
+
+        # Idempotent: nothing new the second time.
+        again = swap_engine.emit_receipts_for_trade(engine, node, kek, trade)
+        assert again == 0
+        assert len(market_mod2.receipts_for_addr(node.addr)) == 2
+
+    def test_abandoned_step_emits_one_missed_receipt(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        lapse = FakeChain("lapse", node.addr)
+        xlm = FakeChain("xlm", "GME")
+        trade = make_trade(i_send="lapse", count=3, my_lapse_addr=node.addr)
+        kek = node.kek()
+        engine = swap_engine.Engine(lapse, xlm, lambda: (kek, "seed"))
+
+        engine.advance(trade)   # we pay step 1; they never reciprocate
+        lapse.current_height += 10**6
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        trade.status = TRADE_STALLED
+        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
+        trade.save()
+        assert engine.consider_abandonment(trade) is True
+
+        emitted = swap_engine.emit_receipts_for_trade(engine, node, kek, trade)
+        assert emitted == 1
+        receipts = [r for r in market_mod2.receipts_for_addr(node.addr)
+                   if r.outcome == "missed"]
+        assert len(receipts) == 1
+        assert receipts[0].tx_hash == ""
+
+
+class TestVerifyReceiptAgainstChain:
+    def _engine(self):
+        lapse = FakeChain("lapse", "a.lapse")
+        xlm = FakeChain("xlm", "GA")
+        return swap_engine.Engine(lapse, xlm, lambda: (None, None)), lapse, xlm
+
+    def test_true_settled_claim_verifies(self):
+        engine, lapse, _xlm = self._engine()
+        lapse.deliver("a.lapse", "b.lapse", "memo1", 500)
+        tx_hash, _depth = lapse.find_payment("a.lapse", "b.lapse", "memo1", 500)
+        receipt = _FakeReceiptRow(
+            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
+            amount=500, memo="memo1", outcome="settled", tx_hash=tx_hash)
+        assert swap_engine.verify_receipt_against_chain(engine, receipt) is True
+
+    def test_false_settled_claim_with_no_matching_payment(self):
+        engine, _lapse, _xlm = self._engine()
+        receipt = _FakeReceiptRow(
+            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
+            amount=500, memo="memo1", outcome="settled", tx_hash="nope")
+        assert swap_engine.verify_receipt_against_chain(engine, receipt) is False
+
+    def test_true_missed_claim_with_no_payment_and_deadline_passed(self):
+        engine, lapse, _xlm = self._engine()
+        lapse.current_height = 2000
+        receipt = _FakeReceiptRow(
+            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
+            amount=500, memo="memo1", outcome="missed", tx_hash="",
+            deadline_height=1000)
+        assert swap_engine.verify_receipt_against_chain(engine, receipt) is True
+
+    def test_false_missed_claim_when_the_payment_actually_exists(self):
+        engine, lapse, _xlm = self._engine()
+        lapse.deliver("a.lapse", "b.lapse", "memo1", 500)
+        lapse.current_height = 2000
+        receipt = _FakeReceiptRow(
+            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
+            amount=500, memo="memo1", outcome="missed", tx_hash="",
+            deadline_height=1000)
+        assert swap_engine.verify_receipt_against_chain(engine, receipt) is False
+
+    def test_unreachable_propagates_rather_than_guessing(self):
+        engine, lapse, _xlm = self._engine()
+        lapse.unreachable = True
+        receipt = _FakeReceiptRow(
+            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
+            amount=500, memo="memo1", outcome="settled", tx_hash="tx1")
+        with pytest.raises(swap_engine.Unreachable):
+            swap_engine.verify_receipt_against_chain(engine, receipt)
+
+
+class _FakeReceiptRow:
+    """Just the attributes verify_receipt_against_chain reads off a
+    StepReceipt row, without needing the database round trip."""
+
+    def __init__(self, asset, from_addr, to_addr, amount, memo, outcome,
+                tx_hash, deadline_height=0):
+        self.asset = asset
+        self.from_addr = from_addr
+        self.to_addr = to_addr
+        self.amount = amount
+        self.memo = memo
+        self.outcome = outcome
+        self.tx_hash = tx_hash
+        self.deadline_height = deadline_height

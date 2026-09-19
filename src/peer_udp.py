@@ -126,6 +126,20 @@ MT_ORDER     = 0x0F
 MT_FILL_REQUEST  = 0x11
 MT_FILL_RESPONSE = 0x12
 
+# A compact, signed claim that one leg of one step settled or was missed
+# (see market.py's step-receipts section). Same propagation and the same
+# backward-compatibility story as MT_ORDER: an older node simply falls
+# through _dispatch on a type it does not know, no floor bump needed.
+MT_RECEIPT = 0x13
+
+# A market backfill request/response, same shape and same reflection
+# protection as MT_GETSYNC/MT_SYNC: a newly-joined or long-disconnected
+# node's own copy of the order book and known receipts is otherwise only
+# ever whatever gossip happened to reach it after it started listening.
+# See request_market/_serve_market.
+MT_GET_MARKET = 0x14
+MT_MARKET     = 0x15
+
 # Level 1 rather than 6: on the wire this competes with pacing, not disk.
 # It reaches within about a point of the ratio at a third of the CPU, and
 # every hop pays the decompress, so the cheaper end is the right one here.
@@ -188,6 +202,15 @@ PUNCH_BURST_SPACING = 0.05
 # otherwise turn one small datagram into a multi-MB reply blasted at the
 # victim. This bounds how many blocks one request can pull.
 MAX_SYNC_BLOCKS   = 500
+
+# Same reflection concern as MAX_SYNC_BLOCKS, for a market backfill: caps
+# how many orders and receipts one GET_MARKET can pull in a single
+# response. A node that wants more asks again; there is no cursor or
+# pagination in this first cut, only a best-effort bootstrap that gets a
+# newly-joined node the current book and known receipts without it having
+# to wait for gossip to happen to reach it, see _serve_market.
+MAX_MARKET_ORDERS = 2000
+MAX_MARKET_RECEIPTS = 5000
 
 # Envelope room on top of a block: the genesis hash, the stemming flag, and
 # msgpack's own framing. Small and fixed, but the ceilings below have to
@@ -695,6 +718,14 @@ class UDPTransport:
         self._reassembler = _Reassembler()
         self._pending_sync: dict[int, _PendingSync] = {}  # msg_id -> _PendingSync
         self._sync_lock   = threading.Lock()
+        # Same shape as sync's, reused as-is: a market backfill response
+        # is a request/response pair with a waiter blocked on an Event,
+        # not gossip, so it needs the same chunk-collection path as
+        # MT_SYNC rather than the generic reassembler everything else
+        # (one-way, fire-and-forget) uses. See request_market.
+        self._pending_market: dict[int, _PendingSync] = {}
+        self._market_lock = threading.Lock()
+        self._get_market_fn = None  # set by main; (kinds) -> {"orders": [...], "receipts": [...]}
         # (target_addr, msg_id) -> {"chunks": {idx: bytes}, "acked": set(),
         # "msg_type": int, "event": Event}. Keyed by target too, not just
         # msg_id, because a broadcast (send_block) reuses one
@@ -744,6 +775,7 @@ class UDPTransport:
         self._on_order      = None  # set by main; swap orders from the network
         self._on_fill_request  = None  # set by main; fill requests from the network
         self._on_fill_response = None  # set by main; fill responses from the network
+        self._on_receipt = None        # set by main; step receipts from the network
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -948,6 +980,15 @@ class UDPTransport:
         self._broadcast(MT_FILL_RESPONSE, {"fill_response": response}, peers,
                         stemming, "fill response")
 
+    def send_receipt(self, receipt: dict, peers=None, stemming: bool = False):
+        """Put a signed step receipt on the wire. Same propagation as an
+        order: the reporter does not know who else holds the order or
+        session this receipt is about, only their addresses, so it has to
+        travel the same broadcast path everything else in this handshake
+        does."""
+        self._broadcast(MT_RECEIPT, {"receipt": receipt}, peers,
+                        stemming, "receipt")
+
     def send_peers(self, addr: str, peers: list[str]):
         """Send peer list to addr."""
         self._send_one(MT_PEERS, self._new_msg_id(),
@@ -972,6 +1013,33 @@ class UDPTransport:
             return pending.result
         with self._sync_lock:
             self._pending_sync.pop(msg_id, None)
+        return None
+
+    def request_market(self, addr: str, kinds=("order", "receipt"),
+                       timeout: float = SYNC_TIMEOUT):
+        """Ask addr for its current order book and/or known receipts.
+        Returns {"orders": [...], "receipts": [...]} or None on timeout.
+
+        Best-effort and single-shot: the response is capped
+        (MAX_MARKET_ORDERS/MAX_MARKET_RECEIPTS) and there is no cursor to
+        ask for more beyond that cap in this first cut, unlike chain sync's
+        from_h/to_h paging. Good enough to get a newly-joined node off
+        zero without waiting on gossip; not a substitute for gossip, which
+        is what keeps a book current afterward.
+        """
+        msg_id = self._new_msg_id()
+        pending = _PendingSync()
+        with self._market_lock:
+            self._pending_market[msg_id] = pending
+        self._send_one(MT_GET_MARKET, msg_id,
+                       {"genesis": self.genesis_hash, "kinds": list(kinds)},
+                       self._addr_tuple(addr))
+        if pending.event.wait(timeout):
+            with self._market_lock:
+                self._pending_market.pop(msg_id, None)
+            return pending.result
+        with self._market_lock:
+            self._pending_market.pop(msg_id, None)
         return None
 
     def get_info(self, addr: str, timeout: float = 8.0) -> dict | None:
@@ -1189,6 +1257,18 @@ class UDPTransport:
                                    sender)
             return
 
+        if msg_type in (MT_MARKET,):
+            with self._market_lock:
+                pending = self._pending_market.get(msg_id)
+            if pending:
+                pending.feed(chunk_idx, chunk_total, payload_bytes)
+                if self._should_ack(chunk_idx, chunk_total, pending.event.is_set()):
+                    self._send_one(MT_ACK, self._new_msg_id(),
+                                   {"acked_msg_id": msg_id,
+                                    "acked_chunks": list(pending.chunks.keys())},
+                                   sender)
+            return
+
         # For everything else, reassemble then dispatch
         complete = self._reassembler.feed(
             sender, msg_id, chunk_idx, chunk_total, payload_bytes
@@ -1339,8 +1419,24 @@ class UDPTransport:
                     self._on_fill_response(response, sender_addr,
                                            bool(data.get("stemming", False)))
 
+        elif msg_type == MT_RECEIPT:
+            if self._is_new(msg_id):
+                self._pool.touch(sender_addr)
+                receipt = data.get("receipt")
+                # Handed up unverified, exactly as an order is: whether
+                # the signature holds, and separately whether the claim
+                # itself checks out against chain data, are both decided
+                # where the keys and the chains live, not at the
+                # transport. See Node._handle_inbound_receipt.
+                if isinstance(receipt, dict) and self._on_receipt:
+                    self._on_receipt(receipt, sender_addr,
+                                     bool(data.get("stemming", False)))
+
         elif msg_type == MT_GETSYNC:
             self._handle_getsync(msg_id, data, sender)
+
+        elif msg_type == MT_GET_MARKET:
+            self._handle_get_market(msg_id, data, sender)
 
         elif msg_type == MT_PUNCH_REQ:
             target = data.get("target", "")
@@ -1455,6 +1551,31 @@ class UDPTransport:
             _encode({"genesis": self.genesis_hash, "chain": chain}),
             BLOCK_COMPRESS_LEVEL)
         self._send_chunked(MT_SYNC, msg_id, payload, sender)
+
+    def _handle_get_market(self, msg_id: int, data: dict, sender: tuple):
+        """Serve a market backfill request. Same reflection-attack concern
+        and same fix as _handle_getsync: gate on the sender having already
+        shown it can receive here, confirming with an ordinary PING first
+        if it has not.
+        """
+        sender_addr = f"{sender[0]}:{sender[1]}"
+        self._pool.touch(sender_addr)
+        if self._may_serve_sync(sender_addr):
+            self._serve_market(msg_id, data, sender)
+        else:
+            self._start_confirmation(sender_addr,
+                                     lambda: self._serve_market(msg_id, data, sender))
+
+    def _serve_market(self, msg_id: int, data: dict, sender: tuple):
+        kinds = data.get("kinds", ["order", "receipt"])
+        if not isinstance(kinds, list):
+            kinds = ["order", "receipt"]
+        payload = (self._get_market_fn(kinds) if self._get_market_fn
+                  else {"orders": [], "receipts": []})
+        compressed = zlib.compress(
+            _encode({"genesis": self.genesis_hash, **payload}),
+            BLOCK_COMPRESS_LEVEL)
+        self._send_chunked(MT_MARKET, msg_id, compressed, sender)
 
     def _may_serve_sync(self, sender_addr: str) -> bool:
         """Whether this address has already shown it can receive here.
@@ -1644,9 +1765,18 @@ class UDPTransport:
         """fn(response, sender_addr, stemming). Set by main after Node init."""
         self._on_fill_response = fn
 
+    def set_receipt_callback(self, fn):
+        """fn(receipt, sender_addr, stemming). Set by main after Node init."""
+        self._on_receipt = fn
+
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""
         self._get_chain_fn = fn
+
+    def set_market_provider(self, fn):
+        """fn(kinds) -> {"orders": [...], "receipts": [...]}. Set by Node
+        after init; see _serve_market."""
+        self._get_market_fn = fn
 
     def set_tip_provider(self, fn):
         """fn() -> (height, tip_hash, version, cumulative_iterations).

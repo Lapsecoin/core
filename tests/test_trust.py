@@ -312,3 +312,97 @@ class TestNegativeAndOddInputs:
 
     def test_negative_age_scores_zero_stake(self):
         assert trust.stake_component(-10, FUNDED) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Network-sourced trust: verified step receipts about an address this
+# node never itself traded with
+# ---------------------------------------------------------------------------
+
+def make_receipt(receipt_id, addr_a, addr_b, session_id, outcome="settled",
+                 asset="lapse", amount=LAPSE, verified=True, reporter=None):
+    return trade_storage.StepReceipt.create(
+        receipt_id=receipt_id, order_id="o1", session_id=session_id, n=1,
+        reporter_lapse_addr=reporter or addr_a, addr_a=addr_a, addr_b=addr_b,
+        asset=asset, from_addr=addr_a, to_addr=addr_b, amount=amount,
+        memo="m", outcome=outcome, tx_hash=("tx1" if outcome == "settled" else ""),
+        deadline_height=0, checked_at_height=0, pubkey="pk", signature="sig",
+        received_at=time.time(), verified=verified)
+
+
+class TestNetworkTally:
+    def test_unverified_receipts_are_not_counted(self):
+        make_receipt("r1", "a", "b", "s1", verified=None)
+        abandoned, count, lapse_amt, _last = trust._network_tally("b")
+        assert (abandoned, count, lapse_amt) == (0, 0, 0)
+
+    def test_verified_settled_receipt_counts_toward_completed(self):
+        make_receipt("r1", "a", "b", "s1", outcome="settled", amount=5 * LAPSE)
+        abandoned, count, lapse_amt, _last = trust._network_tally("b")
+        assert (abandoned, count, lapse_amt) == (0, 1, 5 * LAPSE)
+
+    def test_verified_missed_receipt_counts_as_abandonment(self):
+        make_receipt("r1", "a", "b", "s1", outcome="missed")
+        abandoned, count, _lapse, _last = trust._network_tally("b")
+        assert abandoned == 1
+
+    def test_session_already_known_locally_is_not_double_counted(self):
+        trade_storage.Trade.create(
+            session_id="s1", order_id="o1", role="taker",
+            my_lapse_addr="me", my_xlm_addr="GME", peer_lapse_addr="b",
+            peer_xlm_addr="GB", i_send="lapse", lapse_total=LAPSE, xlm_total=10_000_000,
+            increment_count=2, confirm_depth=2, status="completed",
+            created_at=time.time(), updated_at=time.time())
+        make_receipt("r1", "a", "b", "s1", outcome="settled")
+        abandoned, count, lapse_amt, _last = trust._network_tally("b")
+        assert (abandoned, count, lapse_amt) == (0, 0, 0)
+
+    def test_get_detail_without_node_ignores_network_receipts(self):
+        make_receipt("r1", "a", "b", "s1", outcome="missed")
+        detail = trust.get_detail("b")
+        assert detail["abandoned_count"] == 0
+
+    def test_get_detail_with_node_folds_in_network_receipts(self):
+        make_receipt("r1", "a", "b", "s1", outcome="missed")
+        detail = trust.get_detail("b", node=object())
+        assert detail["abandoned_count"] == 1
+        assert detail["network_abandoned_count"] == 1
+        assert detail["score"] == 0.0
+        assert detail["known"] is True
+
+    def test_network_and_local_history_add_together(self):
+        row = PeerRecord.create(lapse_addr="b", completed_count=2,
+                                completed_lapse=10 * LAPSE, abandoned_count=0,
+                                last_completed_at=time.time())
+        make_receipt("r1", "a", "b", "s1", outcome="settled", amount=3 * LAPSE)
+        detail = trust.get_detail("b", node=object())
+        assert detail["completed_count"] == 3
+        assert detail["completed_lapse"] == 13 * LAPSE
+        assert detail["network_completed_count"] == 1
+
+
+class TestVerifyPendingReceipts:
+    def test_resolves_pending_receipts_up_to_the_limit(self, monkeypatch):
+        import swap_engine
+        make_receipt("r1", "a", "b", "s1", verified=None)
+        make_receipt("r2", "a", "b", "s2", verified=None)
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
+                            lambda engine, r: True)
+        resolved = trust.verify_pending_receipts(node=object(), limit=1)
+        assert resolved == 1
+        verified_count = sum(1 for r in trade_storage.StepReceipt.select()
+                             if r.verified is True)
+        assert verified_count == 1
+
+    def test_unreachable_leaves_it_pending(self, monkeypatch):
+        import swap_engine
+        make_receipt("r1", "a", "b", "s1", verified=None)
+
+        def boom(engine, r):
+            raise swap_engine.Unreachable("down")
+
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain", boom)
+        resolved = trust.verify_pending_receipts(node=object(), limit=10)
+        assert resolved == 0
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        assert row.verified is None

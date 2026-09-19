@@ -56,7 +56,7 @@ import swap
 import trust as trust_mod
 import xlm as xlm_mod
 from trade_storage import (
-    Increment, Trade,
+    Increment, Trade, StepReceipt,
     LEG_PENDING, LEG_INTENT, LEG_SUBMITTED, LEG_SETTLED, LEG_DEAD,
     TRADE_ABANDONED, TRADE_ACTIVE, TRADE_COMPLETED, TRADE_STALLED,
     ensure_tables,
@@ -65,9 +65,12 @@ from trade_storage import (
 log = logging.getLogger("ec.swap_engine")
 
 # Depth at which a LapseCoin leg counts as settled. Two, not one: see the
-# module docstring. A user may raise this and not lower it.
-MIN_CONFIRM_DEPTH = 2
-DEFAULT_CONFIRM_DEPTH = 2
+# module docstring. A user may raise this and not lower it. Sourced from
+# swap.py, the one place this floor is defined, since market.py also
+# needs it (to validate a signed confirm_depth) and cannot import this
+# module without a cycle.
+MIN_CONFIRM_DEPTH = swap.MIN_CONFIRM_DEPTH_FLOOR
+DEFAULT_CONFIRM_DEPTH = swap.MIN_CONFIRM_DEPTH_FLOOR
 
 # How long one step may take before the trade is marked stalled. Built
 # from the chain's own pace rather than a fixed number of seconds, so it
@@ -84,6 +87,13 @@ STEP_TIMEOUT_MULTIPLIER = 6
 # purpose: reloading a long chain at startup is slow, and that must never
 # read as defection.
 ABANDON_AFTER_SECONDS = 3600
+
+# The same margin, in LapseCoin blocks, added on top of a step's own
+# deadline_height before consider_abandonment will actually blame anyone.
+# This is the number that matters for the verdict (see consider_abandonment);
+# ABANDON_AFTER_SECONDS above is only the cheap wall-clock pre-filter that
+# decides whether to bother checking chain height at all.
+ABANDON_AFTER_BLOCKS = ABANDON_AFTER_SECONDS // 120
 
 
 class SwapError(Exception):
@@ -118,6 +128,12 @@ class LapseAdapter:
 
     def balance(self, addr):
         return self.node.view.state.get_balance(addr)
+
+    def height(self):
+        """The current LapseCoin height: the shared clock every step's
+        deadline is anchored to, on either chain a leg happens to move on
+        (see deadline_height)."""
+        return self.node.view.height
 
     def account_exists(self, addr):
         """Always True: a LapseCoin address can receive a payment
@@ -343,8 +359,43 @@ def step_timeout_seconds(confirm_depth, block_seconds=120):
     Scaled off the confirmation window the trade actually uses, so raising
     the depth lengthens the patience to match instead of turning every
     step into a false stall.
+
+    Wall-clock, and used only for the local "stalled" UX badge
+    (_update_timing). It is not what decides abandonment; see
+    step_timeout_blocks and deadline_height for the chain-anchored number
+    that actually governs blame.
     """
     return confirm_depth * block_seconds * STEP_TIMEOUT_MULTIPLIER
+
+
+def step_timeout_blocks(confirm_depth):
+    """The same patience as step_timeout_seconds, in LapseCoin blocks.
+
+    Exact, not approximate: step_timeout_seconds is confirm_depth *
+    120 * STEP_TIMEOUT_MULTIPLIER, and a LapseCoin block is 120 seconds by
+    protocol, so dividing back out leaves confirm_depth *
+    STEP_TIMEOUT_MULTIPLIER blocks with nothing left over to round.
+
+    This, not a wall-clock timestamp, is what a deadline is built from
+    (see deadline_height): a number of blocks is public and the same for
+    every observer, where "now + N seconds" is whatever this node's own
+    clock happened to read when it computed it.
+    """
+    return confirm_depth * STEP_TIMEOUT_MULTIPLIER
+
+
+def deadline_height(base_height, confirm_depth):
+    """The LapseCoin height by which a step is due, given the height its
+    clock started from (the trade's accepted_height for step 1, or the
+    previous step's completed_height for every step after it).
+
+    A pure function of two public numbers (a FillResponse's signed
+    accepted_height and confirm_depth, or a StepReceipt's own
+    completed_height), so any node holding the relevant gossiped messages
+    computes the identical deadline this node does, with nothing asked of
+    anyone's clock or word.
+    """
+    return base_height + step_timeout_blocks(confirm_depth)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +410,7 @@ class Engine:
     carried between passes that a restart could lose.
     """
 
-    def __init__(self, lapse, xlm, secrets_provider):
+    def __init__(self, lapse, xlm, secrets_provider, min_confirm_depth=MIN_CONFIRM_DEPTH):
         self.lapse = lapse
         self.xlm = xlm
         # Returns (kek, xlm_seed) or (None, None) when the wallet is
@@ -367,6 +418,14 @@ class Engine:
         # simply cannot send, which is the correct behaviour rather than
         # an error case.
         self.secrets = secrets_provider
+        # This node's own current floor for recognising a LapseCoin leg as
+        # settled, folded into _required_depth on top of the trade's own
+        # (canonical, maker-declared) confirm_depth. A user who raises
+        # their settings after a trade already started gets the benefit
+        # of it immediately for their own risk-taking, without that
+        # changing the one public number (Trade.confirm_depth) a
+        # bystander computing this trade's deadline would use.
+        self.min_confirm_depth = max(min_confirm_depth, MIN_CONFIRM_DEPTH)
 
     # -- reading -------------------------------------------------------
 
@@ -395,7 +454,7 @@ class Engine:
 
     def _required_depth(self, trade, adapter):
         # Stellar reports a huge depth, so its legs clear any threshold.
-        return max(trade.confirm_depth, MIN_CONFIRM_DEPTH) \
+        return max(trade.confirm_depth, MIN_CONFIRM_DEPTH, self.min_confirm_depth) \
             if adapter.asset == "lapse" else 1
 
     # -- the crash-safe send -------------------------------------------
@@ -669,6 +728,10 @@ class Engine:
         now = time.time()
         done = inc.out_state == LEG_SETTLED and inc.in_state == LEG_SETTLED
         if done:
+            if not inc.completed_height:
+                inc.completed_height = self.lapse.height()
+                inc.save()
+                self._propagate_deadline(trade, inc)
             if trade.status == TRADE_STALLED:
                 trade.status = TRADE_ACTIVE
                 trade.stalled_since = 0.0
@@ -686,6 +749,19 @@ class Engine:
             trade.updated_at = now
             trade.save()
 
+    def _propagate_deadline(self, trade, inc):
+        """Give the next step a deadline now that this one's completed_height
+        is known, so its own deadline_height is never computed later than
+        the moment it becomes possible: a receipt about a stuck step n+1
+        must be able to point at a real deadline_height, not 0.
+        """
+        nxt = Increment.get_or_none(Increment.session_id == trade.session_id,
+                                    Increment.n == inc.n + 1)
+        if nxt is not None and not nxt.deadline_height:
+            nxt.deadline_height = deadline_height(inc.completed_height,
+                                                  trade.confirm_depth)
+            nxt.save()
+
     def _complete(self, trade):
         if trade.status == TRADE_COMPLETED:
             return
@@ -702,37 +778,48 @@ class Engine:
     def consider_abandonment(self, trade):
         """Decide whether a long stall is finally somebody's fault.
 
-        Three conditions, and the middle one is what makes this safe to
-        act on:
+        Two conditions:
 
-        The deadline is long past. Wide on purpose, because a restarting
-        node and a defecting one look identical for a while.
-
-        The peer has already reciprocated at least one step. Their own
-        signed transaction on chain is the acceptance, and nothing else
-        here counts as one. Without this an attacker sends an unsolicited
-        payment tagged with a session the victim never agreed to, waits,
-        and reports them as a defector; with it, a step nobody answered
-        proves only that nobody agreed, which is not a wrong.
+        The deadline is long past, by the chain's own clock, not this
+        node's wall clock: current LapseCoin height must clear the step's
+        deadline_height (see swap_engine.deadline_height) by
+        ABANDON_AFTER_BLOCKS. Because that height and that margin are
+        public and fixed by the handshake, this verdict is one any node
+        holding the same order/FillRequest/FillResponse and the same
+        chain data would reach too, not a private judgement call. The
+        stalled_since/ABANDON_AFTER_SECONDS check that runs first is a
+        cheap wall-clock pre-filter only, so an actively-progressing
+        trade is not re-checked against the chain every pass.
 
         This node does not itself owe the next move. A trade held up by
         our own unsent leg is our problem, not theirs.
 
+        This used to also require the peer to have already reciprocated
+        at least one step, to rule out an attacker sending unsolicited
+        dust tagged with a session the victim never agreed to and then
+        reporting them as a defector. That gate predates the handshake
+        redesign (market.py's FillRequest/FillResponse section): a Trade
+        row can no longer exist here without a verified, signed accept
+        from the actual maker (see swap_engine.check_fill_responses) or a
+        verified request the maker itself chose to answer (_answer_one),
+        so the scenario that gate defended against is now structurally
+        unreachable, and requiring it besides meant a peer who defected on
+        the very first step they owed, the most common case, could never
+        be blamed at all. Removed rather than left in place: the mutual,
+        signed handshake behind every Trade row already is the acceptance
+        the old gate was trying to establish from on-chain reciprocation.
+
         Deliberately no longer asks whether the peer looked reachable.
         That came from liveness notes which said a node was powered on,
         not that it had seen this trade, and publishing them tied a
-        payable address to the network. Reciprocation is both stronger
-        evidence and free.
+        payable address to the network.
         """
         if trade.status != TRADE_STALLED or not trade.stalled_since:
             return False
         if time.time() - trade.stalled_since < ABANDON_AFTER_SECONDS:
             return False
-        if not self._peer_ever_reciprocated(trade):
-            log.debug("[swap] %s stalled, but the peer never accepted it; "
-                      "no blame", trade.session_id)
-            return False
 
+        current_height = self.lapse.height()
         pending = (Increment.select()
                    .where(Increment.session_id == trade.session_id)
                    .order_by(Increment.n))
@@ -744,10 +831,18 @@ class Engine:
             if inc.out_state != LEG_SETTLED and not inc.i_move_first:
                 return False
             if inc.out_state == LEG_SETTLED and inc.in_state != LEG_SETTLED:
+                if not inc.deadline_height:
+                    # Not yet computable (should be rare: step 1 always has
+                    # one from accept, and completing step n-1 always
+                    # gives step n one, see _propagate_deadline). Wait
+                    # rather than guess.
+                    return False
+                if current_height < inc.deadline_height + ABANDON_AFTER_BLOCKS:
+                    return False
                 trade.status = TRADE_ABANDONED
                 trade.updated_at = time.time()
-                trade.note = (f"step {inc.n}: paid and not reciprocated "
-                              f"within {ABANDON_AFTER_SECONDS}s")
+                trade.note = (f"step {inc.n}: paid and not reciprocated by "
+                              f"height {inc.deadline_height + ABANDON_AFTER_BLOCKS}")
                 trade.save()
                 trust_mod.record_abandonment(
                     trade.peer_lapse_addr, trade.session_id)
@@ -761,11 +856,12 @@ class Engine:
     def _peer_ever_reciprocated(trade):
         """Whether the counterparty has settled a leg of their own here.
 
-        This is the acceptance. There is no handshake message and none is
-        needed: a settled inbound leg is a transaction they signed,
-        carrying this trade's session tag, which nobody else could have
-        produced. It says they saw the trade, agreed to its terms, and
-        acted on them.
+        No longer consulted by consider_abandonment (see its docstring),
+        kept only because it is still a true, useful fact for a reader to
+        compute (e.g. the UI badge showing whether a stalled trade has any
+        history at all). A settled inbound leg is a transaction the
+        counterparty signed, carrying this trade's session tag, which
+        nobody else could have produced.
 
         Reading agreement off the chain rather than off a protocol message
         also means it survives everything a message would not: a restart,
@@ -927,11 +1023,19 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     if kek is None:
         return False   # locked; leave it for the next pass to decide
 
+    # Read once and reused for every response this call might send,
+    # accept or decline, so the height a bystander would anchor a
+    # deadline to (were this an accept) is exactly the height Trade.create
+    # below also records, not a slightly later one a block happening to
+    # land mid-call would otherwise introduce.
+    accepted_height = node.view.height
+
     def respond(is_accept, increment_count=None, reason=""):
         resp = market_mod.build_fill_response(
             request_id=req.request_id, order_id=order_row.order_id,
             session_id=req.session_id, lapse_total=req.lapse_total,
             accepted=is_accept, maker_pubkey_hex=node.pk_hex,
+            accepted_height=accepted_height, confirm_depth=confirm_depth,
             increment_count=increment_count, reason=reason)
         market_mod.sign_fill_response(resp, node.keyfile, kek)
         market_mod.store_fill_response(resp)
@@ -1004,6 +1108,7 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
         peer_lapse_addr=req.taker_lapse_addr, peer_xlm_addr=req.taker_xlm_addr,
         i_send=maker_i_send, lapse_total=req.lapse_total, xlm_total=xlm_total,
         increment_count=count, confirm_depth=confirm_depth,
+        accepted_height=accepted_height,
         status=TRADE_ACTIVE, created_at=now, updated_at=now)
 
     timeout = step_timeout_seconds(confirm_depth)
@@ -1012,7 +1117,9 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
         Increment.create(
             id=f"{req.session_id}:{n}", session_id=req.session_id, n=n,
             lapse_amount=lapse_amount, xlm_amount=xlm_amount,
-            i_move_first=i_move_first, created_at=now, deadline_at=now + timeout)
+            i_move_first=i_move_first, created_at=now, deadline_at=now + timeout,
+            deadline_height=(deadline_height(accepted_height, confirm_depth)
+                             if n == 1 else 0))
 
     respond(True, increment_count=count)
     log.info("[swap] %s accepted: %d steps against %s (maker side)",
@@ -1077,13 +1184,153 @@ def _response_dict(resp):
         "session_id": resp.session_id, "lapse_total": resp.lapse_total,
         "accepted": resp.accepted, "increment_count": resp.increment_count,
         "reason": resp.reason, "maker_pubkey": resp.maker_pubkey,
+        "accepted_height": resp.accepted_height, "confirm_depth": resp.confirm_depth,
         "signature": resp.signature,
     }
+
+
+# ---------------------------------------------------------------------------
+# Step receipts: emitting this node's own, and checking somebody else's
+# ---------------------------------------------------------------------------
+#
+# Emission needs nothing new watched: it runs exactly where advance() and
+# consider_abandonment() already determine a leg settled or a trade
+# abandoned, and only packages that already-made determination into a
+# small signed, gossipable record. See market.py's step-receipts section
+# for what the record proves and why its signature is not what it is
+# trusted for.
+
+def emit_receipts_for_trade(engine, node, kek, trade):
+    """This node's own receipts for whatever `trade` has newly settled or
+    (once genuinely abandoned) missed. Returns how many were newly stored.
+
+    Idempotent and cheap to call every pass: each receipt this node would
+    produce for a given (session, step, asset, outcome) is looked up
+    first and skipped if already on file, so repeating this call changes
+    nothing once every applicable receipt already exists.
+    """
+    if kek is None:
+        return 0
+    ensure_tables()
+    addr_a, addr_b = sorted((trade.my_lapse_addr, trade.peer_lapse_addr))
+    emitted = 0
+    steps = list(Increment.select().where(Increment.session_id == trade.session_id))
+    for inc in steps:
+        if inc.completed_height:
+            emitted += _emit_settled_leg(engine, node, kek, trade, inc, "out",
+                                         addr_a, addr_b)
+            emitted += _emit_settled_leg(engine, node, kek, trade, inc, "in",
+                                         addr_a, addr_b)
+    if trade.status == TRADE_ABANDONED:
+        for inc in steps:
+            if inc.out_state == LEG_SETTLED and inc.in_state != LEG_SETTLED:
+                emitted += _emit_missed_leg(engine, node, kek, trade, inc,
+                                            addr_a, addr_b)
+    return emitted
+
+
+def _leg_terms(engine, trade, inc, leg):
+    """(from, to, memo, amount, asset, tx_hash) for one leg of one step."""
+    if leg == "out":
+        from_addr, to_addr, memo, amount = engine._out_terms(trade, inc)
+        return from_addr, to_addr, memo, amount, trade.i_send, inc.out_tx_hash
+    from_addr, to_addr, memo, amount = engine._in_terms(trade, inc)
+    in_asset = "xlm" if trade.i_send == "lapse" else "lapse"
+    return from_addr, to_addr, memo, amount, in_asset, inc.in_tx_hash
+
+
+def _emit_settled_leg(engine, node, kek, trade, inc, leg, addr_a, addr_b):
+    from_addr, to_addr, memo, amount, asset, tx_hash = _leg_terms(
+        engine, trade, inc, leg)
+    if not tx_hash:
+        return 0
+    if (StepReceipt.select()
+            .where(StepReceipt.session_id == trade.session_id,
+                   StepReceipt.n == inc.n, StepReceipt.outcome == "settled",
+                   StepReceipt.asset == asset)
+            .exists()):
+        return 0
+    receipt = market_mod.build_receipt(
+        order_id=trade.order_id, session_id=trade.session_id, n=inc.n,
+        reporter_lapse_addr=node.addr, addr_a=addr_a, addr_b=addr_b,
+        asset=asset, from_addr=from_addr, to_addr=to_addr, amount=amount,
+        memo=memo, outcome="settled", tx_hash=tx_hash,
+        deadline_height=inc.deadline_height,
+        checked_at_height=engine.lapse.height(), pubkey_hex=node.pk_hex)
+    market_mod.sign_receipt(receipt, node.keyfile, kek)
+    return _store_and_publish(node, receipt)
+
+
+def _emit_missed_leg(engine, node, kek, trade, inc, addr_a, addr_b):
+    # Abandonment is only ever this node's own paid leg going
+    # unanswered, so the missing leg is always the inbound one.
+    from_addr, to_addr, memo, amount, asset, _tx = _leg_terms(
+        engine, trade, inc, "in")
+    if (StepReceipt.select()
+            .where(StepReceipt.session_id == trade.session_id,
+                   StepReceipt.n == inc.n, StepReceipt.outcome == "missed")
+            .exists()):
+        return 0
+    receipt = market_mod.build_receipt(
+        order_id=trade.order_id, session_id=trade.session_id, n=inc.n,
+        reporter_lapse_addr=node.addr, addr_a=addr_a, addr_b=addr_b,
+        asset=asset, from_addr=from_addr, to_addr=to_addr, amount=amount,
+        memo=memo, outcome="missed", tx_hash="",
+        deadline_height=inc.deadline_height or 0,
+        checked_at_height=engine.lapse.height(), pubkey_hex=node.pk_hex)
+    market_mod.sign_receipt(receipt, node.keyfile, kek)
+    return _store_and_publish(node, receipt)
+
+
+def _store_and_publish(node, receipt):
+    if not market_mod.store_receipt(receipt):
+        return 0
+    publish = getattr(node, "publish_receipt", None)
+    if publish is not None:
+        publish(receipt)
+    return 1
+
+
+def verify_receipt_against_chain(engine, receipt):
+    """Check one StepReceipt row against the chain it actually claims to
+    describe. True or False; raises Unreachable if that chain cannot
+    currently be asked, which callers must treat as "still unknown", not
+    as a negative (see trust.py: an outage must never zero anyone's
+    standing).
+
+    This is the entire trust value of a receipt: its signature says who
+    is reporting, nothing about whether it is true. A false "settled"
+    claim fails to find the tx_hash it names; a false "missed" claim is
+    contradicted the moment the payment it says does not exist turns up
+    in the very lookup that checks it.
+    """
+    adapter = engine.lapse if receipt.asset == "lapse" else engine.xlm
+    found = adapter.find_payment(receipt.from_addr, receipt.to_addr,
+                                 receipt.memo, receipt.amount)
+    if receipt.outcome == "settled":
+        if not found:
+            return False
+        tx_hash, depth = found
+        required = MIN_CONFIRM_DEPTH if receipt.asset == "lapse" else 1
+        return tx_hash == receipt.tx_hash and depth >= required
+    # "missed": true only if no matching payment exists *and* enough time
+    # has genuinely passed by this node's own view of the chain, not the
+    # reporter's word for checked_at_height.
+    if found:
+        return False
+    return engine.lapse.height() >= receipt.deadline_height + ABANDON_AFTER_BLOCKS
 
 
 def _open_taker_trade(node, req, resp, order_row, confirm_depth):
     """Turn one accepted response into this side's own Trade. Returns
     True if it was created.
+
+    confirm_depth here is this node's own local floor for recognising a
+    leg as settled (Engine._required_depth folds it in); it is not what
+    the trade's deadline is anchored to. That anchor is resp.accepted_height
+    and resp.confirm_depth, the maker's own signed values, so both sides'
+    rows agree on the one public number a bystander would also compute
+    from, rather than each side privately picking its own.
     """
     xlm_total = swap.xlm_for_lapse(req.lapse_total,
                                    order_row.price_stroops_per_lapse)
@@ -1109,7 +1356,8 @@ def _open_taker_trade(node, req, resp, order_row, confirm_depth):
         peer_lapse_addr=order_row.maker_lapse_addr,
         peer_xlm_addr=order_row.maker_xlm_addr,
         i_send=i_send, lapse_total=req.lapse_total, xlm_total=xlm_total,
-        increment_count=resp.increment_count, confirm_depth=confirm_depth,
+        increment_count=resp.increment_count, confirm_depth=resp.confirm_depth,
+        accepted_height=resp.accepted_height,
         status=TRADE_ACTIVE, created_at=now, updated_at=now)
 
     timeout = step_timeout_seconds(confirm_depth)
@@ -1118,7 +1366,9 @@ def _open_taker_trade(node, req, resp, order_row, confirm_depth):
         Increment.create(
             id=f"{req.session_id}:{n}", session_id=req.session_id, n=n,
             lapse_amount=lapse_amount, xlm_amount=xlm_amount,
-            i_move_first=i_move_first, created_at=now, deadline_at=now + timeout)
+            i_move_first=i_move_first, created_at=now, deadline_at=now + timeout,
+            deadline_height=(deadline_height(resp.accepted_height, resp.confirm_depth)
+                             if n == 1 else 0))
 
     log.info("[swap] %s opened: %d steps against %s (taker side)",
              req.session_id, resp.increment_count, order_row.maker_lapse_addr[:24])

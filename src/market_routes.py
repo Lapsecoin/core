@@ -171,7 +171,7 @@ def register(app, node, csrf_token):
         return trust_mod.get_detail(
             addr,
             trust_mod.address_age_blocks(node, addr),
-            node.view.state.get_balance(addr))
+            node.view.state.get_balance(addr), node=node)
 
     def trust_badge(addr):
         detail = peer_trust(addr)
@@ -348,6 +348,7 @@ def register(app, node, csrf_token):
                                pending_requests=_pending_requests(node),
                                peers=peers, now=time.time(),
                                worker=_worker_view(node),
+                               receipts=_receipt_stats(),
                                alert_ok="", alert_err="")
 
 
@@ -525,7 +526,7 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     detail = trust_mod.get_detail(
         order_row.maker_lapse_addr,
         trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
-        node.view.state.get_balance(order_row.maker_lapse_addr))
+        node.view.state.get_balance(order_row.maker_lapse_addr), node=node)
     swap_mod.plan(lapse_total, xlm_total, detail["score"], stranger_cap=cap)
 
     session_id = swap_mod.new_session_id(order_row.order_id, node.addr)
@@ -576,7 +577,7 @@ def _plan_auto_fill(node, direction, lapse_total, max_price, height, stranger_ca
         detail = trust_mod.get_detail(
             order_row.maker_lapse_addr,
             trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
-            node.view.state.get_balance(order_row.maker_lapse_addr))
+            node.view.state.get_balance(order_row.maker_lapse_addr), node=node)
         cap_here = swap_mod.exposure_cap_stroops(detail["score"], stranger_cap_val)
         max_safe_lapse = swap_mod.lapse_for_xlm(
             swap_mod.max_safe_trade_stroops(cap_here), order_row.price_stroops_per_lapse)
@@ -805,6 +806,21 @@ def _pending_requests(node):
         })
     rows.sort(key=lambda r: -r["sent_at"])
     return rows
+
+
+def _receipt_stats():
+    """How much network-sourced reputation data this node currently
+    holds, and how much of it is still waiting on the background chain
+    check that turns a claim into something trust actually counts (see
+    trust.verify_pending_receipts). Without this a page has no way to
+    show whether a thin-looking track record means "nobody has reported
+    anything" or "something is reported but not yet confirmed"."""
+    from trade_storage import StepReceipt
+    ensure_tables()
+    total = StepReceipt.select().count()
+    verified = StepReceipt.select().where(StepReceipt.verified == True).count()  # noqa: E712
+    pending = StepReceipt.select().where(StepReceipt.verified.is_null()).count()
+    return {"total": total, "verified": verified, "pending": pending}
 
 
 def _worker_view(node):

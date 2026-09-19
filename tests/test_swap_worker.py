@@ -232,9 +232,13 @@ class TestBlame:
         assert Trade.get(Trade.session_id == trade.session_id).status == \
             TRADE_STALLED
 
-    def test_peer_who_never_accepted_is_never_blamed(self):
-        """An unsolicited payment nobody answered is not a defection, and
-        this is the path a reputation attack would come down."""
+    def test_peer_who_never_reciprocated_is_blamed(self):
+        """A Trade row here only ever exists through a verified handshake
+        (see swap_engine.consider_abandonment's docstring for why that
+        closes the old worry this test used to guard against, an
+        unsolicited payment tagged with a session nobody agreed to). A
+        peer who defects on the very first step they owe is the common
+        case, not an edge case, and must be blamed like any other."""
         w = Worker(FakeNode())
         trade = make_trade()
         w.run_once()
@@ -243,7 +247,7 @@ class TestBlame:
         trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
         trade.save()
         w.run_once()
-        assert Trade.get(Trade.session_id == trade.session_id).status != \
+        assert Trade.get(Trade.session_id == trade.session_id).status == \
             trade_storage.TRADE_ABANDONED
 
     def test_peer_who_accepted_then_stopped_is_blamed(self):
@@ -264,6 +268,11 @@ class TestBlame:
         trade.status = TRADE_STALLED
         trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
         trade.save()
+        # Steps 1 and 2 completing pushed step 3's deadline_height forward
+        # from wherever the (fixed, fake) chain height was when each did;
+        # simulate real blocks having actually been mined since, same as
+        # stalled_since simulates wall-clock time passing.
+        w.lapse.current_height += 10**6
         w.run_once()
         assert Trade.get(Trade.session_id == trade.session_id).status == \
             trade_storage.TRADE_ABANDONED

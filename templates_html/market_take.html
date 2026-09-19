@@ -46,6 +46,22 @@
             smaller pieces.
           </div>
         {% endif %}
+        {% if trust.network_completed_count or trust.network_abandoned_count %}
+          <div class="stat-sub" style="margin-top:.3rem">
+            {% if trust.network_abandoned_count %}
+              <span style="color:var(--loss)">
+                Other traders have independently reported {{ trust.network_abandoned_count }}
+                non-reciprocation{{ '' if trust.network_abandoned_count == 1 else 's' }} against
+                this address that this node checked and confirmed on chain itself.
+              </span>
+            {% endif %}
+            {% if trust.network_completed_count %}
+              {{ trust.network_completed_count }} of the completed trade{{ '' if trust.network_completed_count == 1 else 's' }}
+              above {{ 'was' if trust.network_completed_count == 1 else 'were' }} reported by other
+              traders, not this node, and independently re-checked against the chain before counting.
+            {% endif %}
+          </div>
+        {% endif %}
       </td>
     </tr>
   </table>

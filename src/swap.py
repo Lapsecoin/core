@@ -46,6 +46,14 @@ import secrets
 MAX_INCREMENTS = 20
 MIN_INCREMENTS = 2
 
+# The floor under any confirm depth, protocol-wide: below this, a single
+# LapseCoin confirmation is not distinguishable from the draw window's
+# routine one-block reorg (see swap_engine's module docstring). Lives here
+# rather than in swap_engine so market.verify_fill_response can enforce it
+# on a signed confirm_depth without importing swap_engine, which itself
+# imports market and would make that a cycle.
+MIN_CONFIRM_DEPTH_FLOOR = 2
+
 # The opening step, as a fraction of an ordinary one. Whoever moves first
 # on step one is exposed before anything at all has been established, so
 # that step is a probe rather than a full increment.

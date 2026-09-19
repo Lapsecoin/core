@@ -137,37 +137,164 @@ def _record(addr):
     return row
 
 
-def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None):
+def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None):
     """Standing plus the figures behind it.
 
     Broken out because a score with no stated reason is a verdict, and a
     user deciding whether to trade with somebody deserves to see what the
     number is made of rather than be handed it.
+
+    node is optional and, when given, folds in this node's own verified
+    reading of gossiped step receipts (see market.py's step-receipts
+    section) naming addr, for sessions this node was not itself a party
+    to. Without it, standing is exactly the old bilateral figure, built
+    only from trades this node personally ran with addr; a caller that
+    never passes node keeps behaving exactly as before. See
+    _network_tally for what "verified" means here and why a receipt this
+    node cannot currently check contributes nothing either way rather
+    than being guessed at.
     """
     ensure_tables()
     row = PeerRecord.get_or_none(PeerRecord.lapse_addr == addr)
-    if row is None:
-        return {"score": 0.0, "completed_count": 0, "completed_lapse": 0,
-                "abandoned_count": 0, "last_completed_at": 0.0,
-                "last_abandoned_at": 0.0, "last_abandon_session": "",
-                "stake": 0.0, "history": 0.0, "known": False}
-    history = history_component(row.completed_count, row.completed_lapse,
-                                row.last_completed_at, now=now)
+    completed_count = row.completed_count if row else 0
+    completed_lapse = row.completed_lapse if row else 0
+    abandoned_count = row.abandoned_count if row else 0
+    last_completed_at = row.last_completed_at if row else 0.0
+    last_abandoned_at = row.last_abandoned_at if row else 0.0
+    last_abandon_session = row.last_abandon_session if row else ""
+    known = row is not None
+
+    # Broken out from the merged totals below so a caller (see
+    # market_take.html's Track record card) can say plainly which part
+    # of this is this node's own experience and which part is this node
+    # independently verifying what other traders have gossiped, rather
+    # than presenting one blended number as if it all came from the same
+    # place.
+    net_abandoned = net_count = net_lapse = 0
+    if node is not None:
+        net_abandoned, net_count, net_lapse, net_last_completed = \
+            _network_tally(addr)
+        if net_abandoned or net_count:
+            known = True
+        abandoned_count += net_abandoned
+        completed_count += net_count
+        completed_lapse += net_lapse
+        last_completed_at = max(last_completed_at, net_last_completed)
+
+    history = history_component(completed_count, completed_lapse,
+                                last_completed_at, now=now)
     stake = stake_component(address_age_blocks, balance_ticks)
     return {
-        "score": score(row.completed_count, row.completed_lapse,
-                       row.abandoned_count, row.last_completed_at,
-                       address_age_blocks, balance_ticks, now),
-        "completed_count": row.completed_count,
-        "completed_lapse": row.completed_lapse,
-        "abandoned_count": row.abandoned_count,
-        "last_completed_at": row.last_completed_at,
-        "last_abandoned_at": row.last_abandoned_at,
-        "last_abandon_session": row.last_abandon_session,
+        "score": score(completed_count, completed_lapse, abandoned_count,
+                       last_completed_at, address_age_blocks, balance_ticks, now),
+        "completed_count": completed_count,
+        "completed_lapse": completed_lapse,
+        "network_completed_count": net_count,
+        "network_abandoned_count": net_abandoned,
+        "abandoned_count": abandoned_count,
+        "last_completed_at": last_completed_at,
+        "last_abandoned_at": last_abandoned_at,
+        "last_abandon_session": last_abandon_session,
         "history": history,
         "stake": stake,
-        "known": True,
+        "known": known,
     }
+
+
+def _network_tally(addr):
+    """(abandoned, completed_count, completed_lapse, last_completed_at)
+    from already-verified step receipts naming addr, excluding any
+    session this node already has a local Trade row for (see PeerRecord:
+    those are already counted above, and counting them again from a
+    receipt this node itself likely emitted would double them).
+
+    Deliberately DB-only: this runs on every trust lookup, including from
+    a page render, so it must never itself make a network call. Turning
+    an unverified receipt into a verified one is verify_pending_receipts'
+    job, run in the background by the swap worker on its own pace; by the
+    time a lookup happens here, a receipt is either already checked or it
+    contributes nothing yet, never a guess either way.
+
+    A receipt's reporter is not checked against addr, deliberately:
+    verify_receipt_against_chain (see verify_pending_receipts) confirms
+    or refutes the claim against the chain itself, not against who
+    signed it, so a false claim fails that check regardless of who made
+    it. Identity only ever mattered for admission control and dedup on
+    the way in, never for what a receipt is worth once verified.
+    """
+    import market as market_mod
+    from trade_storage import Trade, StepReceipt
+
+    known_sessions = {t.session_id for t in
+                      Trade.select(Trade.session_id).where(Trade.peer_lapse_addr == addr)}
+
+    abandoned = 0
+    completed_sessions = set()
+    completed_lapse = 0
+    last_completed_at = 0.0
+    for r in market_mod.receipts_for_addr(addr):
+        if r.verified is not True or r.session_id in known_sessions:
+            continue
+        if r.outcome == "missed":
+            abandoned += 1
+        elif r.outcome == "settled" and r.asset == "lapse":
+            completed_sessions.add(r.session_id)
+            completed_lapse += r.amount
+            last_completed_at = max(last_completed_at, r.received_at)
+    return abandoned, len(completed_sessions), completed_lapse, last_completed_at
+
+
+def verify_pending_receipts(node, limit=20):
+    """Chain-check up to `limit` not-yet-verified receipts, any address,
+    and cache the verdict. The only place a receipt's `verified` column
+    is ever set; see _network_tally for why every trust lookup only ever
+    reads that cache rather than triggering this itself.
+
+    Meant to be called once per swap-worker pass, the same cadence
+    everything else about trades already runs on, not from a request
+    path: this is the one place in the step-receipts design that does
+    real chain I/O (a Horizon call for an XLM leg is possible here), and
+    bounding it per pass is what keeps that cost predictable instead of
+    proportional to how many receipts happen to be sitting unverified.
+    Returns how many were resolved (true or false); an outage leaves the
+    rest for the next pass rather than raising.
+    """
+    import swap_engine as swap_engine_mod
+    from trade_storage import StepReceipt, ensure_tables as _ensure
+
+    _ensure()
+    engine = _lightweight_engine(node)
+    resolved = 0
+    pending = (StepReceipt.select()
+              .where(StepReceipt.verified.is_null())
+              .limit(limit))
+    for r in pending:
+        try:
+            r.verified = swap_engine_mod.verify_receipt_against_chain(engine, r)
+        except swap_engine_mod.Unreachable:
+            continue
+        r.save()
+        resolved += 1
+    return resolved
+
+
+def _lightweight_engine(node):
+    """Just enough of a swap_engine.Engine for verify_receipt_against_chain:
+    the two read-only chain adapters, nothing that signs or sends. Built
+    fresh per call rather than held anywhere, since it is as cheap as the
+    node reference it wraps.
+    """
+    import swap_engine as swap_engine_mod
+
+    class _Adapters:
+        pass
+
+    adapters = _Adapters()
+    adapters.lapse = swap_engine_mod.LapseAdapter(node)
+    # No real trading wallet needed: find_payment/confirmations, the only
+    # calls verification makes, never touch the keyfile.
+    adapters.xlm = swap_engine_mod.XLMAdapter("")
+    return adapters
 
 
 def record_completed(addr, ticks):
@@ -230,19 +357,20 @@ def mutual_scores(node, peer_addr):
     sides too: anyone's address age and balance are chain facts, not
     something told to you.
 
-    What is not available this way is whether the peer has privately
-    marked this node as a defector. That verdict lives only in the
-    peer's own local database, on purpose: there is no channel that
-    publishes it, because broadcasting it would let a false accusation
-    follow an innocent address everywhere. So the same shared record
-    (including whatever it says about the peer, from this node's own
-    honest history) stands in for both halves, weighted by each side's
-    own public stake, which is the most either side could verify about
-    the other without a channel this design deliberately does not have.
+    A defection is no longer only a private opinion, either: get_detail's
+    node argument folds in any gossiped step receipt this node can
+    independently verify against the chain (market.py's step-receipts
+    section), for sessions between this pair that this node was not
+    itself party to. That is a checked fact, not the peer's word, so
+    trusting it here carries none of the risk a bare broadcast opinion
+    would: a false claim fails verification regardless of who signed it.
+    Bilateral history (this node's own PeerRecord for the peer) and
+    network-verified history are simply added together before either
+    half of this function reads them.
     """
     peer_age = address_age_blocks(node, peer_addr)
     peer_balance = node.view.state.get_balance(peer_addr)
-    detail = get_detail(peer_addr, peer_age, peer_balance)
+    detail = get_detail(peer_addr, peer_age, peer_balance, node=node)
     my_trust_of_peer = detail["score"]
 
     my_age = address_age_blocks(node, node.addr)

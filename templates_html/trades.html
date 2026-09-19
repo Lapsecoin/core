@@ -160,6 +160,16 @@
   <p style="color:var(--ink-dim); font-style:italic">Nothing yet.</p>
 {% endif %}
 
+{% if receipts.total %}
+<p class="stat-sub" style="margin-bottom:.3rem">
+  This node holds {{ receipts.total }} step receipt{{ '' if receipts.total == 1 else 's' }}
+  gossiped from across the network &mdash; {{ receipts.verified }} independently
+  checked against the chain and counted above, {{ receipts.pending }} still
+  waiting on that check (a background pass, not this page; reload later to
+  see them settle one way or the other).
+</p>
+{% endif %}
+
 <h2>People you have traded with</h2>
 {% if peers %}
 <div class="table-wrap">
@@ -180,9 +190,23 @@
           <span style="color:var(--ink-dim)">&mdash;</span>
         {% endif %}
       </td>
-      <td data-label="Completed">{{ p.completed_count }}</td>
+      <td data-label="Completed">
+        {{ p.completed_count }}
+        {% if p.network_completed_count %}
+          <span class="stat-sub" title="Reported by other traders and independently re-checked against the chain">
+            ({{ p.network_completed_count }} from others)
+          </span>
+        {% endif %}
+      </td>
       <td data-label="Volume">{{ fmt_lapse_dp(p.completed_lapse, 2) }}</td>
-      <td data-label="Walked away">{{ p.abandoned_count or "no" }}</td>
+      <td data-label="Walked away">
+        {{ p.abandoned_count or "no" }}
+        {% if p.network_abandoned_count %}
+          <span class="stat-sub" title="Reported by other traders and independently re-checked against the chain">
+            ({{ p.network_abandoned_count }} reported by others)
+          </span>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>

@@ -69,8 +69,6 @@ LEG_SETTLED = "settled"
 # transaction, or it expired. Must be rebuilt, never retried.
 LEG_DEAD = "dead"
 
-ACTIVE_LEG_STATES = (LEG_PENDING, LEG_INTENT, LEG_SUBMITTED)
-
 
 # ---------------------------------------------------------------------------
 # Trade states
@@ -84,9 +82,6 @@ TRADE_COMPLETED = "completed"
 # Deadline missed by a wide margin with evidence the counterparty was
 # reachable throughout. Only this slashes; see trust.record_abandonment.
 TRADE_ABANDONED = "abandoned"
-# Ended early by agreement or by the user, with delivered increments
-# standing.
-TRADE_CLOSED = "closed"
 
 
 class Order(_TradeBase):
@@ -142,6 +137,13 @@ class Trade(_TradeBase):
     # the setting midway cannot retroactively un-settle a delivered
     # increment or move the goalposts on a counterparty.
     confirm_depth = IntegerField()
+    # The LapseCoin height this side saw when the trade was accepted. On
+    # the maker's row this is also the value carried in the signed
+    # FillResponse (see market.FILL_RESPONSE_SIGNED_FIELDS), which is what
+    # makes step 1's deadline something any observer can recompute from
+    # public data rather than from this node's own clock: see
+    # swap_engine.deadline_height.
+    accepted_height = IntegerField(default=0)
 
     status = TextField(default=TRADE_ACTIVE, index=True)
     created_at = FloatField()
@@ -192,9 +194,22 @@ class Increment(_TradeBase):
     in_settled_at = FloatField(default=0.0)
 
     created_at = FloatField()
-    # When this step stops being merely slow. Generous by design: a peer
-    # reloading a long chain at startup must never look like a defector.
+    # When this step stops being merely slow, by this node's own clock.
+    # This is a local UX signal only (it drives the "stalled" badge and
+    # nothing else): generous by design, since a peer reloading a long
+    # chain at startup must never look like a defector.
     deadline_at = FloatField(default=0.0)
+    # The LapseCoin height at which BOTH legs of this step were observed
+    # settled. 0 until then. This is what a deterministic, chain-anchored
+    # deadline for the *next* step is built from (see
+    # swap_engine.deadline_height), so the trust-affecting verdict is a
+    # fact anyone can recompute rather than this node's private clock.
+    completed_height = IntegerField(default=0)
+    # This step's own deadline, in the same terms: known up front for step
+    # 1 (Trade.accepted_height + a fixed number of blocks) and filled in
+    # once step n-1's completed_height is known for every step after it.
+    # 0 means "not yet computable", never "no deadline".
+    deadline_height = IntegerField(default=0)
 
 
 class PeerRecord(_TradeBase):
@@ -273,11 +288,72 @@ class FillResponse(_TradeBase):
     increment_count = IntegerField(null=True)   # set only when accepted
     reason = TextField(default="")
     maker_pubkey = TextField()
+    # The maker's own signed height and confirm_depth at accept time: the
+    # public anchor a bystander recomputes every step's deadline_height
+    # from (see swap_engine.deadline_height). Present on every response,
+    # declined included, so the schema is one shape regardless of outcome.
+    accepted_height = IntegerField(default=0)
+    confirm_depth = IntegerField(default=0)
     signature = TextField()
     received_at = FloatField()
 
 
-TRADE_TABLES = [Order, Trade, Increment, PeerRecord, FillRequest, FillResponse]
+class StepReceipt(_TradeBase):
+    """A compact, signed claim that one step of one trade settled or was
+    missed, gossiped exactly like an order so any node can eventually see
+    it, verify it, and fold it into trust for an address it never itself
+    traded with.
+
+    The signature identifies who is reporting, for admission control and
+    dedup, nothing more: the claim's actual weight comes from being
+    checkable against public chain data, not from trusting the reporter.
+    A false "settled" claim fails the tx-hash lookup it points to; a false
+    "missed" claim is contradicted the moment a checker finds the payment
+    it says does not exist. See swap_engine.verify_receipt_against_chain.
+
+    Deliberately not pruned on FillRequest/FillResponse's short timer:
+    unlike those, which exist only to arbitrate a brief window of live
+    capacity, a receipt is the reputation record itself and is meant to
+    outlive the trade it describes.
+    """
+    receipt_id = TextField(primary_key=True)
+    order_id = TextField(index=True)
+    session_id = TextField(index=True)
+    n = IntegerField()
+    # Whoever is reporting: the party who can see the outcome directly,
+    # i.e. the one who sent the leg (for "settled") or the one still
+    # owed it (for "missed"). Signed with this address's LapseCoin key.
+    reporter_lapse_addr = TextField(index=True)
+    # The two addresses this receipt is *about*, sorted so a given pair
+    # always lands in the same two columns regardless of which one sent
+    # this particular leg; both indexed so a trust lookup for either
+    # address is a plain indexed query, not a string scan.
+    addr_a = TextField(index=True)
+    addr_b = TextField(index=True)
+    asset = TextField()                  # "lapse" | "xlm"
+    from_addr = TextField()
+    to_addr = TextField()
+    amount = IntegerField()
+    memo = TextField()
+    outcome = TextField()                # "settled" | "missed"
+    tx_hash = TextField(default="")      # set when outcome == "settled"
+    # The LapseCoin height the leg was due by, and the height at which a
+    # "missed" claim asserts it still had not arrived. Both public and
+    # independently recomputable; see swap_engine.deadline_height.
+    deadline_height = IntegerField(default=0)
+    checked_at_height = IntegerField(default=0)
+    pubkey = TextField()
+    signature = TextField()
+    received_at = FloatField()
+    # This node's own re-check of the claim against the chain(s): None
+    # until looked at, then True/False. Lazy on purpose, see trust.py:
+    # a receipt sits here unverified, at the cost of one row, until
+    # something actually needs this specific address's trust.
+    verified = BooleanField(null=True, default=None)
+
+
+TRADE_TABLES = [Order, Trade, Increment, PeerRecord, FillRequest, FillResponse,
+                StepReceipt]
 
 _initialised = False
 

@@ -39,7 +39,7 @@ import trust as trust_mod
 from crypto import canonical_json
 from params import TICKS_PER_LAPSE
 from trade_storage import (
-    FillRequest, FillResponse, Order, Trade, Increment,
+    FillRequest, FillResponse, Order, Trade, Increment, StepReceipt,
     ensure_tables, LEG_SETTLED, TRADE_COMPLETED,
 )
 
@@ -471,6 +471,16 @@ def get_order(order_id):
     return Order.get_or_none(Order.order_id == order_id)
 
 
+def order_to_wire(row):
+    """A stored Order row as the exact signed dict verify_order/store_order
+    expect, for a market backfill response (see node._market_provider):
+    the same shape gossip already carries, just read back out of storage
+    instead of arriving fresh."""
+    body = {f: getattr(row, f) for f in SIGNED_FIELDS}
+    body["signature"] = row.signature
+    return body
+
+
 def maker_committed(maker_addr, current_height, exclude_order_id=None):
     """What this maker has promised across every one of its own live
     orders, split by which asset each direction obligates: (lapse, xlm).
@@ -646,7 +656,7 @@ def executed_trade_prices(node, limit=200):
         detail = trust_mod.get_detail(
             row.peer_lapse_addr,
             trust_mod.address_age_blocks(node, row.peer_lapse_addr),
-            node.view.state.get_balance(row.peer_lapse_addr))
+            node.view.state.get_balance(row.peer_lapse_addr), node=node)
         weight = max(detail["score"], _TICKER_MIN_WEIGHT)
         out.append((price, weight))
     return out
@@ -715,6 +725,16 @@ FILL_REQUEST_SIGNED_FIELDS = (
 FILL_RESPONSE_SIGNED_FIELDS = (
     "request_id", "order_id", "session_id", "lapse_total",
     "accepted", "increment_count", "reason", "maker_pubkey",
+    # The two facts a bystander needs to recompute this trade's step-1
+    # deadline from public data alone, without asking anyone or trusting
+    # anyone's clock: the LapseCoin height the maker saw at accept time,
+    # and the confirmation depth it is holding this trade to. Both were
+    # previously private, per-node bookkeeping (Trade.accepted_height,
+    # Trade.confirm_depth); signing them here is what turns "abandoned"
+    # from a private verdict into one anyone can check. Required (not
+    # optional) on every response, accepted or not, so the schema stays
+    # one shape rather than two: see swap_engine.deadline_height.
+    "accepted_height", "confirm_depth",
 )
 
 # Mirrors MAX_ORDERS_PER_MAKER / MAX_ORDERS_TOTAL for the same reason:
@@ -918,12 +938,21 @@ def prune_fill_requests(now=None):
 
 
 def build_fill_response(request_id, order_id, session_id, lapse_total, accepted,
-                        maker_pubkey_hex, increment_count=None, reason=""):
+                        maker_pubkey_hex, accepted_height, confirm_depth,
+                        increment_count=None, reason=""):
     """The unsigned body of a fill response, in canonical field order.
 
     increment_count must be given when accepting (it is the schedule
     length the maker is committing to) and must be omitted otherwise;
     verify_fill_response enforces that pairing on the way back in.
+
+    accepted_height and confirm_depth are required on every response,
+    declined included, so the schema is one shape: a bystander who only
+    ever sees declines for an order still parses the same fields it would
+    for an accept. They carry no meaning on a decline (nothing is agreed,
+    nothing to anchor a deadline to) but keeping them present and
+    consistently typed is simpler than a schema that changes shape by
+    outcome.
     """
     return {
         "request_id": request_id,
@@ -934,6 +963,8 @@ def build_fill_response(request_id, order_id, session_id, lapse_total, accepted,
         "increment_count": int(increment_count) if increment_count is not None else None,
         "reason": reason,
         "maker_pubkey": maker_pubkey_hex,
+        "accepted_height": int(accepted_height),
+        "confirm_depth": int(confirm_depth),
     }
 
 
@@ -1001,6 +1032,15 @@ def verify_fill_response(resp, expected_maker_addr=None):
     if not isinstance(resp["reason"], str):
         raise FillResponseRejected("reason must be a string")
 
+    for field in ("accepted_height", "confirm_depth"):
+        if not isinstance(resp[field], int) or isinstance(resp[field], bool):
+            raise FillResponseRejected(f"{field} must be an integer")
+    if resp["accepted_height"] < 0:
+        raise FillResponseRejected("accepted_height must not be negative")
+    if resp["confirm_depth"] < swap_mod.MIN_CONFIRM_DEPTH_FLOOR:
+        raise FillResponseRejected(
+            f"confirm_depth must be at least {swap_mod.MIN_CONFIRM_DEPTH_FLOOR}")
+
     try:
         pubkey = bytes.fromhex(resp["maker_pubkey"])
         signature = bytes.fromhex(resp["signature"])
@@ -1043,6 +1083,7 @@ def store_fill_response(resp):
         session_id=resp["session_id"], lapse_total=resp["lapse_total"],
         accepted=resp["accepted"], increment_count=resp["increment_count"],
         reason=resp["reason"], maker_pubkey=resp["maker_pubkey"],
+        accepted_height=resp["accepted_height"], confirm_depth=resp["confirm_depth"],
         signature=resp["signature"], received_at=time.time())
     return True
 
@@ -1057,3 +1098,260 @@ def prune_fill_responses(now=None):
     now = time.time() if now is None else now
     cutoff = now - FILL_RESPONSE_MAX_AGE_SECONDS
     return FillResponse.delete().where(FillResponse.received_at <= cutoff).execute()
+
+
+# ---------------------------------------------------------------------------
+# Step receipts: a compact, checkable outcome, gossiped like an order
+# ---------------------------------------------------------------------------
+#
+# Everything a receipt needs to be checked, rather than merely believed, is
+# already public by the time a step could possibly settle or be missed: the
+# order, the FillRequest, and the FillResponse are all signed and already
+# gossiped to the whole network, and FillResponse now carries accepted_height
+# and confirm_depth (see FILL_RESPONSE_SIGNED_FIELDS), so any node holding
+# that trio can deterministically recompute this step's schedule, its memo,
+# and its deadline_height (swap_engine.deadline_height) without asking
+# anyone anything.
+#
+# A receipt is therefore a pointer, not a verdict. Its signature identifies
+# who is reporting, for admission control and dedup, nothing more; its
+# weight comes entirely from whether the tx_hash it names (for a "settled"
+# claim) or the absence it names (for a "missed" one, checked against
+# storage.get_tx_by_addr_and_memo / xlm.find_payment, both targeted lookups
+# and never a chain scan) actually holds up. A false claim, either
+# direction, is contradicted by one lookup; see
+# swap_engine.verify_receipt_against_chain, which does that lookup, and
+# trust.py, which only ever runs it lazily, for a specific address, when
+# something actually needs that address's trust.
+
+RECEIPT_SIGNED_FIELDS = (
+    "receipt_id", "order_id", "session_id", "n", "reporter_lapse_addr",
+    "addr_a", "addr_b", "asset", "from_addr", "to_addr", "amount", "memo",
+    "outcome", "tx_hash", "deadline_height", "checked_at_height", "pubkey",
+)
+
+RECEIPT_OUTCOMES = ("settled", "missed")
+
+# Same reasoning as MAX_ORDERS_PER_MAKER/MAX_ORDERS_TOTAL: a reporter is as
+# free to mint keypairs as a maker is. Larger than the fill-request budget
+# since a receipt, unlike a request or response, is meant to be kept
+# indefinitely rather than pruned within the hour (see StepReceipt's own
+# docstring), so the same node accumulates far more of these over its
+# lifetime than it ever holds live requests at once.
+MAX_RECEIPTS_PER_REPORTER = 500
+MAX_RECEIPTS_TOTAL = 200_000
+
+
+class ReceiptRejected(Exception):
+    """A receipt that will not be stored or relayed, and why."""
+
+
+def build_receipt(order_id, session_id, n, reporter_lapse_addr, addr_a, addr_b,
+                  asset, from_addr, to_addr, amount, memo, outcome,
+                  deadline_height, checked_at_height, pubkey_hex, tx_hash=""):
+    """The unsigned body of a step receipt, in canonical field order.
+
+    addr_a/addr_b are sorted by the caller (see
+    swap_engine.build_receipt_for) so the same pair always occupies the
+    same two fields regardless of which address is reporting or which
+    leg this receipt is about.
+    """
+    if outcome not in RECEIPT_OUTCOMES:
+        raise ValueError(f"outcome must be one of {RECEIPT_OUTCOMES}")
+    return {
+        "receipt_id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "session_id": session_id,
+        "n": int(n),
+        "reporter_lapse_addr": reporter_lapse_addr,
+        "addr_a": addr_a,
+        "addr_b": addr_b,
+        "asset": asset,
+        "from_addr": from_addr,
+        "to_addr": to_addr,
+        "amount": int(amount),
+        "memo": memo,
+        "outcome": outcome,
+        "tx_hash": tx_hash,
+        "deadline_height": int(deadline_height),
+        "checked_at_height": int(checked_at_height),
+        "pubkey": pubkey_hex,
+    }
+
+
+def _receipt_signing_bytes(receipt):
+    return canonical_json({k: receipt[k] for k in RECEIPT_SIGNED_FIELDS})
+
+
+def sign_receipt(receipt, keyfile_path, kek):
+    signature = crypto.sign_with_keyfile(_receipt_signing_bytes(receipt), keyfile_path, kek)
+    receipt["signature"] = signature.hex()
+    return receipt
+
+
+def verify_receipt(receipt):
+    """Check a receipt arriving from the network. Raises ReceiptRejected.
+
+    Structural and signature checks only, the same division verify_order
+    and verify_fill_response draw: whether this is well-formed and
+    genuinely signed by the address it names. Whether it actually holds up
+    against chain data is a separate, lazy step (see
+    swap_engine.verify_receipt_against_chain), never done here, since this
+    is the unauthenticated surface any peer can flood and paying for two
+    chain lookups per relayed item here would be exactly the "watch
+    everything" cost this design avoids.
+    """
+    if not isinstance(receipt, dict):
+        raise ReceiptRejected("not an object")
+
+    missing = [f for f in RECEIPT_SIGNED_FIELDS if f not in receipt]
+    if missing:
+        raise ReceiptRejected(f"missing field(s): {missing}")
+    if "signature" not in receipt:
+        raise ReceiptRejected("missing signature")
+
+    unexpected = set(receipt) - set(RECEIPT_SIGNED_FIELDS) - {"signature"}
+    if unexpected:
+        raise ReceiptRejected(f"unexpected field(s): {sorted(unexpected)}")
+
+    for field in ("receipt_id", "order_id", "session_id", "reporter_lapse_addr",
+                 "addr_a", "addr_b", "asset", "from_addr", "to_addr", "memo",
+                 "outcome", "pubkey"):
+        if not isinstance(receipt[field], str) or not receipt[field]:
+            raise ReceiptRejected(f"{field} must be a non-empty string")
+    if not isinstance(receipt["tx_hash"], str):
+        raise ReceiptRejected("tx_hash must be a string")
+
+    for field in ("n", "amount", "deadline_height", "checked_at_height"):
+        if not isinstance(receipt[field], int) or isinstance(receipt[field], bool):
+            raise ReceiptRejected(f"{field} must be an integer")
+    if receipt["n"] < 1:
+        raise ReceiptRejected("n must be at least 1")
+    if receipt["amount"] <= 0:
+        raise ReceiptRejected("amount must be positive")
+
+    if receipt["asset"] not in ("lapse", "xlm"):
+        raise ReceiptRejected("asset must be 'lapse' or 'xlm'")
+    if receipt["outcome"] not in RECEIPT_OUTCOMES:
+        raise ReceiptRejected(f"outcome must be one of {RECEIPT_OUTCOMES}")
+    if receipt["outcome"] == "settled" and not receipt["tx_hash"]:
+        raise ReceiptRejected("a settled receipt must name a tx_hash")
+    if receipt["outcome"] == "missed" and receipt["tx_hash"]:
+        raise ReceiptRejected("a missed receipt must not name a tx_hash")
+    if receipt["checked_at_height"] < receipt["deadline_height"]:
+        raise ReceiptRejected("checked_at_height precedes the claimed deadline")
+
+    if receipt["addr_a"] >= receipt["addr_b"]:
+        raise ReceiptRejected("addr_a and addr_b must be sorted and distinct")
+    if receipt["reporter_lapse_addr"] not in (receipt["addr_a"], receipt["addr_b"]):
+        raise ReceiptRejected("reporter must be one of the two subject addresses")
+    if not crypto.is_valid_address(receipt["addr_a"]):
+        raise ReceiptRejected("addr_a is not a valid address")
+    if not crypto.is_valid_address(receipt["addr_b"]):
+        raise ReceiptRejected("addr_b is not a valid address")
+
+    _check_receipt_admission(receipt["reporter_lapse_addr"])
+    _verify_receipt_signature(receipt)
+    return True
+
+
+def _check_receipt_admission(reporter_lapse_addr):
+    ensure_tables()
+    if StepReceipt.select().count() >= MAX_RECEIPTS_TOTAL:
+        raise ReceiptRejected(f"the receipt store is full (limit {MAX_RECEIPTS_TOTAL})")
+    live = (StepReceipt.select()
+            .where(StepReceipt.reporter_lapse_addr == reporter_lapse_addr)
+            .count())
+    if live >= MAX_RECEIPTS_PER_REPORTER:
+        raise ReceiptRejected(
+            f"reporter already has {live} receipts here "
+            f"(limit {MAX_RECEIPTS_PER_REPORTER})")
+
+
+def _verify_receipt_signature(receipt):
+    try:
+        pubkey = bytes.fromhex(receipt["pubkey"])
+        signature = bytes.fromhex(receipt["signature"])
+    except (ValueError, TypeError):
+        raise ReceiptRejected("pubkey and signature must be hex")
+    if crypto.public_key_to_address(pubkey) != receipt["reporter_lapse_addr"]:
+        raise ReceiptRejected("pubkey does not match reporter_lapse_addr")
+    if not crypto.verify(_receipt_signing_bytes(receipt), signature, pubkey):
+        raise ReceiptRejected("signature does not verify")
+
+
+def receipt_hash(receipt):
+    body = {k: receipt.get(k) for k in RECEIPT_SIGNED_FIELDS}
+    return crypto.sha256_hex(canonical_json(body))
+
+
+def already_known_receipt(receipt):
+    if not isinstance(receipt, dict):
+        return False
+    ensure_tables()
+    rid = receipt.get("receipt_id")
+    if not isinstance(rid, str):
+        return False
+    return StepReceipt.get_or_none(StepReceipt.receipt_id == rid) is not None
+
+
+def store_receipt(receipt):
+    """Persist a verified receipt. Returns False if already known."""
+    ensure_tables()
+    if StepReceipt.get_or_none(StepReceipt.receipt_id == receipt["receipt_id"]) is not None:
+        return False
+    if StepReceipt.select().count() >= MAX_RECEIPTS_TOTAL:
+        raise ReceiptRejected(f"the receipt store is full (limit {MAX_RECEIPTS_TOTAL})")
+    live = (StepReceipt.select()
+            .where(StepReceipt.reporter_lapse_addr == receipt["reporter_lapse_addr"])
+            .count())
+    if live >= MAX_RECEIPTS_PER_REPORTER:
+        raise ReceiptRejected(
+            f"reporter already has {live} receipts here "
+            f"(limit {MAX_RECEIPTS_PER_REPORTER})")
+    StepReceipt.create(
+        receipt_id=receipt["receipt_id"], order_id=receipt["order_id"],
+        session_id=receipt["session_id"], n=receipt["n"],
+        reporter_lapse_addr=receipt["reporter_lapse_addr"],
+        addr_a=receipt["addr_a"], addr_b=receipt["addr_b"],
+        asset=receipt["asset"], from_addr=receipt["from_addr"],
+        to_addr=receipt["to_addr"], amount=receipt["amount"],
+        memo=receipt["memo"], outcome=receipt["outcome"],
+        tx_hash=receipt["tx_hash"], deadline_height=receipt["deadline_height"],
+        checked_at_height=receipt["checked_at_height"], pubkey=receipt["pubkey"],
+        signature=receipt["signature"], received_at=time.time(), verified=None)
+    return True
+
+
+def receipts_for_addr(addr):
+    """Every receipt on file naming addr as one of its two subjects,
+    verified or not. Callers that care about trust must run each
+    unverified one through swap_engine.verify_receipt_against_chain
+    before counting it; see trust.py."""
+    ensure_tables()
+    return list(StepReceipt.select()
+               .where((StepReceipt.addr_a == addr) | (StepReceipt.addr_b == addr)))
+
+
+def receipt_to_wire(row):
+    """A stored StepReceipt row as the exact signed dict verify_receipt/
+    store_receipt expect, for a market backfill response; see
+    order_to_wire."""
+    body = {f: getattr(row, f) for f in RECEIPT_SIGNED_FIELDS}
+    body["signature"] = row.signature
+    return body
+
+
+def recent_orders(limit):
+    ensure_tables()
+    return list(Order.select()
+               .where(Order.cancelled == False)          # noqa: E712
+               .order_by(Order.received_at.desc())
+               .limit(limit))
+
+
+def recent_receipts(limit):
+    ensure_tables()
+    return list(StepReceipt.select()
+               .order_by(StepReceipt.received_at.desc())
+               .limit(limit))

@@ -50,6 +50,7 @@ import market as market_mod
 import settings as settings_mod
 import swap_engine
 import trade_storage
+import trust as trust_mod
 import xlm as xlm_mod
 from trade_storage import Trade, TRADE_ACTIVE, TRADE_STALLED
 
@@ -65,6 +66,13 @@ POLL_SECONDS = 20
 # tight retry loop against a public endpoint that is already struggling.
 UNREACHABLE_BACKOFF_SECONDS = 120
 
+# How often to retry a market backfill (Node.backfill_market_from) while
+# this node's own book and receipt store are still both completely empty.
+# Only fires in that narrow condition, so this is a bootstrap aid, not a
+# replacement for gossip: once anything at all has arrived, by gossip or
+# by one successful backfill, this stops trying.
+BACKFILL_RETRY_SECONDS = 300
+
 
 class SwapWorker:
     """Drives active trades. One instance per node."""
@@ -78,6 +86,7 @@ class SwapWorker:
         self._unreachable_until = 0.0
         self._last_error = ""
         self._passes = 0
+        self._next_backfill_attempt = 0.0
 
     # -- wiring --------------------------------------------------------
 
@@ -102,7 +111,10 @@ class SwapWorker:
         return swap_engine.Engine(
             swap_engine.LapseAdapter(self.node),
             swap_engine.XLMAdapter(self.xlm_keyfile),
-            self._secrets)
+            self._secrets,
+            min_confirm_depth=max(
+                self.node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
+                swap_engine.MIN_CONFIRM_DEPTH))
 
     def _enabled(self):
         return self.node.settings.get(settings_mod.SWAP_ENABLED)
@@ -150,12 +162,49 @@ class SwapWorker:
                      corrected)
         return corrected
 
+    def _emit_receipts(self, engine, kek, trade):
+        """Wrap emit_receipts_for_trade so a bug or a missing signing key
+        in this best-effort, purely additive step can never stop the
+        trade-advancing or blame logic around it from running; those are
+        the ones that actually move or protect money."""
+        try:
+            swap_engine.emit_receipts_for_trade(engine, self.node, kek, trade)
+        except Exception:
+            log.exception("[swap] %s: emitting step receipts failed",
+                          trade.session_id)
+
+    def _maybe_backfill_market(self):
+        """Try once, every BACKFILL_RETRY_SECONDS, to pull the order book
+        and known receipts from a peer, but only while this node has
+        found precisely nothing of either kind yet: a book with even one
+        row in it, gossiped or backfilled, is left to gossip from there.
+        Needs no wallet and runs even while locked, since it only ever
+        stores and relays what a peer sends, exactly like any other
+        inbound gossip.
+        """
+        trade_storage.ensure_tables()
+        now = time.time()
+        if now < self._next_backfill_attempt:
+            return
+        self._next_backfill_attempt = now + BACKFILL_RETRY_SECONDS
+        if trade_storage.Order.select().count() or trade_storage.StepReceipt.select().count():
+            return
+        pool = getattr(self.node, "pool", None)
+        peer = pool.random() if pool is not None else None
+        if not peer:
+            return
+        try:
+            self.node.backfill_market_from(peer)
+        except Exception:
+            log.exception("[swap] market backfill from %s failed", peer)
+
     def run_once(self):
         """One pass over every active trade. Returns how many were touched."""
         if not self._enabled():
             return 0
         if time.time() < self._unreachable_until:
             return 0
+        self._maybe_backfill_market()
 
         trade_storage.ensure_tables()
         kek, seed = self._secrets()
@@ -205,15 +254,28 @@ class SwapWorker:
         except Exception:
             log.exception("[swap] pruning the order book failed")
 
+        # A bounded batch per pass, not everything pending at once: this
+        # is the one place trust's network-sourced tally does real chain
+        # I/O (see trust.verify_pending_receipts), and every trust lookup
+        # elsewhere only ever reads what this has already resolved, so a
+        # page render or a fill decision is never the thing waiting on
+        # Horizon.
+        try:
+            trust_mod.verify_pending_receipts(self.node)
+        except Exception:
+            log.exception("[swap] verifying pending receipts failed")
+
         touched = 0
         for trade in Trade.select().where(
                 Trade.status.in_([TRADE_ACTIVE, TRADE_STALLED])):
             try:
                 engine.advance(trade)
                 touched += 1
+                self._emit_receipts(engine, kek, trade)
                 fresh = Trade.get_or_none(Trade.session_id == trade.session_id)
                 if fresh is not None and fresh.status == TRADE_STALLED:
                     engine.consider_abandonment(fresh)
+                    self._emit_receipts(engine, kek, fresh)
             except swap_engine.Unreachable as e:
                 # An outage says nothing about any trade, so nothing is
                 # concluded and nothing is blamed. Back off rather than
