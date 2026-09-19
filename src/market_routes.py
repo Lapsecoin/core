@@ -224,16 +224,34 @@ def register(app, node, csrf_token):
         best = market_mod.best_prices(height, exclude_maker=node.addr)
         ticker = market_mod.ticker_price(node)
 
+        lapse_balance = node.view.state.get_balance(node.addr)
+        xlm_spendable = _spendable(xlm_addr)
+        # What this node's own open orders, combined, already ask for on
+        # each side, checked against what it actually holds right now.
+        # Each order was affordable on its own when posted
+        # (market_routes._place_order), but nothing rechecks the sum as
+        # more orders pile up or a balance moves, so this is the one
+        # place a maker sees "you have more posted than you can cover"
+        # before a taker's fill request finds out the hard way (see
+        # market.maker_committed and swap_engine._pending_send_total,
+        # which is what actually keeps that discovery from costing
+        # anyone real money).
+        lapse_committed, xlm_committed = market_mod.maker_committed(node.addr, height)
+
         return render_template(
             "market.html", title="Market",
             swap_enabled=swaps_on(),
             alert_ok=alert_ok, alert_err=alert_err,
             depth=depth, best=best, ticker=ticker,
             lapse_addr=node.addr,
-            lapse_balance=node.view.state.get_balance(node.addr),
+            lapse_balance=lapse_balance,
+            lapse_committed=lapse_committed,
+            lapse_overcommitted=lapse_committed > lapse_balance,
             xlm_addr=xlm_addr,
             xlm_account_exists=_account_exists(xlm_addr),
-            xlm_spendable=_spendable(xlm_addr),
+            xlm_spendable=xlm_spendable,
+            xlm_committed=xlm_committed,
+            xlm_overcommitted=xlm_committed > xlm_spendable,
             xlm_locked=_locked(xlm_addr),
             xlm_usd=xlm_mod.get_xlm_usd(),
             suggested_price=_suggested_price(best, ticker),
@@ -260,6 +278,7 @@ def register(app, node, csrf_token):
         # The taker's side is the opposite of the maker's.
         taking_side = "buy" if row.direction == "sell" else "sell"
         maker_xlm_unfunded = _maker_xlm_unfunded(row, _account_exists)
+        maker_lapse_overcommitted = _maker_lapse_overcommitted(row, node, height)
         max_fill_ticks = min(remaining, row.max_fill or remaining)
         max_safe_stroops = swap_mod.max_safe_trade_stroops(cap)
         max_safe_lapse = swap_mod.lapse_for_xlm(max_safe_stroops,
@@ -303,6 +322,7 @@ def register(app, node, csrf_token):
             confirm_depth=confirm_depth(),
             eta_seconds=planned_steps * confirm_depth() * LAPSE_BLOCK_SECONDS,
             maker_xlm_unfunded=maker_xlm_unfunded,
+            maker_lapse_overcommitted=maker_lapse_overcommitted,
             account_min_xlm=fmt_xlm(xlm_mod.ACCOUNT_MIN_BALANCE_STROOPS),
             alert_err=alert_err, csrf_token=csrf_token)
 
@@ -826,6 +846,29 @@ def _maker_xlm_unfunded(order_row, account_exists):
     """
     taker_pays_xlm = order_row.direction == "sell"
     return taker_pays_xlm and account_exists(order_row.maker_xlm_addr) is False
+
+
+def _maker_lapse_overcommitted(order_row, node, height):
+    """Whether this maker's own live sell orders, combined, already ask
+    for more LAPSE than the maker's own chain balance actually holds.
+
+    A single order's own post-time check only ever looks at that one
+    order against the balance at that moment (market_routes._place_order);
+    it says nothing about a second, later order that is also
+    individually affordable but, added to the first, is not. That does
+    not put anything a taker sends at risk any more (see
+    swap_engine._pending_send_total: an accept the maker cannot actually
+    fund now gets refused there, not discovered after payment), but it
+    is still worth surfacing here rather than letting a taker's fill
+    request go out only to bounce, since this is free to compute: orders
+    and this maker's own LAPSE balance are both already-local chain
+    data, not a Horizon call.
+    """
+    if order_row.direction != "sell":
+        return False
+    committed, _xlm = market_mod.maker_committed(order_row.maker_lapse_addr, height)
+    balance = node.view.state.get_balance(order_row.maker_lapse_addr)
+    return committed > balance
 
 
 def _suggested_price(best, ticker=None):

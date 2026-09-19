@@ -471,6 +471,43 @@ def get_order(order_id):
     return Order.get_or_none(Order.order_id == order_id)
 
 
+def maker_committed(maker_addr, current_height, exclude_order_id=None):
+    """What this maker has promised across every one of its own live
+    orders, split by which asset each direction obligates: (lapse, xlm).
+
+    A single order's own post-time check (market_routes._place_order)
+    only ever looks at that one order against the balance at that
+    moment; it says nothing about a second order posted later that is
+    also individually affordable but, combined with the first, is not.
+    Both figures here are free for *any* node to compute, maker or not:
+    the order book and this maker's LAPSE balance are both already-local
+    data, and this makes no network call on its own for either return
+    value (the balance to compare against is the caller's job to fetch,
+    since the LAPSE one is a local read the caller already has and the
+    XLM one may or may not be worth a Horizon call depending on who is
+    asking - see market_routes._maker_lapse_overcommitted, which spends
+    nothing extra, versus _my_orders, which is the maker's own page and
+    can afford one XLM balance read same as the rest of it does).
+
+    exclude_order_id leaves one order out of its own total, for checking
+    whether an order is over-committed *given every other one already
+    posted*, without that order's own ask double-counting against itself.
+    """
+    ensure_tables()
+    lapse_committed = 0
+    xlm_committed = 0
+    for row in orders_by_maker(maker_addr, current_height):
+        if row.order_id == exclude_order_id:
+            continue
+        remaining = remaining_ticks(row)
+        if row.direction == "sell":
+            lapse_committed += remaining
+        else:
+            xlm_committed += swap_mod.xlm_for_lapse(
+                remaining, row.price_stroops_per_lapse)
+    return lapse_committed, xlm_committed
+
+
 def already_known(item):
     """Whether this exact order or cancellation has already been handled
     here, cheaply and without a signature check.

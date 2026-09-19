@@ -274,6 +274,25 @@
 {# --------------------------------------------------------- your own orders #}
 {% if my_orders %}
 <h2>Your open orders</h2>
+{% if lapse_overcommitted or xlm_overcommitted %}
+<div class="card">
+  <div class="card-title">Your open orders ask for more than you hold</div>
+  <p style="font-size:.92rem">
+    {% if lapse_overcommitted %}
+      Your sell orders together ask for {{ fmt_lapse_dp(lapse_committed, 2) }} LAPSE,
+      but this address only holds {{ fmt_lapse_dp(lapse_balance, 2) }}.
+    {% endif %}
+    {% if xlm_overcommitted %}
+      Your buy orders together would need {{ fmt_xlm(xlm_committed) }} XLM,
+      but only {{ fmt_xlm(xlm_spendable) }} is spendable.
+    {% endif %}
+    This does not risk anyone's funds (a fill you cannot actually cover
+    is refused before payment, not after), but a taker's request against
+    one of these may simply come back declined. Cancel what you no
+    longer intend to fully honour, or top up before it is filled.
+  </p>
+</div>
+{% endif %}
 <div class="table-wrap">
 <table class="stacked">
   <thead>
@@ -290,10 +309,10 @@
       <td data-label="Amount">{{ fmt_lapse_dp(o.lapse_total, 2) }}</td>
       <td data-label="Progress">
         <div class="progress" style="width:6rem"
-             title="{{ fmt_lapse_dp(o.delivered, 2) }} delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} claimed and awaiting payment{% endif %}">
+             title="{{ fmt_lapse_dp(o.delivered, 2) }} delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} accepted and awaiting payment{% endif %}">
           <div class="progress-fill" style="width: {{ o.pct_delivered }}%"></div>
         </div>
-        <span class="stat-sub">{{ o.pct_delivered }}% delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} claimed{% endif %}</span>
+        <span class="stat-sub">{{ o.pct_delivered }}% delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} accepted{% endif %}</span>
       </td>
       <td data-label="Left">{{ fmt_lapse_dp(o.remaining, 2) }}</td>
       <td data-label="Price">{{ fmt_price(o.price_stroops_per_lapse) }} XLM</td>
@@ -445,6 +464,26 @@
   var card = document.getElementById("order-form").closest(".card");
   if (card) card.addEventListener("side-changed", recalc);
   recalc();
+})();
+
+(function () {
+  // The book, the ticker and "your open orders" all change as gossip
+  // arrives on this node, not just when this browser tab happens to be
+  // reloaded, so a stale page can show an order as available when it
+  // was actually filled or cancelled minutes ago. A plain reload rather
+  // than a live-patched fetch: simplest correct thing, no new endpoint
+  // to keep in sync with this page's own rendering, and the cost is one
+  // ordinary page load every interval, not per order or per gossip
+  // message. Skipped whenever the tab is hidden (nothing to update the
+  // user cannot see) or a field currently has focus (never yank a form
+  // out from under someone mid-entry).
+  var REFRESH_MS = 20000;
+  setInterval(function () {
+    if (document.hidden) return;
+    var active = document.activeElement;
+    if (active && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) return;
+    location.reload();
+  }, REFRESH_MS);
 })();
 </script>
 

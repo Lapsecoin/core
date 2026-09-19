@@ -65,6 +65,19 @@
   </div>
 {% endif %}
 
+{% if maker_lapse_overcommitted %}
+  <div class="card">
+    <div class="card-title">This maker may not be able to cover this order</div>
+    <p style="font-size:.92rem">
+      This seller's own open sell orders, added together, currently ask
+      for more LAPSE than their own address actually holds. That does
+      not put anything you send at risk (a fill this maker cannot
+      actually fund is refused before you pay, not after), but a
+      request against this order may simply come back declined.
+    </p>
+  </div>
+{% endif %}
+
 {% if too_large %}
   <div class="card">
     <div class="card-title">Too large to do safely right now</div>

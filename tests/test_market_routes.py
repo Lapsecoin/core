@@ -434,6 +434,45 @@ class TestMakerXlmUnfunded:
         assert market_routes._maker_xlm_unfunded(order, lambda addr: False) is False
 
 
+class TestMakerLapseOvercommitted:
+    """The market_take warning for the fund-safety gap a single order's
+    own post-time check cannot see: this maker's *other* open sell
+    orders, combined with this one, asking for more LAPSE than the
+    maker's chain balance actually holds."""
+
+    class _Node:
+        def __init__(self, balance):
+            self.view = type("V", (), {"state": type(
+                "S", (), {"get_balance": staticmethod(lambda addr: balance)})()})()
+
+    def test_a_lone_affordable_sell_order_does_not_warn(self):
+        order = make_maker_order(direction="sell", lapse_total=5 * LAPSE)
+        assert market_routes._maker_lapse_overcommitted(
+            order, self._Node(10 * LAPSE), height=100) is False
+
+    def test_a_lone_order_bigger_than_the_balance_warns(self):
+        order = make_maker_order(direction="sell", lapse_total=5 * LAPSE)
+        assert market_routes._maker_lapse_overcommitted(
+            order, self._Node(1 * LAPSE), height=100) is True
+
+    def test_two_affordable_alone_but_not_together_warns(self):
+        """Neither order alone exceeds the balance; together they do,
+        which is exactly the gap swap_engine._pending_send_total closes
+        at accept time and this surfaces before a request is even sent."""
+        maker = "maker.addr"
+        order_a = make_maker_order(order_id="a", direction="sell",
+                                   lapse_total=6 * LAPSE, maker_lapse=maker)
+        make_maker_order(order_id="b", direction="sell",
+                         lapse_total=6 * LAPSE, maker_lapse=maker)
+        assert market_routes._maker_lapse_overcommitted(
+            order_a, self._Node(10 * LAPSE), height=100) is True
+
+    def test_buy_order_never_warns_this_check_is_lapse_side_only(self):
+        order = make_maker_order(direction="buy", lapse_total=5 * LAPSE)
+        assert market_routes._maker_lapse_overcommitted(
+            order, self._Node(0), height=100) is False
+
+
 class TestAutoFill:
     """The market-order half of the market (raised directly by the user:
     trading should not require reading the book and copying an

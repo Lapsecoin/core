@@ -570,6 +570,68 @@ class TestOrdersByMaker:
         assert rows[0].order_id == order["order_id"]
 
 
+class TestMakerCommitted:
+    """A maker's own combined exposure across every live order, which no
+    single order's own post-time check ever sees (market_routes
+    ._place_order only checks the one order being posted against the
+    balance at that moment)."""
+
+    def test_no_orders_is_nothing_committed(self, maker):
+        assert market.maker_committed(maker["addr"], current_height=100) == (0, 0)
+
+    def test_a_sell_order_commits_lapse_only(self, maker):
+        market.store_order(signed_order(maker, direction="sell", lapse_total=5 * LAPSE))
+        lapse, xlm = market.maker_committed(maker["addr"], current_height=100)
+        assert lapse == 5 * LAPSE
+        assert xlm == 0
+
+    def test_a_buy_order_commits_xlm_only(self, maker):
+        market.store_order(signed_order(maker, direction="buy",
+                                        lapse_total=5 * LAPSE, price=1000))
+        lapse, xlm = market.maker_committed(maker["addr"], current_height=100)
+        assert lapse == 0
+        assert xlm == market.swap_mod.xlm_for_lapse(5 * LAPSE, 1000)
+
+    def test_two_sell_orders_sum(self, maker):
+        market.store_order(signed_order(maker, order_id="o1", direction="sell",
+                                        lapse_total=5 * LAPSE))
+        market.store_order(signed_order(maker, order_id="o2", direction="sell",
+                                        lapse_total=7 * LAPSE))
+        lapse, _xlm = market.maker_committed(maker["addr"], current_height=100)
+        assert lapse == 12 * LAPSE
+
+    def test_delivered_or_reserved_amounts_reduce_what_is_still_committed(self, maker, taker):
+        """Committed means still outstanding, not the order's original
+        size: what has already settled or been accepted no longer
+        threatens a future balance check."""
+        order = signed_order(maker, direction="sell", lapse_total=10 * LAPSE)
+        market.store_order(order)
+        market.store_fill_response(
+            signed_fill_response(maker, order_id=order["order_id"],
+                                 session_id="s" * 16, lapse_total=4 * LAPSE))
+        lapse, _xlm = market.maker_committed(maker["addr"], current_height=100)
+        assert lapse == 6 * LAPSE
+
+    def test_exclude_order_id_leaves_that_order_out(self, maker):
+        order = signed_order(maker, direction="sell", lapse_total=5 * LAPSE)
+        market.store_order(order)
+        lapse, _xlm = market.maker_committed(
+            maker["addr"], current_height=100, exclude_order_id=order["order_id"])
+        assert lapse == 0
+
+    def test_a_cancelled_order_does_not_count(self, maker):
+        order = signed_order(maker, direction="sell", lapse_total=5 * LAPSE)
+        market.store_order(order)
+        market.apply_cancellation(order["order_id"], maker["addr"])
+        lapse, _xlm = market.maker_committed(maker["addr"], current_height=100)
+        assert lapse == 0
+
+    def test_someone_elses_orders_are_not_counted(self, maker, taker):
+        market.store_order(signed_order(maker, direction="sell", lapse_total=5 * LAPSE))
+        lapse, _xlm = market.maker_committed(taker["addr"], current_height=100)
+        assert lapse == 0
+
+
 class TestOrdersByMakerWithClaims:
     """Discovery's own view: unlike orders_by_maker, a cancelled or
     expired order must still surface here if a fill request (and
