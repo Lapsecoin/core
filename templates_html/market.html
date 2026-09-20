@@ -180,17 +180,14 @@
 
 {% if xlm_addr %}
 {# ---------------------------------------------------------------- trade #}
-<h2 style="margin-bottom:.2rem">Trade</h2>
+<h2 style="margin-bottom:.2rem">Post an order</h2>
 <p class="stat-sub" style="margin-top:0">
-  Post an order to name your own price and let it wait in the book, or
-  take now to fill immediately against what is already there.
+  Name your own price and let it wait in the book until somebody takes
+  it, or it expires. To take an existing order instead, pick one from
+  the book above (or the <a href="/market/book">full order book</a>) and
+  hit Buy or Sell on it directly.
 </p>
-<div class="mode-tabs" role="tablist">
-  <button type="button" class="mode-tab is-active" data-mode="order" role="tab">Post an order</button>
-  <button type="button" class="mode-tab" data-mode="take" role="tab">Take now</button>
-</div>
 
-<div class="mode-panel" data-mode="order">
 {# --------------------------------------------------------- resting order #}
 <div class="card">
   <div class="tabs" role="tablist">
@@ -268,82 +265,12 @@
               data-sell-label="Place sell order">Place buy order</button>
     </div>
     <p class="stat-sub" style="margin-top:.5rem">
-      Waits in the book at your price until somebody takes it (or your own
-      "Take now" does), or it expires. Anyone who takes it still only ever
-      moves this node's own safe step size at a time (see
-      <a href="/settings">Settings</a>), whatever they ask for.
+      Waits in the book at your price until somebody takes it, or it
+      expires. Anyone who takes it still only ever moves this node's own
+      safe step size at a time (see <a href="/settings">Settings</a>),
+      whatever they ask for.
     </p>
   </form>
-</div>
-</div>
-
-<div class="mode-panel" data-mode="take" hidden>
-{# ------------------------------------------------------------- trade now #}
-<div class="card">
-  <div class="tabs" role="tablist">
-    <button type="button" class="tab is-active" data-side="buy" role="tab">Buy LAPSE</button>
-    <button type="button" class="tab" data-side="sell" role="tab">Sell LAPSE</button>
-  </div>
-
-  <form method="post" id="auto-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="action" value="auto_fill">
-    <input type="hidden" name="direction" id="auto-direction" value="buy">
-
-    <div class="form-row">
-      <label for="auto-amount">Amount</label>
-      <input id="auto-amount" type="text" name="amount_lapse" inputmode="decimal"
-             placeholder="0.00" required autocomplete="off">
-      <span>LAPSE</span>
-    </div>
-
-    <details style="margin:.4rem 0">
-      <summary class="stat-sub" style="cursor:pointer">Set a price limit or a minimum fill (optional)</summary>
-      <div class="form-row">
-        <label for="auto-max-price">No worse than</label>
-        <input id="auto-max-price" type="text" name="max_price_xlm" inputmode="decimal"
-               placeholder="blank = accept the best available" autocomplete="off">
-        <span>XLM each</span>
-        <div class="stat-sub">
-          Leave blank to take whatever is currently on offer, exactly like a
-          real exchange's market order. Set this only if you would rather
-          not trade at all than pay more (buying) or accept less (selling)
-          than a specific price.
-        </div>
-      </div>
-      <div class="form-row">
-        <label for="auto-min-total">At least</label>
-        <input id="auto-min-total" type="text" name="min_total_lapse" inputmode="decimal"
-               placeholder="blank = take whatever fills" autocomplete="off">
-        <span>LAPSE, or nothing at all</span>
-        <div class="stat-sub">
-          If the book cannot supply at least this much on acceptable terms,
-          nothing is traded, rather than leaving you with a token amount
-          you did not actually want. Once a trade opens it cannot be
-          cheaply undone, so this is checked before any of them do.
-        </div>
-      </div>
-    </details>
-
-    <div class="form-row">
-      <label for="auto_pass">Passphrase</label>
-      <input id="auto_pass" type="password" name="passphrase" required>
-    </div>
-
-    <div style="padding-top:.5rem">
-      <button type="submit" id="auto-submit" data-buy-label="Buy now"
-              data-sell-label="Sell now">Buy now</button>
-    </div>
-    <p class="stat-sub" style="margin-top:.5rem">
-      Fills automatically against the best-priced orders already on the
-      book, splitting across as many as needed. Each slice is still capped
-      by how much this node will safely risk with that specific
-      counterparty (see <a href="/settings">Settings</a>); a thin book or a
-      tight cap can mean only part of this fills, which is reported rather
-      than treated as an error. Nothing here is chosen by hand.
-    </p>
-  </form>
-</div>
 </div>
 
 {# --------------------------------------------------- pending fill requests #}
@@ -500,12 +427,6 @@
          padding: .3rem 1rem; font-size: .85rem; cursor: pointer; }
   .tab.is-active { color: var(--ink); font-weight: bold;
                    border-color: var(--rule); background: var(--paper-2); }
-  .mode-tabs { display: flex; gap: .4rem; margin-bottom: .6rem; }
-  .mode-tab { background: var(--paper); color: var(--ink-dim);
-              border: 1px solid var(--rule-lt); border-radius: 4px;
-              padding: .4rem 1.1rem; font-size: .9rem; cursor: pointer; }
-  .mode-tab.is-active { color: var(--paper); font-weight: bold;
-                        border-color: var(--ink); background: var(--ink); }
   .book { display: flex; flex-wrap: wrap; gap: 1.2rem; }
   .book-side { flex: 1 1 320px; min-width: 0; }
   .stacked.compact th, .stacked.compact td { padding: .25rem .5rem; }
@@ -517,27 +438,8 @@
 
 <script>
 (function () {
-  // Post an order / Take now: only one panel shown at a time, so the
-  // page never has to show two full forms nobody asked to compare.
-  var modeTabs = document.querySelectorAll(".mode-tab");
-  Array.prototype.forEach.call(modeTabs, function (tab) {
-    tab.addEventListener("click", function () {
-      Array.prototype.forEach.call(modeTabs, function (t) {
-        t.classList.remove("is-active");
-      });
-      tab.classList.add("is-active");
-      Array.prototype.forEach.call(document.querySelectorAll(".mode-panel"), function (panel) {
-        panel.hidden = panel.dataset.mode !== tab.dataset.mode;
-      });
-    });
-  });
-})();
-
-(function () {
-  // Each .tabs group lives in its own card, alongside its own hidden
-  // "direction" input and its own submit button; scoped per-card so the
-  // order form and the take-now form toggle buy/sell independently
-  // instead of one click flipping both.
+  // The order form's own Buy/Sell tabs, alongside its own hidden
+  // "direction" input and its own submit button.
   Array.prototype.forEach.call(document.querySelectorAll(".tabs"), function (group) {
     var card = group.closest(".card");
     if (!card) return;

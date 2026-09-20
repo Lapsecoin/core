@@ -1015,8 +1015,12 @@ class TestDepth:
 
 
 class TestListOrders:
-    """The order book page's own view: one side, paged and sorted, on
-    top of the same entries book_depth already assembles."""
+    """The order book page's own view: one side, paged and sorted.
+    Unlike book_depth, "price" and "recent" are pushed to SQL (ordering
+    and paging on stored, indexed columns), and remaining_ticks is only
+    ever computed for rows actually being considered for the page, so
+    the cost of a page does not grow with how many orders are on the
+    book."""
 
     def test_default_sort_matches_book_depth_price_order(self, maker):
         market.store_order(signed_order(maker, direction="sell", price=1200))
@@ -1074,6 +1078,47 @@ class TestListOrders:
         market.store_order(signed_order(maker, direction="sell"))
         page, total = market.list_orders(100, "sell", exclude_maker=maker["addr"])
         assert page == [] and total == 0
+
+    def test_a_remainder_below_min_fill_is_excluded_from_every_sort(self, maker):
+        order = signed_order(maker, direction="sell", lapse_total=10 * LAPSE,
+                             min_fill=5 * LAPSE)
+        market.store_order(order)
+        _accepted_response(order["order_id"], "s" * 16, 7 * LAPSE)  # remaining: 3, below min_fill
+        for sort in market.BOOK_SORTS:
+            page, _total = market.list_orders(100, "sell", sort=sort)
+            assert page == [], f"sort={sort!r} should have hidden the dust remainder"
+
+    def test_price_and_recent_pagination_is_pushed_to_sql(self, maker, monkeypatch):
+        """remaining_ticks (the one genuinely live computation here) must
+        only ever run for rows in the requested page, not the whole side,
+        for the two sorts that can be paged in SQL."""
+        for i in range(5):
+            market.store_order(signed_order(maker, order_id=f"o{i}", price=1000 + i))
+        calls = []
+        real_remaining = market.remaining_ticks
+        monkeypatch.setattr(market, "remaining_ticks",
+                            lambda row: calls.append(row.order_id) or real_remaining(row))
+        for sort in ("price", "recent"):
+            calls.clear()
+            page, total = market.list_orders(100, "sell", sort=sort, offset=1, limit=2)
+            assert total == 5
+            assert len(page) == 2
+            assert len(calls) == 2, f"sort={sort!r} computed remaining for {len(calls)} rows, not just the page"
+
+    def test_amount_sort_is_bounded_to_the_candidate_window(self, maker, monkeypatch):
+        """A page must not cost more than the documented window's worth
+        of remaining_ticks calls, however large the book is."""
+        monkeypatch.setattr(market, "AMOUNT_SORT_CANDIDATE_WINDOW", 3)
+        for i in range(10):
+            market.store_order(signed_order(maker, order_id=f"o{i}",
+                                            lapse_total=(i + 1) * LAPSE))
+        calls = []
+        real_remaining = market.remaining_ticks
+        monkeypatch.setattr(market, "remaining_ticks",
+                            lambda row: calls.append(row.order_id) or real_remaining(row))
+        page, total = market.list_orders(100, "sell", sort="amount", limit=2)
+        assert total == 10          # the count is not windowed, only the ranking is
+        assert len(calls) == 3      # bounded to the (patched) window, not all 10 orders
 
 
 # ---------------------------------------------------------------------------

@@ -291,10 +291,6 @@ def register(app, node, csrf_token):
                         alert_ok = _place_order(node, xlm_addr, height)
                     elif action == "cancel_order":
                         alert_ok = _cancel_order(node)
-                    elif action == "auto_fill":
-                        result = _auto_fill(node, xlm_keyfile(), height,
-                                            confirm_depth(), stranger_cap())
-                        alert_ok = _auto_fill_message(result)
                     elif action == "answer_fill_request":
                         alert_ok = answer_fill_request_action()
                 except ValueError as e:
@@ -586,8 +582,7 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
 
     Thin on purpose: _open_trade is the reusable core, taking the amount
     and passphrase as plain arguments rather than reading request.form,
-    so _auto_fill can call it once per order while sweeping the book
-    without a fake HTTP form per slice.
+    so it stays testable and callable without a fake HTTP form.
     """
     passphrase = request.form.get("passphrase", "").strip()
     if not passphrase:
@@ -672,192 +667,6 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     log.info("[market] fill request %s sent against order %s",
              session_id, order_row.order_id)
     return session_id
-
-
-def _plan_auto_fill(node, direction, lapse_total, max_price, height, stranger_cap_val):
-    """Work out which orders _auto_fill would take and how much of each,
-    without opening a single trade. Pure and side-effect-free, so it can
-    be run once to check a minimum-fill tolerance before anything
-    irreversible happens (see _auto_fill), and safe to re-run.
-
-    Returns (slices, skipped): slices is [(order_row, take_ticks), ...]
-    in the order they would be filled; skipped is [(order_id, reason)].
-    """
-    book = market_mod.book_depth(height, exclude_maker=node.addr)
-    candidates = book["sells"] if direction == "buy" else book["buys"]
-
-    remaining = lapse_total
-    slices = []
-    skipped = []
-    for entry in candidates:
-        if remaining <= 0:
-            break
-        if max_price is not None:
-            # Sorted best-first on both sides (sells ascending, buys
-            # descending; see market.book_depth), so the first entry
-            # past the limit means nothing further qualifies either.
-            if direction == "buy" and entry["price"] > max_price:
-                break
-            if direction == "sell" and entry["price"] < max_price:
-                break
-
-        order_row = market_mod.get_order(entry["order_id"])
-        if order_row is None:
-            continue   # cancelled between the read above and here
-
-        detail = trust_mod.get_detail(
-            order_row.maker_lapse_addr,
-            trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
-            node.view.state.get_balance(order_row.maker_lapse_addr), node=node)
-        cap_here = swap_mod.exposure_cap_stroops(detail["score"], stranger_cap_val)
-        max_safe_lapse = swap_mod.lapse_for_xlm(
-            swap_mod.max_safe_trade_stroops(cap_here), order_row.price_stroops_per_lapse)
-        take_ticks = min(remaining, entry["remaining"], max_safe_lapse)
-
-        if take_ticks <= 0:
-            skipped.append((order_row.order_id,
-                           "no safe amount with this counterparty yet"))
-            continue
-        if order_row.min_fill and take_ticks < order_row.min_fill:
-            skipped.append((order_row.order_id,
-                           "below this order's own minimum fill"))
-            continue
-
-        slices.append((order_row, take_ticks))
-        remaining -= take_ticks
-    return slices, skipped
-
-
-def _auto_fill(node, xlm_keyfile_path, height, depth, stranger_cap_val):
-    """The market-order half of this market: fill up to a requested
-    amount by sweeping the best compatible orders in the book, without
-    the user ever choosing which one.
-
-    direction is what the user wants to do ("buy" or "sell" LAPSE); it
-    matches against the opposite side of the book, exactly as
-    market_take already does for a single manually-picked order. Orders
-    are tried best price first (book_depth's own sort order), each
-    filled by as much as is safe with that specific counterparty (the
-    same trust-scaled exposure cap _open_trade already enforces),
-    continuing to the next order for whatever remains. max_price is the
-    worst price the user will accept; omitted, this behaves like a real
-    market order and takes whatever is currently on offer.
-
-    min_total_lapse is the smallest total the user is willing to walk
-    away with; below it, nothing at all is traded. This has to be
-    checked with a full dry-run planning pass (_plan_auto_fill) *before*
-    a single trade opens: unlike a real exchange's matching engine,
-    opening a trade here is not a reversible ledger entry, it is a
-    signed fill request sent to the whole network and, once the maker
-    accepts, a Trade row this node's own worker starts trying to pay
-    into. There is no cheap way
-    to undo the first three trades of a sweep upon discovering the
-    fourth can't happen; the only sound order is decide once, on a plan
-    that changes nothing, then execute exactly that plan.
-
-    Ordinary market conditions (thin book, one counterparty's own safe
-    limit too small, an order's minimum fill not met, or the whole
-    sweep falling short of min_total_lapse) are reported in the result,
-    never raised: a market order legitimately filling only part of what
-    was asked, or refusing to trade a trivial fraction of it, is success,
-    not failure. Only the passphrase and wallet checks raise, since a
-    wrong passphrase would fail every slice identically.
-    """
-    passphrase = request.form.get("passphrase", "").strip()
-    if not passphrase:
-        raise ValueError("a passphrase is required")
-    direction = request.form.get("direction", "buy")
-    if direction not in ("buy", "sell"):
-        raise ValueError("choose buy or sell")
-    lapse_total = parse_lapse(request.form.get("amount_lapse"))
-    max_price_raw = (request.form.get("max_price_xlm") or "").strip()
-    max_price = parse_xlm(max_price_raw) if max_price_raw else None
-    min_total_raw = (request.form.get("min_total_lapse") or "").strip()
-    min_total = parse_lapse(min_total_raw) if min_total_raw else 0
-
-    xlm_addr = xlm_mod.load_public_key(xlm_keyfile_path)
-    if not xlm_addr:
-        raise ValueError("create a Stellar address first")
-    # Verified once here, not left to fail inside the loop: a wrong
-    # passphrase applies identically to every slice, so failing fast
-    # with one clear message beats repeating the same rejection once
-    # per candidate order.
-    try:
-        kek = crypto_mod.derive_kek(node.keyfile, passphrase)
-        crypto_mod.decrypt_secret_key(node.keyfile, kek=kek)
-        xlm_mod.decrypt_seed(xlm_keyfile_path, kek=kek)
-    except ValueError:
-        raise ValueError("that is not this node's passphrase")
-
-    slices, skipped = _plan_auto_fill(node, direction, lapse_total, max_price,
-                                      height, stranger_cap_val)
-    plannable = sum(ticks for _order, ticks in slices)
-    if min_total and plannable < min_total:
-        return {"requested": lapse_total, "filled": 0, "remaining": lapse_total,
-                "fills": [], "skipped": skipped, "min_not_met": True,
-                "would_have_filled": plannable, "min_total": min_total}
-
-    remaining = lapse_total
-    fills = []
-    for order_row, take_ticks in slices:
-        try:
-            session_id = _open_trade(node, order_row, height, xlm_keyfile_path,
-                                     depth, stranger_cap_val, take_ticks, passphrase)
-        except (ValueError, market_mod.OrderRejected,
-               market_mod.FillRequestRejected, swap_mod.TradeTooLarge) as e:
-            # The plan said this was safe; something changed between
-            # planning and here (the order was cancelled, a fill request
-            # cap was hit by something else). Move on rather than lose
-            # the rest of an otherwise-good plan over one stale slice.
-            skipped.append((order_row.order_id, str(e)))
-            continue
-        fills.append({"session_id": session_id, "lapse": take_ticks,
-                      "price": order_row.price_stroops_per_lapse,
-                      "maker": order_row.maker_lapse_addr})
-        remaining -= take_ticks
-
-    return {"requested": lapse_total, "filled": lapse_total - remaining,
-            "remaining": remaining, "fills": fills, "skipped": skipped,
-            "min_not_met": False}
-
-
-def _auto_fill_message(result):
-    lapse = lambda ticks: ticks / TICKS_PER_LAPSE
-
-    if result.get("min_not_met"):
-        return (f"Only {lapse(result['would_have_filled']):.4f} LAPSE was "
-                f"available on acceptable terms, short of the "
-                f"{lapse(result['min_total']):.4f} LAPSE minimum you set, so "
-                f"nothing was traded. Lower the minimum, raise your price "
-                f"limit, or post a resting order instead.")
-
-    if not result["fills"]:
-        return ("Nothing could be filled right now: nothing on the book met "
-                "your price, or safe limits with those counterparties were "
-                "already reached. Post a resting order instead if you are "
-                "willing to wait for one.")
-
-    # One line per distinct price actually paid, in the order filled,
-    # so "bought 2 at x, 3 at y" reads as the tiers it actually was
-    # rather than one blended number that hides what happened.
-    tiers = []
-    for fill in result["fills"]:
-        if tiers and tiers[-1]["price"] == fill["price"]:
-            tiers[-1]["lapse"] += fill["lapse"]
-            tiers[-1]["trades"] += 1
-        else:
-            tiers.append({"price": fill["price"], "lapse": fill["lapse"], "trades": 1})
-    tier_text = ", ".join(
-        f"{lapse(t['lapse']):.4f} LAPSE at {fmt_price(t['price'])} XLM each"
-        for t in tiers)
-    n = len(result["fills"])
-    msg = f"Filled {tier_text} ({n} trade{'' if n == 1 else 's'} total)."
-    if result["remaining"] > 0:
-        msg += (f" {lapse(result['remaining']):.4f} LAPSE could not be filled "
-               f"right now (nothing left on the book met your price, or safe "
-               f"limits with those counterparties were reached); post a "
-               f"resting order for the rest if you want to wait for one.")
-    return msg
 
 
 # ---------------------------------------------------------------------------

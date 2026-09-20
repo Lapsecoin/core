@@ -572,25 +572,28 @@ def prune_expired(current_height):
 # ---------------------------------------------------------------------------
 
 def book_depth(current_height, exclude_maker=None):
-    """The book as two price-sorted sides.
+    """The book as two price-sorted sides, for the aggregate stats
+    (best_prices' total depth and order counts) and the Market page's
+    own best-5 preview.
 
     Buyers are sorted best-price-first meaning highest, sellers
     lowest-first, so in both cases the top of the list is the best
     available deal for whoever is reading it.
+
+    Unlike list_orders, this does compute remaining_ticks for every
+    open order on both sides, not just a handful: a total available-to-
+    buy/wanted figure is a sum across the whole side, which has no
+    SQL-only shortcut the way ordering by a stored column does (see
+    list_orders). Bounded in practice by MAX_ORDERS_TOTAL, and this is
+    the one place in this module that cost is still paid in full; a
+    market big enough for that to matter would need a maintained
+    remaining/delivered figure on the Order row itself to avoid it,
+    which is a real, more invasive change, not one this function can
+    make on its own.
     """
     buys, sells = [], []
     for row in open_orders(current_height, exclude_maker):
-        entry = {
-            "order_id": row.order_id,
-            "maker": row.maker_lapse_addr,
-            "price": row.price_stroops_per_lapse,
-            "total": row.lapse_total,
-            "remaining": remaining_ticks(row),
-            "min_fill": row.min_fill,
-            "max_fill": row.max_fill,
-            "expiry_block": row.expiry_block,
-            "received_at": row.received_at,
-        }
+        entry = _order_entry(row)
         (buys if row.direction == "buy" else sells).append(entry)
     buys.sort(key=lambda e: e["price"], reverse=True)
     sells.sort(key=lambda e: e["price"])
@@ -607,10 +610,61 @@ def book_depth(current_height, exclude_maker=None):
 # rows is what keeps one page load's worst case bounded too.
 BOOK_PAGE_SIZE = 20
 
-# Ways to order one side of the book for display. "price" is book_depth's
-# own order (best deal first) and needs no further sorting; the others
-# re-sort the same already-fetched entries.
+# Ways to order one side of the book for display.
 BOOK_SORTS = ("price", "amount", "recent")
+
+# "amount" needs each candidate's remaining size to rank it, and
+# remaining is not a stored column (see remaining_ticks: it is derived
+# from Trade and FillResponse rows every time it is asked), so SQL
+# cannot sort or page by it directly the way it can for "price" or
+# "recent". Ranking it exactly across a genuinely large book would mean
+# computing that derived value for every open order on that side just
+# to answer one page. Bounded instead to this many of the most recently
+# received candidates: comfortably more than any order book this node
+# is actually likely to carry, and, unlike the book's own ceiling
+# (MAX_ORDERS_TOTAL, network-wide across both sides), the cost of an
+# "amount" page never grows past this number regardless of how large
+# the book gets. A "largest first" page is therefore "largest among
+# recent candidates", not a literal global maximum; documented rather
+# than silently approximated.
+AMOUNT_SORT_CANDIDATE_WINDOW = 500
+
+
+def _order_entry(row):
+    """One Order row as a book_depth/list_orders display entry. The one
+    place remaining_ticks (a live computation, not a stored column) is
+    actually paid for, so every caller here is deliberate about calling
+    it only for the rows it is about to show, not every row it merely
+    queried.
+    """
+    return {
+        "order_id": row.order_id,
+        "maker": row.maker_lapse_addr,
+        "price": row.price_stroops_per_lapse,
+        "total": row.lapse_total,
+        "remaining": remaining_ticks(row),
+        "min_fill": row.min_fill,
+        "max_fill": row.max_fill,
+        "expiry_block": row.expiry_block,
+        "received_at": row.received_at,
+    }
+
+
+def _open_orders_query(current_height, direction, exclude_maker=None):
+    """The indexed, SQL-only half of open_orders' own filter (cancelled,
+    not expired, the right side, not this node's own): everything that
+    can be decided without a live computation. Callers still need to
+    apply open_orders' remaining-based rules (nonzero, at least
+    min_fill) themselves, on whatever subset they actually fetch.
+    """
+    ensure_tables()
+    query = (Order.select()
+             .where(Order.direction == direction,
+                    Order.cancelled == False,          # noqa: E712
+                    Order.expiry_block > current_height))
+    if exclude_maker:
+        query = query.where(Order.maker_lapse_addr != exclude_maker)
+    return query
 
 
 def list_orders(current_height, direction, exclude_maker=None,
@@ -620,22 +674,48 @@ def list_orders(current_height, direction, exclude_maker=None,
     book page. Returns (page_rows, total_count) so a page can say "21-40
     of 137" without a second query.
 
-    Reuses book_depth's own entries and its "price" order (best deal
-    first) rather than re-querying: this is a display concern layered on
-    top of the same data book_depth already assembles for the compact
-    preview, not a second source of truth for what the book contains.
+    "price" and "recent" are both stored, indexed columns, so both the
+    ordering and the paging are pushed straight to SQL: the cost of a
+    page never grows with how many orders are actually on the book, only
+    with the page size. "amount" cannot be, see
+    AMOUNT_SORT_CANDIDATE_WINDOW for why and what it does instead.
+    remaining_ticks (needed either way, to show the row and to drop a
+    remainder below its own min_fill, see open_orders) is computed only
+    for rows actually being considered for this page, never for the
+    whole side.
+
+    total counts every order matching direction/cancelled/expiry
+    regardless of sort, which can run slightly ahead of how many rows
+    would actually ever display (a remainder below its own min_fill
+    counts here but is filtered out of every page): computing the exact
+    figure would mean the same whole-side remaining scan this function
+    exists to avoid, for a number that only ever appears as "N orders on
+    this side", not a promise that a full listing would show exactly N.
     """
     ensure_tables()
     if sort not in BOOK_SORTS:
         sort = "price"
-    depth = book_depth(current_height, exclude_maker)
-    rows = depth["sells"] if direction == "sell" else depth["buys"]
+    query = _open_orders_query(current_height, direction, exclude_maker)
+    total = query.count()
+
     if sort == "amount":
-        rows = sorted(rows, key=lambda e: e["remaining"], reverse=True)
-    elif sort == "recent":
-        rows = sorted(rows, key=lambda e: e["received_at"], reverse=True)
-    total = len(rows)
-    return rows[offset:offset + limit], total
+        candidates = [_order_entry(r) for r in
+                     query.order_by(Order.received_at.desc())
+                          .limit(AMOUNT_SORT_CANDIDATE_WINDOW)]
+        candidates = [e for e in candidates if e["remaining"] >= max(e["min_fill"], 1)]
+        candidates.sort(key=lambda e: e["remaining"], reverse=True)
+        return candidates[offset:offset + limit], total
+
+    if sort == "recent":
+        query = query.order_by(Order.received_at.desc())
+    else:
+        query = query.order_by(Order.price_stroops_per_lapse.asc()
+                               if direction == "sell" else
+                               Order.price_stroops_per_lapse.desc())
+
+    page = [_order_entry(r) for r in query.offset(offset).limit(limit)]
+    page = [e for e in page if e["remaining"] >= max(e["min_fill"], 1)]
+    return page, total
 
 
 def best_prices(current_height, exclude_maker=None):
