@@ -1038,10 +1038,14 @@ class FakeDiscoveryNode:
         self.view = _FakeView(height, balances)
         self.storage = _FakeStorage(heights_by_addr)
         self.publish_fill_response_calls = []
+        self.publish_fill_request_calls = []
         self.publish_receipt_calls = []
 
     def publish_fill_response(self, resp):
         self.publish_fill_response_calls.append(resp)
+
+    def publish_fill_request(self, req):
+        self.publish_fill_request_calls.append(req)
 
     def kek(self):
         return crypto.derive_kek(self.keyfile, self.passphrase)
@@ -1442,6 +1446,129 @@ class TestManualFillDecisions:
         engine, _lapse, _xlm = make_maker_engine(node)
         assert swap_engine.decide_fill_request(
             engine, node, "GMAKER", 5 * XLM, 2, "no-such-request", accept=False) is False
+
+
+class TestAutoMatchOrders:
+    """Proactively taking a compatible order already resting in the
+    book, on this node's own initiative, for one of this node's own
+    live orders: no person on either side has to notice the other and
+    click Buy or Sell for a pair of orders that already agree on price
+    to actually trade."""
+
+    def test_a_crossing_buy_order_is_auto_matched(self, tmp_path):
+        """This node's own sell at 1000 and somebody else's resting buy
+        at 1050 already agree (the buyer offered more than the seller
+        asked), so this node sends a fill request against it on its
+        own, without a human or an incoming request from the other
+        side."""
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE")
+        make_order(order_id="theirs", direction="buy", price=1050,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
+        assert len(node.publish_fill_request_calls) == 1
+        req = node.publish_fill_request_calls[0]
+        assert req["order_id"] == "theirs"
+        assert req["taker_lapse_addr"] == node.addr
+        assert market_mod.get_fill_request(req["request_id"]) is not None
+
+    def test_a_non_crossing_order_is_left_alone(self, tmp_path):
+        """A resting buy at 950 has not offered enough to meet a sell
+        asking 1000; nobody here is bridging that gap, so nothing is
+        sent."""
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE")
+        make_order(order_id="theirs", direction="buy", price=950,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert node.publish_fill_request_calls == []
+
+    def test_a_buy_order_matching_a_cheaper_sell_pays_lapse_or_xlm_correctly(
+            self, tmp_path):
+        """This node's own buy at 1050 crosses somebody else's resting
+        sell at 1000 (this node offered more than they asked); this
+        node pays LAPSE to fulfil their sell exactly as a manual taker
+        would (order_row.direction == 'sell' -> the maker gives LAPSE
+        -> here 'the maker' of the resting order is the other side, so
+        this node, the taker, pays XLM back for it)."""
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="buy", price=1050,
+                  maker_lapse=node.addr, maker_xlm="GMINE")
+        make_order(order_id="theirs", direction="sell", price=1000,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
+        req = node.publish_fill_request_calls[0]
+        assert req["order_id"] == "theirs"
+
+    def test_an_already_requested_counter_order_is_not_asked_again(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE")
+        make_order(order_id="theirs", direction="buy", price=1050,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert len(node.publish_fill_request_calls) == 1
+
+    def test_insufficient_funding_skips_the_match(self, tmp_path):
+        """This node cannot actually fund the LAPSE leg a matching buy
+        order would need, so nothing is sent even though the prices
+        agree; the same funding check a manual taker's request would
+        be held to."""
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE")
+        make_order(order_id="theirs", direction="buy", price=1050,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, lapse, _xlm = make_maker_engine(node)
+        lapse.balances[node.addr] = 0
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert node.publish_fill_request_calls == []
+
+    def test_a_locked_wallet_sends_nothing(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE")
+        make_order(order_id="theirs", direction="buy", price=1050,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine = swap_engine.Engine(FakeChain("lapse", node.addr),
+                                    FakeChain("xlm", "GMINE"),
+                                    lambda: (None, None))
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert node.publish_fill_request_calls == []
+
+    def test_no_own_orders_is_a_no_op(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+
+    def test_the_exposure_cap_still_bounds_the_sent_amount(self, tmp_path):
+        """A stranger counterparty's exposure cap is small; the amount
+        this node asks for must fit inside it rather than the whole of
+        either order."""
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  lapse_total=1000 * LAPSE, maker_lapse=node.addr, maker_xlm="GMINE")
+        make_order(order_id="theirs", direction="buy", price=1050,
+                  lapse_total=1000 * LAPSE, maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        tiny_cap = 1000
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", tiny_cap) == 1
+        req = node.publish_fill_request_calls[0]
+        assert req["lapse_total"] < 1000 * LAPSE
 
 
 # ---------------------------------------------------------------------------

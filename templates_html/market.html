@@ -170,10 +170,12 @@
 {# ---------------------------------------------------------------- trade #}
 <h2 style="margin-bottom:.2rem">Post an order</h2>
 <p class="stat-sub" style="margin-top:0">
-  Name your own price and let it wait in the book until somebody takes
-  it, or it expires. To take an existing order instead, pick one from
-  the book above (or the <a href="/market/book">full order book</a>) and
-  hit Buy or Sell on it directly.
+  Name your own price. If a matching order is already sitting on the
+  other side of the book, this node takes it immediately on its own;
+  otherwise yours waits in the book until somebody takes it, or it
+  expires. To take a specific existing order yourself instead, pick one
+  from the book above (or the <a href="/market/book">full order book</a>)
+  and hit Buy or Sell on it directly.
 </p>
 
 {# --------------------------------------------------------- resting order #}

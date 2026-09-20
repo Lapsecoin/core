@@ -441,12 +441,26 @@ class TestDiscoveryWiring:
         assert node is w.node
         assert depth >= swap_engine.MIN_CONFIRM_DEPTH
 
+    def test_auto_matching_runs_with_the_right_arguments(self, tmp_path, monkeypatch):
+        w, pub = self._worker_with_wallet(tmp_path)
+        calls = []
+        monkeypatch.setattr(swap_engine, "auto_match_orders",
+                            lambda *a: calls.append(a) or 0)
+        w.run_once()
+        assert len(calls) == 1
+        engine, node, my_xlm_addr, cap = calls[0]
+        assert my_xlm_addr == pub
+        assert node is w.node
+        assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
+
     def test_discovery_is_skipped_without_a_trading_wallet(self, monkeypatch):
         w = Worker(DiscoveryFakeNode())   # default xlm_keyfile is nonexistent
         calls = []
         monkeypatch.setattr(swap_engine, "answer_fill_requests",
                             lambda *a, **kw: calls.append(a) or 0)
         monkeypatch.setattr(swap_engine, "check_fill_responses",
+                            lambda *a: calls.append(a) or 0)
+        monkeypatch.setattr(swap_engine, "auto_match_orders",
                             lambda *a: calls.append(a) or 0)
         w.run_once()
         assert calls == []
@@ -472,6 +486,19 @@ class TestDiscoveryWiring:
         def boom(*a):
             raise ValueError("bug checking responses")
         monkeypatch.setattr(swap_engine, "check_fill_responses", boom)
+
+        w.run_once()
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        assert inc.out_state == trade_storage.LEG_SETTLED
+
+    def test_an_auto_match_bug_does_not_stop_existing_trades_advancing(
+            self, tmp_path, monkeypatch):
+        w, _pub = self._worker_with_wallet(tmp_path)
+        trade = make_trade()
+
+        def boom(*a):
+            raise ValueError("bug auto-matching")
+        monkeypatch.setattr(swap_engine, "auto_match_orders", boom)
 
         w.run_once()
         inc = Increment.get(Increment.id == f"{trade.session_id}:1")

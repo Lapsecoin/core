@@ -322,6 +322,12 @@ class SwapWorker:
                         swap_engine.MIN_CONFIRM_DEPTH))
             except Exception:
                 log.exception("[swap] checking fill responses failed")
+            try:
+                swap_engine.auto_match_orders(
+                    engine, self.node, my_xlm_addr,
+                    self.node.settings.get(settings_mod.SWAP_STRANGER_CAP_STROOPS))
+            except Exception:
+                log.exception("[swap] auto-matching this node's own orders failed")
 
         # Housekeeping, run after the above has had at least one chance
         # at whatever is currently pending: a node that was offline for

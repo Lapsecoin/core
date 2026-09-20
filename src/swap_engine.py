@@ -1187,6 +1187,172 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
 
 
 # ---------------------------------------------------------------------------
+# Auto-matching: proactively taking a compatible order already in the book
+# ---------------------------------------------------------------------------
+#
+# Posting an order has always meant "I will trade at this price if someone
+# takes it"; nothing made this node check whether somebody already had.
+# Two orders on opposite sides of the book that already agree on a price
+# do not need a person on either side to notice each other and click Buy
+# or Sell for themselves: the two posted prices already say both makers
+# are willing, and the fill-request handshake above is exactly what
+# already lets a trade be initiated by software rather than by hand
+# (node._handle_inbound_fill_request treats a request the same regardless
+# of what produced it). This is that same taker path, pointed at this
+# node's own resting orders instead of waiting for a person to browse the
+# book.
+#
+# Two orders cross when the side offering to pay more names a price at
+# least as good as the side offering to accept less: a sell at 1000 and a
+# buy at 1050 cross (the buyer already offered more than the seller
+# asked); a sell at 1000 and a buy at 950 do not, since nobody here is
+# offering to bridge that gap. A crossing request always fills at the
+# resting counter-order's own price (market.validate_fill/xlm_for_lapse),
+# the exact rule a manual taker is already held to, so this can never
+# fill anyone at a price they did not themselves post, and it is decided
+# by the counter-order's own maker through the exact same _answer_one
+# path (trust floor, exposure cap, funding) a request typed in by a
+# person goes through. There is no separate "how close is close enough"
+# setting to configure anywhere: an order's own price already is that
+# number, per order, by construction.
+
+# How many of the best-priced counter-orders to check per own order, per
+# pass. Bounded rather than the whole side, same reasoning as
+# market.list_orders' own page size: "price" is already sorted best-first
+# by SQL, and once one candidate does not cross, nothing further down a
+# price-sorted list will either, so this almost never looks past the
+# first row. It only widens past that when the very best-priced order
+# turns out to be unusable for some other reason (a live request against
+# it already sent, or this node's own funding or exposure cap falling
+# short), or when list_orders' own page has a dust remainder filtered out
+# of it (see that function's docstring); a later pass still catches
+# whatever a bounded page happened to miss.
+AUTO_MATCH_CANDIDATES = 5
+
+
+def auto_match_orders(engine, node, my_xlm_addr, stranger_cap):
+    """For each of this node's own live orders, look for an existing
+    counter-order that already crosses it and send a fill request
+    against it, the same thing a person manually taking that order
+    would do. Returns how many requests were sent this pass.
+
+    Nothing about safety changes: this side's own funding and exposure
+    cap are checked here first, the same way market_routes._open_trade
+    checks them for a manual taker, and the counter-order's own maker
+    still independently decides through _answer_one. This can only
+    ever do what a person watching both sides of the book could
+    already have done by hand, sooner and without having to be there.
+    """
+    ensure_tables()
+    kek, _seed = engine.secrets()
+    if kek is None:
+        return 0
+    height = node.view.height
+    my_orders = market_mod.orders_by_maker(node.addr, height)
+    if not my_orders:
+        return 0
+
+    # At most one live request per counter-order from this node: a pass
+    # that already asked about one does not ask again on every later
+    # pass while that request is still waiting for an answer.
+    already_asked = {r.order_id for r in market_mod.requests_by_taker(node.addr)}
+    # Same reasoning as swap_engine._pending_send_total, but for
+    # requests this very pass is about to send rather than trades
+    # already accepted: two crossing candidates found in the same pass
+    # must not each be sized against the same untouched balance.
+    promised_this_pass = {"lapse": 0, "xlm": 0}
+
+    sent = 0
+    for mine in my_orders:
+        if market_mod.remaining_ticks(mine) < max(mine.min_fill, 1):
+            continue
+        counter_direction = "buy" if mine.direction == "sell" else "sell"
+        candidates, _total = market_mod.list_orders(
+            height, counter_direction, exclude_maker=node.addr,
+            sort="price", limit=AUTO_MATCH_CANDIDATES)
+        for theirs in candidates:
+            crosses = (theirs["price"] >= mine.price_stroops_per_lapse
+                      if mine.direction == "sell" else
+                      theirs["price"] <= mine.price_stroops_per_lapse)
+            if not crosses:
+                break   # price-sorted best-first; nothing further crosses either
+            if theirs["order_id"] in already_asked:
+                continue
+            if _send_auto_match(engine, node, my_xlm_addr, stranger_cap,
+                                kek, theirs["order_id"], promised_this_pass):
+                sent += 1
+                already_asked.add(theirs["order_id"])
+    if sent:
+        log.info("[swap] auto-matched %d existing order(s) in the book", sent)
+    return sent
+
+
+def _send_auto_match(engine, node, my_xlm_addr, stranger_cap, kek, order_id,
+                     promised_this_pass):
+    """Send a fill request against one counter-order already known to
+    cross, sized to fit everything that already bounds a manual taker.
+    Returns True if a request was sent.
+    """
+    order_row = market_mod.get_order(order_id)
+    if order_row is None or order_row.expiry_block <= node.view.height:
+        return False
+
+    remaining = market_mod.remaining_ticks(order_row)
+    if remaining < max(order_row.min_fill, 1):
+        return False
+
+    detail = trust_mod.get_detail(
+        order_row.maker_lapse_addr,
+        trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
+        node.view.state.get_balance(order_row.maker_lapse_addr), node=node)
+    cap = swap.exposure_cap_stroops(detail["score"], stranger_cap)
+    max_safe_lapse = swap.lapse_for_xlm(
+        swap.max_safe_trade_stroops(cap), order_row.price_stroops_per_lapse)
+
+    lapse_total = min(remaining, order_row.max_fill or remaining, max_safe_lapse)
+    if lapse_total < max(order_row.min_fill, 1):
+        # Whatever this node can safely and honestly ask for is smaller
+        # than this counter-order will accept; nothing to do until
+        # either side's trust or this node's own funding changes.
+        return False
+
+    xlm_total = swap.xlm_for_lapse(lapse_total, order_row.price_stroops_per_lapse)
+
+    # The mirror of order_row.direction: they are selling LAPSE (this
+    # node pays XLM) or buying it (this node pays LAPSE).
+    i_send = "xlm" if order_row.direction == "sell" else "lapse"
+    if i_send == "xlm":
+        have, need = engine.xlm.balance(my_xlm_addr), xlm_total
+    else:
+        have, need = engine.lapse.balance(node.addr), lapse_total
+    already_owed = _pending_send_total(i_send) + promised_this_pass[i_send]
+    if have - already_owed < need:
+        return False
+
+    try:
+        swap.plan(lapse_total, xlm_total, detail["score"], stranger_cap=stranger_cap)
+    except swap.TradeTooLarge:
+        return False
+    try:
+        market_mod.validate_fill(order_row, lapse_total)
+    except market_mod.OrderRejected:
+        return False
+
+    session_id = swap.new_session_id(order_id, node.addr)
+    req = market_mod.build_fill_request(
+        order_id=order_id, session_id=session_id,
+        taker_lapse_addr=node.addr, taker_xlm_addr=my_xlm_addr,
+        lapse_total=lapse_total, pubkey_hex=node.pk_hex)
+    market_mod.sign_fill_request(req, node.keyfile, kek)
+    market_mod.store_fill_request(req)
+    node.publish_fill_request(req)
+    promised_this_pass[i_send] += need
+    log.info("[swap] auto-match: requested %d ticks against order %s (crossed at %d)",
+             lapse_total, order_id[:12], order_row.price_stroops_per_lapse)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Taker-side: watching for an answer
 # ---------------------------------------------------------------------------
 #
