@@ -8,8 +8,11 @@
 <div class="stats">
   <div class="stat">
     <div class="stat-label">Price</div>
-    <div class="stat-value">{{ fmt_price(display_price) }}</div>
-    <div class="stat-sub">XLM per LAPSE{% if not ticker %}, starting reference{% endif %}</div>
+    <div class="stat-value">{{ fmt_price(display_price) }} XLM</div>
+    <div class="stat-sub">
+      {% if ticker %}per LAPSE, last traded{% else %}per LAPSE, reference{% endif %}
+      {% if xlm_usd %}&middot; ${{ "%.4f"|format(display_price / 10000000 * xlm_usd) }}{% endif %}
+    </div>
   </div>
   <div class="stat">
     <div class="stat-label">Available to buy</div>
@@ -23,47 +26,11 @@
   </div>
 </div>
 
-{% if ticker %}
-  <p class="stat-sub" style="margin:-.25rem 0 .35rem">
-    A weighted median of this node's own recently completed trades
-    (weighted by how much this node trusts each counterparty).
-    This is what <em>this node</em> has actually traded at, not a
-    network-wide rate; nothing stops two cooperating addresses from
-    trading with each other to move it, so treat it as a data point,
-    not a price feed. To see what's actually on offer right now, pick
-    an order from the book below (or the <a href="/market/book">full
-    order book</a>).
-  </p>
-{% else %}
-  <p class="stat-sub" style="margin:-.25rem 0 .35rem">
-    Nobody has traded here yet, so this is a starting reference (1 XLM
-    per 1,000 LAPSE), not a quote from anyone. It stops mattering the
-    moment a real order or a real trade exists.
-  </p>
-{% endif %}
-
-{% if xlm_usd %}
-  <p class="stat-sub" style="margin:-.25rem 0 .6rem">
-    XLM is about ${{ "%.4f"|format(xlm_usd) }} right now, so at the price
-    above, 1 LAPSE costs roughly ${{ "%.4f"|format(display_price / 10000000 * xlm_usd) }}.
-    That figure comes from a public price feed and is for orientation only;
-    it never affects a trade.
-  </p>
-{% endif %}
-
 {# ------------------------------------------------------------- the book #}
 <h2 style="margin-bottom:.3rem">Order book</h2>
 {% if not depth.sells and not depth.buys %}
   <p style="color:var(--ink-dim); font-style:italic; margin-top:0">
-    {% if ticker %}
-      Nothing resting right now: every order has been filled, cancelled
-      or expired. Trades have still happened here before (see "Last
-      traded" above); post an order to be the next one waiting.
-    {% else %}
-      Nobody has posted an order yet. On a new coin that is the normal
-      starting point, not a fault: the first order posted is also the
-      first price this market has ever had.
-    {% endif %}
+    {% if ticker %}Nothing resting right now.{% else %}Nobody has posted an order yet.{% endif %}
   </p>
 {% else %}
 <div class="book">
@@ -112,8 +79,7 @@
   </div>
 </div>
 <p class="stat-sub" style="margin:.3rem 0 0">
-  Best 5 each side shown here.
-  <a href="/market/book?side=sell">Full order book</a> has all of it, sortable and paged.
+  Top 5 each side. <a href="/market/book?side=sell">Full order book</a>.
 </p>
 {% endif %}
 
@@ -122,9 +88,8 @@
   <div class="card-title">Your trading wallet</div>
   {% if not xlm_addr %}
     <p style="font-size:.92rem; margin-bottom:.5rem">
-      Trading needs a Stellar address to receive XLM at. Generating one is
-      free and happens entirely on this machine; the key is encrypted with
-      your passphrase and never leaves it.
+      Trading needs a Stellar address. Generated locally, encrypted with
+      your passphrase.
     </p>
     <form method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -166,12 +131,9 @@
 {# ---------------------------------------------------------------- trade #}
 <h2 style="margin-bottom:.2rem">Post an order</h2>
 <p class="stat-sub" style="margin-top:0">
-  Name your own price. If a matching order is already sitting on the
-  other side of the book, this node takes it immediately on its own;
-  otherwise yours waits in the book until somebody takes it, or it
-  expires. To take a specific existing order yourself instead, pick one
-  from the book above (or the <a href="/market/book">full order book</a>)
-  and hit Buy or Sell on it directly.
+  Name your own price. A matching order already in the book is taken
+  immediately; otherwise this waits until someone takes it. To take a
+  specific order yourself, use the book above.
 </p>
 
 {# --------------------------------------------------------- resting order #}
@@ -201,25 +163,18 @@
       <span>XLM each</span>
       <div class="stat-sub">
         {% if best.best_sell or best.best_buy %}
-          Prefilled with the best price on the book. Change it to whatever
-          you are willing to trade at.
+          Prefilled with the best book price.
         {% elif ticker %}
-          The book is empty, so this is prefilled from this node's own
-          last traded price instead, not a live quote. Change it to
-          whatever you are willing to trade at.
+          Prefilled from this node's last trade, not a live quote.
         {% else %}
-          The book is empty and this node has no trade history either, so
-          this is prefilled with a starting reference (1 XLM per 1,000
-          LAPSE), not a quote from anyone. Change it to whatever you are
-          willing to trade at; whatever you pick is the first real quote
-          anyone sees.
+          Prefilled with a starting reference, not a real quote.
         {% endif %}
       </div>
     </div>
 
     <div class="form-row">
       <label>Total</label>
-      <div class="stat-value" id="total-line">n/a</div>
+      <div class="stat-value" id="total-line"></div>
     </div>
 
     <details style="margin:.4rem 0">
@@ -229,17 +184,13 @@
         <input id="min_fill" type="text" name="min_fill_lapse" inputmode="decimal"
                placeholder="0" autocomplete="off">
         <span>LAPSE</span>
-        <div class="stat-sub">Refuse anyone wanting to take less than this. Leave blank for no minimum.</div>
+        <div class="stat-sub">Refuse fills below this. Blank for no minimum.</div>
       </div>
       <div class="form-row">
         <label for="expiry_hours">Expires in</label>
         <input id="expiry_hours" type="number" name="expiry_hours" min="1"
                max="720" value="168">
         <span>hours</span>
-        <div class="stat-sub">
-          The order disappears by itself after this. It exists to be filled
-          and then be gone, not to sit advertised.
-        </div>
       </div>
       <div class="form-row">
         <label for="auto_match_margin">Auto-match margin</label>
@@ -247,12 +198,9 @@
                inputmode="decimal" placeholder="0" autocomplete="off">
         <span>XLM per LAPSE</span>
         <div class="stat-sub">
-          This node will keep looking for an existing order to match this
-          one against, and will privately go up to this much worse than the
-          price above to close one. Kept entirely local: your posted price
-          above is the only number anyone else ever sees, whatever this
-          node actually settles for. Leave blank to only ever match at
-          least as good as your own price.
+          How much worse than the price above this node will privately
+          accept to close a match. Never shared; blank to only match at
+          your own price.
         </div>
       </div>
     </details>
@@ -266,12 +214,6 @@
       <button type="submit" id="submit-btn" data-buy-label="Place buy order"
               data-sell-label="Place sell order">Place buy order</button>
     </div>
-    <p class="stat-sub" style="margin-top:.5rem">
-      Waits in the book at your price until somebody takes it, or it
-      expires. Anyone who takes it still only ever moves this node's own
-      safe step size at a time (see <a href="/settings">Settings</a>),
-      whatever they ask for.
-    </p>
   </form>
 </div>
 
@@ -279,11 +221,7 @@
 {% if pending_maker_requests %}
 <h2>Requests waiting on your decision</h2>
 <p style="font-size:.85rem; color:var(--ink-dim)">
-  Most requests are answered the moment they arrive; anything still listed
-  here could not be, for the reason shown below (a locked wallet, funds
-  already committed elsewhere, a step larger than your current exposure
-  cap, or a counterparty below your auto-accept trust floor, set in
-  <a href="/settings">Settings</a>).
+  Reason shown below. Auto-accept settings are in <a href="/settings">Settings</a>.
 </p>
 <div class="table-wrap">
 <table class="stacked">
@@ -348,17 +286,13 @@
   <div class="card-title">Your open orders ask for more than you hold</div>
   <p style="font-size:.92rem">
     {% if lapse_overcommitted %}
-      Your sell orders together ask for {{ fmt_lapse_dp(lapse_committed, 2) }} LAPSE,
-      but this address only holds {{ fmt_lapse_dp(lapse_balance, 2) }}.
+      Sell orders ask for {{ fmt_lapse_dp(lapse_committed, 2) }} LAPSE, you hold
+      {{ fmt_lapse_dp(lapse_balance, 2) }}.
     {% endif %}
     {% if xlm_overcommitted %}
-      Your buy orders together would need {{ fmt_xlm(xlm_committed) }} XLM,
-      but only {{ fmt_xlm(xlm_spendable) }} is spendable.
+      Buy orders need {{ fmt_xlm(xlm_committed) }} XLM, {{ fmt_xlm(xlm_spendable) }} spendable.
     {% endif %}
-    This does not risk anyone's funds (a fill you cannot actually cover
-    is refused before payment, not after), but a taker's request against
-    one of these may simply come back declined. Cancel what you no
-    longer intend to fully honour, or top up before it is filled.
+    No funds at risk, but a fill may come back declined. Cancel or top up.
   </p>
 </div>
 {% endif %}
@@ -476,7 +410,7 @@
   function recalc() {
     var a = parseFloat(amount.value), p = parseFloat(price.value);
     if (!isFinite(a) || !isFinite(p) || a <= 0 || p <= 0) {
-      total.textContent = "n/a";
+      total.textContent = "";
       return;
     }
     var xlm = a * p;
