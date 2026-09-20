@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 
-<p style="margin-top:-.4rem"><a href="/market">&larr; Back to Market</a></p>
+<p style="margin-top:-.4rem"><a href="/market">Back to Market</a></p>
 
 <h1 style="margin-bottom:.3rem">Order book</h1>
 
@@ -77,10 +77,10 @@
   <span class="stat-sub">Page {{ page }} of {{ last_page }}</span>
   <div>
     {% if page > 1 %}
-      <a class="btn-sm" href="/market/book?side={{ side }}&sort={{ sort }}&page={{ page - 1 }}">&larr; Newer page</a>
+      <a class="btn-sm" href="/market/book?side={{ side }}&sort={{ sort }}&page={{ page - 1 }}">Newer page</a>
     {% endif %}
     {% if page < last_page %}
-      <a class="btn-sm" href="/market/book?side={{ side }}&sort={{ sort }}&page={{ page + 1 }}">Next page &rarr;</a>
+      <a class="btn-sm" href="/market/book?side={{ side }}&sort={{ sort }}&page={{ page + 1 }}">Next page</a>
     {% endif %}
   </div>
 </div>
