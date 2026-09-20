@@ -49,6 +49,7 @@ real defector.
 """
 
 import logging
+import threading
 import time
 
 import market as market_mod
@@ -925,6 +926,26 @@ def reconcile_all(engine):
 # carries the one thing a claim used to supply (the taker's address on
 # the other chain), and a maker that has explicitly agreed no longer
 # needs anything paid first to learn a session exists.
+#
+# _answer_one is called from two different threads that share nothing
+# but this process's own database: the swap worker's own periodic pass
+# (swap_worker.run_once, via answer_fill_requests) and a person clicking
+# Accept on the Market page (market_routes.answer_fill_request_action,
+# via decide_fill_request), on Werkzeug's own request thread (see
+# api._close_db_after_request's docstring: every request runs on a
+# fresh thread). Both read this node's own balance and
+# _pending_send_total, and both read an order's own remaining_ticks,
+# before deciding whether to commit; neither of those reads locks
+# anything. Two accepts racing each other, one from each thread, can
+# each see the exposure as it stood before the other committed and both
+# pass, jointly promising more than this node holds or more than an
+# order's own lapse_total allows, since Trade.create for the first one
+# is not visible to the second's read until it already made its own
+# decision. _ACCEPT_LOCK below makes "read the exposure, then commit
+# to it" one atomic step process-wide, the same guarantee a single
+# thread already gets for free from running one request at a time.
+_ACCEPT_LOCK = threading.Lock()
+
 
 def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
                          min_trust=0.0):
@@ -1068,6 +1089,20 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     with a positive floor, left pending for exactly this reason: the
     request was otherwise fine, a person just had to be the one to say
     yes.
+    """
+    with _ACCEPT_LOCK:
+        return _answer_one_locked(engine, node, my_xlm_addr, stranger_cap,
+                                  confirm_depth, order_row, req, min_trust)
+
+
+def _answer_one_locked(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+                       order_row, req, min_trust=0.0):
+    """The body of _answer_one, run under _ACCEPT_LOCK. Split out only so
+    the lock and the decision it guards are each easy to read on their
+    own; see _ACCEPT_LOCK for why every read this makes (this node's own
+    balance, _pending_send_total, the order's own remaining_ticks) has
+    to be paired with its eventual commit (Trade.create, or the
+    FillResponse either way) with nothing else able to run in between.
     """
     kek, _seed = engine.secrets()
     if kek is None:

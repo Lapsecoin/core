@@ -490,15 +490,30 @@ class TestMyOrders:
         assert rows[0]["pct_delivered"] == 0
         assert rows[0]["remaining"] == 10 * LAPSE
 
-    def test_an_accepted_fill_response_shows_as_reserved_not_delivered(self):
-        make_maker_order(order_id="o1", maker_lapse="me.lapse",
+    def test_an_accepted_fill_response_shows_as_reserved_not_delivered(self, tmp_path):
+        # A real keypair standing in for this maker's own node: reserved_
+        # ticks now checks that an accepted response's maker_pubkey
+        # actually resolves to the order's own maker_lapse_addr (see
+        # market.TestForgedResponsesDoNotReserve), so the order and the
+        # response naming it have to agree on a real address rather than
+        # the placeholder "me.lapse"/"ab"*10 strings this test used
+        # before that check existed.
+        sk, pk = crypto.generate_keypair()
+        keyfile = str(tmp_path / "maker.key")
+        crypto.save_key(keyfile, sk, pk, "pw")
+        kek = crypto.derive_kek(keyfile, "pw")
+        maker_addr = crypto.public_key_to_address(pk)
+
+        make_maker_order(order_id="o1", maker_lapse=maker_addr,
                          lapse_total=10 * LAPSE)
-        market_mod.FillResponse.create(
+        resp = market_mod.build_fill_response(
             request_id="r" * 16, order_id="o1", session_id="s" * 16,
             lapse_total=4 * LAPSE, accepted=True, increment_count=3,
-            reason="", maker_pubkey="ab" * 10, signature="cd" * 10,
-            received_at=time.time())
-        rows = market_routes._my_orders(self._Node("me.lapse"), height=100)
+            reason="", maker_pubkey_hex=pk.hex(),
+            accepted_height=100, confirm_depth=2)
+        market_mod.sign_fill_response(resp, keyfile, kek)
+        market_mod.store_fill_response(resp)
+        rows = market_routes._my_orders(self._Node(maker_addr), height=100)
 
         assert rows[0]["delivered"] == 0
         assert rows[0]["reserved"] == 4 * LAPSE

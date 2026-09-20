@@ -353,7 +353,7 @@ class TestUnfillableRemainderIsHiddenFromTakers:
         order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        _accepted_response(order["order_id"], "s" * 16, 7 * LAPSE)
+        _accepted_response(maker, order["order_id"], "s" * 16, 7 * LAPSE)
         assert market.remaining_ticks(row) == 3 * LAPSE   # nonzero, but < min_fill
         assert market.open_orders(current_height=100) == []
 
@@ -361,7 +361,7 @@ class TestUnfillableRemainderIsHiddenFromTakers:
         order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        _accepted_response(order["order_id"], "s" * 16, 5 * LAPSE)
+        _accepted_response(maker, order["order_id"], "s" * 16, 5 * LAPSE)
         assert market.remaining_ticks(row) == 5 * LAPSE   # exactly min_fill
         assert len(market.open_orders(current_height=100)) == 1
 
@@ -369,23 +369,34 @@ class TestUnfillableRemainderIsHiddenFromTakers:
         order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=0)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        _accepted_response(order["order_id"], "s" * 16, 9 * LAPSE)
+        _accepted_response(maker, order["order_id"], "s" * 16, 9 * LAPSE)
         assert market.remaining_ticks(row) == 1 * LAPSE
         assert len(market.open_orders(current_height=100)) == 1
 
     def test_fully_delivered_is_excluded_same_as_before(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
         market.store_order(order)
-        _accepted_response(order["order_id"], "s" * 16, 10 * LAPSE)
+        _accepted_response(maker, order["order_id"], "s" * 16, 10 * LAPSE)
         assert market.open_orders(current_height=100) == []
 
 
-def _accepted_response(order_id, session_id, lapse_total, request_id=None):
+def _accepted_response(maker, order_id, session_id, lapse_total, request_id=None):
+    """A network-observed accepted response, signed by the order's real
+    maker: reserved_ticks now checks that a response's maker_pubkey
+    actually resolves to the order's own maker_lapse_addr (see
+    TestForgedResponsesDoNotReserve below for why), so a helper standing
+    in for a genuine one has to be signed by that same key rather than a
+    placeholder hex string."""
+    resp = signed_fill_response(
+        maker, request_id=request_id or session_id, order_id=order_id,
+        session_id=session_id, lapse_total=lapse_total, accepted=True)
     trade_storage.FillResponse.create(
-        request_id=request_id or session_id, order_id=order_id,
-        session_id=session_id, lapse_total=lapse_total, accepted=True,
-        increment_count=3, reason="", maker_pubkey="ab" * 10,
-        signature="cd" * 10, received_at=time.time())
+        request_id=resp["request_id"], order_id=resp["order_id"],
+        session_id=resp["session_id"], lapse_total=resp["lapse_total"],
+        accepted=resp["accepted"], increment_count=resp["increment_count"],
+        reason=resp["reason"], maker_pubkey=resp["maker_pubkey"],
+        accepted_height=resp["accepted_height"], confirm_depth=resp["confirm_depth"],
+        signature=resp["signature"], received_at=time.time())
 
 
 class TestRemainingReflectsNetworkKnownResponses:
@@ -406,15 +417,15 @@ class TestRemainingReflectsNetworkKnownResponses:
         # A response this node only ever saw over gossip: no Trade row
         # here for it, on either side, the way a genuine third party's
         # node would have none either.
-        _accepted_response(order["order_id"], "s" * 16, 4 * LAPSE)
+        _accepted_response(maker, order["order_id"], "s" * 16, 4 * LAPSE)
         assert market.remaining_ticks(row) == 6 * LAPSE
 
     def test_multiple_unrelated_responses_all_reduce_it(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        _accepted_response(order["order_id"], "s1" * 8, 3 * LAPSE)
-        _accepted_response(order["order_id"], "s2" * 8, 2 * LAPSE)
+        _accepted_response(maker, order["order_id"], "s1" * 8, 3 * LAPSE)
+        _accepted_response(maker, order["order_id"], "s2" * 8, 2 * LAPSE)
         assert market.remaining_ticks(row) == 5 * LAPSE
 
     def test_an_unaccepted_response_does_not_count(self, maker):
@@ -432,7 +443,7 @@ class TestRemainingReflectsNetworkKnownResponses:
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        _accepted_response("some-other-order", "s" * 16, 4 * LAPSE)
+        _accepted_response(maker, "some-other-order", "s" * 16, 4 * LAPSE)
         assert market.remaining_ticks(row) == 10 * LAPSE
 
     def test_a_locally_tracked_trades_own_response_is_not_double_counted(self, maker, taker):
@@ -444,7 +455,7 @@ class TestRemainingReflectsNetworkKnownResponses:
         market.store_order(order)
         row = market.get_order(order["order_id"])
         session_id = "s" * 16
-        _accepted_response(order["order_id"], session_id, 4 * LAPSE)
+        _accepted_response(maker, order["order_id"], session_id, 4 * LAPSE)
         Trade.create(
             session_id=session_id, order_id=order["order_id"], role="maker",
             my_lapse_addr=maker["addr"], my_xlm_addr=maker["xlm"],
@@ -457,6 +468,78 @@ class TestRemainingReflectsNetworkKnownResponses:
         # but it must not ALSO be treated as an unrelated reserved
         # response once this node recognizes it as its own trade's.
         assert market.remaining_ticks(row) == 10 * LAPSE
+
+
+class TestForgedResponsesDoNotReserve:
+    """reserved_ticks used to sum every accepted FillResponse naming an
+    order, regardless of whose key signed it. verify_fill_response only
+    proves a response is genuinely signed by *somebody* (a plain relay
+    cannot always tell who the right signer is, see
+    node._handle_inbound_fill_response), so a stranger could mint a
+    free keypair, sign an 'accepted' response naming somebody else's
+    real order, and shrink that order's advertised remaining size to
+    zero for the whole network, including the real maker's own node,
+    without ever sending a FillRequest or holding a stroop. Fixed by
+    checking the response's maker_pubkey actually resolves to the
+    order's own maker_lapse_addr before counting it."""
+
+    def test_a_response_signed_by_a_stranger_does_not_reserve_anything(self, maker, taker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+
+        # 'taker' stands in for an attacker: a real, independent keypair
+        # with nothing to do with this order, signing a well-formed,
+        # genuinely-verifying 'accepted' response that simply names
+        # someone else's order_id.
+        forged = signed_fill_response(
+            taker, order_id=order["order_id"], session_id="f" * 16,
+            lapse_total=10 * LAPSE, accepted=True)
+        assert market.verify_fill_response(forged)  # genuinely signed...
+        assert market.store_fill_response(forged)   # ...and admitted, same as any relay would.
+
+        # ...but it must not shrink what the order still has to offer.
+        assert market.remaining_ticks(row) == 10 * LAPSE
+        assert len(market.open_orders(current_height=100)) == 1
+
+    def test_a_response_from_the_real_maker_still_reserves(self, maker, taker):
+        """The fix must not overcorrect into distrusting every response:
+        one genuinely signed by the order's own maker still counts,
+        exactly as before."""
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(maker, order["order_id"], "g" * 16, 4 * LAPSE)
+        assert market.remaining_ticks(row) == 6 * LAPSE
+
+    def test_reserved_ticks_is_zero_for_an_order_this_node_does_not_have(self):
+        # Nothing to check the signer against, so nothing is trusted.
+        assert market.reserved_ticks("no-such-order") == 0
+
+
+class TestFillResponseAdmissionCapsPerSigner:
+    """MAX_FILL_RESPONSES_TOTAL alone bounds the whole network's shared
+    budget, not any one signer's share of it: without a per-signer cap,
+    one attacker minting free, well-formed 'accepted' responses (see
+    TestForgedResponsesDoNotReserve for why those are cheap to produce)
+    could exhaust the entire global table, after which store_fill_response
+    refuses every genuine maker's real accept, network-wide, until
+    pruning catches up an hour later."""
+
+    def test_one_signer_is_capped_independent_of_the_global_limit(self, maker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_FILL_RESPONSES_PER_MAKER", 3)
+        for i in range(3):
+            resp = signed_fill_response(
+                maker, request_id=f"r{i}" * 8, order_id=f"o{i}",
+                session_id=f"s{i}" * 4, accepted=False, reason="no room")
+            assert market.store_fill_response(resp)
+        one_more = signed_fill_response(
+            maker, request_id="r-over" * 3, order_id="o-over",
+            session_id="s-over" * 3, accepted=False, reason="no room")
+        with pytest.raises(market.FillResponseRejected, match="already has"):
+            market.store_fill_response(one_more)
+        with pytest.raises(market.FillResponseRejected, match="already has"):
+            market.verify_fill_response(one_more)
 
 
 class TestOrderHash:
@@ -1102,7 +1185,7 @@ class TestListOrders:
         order = signed_order(maker, direction="sell", lapse_total=10 * LAPSE,
                              min_fill=5 * LAPSE)
         market.store_order(order)
-        _accepted_response(order["order_id"], "s" * 16, 7 * LAPSE)  # remaining: 3, below min_fill
+        _accepted_response(maker, order["order_id"], "s" * 16, 7 * LAPSE)  # remaining: 3, below min_fill
         for sort in market.BOOK_SORTS:
             page, _total = market.list_orders(100, "sell", sort=sort)
             assert page == [], f"sort={sort!r} should have hidden the dust remainder"

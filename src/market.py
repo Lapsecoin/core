@@ -387,15 +387,46 @@ def reserved_ticks(order_id):
     the maker's own attested exposure, and this node's own copy of it
     ages out (see FILL_RESPONSE_MAX_AGE_SECONDS) the same way a claim's
     did if the trade it names is not the one this node ever settles.
+
+    That last guarantee depends on the response actually having come
+    from the order's own maker, and nothing before this function checks
+    that: verify_fill_response only proves the response is genuinely
+    signed by *somebody* (see its own docstring and
+    node._handle_inbound_fill_response), because a plain relay cannot
+    always tell who the right signer is and must not be made to. Anyone
+    can mint a fresh, free keypair and sign an 'accepted' response
+    naming somebody else's real order_id; that response is admitted and
+    stored exactly like a genuine one. Trusting it here, where nothing
+    downstream re-checks identity, would let a stranger shrink any
+    order's advertised size to zero for the whole network, including
+    the real maker's own node, for the cost of one signature. So this
+    is where that check has to live: only a response whose maker_pubkey
+    actually resolves to this order's maker_lapse_addr counts.
     """
     ensure_tables()
+    order_row = get_order(order_id)
+    if order_row is None:
+        return 0
     known_sessions = {t.session_id for t in
                       Trade.select(Trade.session_id).where(Trade.order_id == order_id)}
     responses = (FillResponse.select()
                 .where(FillResponse.order_id == order_id,
                        FillResponse.accepted == True))          # noqa: E712
     return sum(r.lapse_total for r in responses
-              if r.session_id not in known_sessions)
+              if r.session_id not in known_sessions
+              and _signed_by_maker(r.maker_pubkey, order_row.maker_lapse_addr))
+
+
+def _signed_by_maker(pubkey_hex, maker_lapse_addr):
+    """Whether a hex pubkey resolves to the given address. False, not an
+    exception, on anything unparseable: a malformed maker_pubkey should
+    never reach here past verify_fill_response's own hex check, but this
+    is a read path with no reason to raise over stored data."""
+    try:
+        pubkey = bytes.fromhex(pubkey_hex)
+    except (ValueError, TypeError):
+        return False
+    return crypto.public_key_to_address(pubkey) == maker_lapse_addr
 
 
 def remaining_ticks(order_row):
@@ -902,6 +933,16 @@ MAX_FILL_REQUESTS_TOTAL = 10_000
 FILL_REQUEST_MAX_AGE_SECONDS = 3600
 
 MAX_FILL_RESPONSES_TOTAL = 10_000
+# Mirrors MAX_ORDERS_PER_MAKER / MAX_FILL_REQUESTS_PER_TAKER for the same
+# reason, and its absence used to be a real hole: nothing else here
+# stops one signer from spending the *entire* global
+# MAX_FILL_RESPONSES_TOTAL budget on free, self-signed responses (see
+# reserved_ticks' own history for why a response need not even answer a
+# real request to be admitted), which would refuse every genuine maker's
+# accept network-wide, not merely pollute one order's book. Counted by
+# the signer's own pubkey, the one thing here that costs a keypair to
+# change, exactly like every other per-signer cap in this module.
+MAX_FILL_RESPONSES_PER_MAKER = 200
 FILL_RESPONSE_MAX_AGE_SECONDS = 3600
 
 
@@ -1196,6 +1237,17 @@ def verify_fill_response(resp, expected_maker_addr=None):
         raise FillResponseRejected(
             f"confirm_depth must be at least {swap_mod.MIN_CONFIRM_DEPTH_FLOOR}")
 
+    # Last, and cheaper than the signature check that follows: same
+    # reasoning as market._check_admission. Keyed on the claimed
+    # maker_pubkey itself, ahead of the signature check that proves it
+    # is genuinely who signed this, for the same reason _check_admission
+    # runs before an order's own signature check: a maker already at its
+    # own limit is refused without this node paying for a FALCON
+    # verification first, and a forged pubkey is refused here for free
+    # rather than after an expensive check that would have rejected it
+    # anyway once _verify_fill_response_signature ran.
+    _check_fill_response_admission(resp["maker_pubkey"])
+
     try:
         pubkey = bytes.fromhex(resp["maker_pubkey"])
         signature = bytes.fromhex(resp["signature"])
@@ -1225,14 +1277,30 @@ def already_known_fill_response(resp):
     return FillResponse.get_or_none(FillResponse.request_id == rid) is not None
 
 
+def _check_fill_response_admission(maker_pubkey_hex):
+    """Refuse before the expensive signature check, and again as the
+    actual gate before a write, exactly like _check_admission and
+    _check_fill_request_admission. See MAX_FILL_RESPONSES_PER_MAKER for
+    why a per-signer cap has to exist here at all."""
+    ensure_tables()
+    if FillResponse.select().count() >= MAX_FILL_RESPONSES_TOTAL:
+        raise FillResponseRejected(
+            f"the response book is full (limit {MAX_FILL_RESPONSES_TOTAL})")
+    live = (FillResponse.select()
+            .where(FillResponse.maker_pubkey == maker_pubkey_hex)
+            .count())
+    if live >= MAX_FILL_RESPONSES_PER_MAKER:
+        raise FillResponseRejected(
+            f"this signer already has {live} responses here "
+            f"(limit {MAX_FILL_RESPONSES_PER_MAKER})")
+
+
 def store_fill_response(resp):
     """Persist a verified fill response. Returns False if already known."""
     ensure_tables()
     if FillResponse.get_or_none(FillResponse.request_id == resp["request_id"]) is not None:
         return False
-    if FillResponse.select().count() >= MAX_FILL_RESPONSES_TOTAL:
-        raise FillResponseRejected(
-            f"the response book is full (limit {MAX_FILL_RESPONSES_TOTAL})")
+    _check_fill_response_admission(resp["maker_pubkey"])
     FillResponse.create(
         request_id=resp["request_id"], order_id=resp["order_id"],
         session_id=resp["session_id"], lapse_total=resp["lapse_total"],

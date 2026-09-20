@@ -13,6 +13,7 @@ was killed or what was lost.
 import json
 import os
 import sys
+import threading
 import time
 
 import pytest
@@ -1298,6 +1299,107 @@ class TestAnswerFillRequests:
         # independently-tie-broken opening_mover call on the maker's
         # side would produce.
         assert first.i_move_first is False
+
+
+class TestAnswerFillRequestsIsSerializedAcrossThreads:
+    """_answer_one runs from two different threads that share nothing but
+    this process's own database: the swap worker's own periodic pass
+    (swap_worker.run_once) and a person clicking Accept on the Market
+    page, which Werkzeug hands a brand new thread per request (see
+    api._close_db_after_request's docstring). Both read this node's own
+    balance and _pending_send_total, then commit a Trade, without a lock
+    that read-then-commit is not atomic: two accepts racing each other
+    against two different orders of the same maker can each see the
+    exposure as it stood before the other committed, both pass the
+    funding check, and jointly promise more LAPSE than this node holds.
+    _ACCEPT_LOCK exists to make that impossible; this proves it.
+
+    Needs a real, file-backed database rather than the usual ":memory:"
+    fixture: peewee opens a separate connection per thread
+    (thread_safe=True), and two connections to ":memory:" are two
+    unrelated, empty databases. A file is what every real node actually
+    uses, so this is also the more faithful setup for a threading test.
+    """
+
+    def test_two_orders_racing_the_same_balance_never_both_commit(
+            self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "race.db")
+        storage_mod.db.init(db_path)
+        storage_mod.db.connect(reuse_if_open=True)
+        storage_mod.db.create_tables(trade_storage.TRADE_TABLES, safe=True)
+        trade_storage._initialised = True
+        try:
+            node = FakeDiscoveryNode(tmp_path, balances={})
+            order_a = make_order(order_id="order-a", direction="sell",
+                                 lapse_total=10 * LAPSE, maker_lapse=node.addr)
+            order_b = make_order(order_id="order-b", direction="sell",
+                                 lapse_total=10 * LAPSE, maker_lapse=node.addr)
+            req_a = make_request(order_id="order-a", session_id="a" * 16,
+                                 taker_lapse="takerA", taker_xlm="GA",
+                                 lapse_total=5 * LAPSE)
+            req_b = make_request(order_id="order-b", session_id="b" * 16,
+                                 taker_lapse="takerB", taker_xlm="GB",
+                                 lapse_total=5 * LAPSE)
+            engine, _lapse, _xlm = make_maker_engine(node)
+            # Enough for exactly one of the two 5-LAPSE fills, not both:
+            # the scenario a missing lock would let through.
+            engine.lapse.balances[node.addr] = 6 * LAPSE
+
+            # Widen the funding check into a window an unlocked version
+            # would race inside, and record when each thread was in it.
+            real_pending_send_total = swap_engine._pending_send_total
+            timeline = []
+            timeline_lock = threading.Lock()
+
+            def instrumented(asset):
+                start = time.monotonic()
+                result = real_pending_send_total(asset)
+                time.sleep(0.1)
+                with timeline_lock:
+                    timeline.append(
+                        (threading.current_thread().name, start, time.monotonic()))
+                return result
+
+            monkeypatch.setattr(swap_engine, "_pending_send_total", instrumented)
+
+            barrier = threading.Barrier(2)
+            results = {}
+
+            def run(name, order_row, req):
+                barrier.wait(timeout=5)
+                results[name] = swap_engine._answer_one(
+                    engine, node, "GMAKER", 5 * XLM, 2, order_row, req)
+
+            t1 = threading.Thread(target=run, args=("worker", order_a, req_a),
+                                  name="worker")
+            t2 = threading.Thread(target=run, args=("flask", order_b, req_b),
+                                  name="flask")
+            t1.start()
+            t2.start()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+
+            assert len(timeline) == 2, "both threads must have reached the funding check"
+            (_n1, s1, e1), (_n2, s2, e2) = sorted(timeline, key=lambda row: row[1])
+            assert e1 <= s2, (
+                "the two accept decisions overlapped in the funding-check "
+                "window; _ACCEPT_LOCK did not serialize them")
+
+            # With the balance and requests as sized above, exactly one of
+            # the two must have been accepted and the other refused for
+            # insufficient funds; not both, and not neither.
+            assert sorted(results.values()) == [False, True]
+            trades = list(Trade.select())
+            assert len(trades) == 1
+            committed = sum(t.lapse_total for t in trades)
+            assert committed <= engine.lapse.balances[node.addr]
+        finally:
+            storage_mod.db.close()
+            storage_mod.db.init(":memory:")
+            storage_mod.db.connect(reuse_if_open=True)
+            storage_mod.db.drop_tables(trade_storage.TRADE_TABLES, safe=True)
+            storage_mod.db.create_tables(trade_storage.TRADE_TABLES, safe=True)
+            trade_storage._initialised = True
 
 
 class TestAutoAcceptTrustFloor:
