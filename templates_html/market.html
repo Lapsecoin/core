@@ -268,7 +268,8 @@
   Most requests are answered the moment they arrive; anything still listed
   here could not be, for the reason shown below (a locked wallet, funds
   already committed elsewhere, a step larger than your current exposure
-  cap, or a counterparty below your auto-accept trust floor, set in
+  cap, a counterparty below your auto-accept trust floor, or an order
+  priced past your auto-accept rate floor/ceiling, all set in
   <a href="/settings">Settings</a>).
 </p>
 <div class="table-wrap">
@@ -304,6 +305,10 @@
           <span style="color:var(--loss)" title="{{ r.fit_note }}">Over your exposure cap</span>
         {% elif r.below_trust_floor %}
           <span style="color:var(--ink-dim)">Below your auto-accept trust floor</span>
+        {% elif r.below_rate_floor %}
+          <span style="color:var(--ink-dim)">This order is priced below your minimum sell rate</span>
+        {% elif r.above_rate_ceiling %}
+          <span style="color:var(--ink-dim)">This order is priced above your maximum buy rate</span>
         {% else %}
           <span style="color:var(--ink-dim)">Could not fund this leg right now</span>
         {% endif %}

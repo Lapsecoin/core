@@ -428,6 +428,10 @@ class TestDiscoveryWiring:
         assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
         assert depth >= swap_engine.MIN_CONFIRM_DEPTH
         assert kwargs["min_trust"] == settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST.default
+        assert kwargs["min_sell_rate"] == \
+            settings_mod.SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS.default
+        assert kwargs["max_buy_rate"] == \
+            settings_mod.SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS.default
 
     def test_response_checking_runs_with_the_right_arguments(
             self, tmp_path, monkeypatch):

@@ -1361,6 +1361,89 @@ class TestAutoAcceptTrustFloor:
         assert resp["accepted"] is False
 
 
+class TestAutoAcceptRateFloor:
+    """settings.SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS and
+    SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS: a floor/ceiling on the
+    order's own price, checked at accept time rather than at post time,
+    since a price is fixed once an order is signed but the book around
+    it is not. Same shape as the trust floor: left pending, not
+    declined, for decide_fill_request to answer by hand."""
+
+    def test_a_sell_order_below_the_floor_is_left_pending(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", price=1000, maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, min_sell_rate=1001) == 0
+        assert Trade.select().count() == 0
+        assert node.publish_fill_response_calls == []
+
+    def test_a_sell_order_at_or_above_the_floor_still_auto_accepts(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", price=1000, maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, min_sell_rate=1000) == 1
+        assert Trade.select().count() == 1
+
+    def test_a_buy_order_above_the_ceiling_is_left_pending(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(direction="buy", price=1000, maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, xlm = make_maker_engine(node)
+        xlm.balances["GMAKER"] = swap.xlm_for_lapse(req.lapse_total, 1000)
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, max_buy_rate=999) == 0
+        assert Trade.select().count() == 0
+        assert node.publish_fill_response_calls == []
+
+    def test_a_buy_order_at_or_below_the_ceiling_still_auto_accepts(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(direction="buy", price=1000, maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, xlm = make_maker_engine(node)
+        xlm.balances["GMAKER"] = swap.xlm_for_lapse(req.lapse_total, 1000)
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, max_buy_rate=1000) == 1
+        assert Trade.select().count() == 1
+
+    def test_default_floor_and_ceiling_exclude_nothing(self, tmp_path):
+        """Zero and inf, the defaults, must never bite a real order:
+        every stored order already has a positive price."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+
+    def test_a_rate_pending_request_can_still_be_accepted_by_hand(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", price=1000, maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, min_sell_rate=1001) == 0
+
+        # decide_fill_request never takes min_sell_rate/max_buy_rate: a
+        # person clicking Accept has already made the call the floor
+        # exists to require.
+        assert swap_engine.decide_fill_request(
+            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=True) is True
+        assert Trade.select().count() == 1
+
+
 class TestManualFillDecisions:
     """min_trust=inf: answer_fill_requests leaves every live request
     pending instead of deciding it (no counterparty ever clears an

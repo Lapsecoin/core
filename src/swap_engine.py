@@ -927,7 +927,7 @@ def reconcile_all(engine):
 # needs anything paid first to learn a session exists.
 
 def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
-                         min_trust=0.0):
+                         min_trust=0.0, min_sell_rate=0.0, max_buy_rate=float("inf")):
     """Decide every live fill request against this node's own orders.
     Returns how many were accepted.
 
@@ -942,8 +942,14 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     there would show, answered only by decide_fill_request once a person
     actually clicks Accept or Decline. Passing inf leaves every live
     request pending this way, which is how "review everything by hand"
-    is expressed here: there is no separate switch for it. Nothing about
-    the decision itself changes in either case, only who makes the call.
+    is expressed here: there is no separate switch for it. min_sell_rate
+    and max_buy_rate (settings.SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS and
+    SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS) do the same thing on price
+    rather than on the counterparty: an order's own price is fixed once
+    posted, but the book around it is not, so these are a standing floor
+    or ceiling checked at accept time, not at post time. Nothing about
+    the decision itself changes in any of these cases, only who makes
+    the call.
     """
     ensure_tables()
     # Not orders_by_maker: that hides a cancelled or expired order, and a
@@ -961,7 +967,8 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
             if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
                 continue
             if _answer_one(engine, node, my_xlm_addr, stranger_cap,
-                          confirm_depth, order_row, req, min_trust=min_trust):
+                          confirm_depth, order_row, req, min_trust=min_trust,
+                          min_sell_rate=min_sell_rate, max_buy_rate=max_buy_rate):
                 accepted += 1
     if accepted:
         log.info("[swap] accepted %d new fill request(s) as maker", accepted)
@@ -1044,30 +1051,35 @@ def _pending_send_total(asset):
 
 
 def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
-                order_row, req, min_trust=0.0):
+                order_row, req, min_trust=0.0, min_sell_rate=0.0,
+                max_buy_rate=float("inf")):
     """Decide one fill request against one order. Returns True if it was
     accepted; a decline is still an answer, just not a trade. Returning
     False can also mean the request is being left pending rather than
-    answered at all (see min_trust below), which is not the same thing
-    as a decline: nothing here has told the taker anything yet.
+    answered at all (see min_trust, min_sell_rate and max_buy_rate
+    below), which is not the same thing as a decline: nothing here has
+    told the taker anything yet.
 
     Every request that gets an actual answer, accept or decline, gets it
     exactly once: the caller already filters out anything with a stored
     response, so reaching here means this is the first and only look a
     request that ends up answered gets. A request left pending for
-    falling short of min_trust is looked at again on the next call,
-    since nothing was recorded to remember that it was already seen.
+    falling short of one of these floors is looked at again on the next
+    call, since nothing was recorded to remember that it was already
+    seen.
 
-    min_trust (see settings.SWAP_AUTO_ACCEPT_MIN_TRUST) only ever makes
-    this stricter than the hard checks above it (funding, the exposure
+    min_trust, min_sell_rate and max_buy_rate (see settings.
+    SWAP_AUTO_ACCEPT_MIN_TRUST, SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS
+    and SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS) only ever make this
+    stricter than the hard checks above them (funding, the exposure
     cap): those can still auto-decline a request outright regardless of
-    this argument, because there is nothing left to decide by hand once
-    a request structurally cannot be honoured. This argument exists so
-    decide_fill_request's manual Accept (default min_trust=0.0) can
-    answer a request that answer_fill_requests's automatic pass, called
-    with a positive floor, left pending for exactly this reason: the
-    request was otherwise fine, a person just had to be the one to say
-    yes.
+    these arguments, because there is nothing left to decide by hand
+    once a request structurally cannot be honoured. These arguments
+    exist so decide_fill_request's manual Accept (whose defaults leave
+    every floor off) can answer a request that answer_fill_requests's
+    automatic pass, called with a stricter floor, left pending for
+    exactly this reason: the request was otherwise fine, a person just
+    had to be the one to say yes.
     """
     kek, _seed = engine.secrets()
     if kek is None:
@@ -1146,6 +1158,20 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
         # declined, so it surfaces on the Market page's pending list
         # (market_routes.pending_maker_requests) for decide_fill_request
         # to accept or decline by hand instead.
+        return False
+
+    # order_row.price_stroops_per_lapse is fixed once the order is
+    # signed (market.py's module docstring: an order is immutable), but
+    # the book around it is not, so this is a standing floor/ceiling
+    # checked fresh at accept time rather than something the order's own
+    # price could enforce on its own. Same reasoning and same effect as
+    # the trust floor just above: left pending, not declined, for a
+    # person to override on the Market page.
+    if (order_row.direction == "sell"
+            and order_row.price_stroops_per_lapse < min_sell_rate):
+        return False
+    if (order_row.direction == "buy"
+            and order_row.price_stroops_per_lapse > max_buy_rate):
         return False
 
     # opening_mover is computed from the same mutual, unforgeable data
