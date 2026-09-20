@@ -266,12 +266,12 @@
 
 <script>
 (function () {
-  // A step's own state (sent, confirming, settled) advances on the
-  // worker's own pace (swap_worker.POLL_SECONDS), not on this browser
-  // tab's schedule, so a page left open shows a trade as stuck long
-  // after it has actually moved. Same reasoning as market.html's own
-  // refresh: a plain reload, skipped while the tab is hidden or a form
-  // field has focus, is the simplest correct way to keep this live
+  // A step's own state (sent, confirming, settled) advances as the
+  // swap worker reacts to chain/gossip events on its own, not on this
+  // browser tab's schedule, so a page left open shows a trade as stuck
+  // long after it has actually moved. Same reasoning as market.html's
+  // own refresh: a plain reload, skipped while the tab is hidden or a
+  // form field has focus, is the simplest correct way to keep this live
   // without a new endpoint or per-message traffic.
   var REFRESH_MS = 20000;
   setInterval(function () {

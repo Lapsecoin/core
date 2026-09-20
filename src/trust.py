@@ -37,18 +37,21 @@ decrementing it: a partial penalty would price honesty and dishonesty on
 the same curve, and they are not the same thing.
 
 What it does not do is fire on a mere timeout, or stay fired once the
-reason for it stops being true. A stalled trade is not a slash (see
-swap_engine.consider_abandonment for the margin required first), and
+reason for it stops being true. A stalled trade is not a slash on its
+own (see swap_engine.is_delinquent for the margin required first), and
 this node is never the last word on whether one happened: standing here
-is computed fresh from this node's own Trade rows every time it is
-asked, never incremented and stored. A trade this node marked abandoned
-that later, genuinely, settles (a node that was offline for entirely
-mundane reasons, paying what it always owed, late) is simply a Trade row
-whose status changed back (see swap_engine.recheck_abandoned); there is
-no separate counter to remember to also fix, because there is no counter
-at all. The same goes for a gossiped step receipt claiming a payment
-never arrived: that claim is re-checked against the chain on the same
-schedule as an unverified one (see verify_pending_receipts), not
+is computed fresh from this node's own Trade and Increment rows every
+time it is asked, never incremented and stored. There is no
+TRADE_ABANDONED status any more, and nothing to reverse if a late
+payment arrives (a node that was offline for entirely mundane reasons,
+paying what it always owed, late): a trade simply stays "stalled" for as
+long as a leg is missing, is_delinquent recomputes whether that still
+counts against the peer from the current chain height every single
+call, and the moment the missing leg settles it stops counting on the
+very next call, nothing was ever written down that needed to be written
+back. The same goes for a gossiped step receipt claiming a payment never
+arrived: that claim is re-checked against the chain the next time
+anything asks for this address's standing (see _network_tally), not
 accepted once and then trusted forever, because whether it never arrived
 is true only until the moment it does.
 """
@@ -139,44 +142,59 @@ def score(completed_count, completed_ticks, abandoned_count,
 
 
 # ---------------------------------------------------------------------------
-# Local history: derived from this node's own Trade rows, never stored
+# Local history: derived from this node's own Trade/Increment rows, never
+# stored
 # ---------------------------------------------------------------------------
 #
 # There used to be a PeerRecord table here, incremented once per completed
-# or abandoned trade and read back as the answer. That is exactly the
-# design this module's own docstring now warns against: an incremented
-# counter has no way to notice that the trade it counted against later
-# resolved differently (a late payment settling what looked abandoned),
-# so "abandoned" became a fact this node could assert once and never
-# revisit. A Trade row's own `status` is already the one place that
-# outcome lives, and it already changes when the truth does (see
-# swap_engine.recheck_abandoned); querying it fresh means there is
-# nothing left over to fall out of sync with it.
+# or abandoned trade and read back as the answer. Then a TRADE_ABANDONED
+# status on Trade itself, which was the same problem one layer down: a
+# status set once and needing a dedicated pass (swap_engine.recheck_abandoned,
+# since removed) to notice when it stopped being true. Both were an
+# incremented or written verdict with no way to hear about a trade that
+# later resolved differently. A Trade row's own `status` plus its
+# Increment rows are already the one place that outcome lives, and
+# swap_engine.is_delinquent recomputes whether a stall currently counts
+# against a peer from exactly those rows and the current chain height,
+# fresh, every call: there is nothing left over to fall out of sync with.
 
-def local_tally(addr):
-    """This node's own completed/abandoned counts and volumes against
-    addr, computed fresh from Trade rows every call rather than read
-    back from a running total. Cheap: a node's own trade history with
-    one counterparty is small by construction (see MAX_ORDERS_PER_MAKER
-    and friends bounding the market generally), so this is a couple of
-    indexed queries, not a scan.
+def local_tally(addr, current_height=None):
+    """This node's own completed/delinquent counts and volumes against
+    addr, computed fresh from Trade and Increment rows every call rather
+    than read back from a running total. Cheap: a node's own trade
+    history with one counterparty is small by construction (see
+    MAX_ORDERS_PER_MAKER and friends bounding the market generally), so
+    this is a couple of indexed queries plus, at most, one row scan per
+    still-stalled trade with this peer, not a scan of everything.
+
+    current_height is the current LapseCoin height, needed to tell
+    whether a stalled trade has been delinquent long enough to count
+    (see swap_engine.is_delinquent). Without it (the default) delinquency
+    simply cannot be computed, and this reports none, the same way an
+    unreachable chain never zeroes anyone's standing elsewhere in this
+    module: not knowing is not the same as knowing it is fine.
     """
-    from trade_storage import Trade, TRADE_COMPLETED, TRADE_ABANDONED
+    import swap_engine as swap_engine_mod
+    from trade_storage import Trade, TRADE_COMPLETED, TRADE_STALLED
 
     completed = list(Trade.select()
                      .where(Trade.peer_lapse_addr == addr,
                             Trade.status == TRADE_COMPLETED))
-    abandoned = list(Trade.select()
-                     .where(Trade.peer_lapse_addr == addr,
-                            Trade.status == TRADE_ABANDONED)
-                     .order_by(Trade.updated_at.desc()))
+    delinquent = []
+    if current_height is not None:
+        stalled = (Trade.select()
+                  .where(Trade.peer_lapse_addr == addr,
+                         Trade.status == TRADE_STALLED)
+                  .order_by(Trade.updated_at.desc()))
+        delinquent = [t for t in stalled
+                     if swap_engine_mod.is_delinquent(t, current_height)]
     return {
         "completed_count": len(completed),
         "completed_lapse": sum(t.lapse_total for t in completed),
         "last_completed_at": max((t.updated_at for t in completed), default=0.0),
-        "abandoned_count": len(abandoned),
-        "last_abandoned_at": abandoned[0].updated_at if abandoned else 0.0,
-        "last_abandon_session": abandoned[0].session_id if abandoned else "",
+        "abandoned_count": len(delinquent),
+        "last_abandoned_at": delinquent[0].updated_at if delinquent else 0.0,
+        "last_abandon_session": delinquent[0].session_id if delinquent else "",
     }
 
 
@@ -187,18 +205,23 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
     user deciding whether to trade with somebody deserves to see what the
     number is made of rather than be handed it.
 
-    node is optional and, when given, folds in this node's own verified
-    reading of gossiped step receipts (see market.py's step-receipts
-    section) naming addr, for sessions this node was not itself a party
-    to. Without it, standing is exactly the old bilateral figure, built
-    only from trades this node personally ran with addr; a caller that
-    never passes node keeps behaving exactly as before. See
-    _network_tally for what "verified" means here and why a receipt this
-    node cannot currently check contributes nothing either way rather
-    than being guessed at.
+    node is optional and, when given, does two things a bare address
+    cannot: supplies the current LapseCoin height that local_tally needs
+    to judge a stalled trade of this node's own (see swap_engine.
+    is_delinquent), and folds in this node's own verified reading of
+    gossiped step receipts (see market.py's step-receipts section) naming
+    addr, for sessions this node was not itself a party to. Without node,
+    standing is the bilateral figure built only from trades this node
+    personally ran with addr, with no stall of its own counted as
+    delinquent (current height unknown) and nothing network-sourced
+    folded in; a caller that never passes node keeps behaving exactly as
+    before. See _network_tally for what "verified" means here and why a
+    receipt this node cannot currently check contributes nothing either
+    way rather than being guessed at.
     """
     ensure_tables()
-    local = local_tally(addr)
+    current_height = node.view.height if node is not None else None
+    local = local_tally(addr, current_height)
     completed_count = local["completed_count"]
     completed_lapse = local["completed_lapse"]
     abandoned_count = local["abandoned_count"]
@@ -215,6 +238,7 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
     # place.
     net_abandoned = net_count = net_lapse = 0
     if node is not None:
+        _verify_addr_receipts(node, addr, current_height)
         net_abandoned, net_count, net_lapse, net_last_completed = \
             _network_tally(addr)
         if net_abandoned or net_count:
@@ -252,19 +276,18 @@ def _network_tally(addr):
     again from a receipt this node itself likely emitted would double
     them).
 
-    Deliberately DB-only: this runs on every trust lookup, including from
-    a page render, so it must never itself make a network call. Turning
-    an unverified receipt into a verified one is verify_pending_receipts'
-    job, run in the background by the swap worker on its own pace; by the
-    time a lookup happens here, a receipt is either already checked or it
-    contributes nothing yet, never a guess either way.
+    DB-only: reads whatever verified cache _verify_addr_receipts (called
+    first by get_detail, whenever it has a node to verify with) already
+    populated for this address. A receipt this node has never had reason
+    to check yet, or one an outage left unresolved, contributes nothing
+    either way rather than being guessed at.
 
     A receipt's reporter is not checked against addr, deliberately:
-    verify_receipt_against_chain (see verify_pending_receipts) confirms
-    or refutes the claim against the chain itself, not against who
-    signed it, so a false claim fails that check regardless of who made
-    it. Identity only ever mattered for admission control and dedup on
-    the way in, never for what a receipt is worth once verified.
+    verify_receipt_against_chain (see _verify_addr_receipts) confirms or
+    refutes the claim against the chain itself, not against who signed
+    it, so a false claim fails that check regardless of who made it.
+    Identity only ever mattered for admission control and dedup on the
+    way in, never for what a receipt is worth once verified.
     """
     import market as market_mod
     from trade_storage import Trade, StepReceipt
@@ -288,62 +311,89 @@ def _network_tally(addr):
     return abandoned, len(completed_sessions), completed_lapse, last_completed_at
 
 
-def verify_pending_receipts(node, limit=20):
-    """Chain-check up to `limit` receipts, any address, and cache the
-    verdict. See _network_tally for why every trust lookup only ever
-    reads that cache rather than triggering this itself.
 
-    Two different queues, because "settled" and "missed" are not the
-    same kind of claim. A settled claim is monotonic: once a payment is
-    confirmed, it does not later un-happen (barring a reorg, and an
-    active trade already re-checks its own legs against that
-    continuously; a third party's settled receipt is not re-chased here,
-    which is an accepted, narrower gap than the one this function
-    exists to close). A missed claim is not monotonic: "the payment has
-    not arrived" is true only until the moment it does, and a node that
-    was genuinely offline rather than dishonest can make it false at any
-    time by finally sending what it owed. So unverified receipts (either
-    outcome) are checked first, and any spare budget goes to re-checking
-    already-verified "missed" claims, oldest-checked first, rather than
-    trusting that verdict forever. That re-check is the network-wide
-    half of redemption; swap_engine.recheck_abandoned is the local half,
-    for the node this payment was actually owed to.
+# How many receipts _verify_addr_receipts will chain-check in one call.
+# A real counterparty has a handful of receipts naming it; this exists
+# for the address that does not. verify_receipt's reporter check means
+# spamming one victim address still costs an attacker one of their own
+# MAX_RECEIPTS_PER_REPORTER slots per receipt, but nothing stops them
+# from paying that cost from many cheaply-generated addresses, up to
+# MAX_RECEIPTS_TOTAL network-wide, all naming the same victim. Without
+# this cap, the first trust lookup for that address (a market page
+# render, easily triggered by anyone, not just the victim) would make
+# one chain call, possibly a Horizon one, per spammed receipt,
+# synchronously, in that one request. This is the difference between a
+# handful of lookups and hundreds: bounded per call, not per address.
+MAX_CHAIN_CHECKS_PER_LOOKUP = 20
 
-    Meant to be called once per swap-worker pass, the same cadence
-    everything else about trades already runs on, not from a request
-    path: this is the one place in the step-receipts design that does
-    real chain I/O (a Horizon call for an XLM leg is possible here), and
-    bounding it per pass is what keeps that cost predictable instead of
-    proportional to how many receipts happen to be sitting around.
-    Returns how many were resolved; an outage leaves a receipt exactly
-    as it was for the next pass to try again, never guessed at.
+
+def _verify_addr_receipts(node, addr, current_height):
+    """Chain-check up to MAX_CHAIN_CHECKS_PER_LOOKUP of this address's
+    on-file receipts that still need it, right here, on the caller's own
+    thread, at the moment something actually asks for addr's standing.
+    Returns how many were (re)checked.
+
+    A real address, with a real handful of counterparties, never
+    notices the cap: everything it has gets checked in one call, same as
+    before. An address somebody has spammed with receipts (see
+    MAX_CHAIN_CHECKS_PER_LOOKUP for how, and why the cap exists at all)
+    instead gets a bounded number of chain calls per lookup and no more;
+    receipts left over this call are exactly as unverified as they were
+    before it, for the next lookup to make progress on, not a scan this
+    request pays for in full. A background sweep would grind through a
+    spam pile faster, but only by bringing back the always-on cost this
+    design exists to avoid; this trades that for the pile taking longer
+    to resolve, on whichever caller last happened to ask about it.
+
+    "settled" and "missed" are not the same kind of claim. A settled
+    claim is monotonic: once verified true or caught false, it never
+    needs re-checking (barring a reorg, and an active trade of this
+    node's own already re-checks its own legs continuously; a third
+    party's settled receipt is not re-chased here, an accepted, narrower
+    gap). A missed claim is not monotonic: "the payment has not arrived"
+    is true only until the moment it does, and a node that was genuinely
+    offline rather than dishonest can make it false at any time by
+    finally sending what it owed and gossiping a settled receipt for the
+    same step, so a claim currently believed missing is re-verified
+    against the live chain every time it is asked about, at most once
+    per height (see StepReceipt.verified_at_height) so reloading the
+    same page twice inside one block does no repeat chain I/O.
+
+    There is no scheduled sweep doing this in the background any more:
+    the previous design polled a fixed batch of receipts, any address,
+    every worker pass, whether or not anyone was looking. A receipt
+    nobody's trust ever depends on now costs nothing at all, which is
+    the entire point of computing this lazily instead of eagerly.
     """
+    import market as market_mod
     import swap_engine as swap_engine_mod
-    from trade_storage import StepReceipt, ensure_tables as _ensure
+    from trade_storage import ensure_tables as _ensure
 
     _ensure()
     engine = _lightweight_engine(node)
-
-    pending = list(StepReceipt.select()
-                  .where(StepReceipt.verified.is_null())
-                  .limit(limit))
-    remaining = limit - len(pending)
-    if remaining > 0:
-        pending += list(StepReceipt.select()
-                        .where(StepReceipt.outcome == "missed",
-                               StepReceipt.verified == True)  # noqa: E712
-                        .order_by(StepReceipt.received_at)
-                        .limit(remaining))
-
-    resolved = 0
-    for r in pending:
+    checked = 0
+    for r in market_mod.receipts_for_addr(addr):
+        if checked >= MAX_CHAIN_CHECKS_PER_LOOKUP:
+            break
+        # False is permanent either way: a false "settled" claim can
+        # never become true (its tx_hash is fixed), and a "missed" claim
+        # caught false means the payment was already found, which cannot
+        # un-happen (barring a reorg, the same accepted, narrower gap
+        # noted above). True is permanent for "settled" but not for
+        # "missed", which is re-checked at most once per height.
+        if r.verified is False:
+            continue
+        if r.verified is True and (r.outcome != "missed"
+                                   or r.verified_at_height == current_height):
+            continue
         try:
             r.verified = swap_engine_mod.verify_receipt_against_chain(engine, r)
         except swap_engine_mod.Unreachable:
             continue
+        r.verified_at_height = current_height
         r.save()
-        resolved += 1
-    return resolved
+        checked += 1
+    return checked
 
 
 def _lightweight_engine(node):
@@ -403,10 +453,11 @@ def mutual_scores(node, peer_addr):
     itself party to. That is a checked fact, not the peer's word, so
     trusting it here carries none of the risk a bare broadcast opinion
     would: a false claim fails verification regardless of who signed it,
-    and, unlike this node's own Trade rows, is re-checked periodically
-    rather than trusted forever (see verify_pending_receipts). Bilateral
-    history and network-verified history are simply added together
-    before either half of this function reads them.
+    and, unlike this node's own Trade rows, a "missed" claim is
+    re-checked on demand rather than trusted forever (see
+    _verify_addr_receipts). Bilateral history and network-verified
+    history are simply added together before either half of this
+    function reads them.
     """
     peer_age = address_age_blocks(node, peer_addr)
     peer_balance = node.view.state.get_balance(peer_addr)

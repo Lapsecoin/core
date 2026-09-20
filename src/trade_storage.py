@@ -77,14 +77,19 @@ LEG_DEAD = "dead"
 TRADE_ACTIVE = "active"
 # Deadline missed, but not blamed. A counterparty restarting a node looks
 # exactly like this, so it carries no penalty and resumes on its own.
+#
+# There used to be a further status, TRADE_ABANDONED, entered once a
+# stall ran long enough to slash standing and reversed by a dedicated
+# recheck pass if a late payment settled it after all. That was a stored
+# verdict needing active maintenance to keep correct. A trade now simply
+# stays STALLED for as long as it is missing a leg, however long that
+# is: the ordinary advance loop keeps retrying it (nothing special about
+# "stalled for an hour" versus "stalled for a minute"), and whether it
+# currently counts against the peer's standing is computed fresh every
+# time from these same rows (see swap_engine.is_delinquent), never
+# written down. See trust.py's module docstring for why that matters.
 TRADE_STALLED = "stalled"
 TRADE_COMPLETED = "completed"
-# Deadline missed by a wide margin, by the chain's own clock; see
-# swap_engine.Engine.consider_abandonment. Only this slashes standing
-# (trust.local_tally reads it straight off this status), and it is not
-# permanent: a late, genuine settlement flips it back (see
-# swap_engine.Engine.recheck_abandoned).
-TRADE_ABANDONED = "abandoned"
 
 
 class Order(_TradeBase):
@@ -333,13 +338,38 @@ class StepReceipt(_TradeBase):
     # This node's own re-check of the claim against the chain(s): None
     # until looked at, then True/False. Lazy on purpose, see trust.py:
     # a receipt sits here unverified, at the cost of one row, until
-    # something actually needs this specific address's trust.
+    # something actually needs this specific address's trust, and that
+    # lookup happens on the caller's own thread at query time, not in a
+    # background sweep.
     verified = BooleanField(null=True, default=None)
+    # The LapseCoin height verified was last set at. A "settled" verdict
+    # is monotonic (see trust.py) and never re-checked once true or once
+    # a false claim is caught, so this only matters for "missed": it is
+    # what lets a trust lookup skip re-verifying a claim it already
+    # checked at this exact height, without needing a scheduled sweep to
+    # decide when a re-check is "due".
+    verified_at_height = IntegerField(default=0)
 
 
 TRADE_TABLES = [Order, Trade, Increment, FillRequest, FillResponse, StepReceipt]
 
 _initialised = False
+
+
+def _migrate_receipt_verified_at_height():
+    """Backfill StepReceipt.verified_at_height for a database created
+    before that column existed. create_tables(safe=True) below only
+    creates missing tables, not missing columns on one that already
+    exists, so an upgrade needs this the same way storage.py's own
+    _migrate_addrindex_memo does for the chain database. Existing rows
+    get 0, "never checked at any height", which is exactly what a fresh
+    row would carry, so nothing is lost by defaulting rather than
+    recomputing.
+    """
+    cols = {r[1] for r in db.execute_sql("PRAGMA table_info(stepreceipt)").fetchall()}
+    if "verified_at_height" not in cols:
+        db.execute_sql("ALTER TABLE stepreceipt ADD COLUMN verified_at_height "
+                       "INTEGER NOT NULL DEFAULT 0")
 
 
 def init_tables():
@@ -351,6 +381,7 @@ def init_tables():
     """
     global _initialised
     db.create_tables(TRADE_TABLES, safe=True)
+    _migrate_receipt_verified_at_height()
     _initialised = True
 
 

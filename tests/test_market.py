@@ -991,6 +991,7 @@ class _TickerState:
 
 class _TickerView:
     def __init__(self, balances=None):
+        self.height = 1000
         self.chain = [{"height": 1000}]
         self.state = _TickerState(balances)
 

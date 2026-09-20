@@ -58,7 +58,7 @@ import xlm as xlm_mod
 from trade_storage import (
     Increment, Trade, StepReceipt,
     LEG_PENDING, LEG_INTENT, LEG_SUBMITTED, LEG_SETTLED, LEG_DEAD,
-    TRADE_ABANDONED, TRADE_ACTIVE, TRADE_COMPLETED, TRADE_STALLED,
+    TRADE_ACTIVE, TRADE_COMPLETED, TRADE_STALLED,
     ensure_tables,
 )
 
@@ -82,17 +82,17 @@ DEFAULT_CONFIRM_DEPTH = swap.MIN_CONFIRM_DEPTH_FLOOR
 # enough is blaming somebody whose node was restarting.
 STEP_TIMEOUT_MULTIPLIER = 6
 
-# Past this, with the peer observably reachable throughout, a stall
-# becomes abandonment. Roughly an hour on a two-minute chain. Long on
-# purpose: reloading a long chain at startup is slow, and that must never
-# read as defection.
+# Past this, a stall starts counting against the peer's standing (see
+# is_delinquent). Roughly an hour on a two-minute chain. Long on purpose:
+# reloading a long chain at startup is slow, and that must never read as
+# defection.
+#
+# Expressed in seconds here only because an hour is an easier number to
+# set and sanity-check than "30 blocks"; ABANDON_AFTER_BLOCKS below,
+# derived from it once, is the number is_delinquent actually compares
+# against a public height with, since a wall-clock second is this node's
+# own and a block is everyone's.
 ABANDON_AFTER_SECONDS = 3600
-
-# The same margin, in LapseCoin blocks, added on top of a step's own
-# deadline_height before consider_abandonment will actually blame anyone.
-# This is the number that matters for the verdict (see consider_abandonment);
-# ABANDON_AFTER_SECONDS above is only the cheap wall-clock pre-filter that
-# decides whether to bother checking chain height at all.
 ABANDON_AFTER_BLOCKS = ABANDON_AFTER_SECONDS // 120
 
 
@@ -396,6 +396,54 @@ def deadline_height(base_height, confirm_depth):
     anyone's clock or word.
     """
     return base_height + step_timeout_blocks(confirm_depth)
+
+
+def is_delinquent(trade, current_height):
+    """Whether this trade currently counts against its counterparty's
+    standing: this node paid a step, by the chain's own clock the
+    counterparty has had ABANDON_AFTER_BLOCKS past that step's own
+    deadline_height to reciprocate, and still has not.
+
+    A pure function of Increment rows and a height, both public facts,
+    recomputed fresh every time this is asked (see trust.local_tally)
+    rather than decided once and written down. That is the entire point:
+    there used to be a TRADE_ABANDONED status set here and a separate
+    recheck_abandoned pass to reverse it if a late payment arrived, which
+    is maintenance a stored verdict needs and a computed one does not.
+    The moment the missing leg settles, in_state flips to LEG_SETTLED
+    (the ordinary advance loop already does that, see _update_timing) and
+    this simply returns False on the very next call, nothing to reverse.
+
+    Only ever true for a still-STALLED trade: one that finished, however
+    late, is TRADE_COMPLETED and this never runs against it again.
+
+    This node not itself owing the next move is not a case this needs to
+    rule out separately: the first not-fully-settled increment is either
+    one this node has paid and is waiting on (checked below) or one this
+    node has not paid yet, and the loop returns False for the latter
+    without looking further, exactly as the old consider_abandonment did.
+
+    No longer requires the peer to have reciprocated some earlier step
+    first: a Trade row cannot exist without a verified, signed accept
+    from the actual maker (market.py's FillRequest/FillResponse
+    handshake), so the unsolicited-dust scenario that guard defended
+    against is structurally unreachable regardless, and requiring it
+    anyway meant a peer defecting on the very first step they owed, the
+    common case, could never be judged at all.
+    """
+    if trade.status != TRADE_STALLED:
+        return False
+    for inc in (Increment.select()
+                .where(Increment.session_id == trade.session_id)
+                .order_by(Increment.n)):
+        if inc.out_state == LEG_SETTLED and inc.in_state == LEG_SETTLED:
+            continue
+        if inc.out_state != LEG_SETTLED:
+            return False
+        if not inc.deadline_height:
+            return False
+        return current_height >= inc.deadline_height + ABANDON_AFTER_BLOCKS
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -769,148 +817,24 @@ class Engine:
         trade.updated_at = time.time()
         trade.stalled_since = 0.0
         trade.save()
-        # Nothing else to update: trust reads completed/abandoned counts
-        # straight off Trade.status (see trust.local_tally), so this save
-        # is the entire effect on this peer's standing.
+        # Nothing else to update: trust reads completed counts straight
+        # off Trade.status, and delinquency is computed fresh from
+        # Increment rows (see trust.local_tally, is_delinquent), so this
+        # save is the entire effect on this peer's standing.
         log.info("[swap] %s completed: %d steps delivered",
                  trade.session_id, trade.increment_count)
-
-    # -- blame ---------------------------------------------------------
-
-    def consider_abandonment(self, trade):
-        """Decide whether a long stall is finally somebody's fault.
-
-        Two conditions:
-
-        The deadline is long past, by the chain's own clock, not this
-        node's wall clock: current LapseCoin height must clear the step's
-        deadline_height (see swap_engine.deadline_height) by
-        ABANDON_AFTER_BLOCKS. Because that height and that margin are
-        public and fixed by the handshake, this verdict is one any node
-        holding the same order/FillRequest/FillResponse and the same
-        chain data would reach too, not a private judgement call. The
-        stalled_since/ABANDON_AFTER_SECONDS check that runs first is a
-        cheap wall-clock pre-filter only, so an actively-progressing
-        trade is not re-checked against the chain every pass.
-
-        This node does not itself owe the next move. A trade held up by
-        our own unsent leg is our problem, not theirs.
-
-        This used to also require the peer to have already reciprocated
-        at least one step, to rule out an attacker sending unsolicited
-        dust tagged with a session the victim never agreed to and then
-        reporting them as a defector. That gate predates the handshake
-        redesign (market.py's FillRequest/FillResponse section): a Trade
-        row can no longer exist here without a verified, signed accept
-        from the actual maker (see swap_engine.check_fill_responses) or a
-        verified request the maker itself chose to answer (_answer_one),
-        so the scenario that gate defended against is now structurally
-        unreachable, and requiring it besides meant a peer who defected on
-        the very first step they owed, the most common case, could never
-        be blamed at all. Removed rather than left in place: the mutual,
-        signed handshake behind every Trade row already is the acceptance
-        the old gate was trying to establish from on-chain reciprocation.
-
-        Deliberately no longer asks whether the peer looked reachable.
-        That came from liveness notes which said a node was powered on,
-        not that it had seen this trade, and publishing them tied a
-        payable address to the network.
-        """
-        if trade.status != TRADE_STALLED or not trade.stalled_since:
-            return False
-        if time.time() - trade.stalled_since < ABANDON_AFTER_SECONDS:
-            return False
-
-        current_height = self.lapse.height()
-        pending = (Increment.select()
-                   .where(Increment.session_id == trade.session_id)
-                   .order_by(Increment.n))
-        for inc in pending:
-            if inc.out_state == LEG_SETTLED and inc.in_state == LEG_SETTLED:
-                continue
-            # This node still owes its own leg, so the delay is not the
-            # peer's to answer for.
-            if inc.out_state != LEG_SETTLED and not inc.i_move_first:
-                return False
-            if inc.out_state == LEG_SETTLED and inc.in_state != LEG_SETTLED:
-                if not inc.deadline_height:
-                    # Not yet computable (should be rare: step 1 always has
-                    # one from accept, and completing step n-1 always
-                    # gives step n one, see _propagate_deadline). Wait
-                    # rather than guess.
-                    return False
-                if current_height < inc.deadline_height + ABANDON_AFTER_BLOCKS:
-                    return False
-                trade.status = TRADE_ABANDONED
-                trade.updated_at = time.time()
-                trade.note = (f"step {inc.n}: paid and not reciprocated by "
-                              f"height {inc.deadline_height + ABANDON_AFTER_BLOCKS}")
-                trade.save()
-                # Nothing else to update: trust reads completed/abandoned
-                # counts straight off Trade.status (trust.local_tally),
-                # so this save is the entire effect on this peer's
-                # standing, and it is exactly as reversible as the save
-                # itself: see recheck_abandoned below.
-                log.warning("[swap] %s abandoned by %s at step %d",
-                            trade.session_id, trade.peer_lapse_addr[:24], inc.n)
-                return True
-            return False
-        return False
-
-    def recheck_abandoned(self, trade):
-        """Whether a trade this node already gave up on has, since then,
-        genuinely finished: the specific leg that was missing might have
-        arrived late, from a counterparty who was offline rather than
-        dishonest. Un-abandons it (back to TRADE_ACTIVE) the moment that
-        leg is found settled, and lets the ordinary advance() loop take
-        it the rest of the way, including any steps after the one that
-        stalled which never got a chance to run.
-
-        This is the entire redemption mechanism on this node's own side:
-        trust is derived straight from Trade.status (see
-        trust.local_tally), so flipping the status here is the whole
-        fix, not step one of a fix. See trust.verify_pending_receipts
-        for the matching half of this for a receipt gossiped about a
-        session this node was not itself a party to.
-
-        Read-only towards sending: this never builds or signs anything
-        on this node's own behalf, only asks the chain whether the
-        counterparty's leg now exists, which is safe to do even though
-        this node has already zeroed its own exposure toward them.
-        Returns True if it un-abandoned the trade.
-        """
-        if trade.status != TRADE_ABANDONED:
-            return False
-        stuck = (Increment.select()
-                .where(Increment.session_id == trade.session_id,
-                       Increment.out_state == LEG_SETTLED,
-                       Increment.in_state != LEG_SETTLED)
-                .order_by(Increment.n)
-                .first())
-        if stuck is None:
-            return False
-        self.check_inbound(trade, stuck)
-        stuck = Increment.get(Increment.id == stuck.id)
-        if stuck.in_state != LEG_SETTLED:
-            return False
-        trade.status = TRADE_ACTIVE
-        trade.stalled_since = 0.0
-        trade.updated_at = time.time()
-        trade.note = f"step {stuck.n}: settled late; abandonment reversed"
-        trade.save()
-        log.info("[swap] %s: step %d settled late; un-abandoning, trade resumes",
-                 trade.session_id, stuck.n)
-        return True
 
     @staticmethod
     def _peer_ever_reciprocated(trade):
         """Whether the counterparty has settled a leg of their own here.
 
-        No longer consulted by consider_abandonment (see its docstring),
-        kept only because it is still a true, useful fact for a reader to
-        compute (e.g. the UI badge showing whether a stalled trade has any
-        history at all). A settled inbound leg is a transaction the
-        counterparty signed, carrying this trade's session tag, which
+        Not consulted by is_delinquent (a peer's very first owed step can
+        be judged with nothing else to go on, see that function's
+        docstring); kept because it is still a true, useful fact for a
+        reader to compute, e.g. the Trades page distinguishing a peer who
+        has never sent anything at all from one mid-trade who has already
+        reciprocated earlier steps. A settled inbound leg is a transaction
+        the counterparty signed, carrying this trade's session tag, which
         nobody else could have produced.
 
         Reading agreement off the chain rather than off a protocol message
@@ -1002,15 +926,25 @@ def reconcile_all(engine):
 # the other chain), and a maker that has explicitly agreed no longer
 # needs anything paid first to learn a session exists.
 
-def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth):
+def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+                         auto=True):
     """Decide every live fill request against this node's own orders.
     Returns how many were accepted.
 
     Nothing here waits on a chain except the two balance checks, so a
     locked wallet or an unreachable one just leaves requests unanswered
     for the next pass rather than risking a decision it cannot back.
+
+    auto=False (see settings.SWAP_AUTO_ACCEPT_FILLS) leaves every live
+    request exactly where it is instead: still pending, still visible on
+    the Market page with the same trust detail a click there would show,
+    answered only by decide_fill_request once a person actually clicks
+    Accept or Decline. Nothing about the decision itself changes between
+    the two modes, this only decides who makes the call.
     """
     ensure_tables()
+    if not auto:
+        return 0
     # Not orders_by_maker: that hides a cancelled or expired order, and a
     # request that arrived (and was already accepted) before this node
     # cancelled its own order still deserves completion.
@@ -1031,6 +965,54 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth)
     if accepted:
         log.info("[swap] accepted %d new fill request(s) as maker", accepted)
     return accepted
+
+
+def decide_fill_request(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+                        request_id, accept):
+    """Answer exactly one fill request against one of this node's own
+    orders, by request_id: the manual counterpart to answer_fill_requests,
+    for a person clicking Accept or Decline on the Market page instead of
+    SWAP_AUTO_ACCEPT_FILLS deciding on its own.
+
+    accept=False never touches trust or the exposure cap; a maker may
+    decline anyone for any reason (or none) and always could, auto-accept
+    or not. accept=True runs through the exact same _answer_one this
+    node's own worker would have used automatically: nothing about a
+    manual accept is a weaker check than an automatic one, only who
+    triggers it. Returns True if it produced an answer, False if there
+    was nothing left here to answer (already answered, already a trade,
+    the order or request is gone, or a decline failed to find the row at
+    all), so a route calling this can tell "handled" from "too late".
+    """
+    ensure_tables()
+    req = market_mod.get_fill_request(request_id)
+    if req is None:
+        return False
+    order_row = market_mod.get_order(req.order_id)
+    if order_row is None or order_row.maker_lapse_addr != node.addr:
+        return False
+    if market_mod.get_fill_response(req.request_id) is not None:
+        return False
+    if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
+        return False
+
+    if not accept:
+        kek, _seed = engine.secrets()
+        if kek is None:
+            return False
+        resp = market_mod.build_fill_response(
+            request_id=req.request_id, order_id=order_row.order_id,
+            session_id=req.session_id, lapse_total=req.lapse_total,
+            accepted=False, maker_pubkey_hex=node.pk_hex,
+            accepted_height=node.view.height, confirm_depth=confirm_depth,
+            increment_count=None, reason="declined by the maker")
+        market_mod.sign_fill_response(resp, node.keyfile, kek)
+        market_mod.store_fill_response(resp)
+        node.publish_fill_response(resp)
+        return True
+
+    return _answer_one(engine, node, my_xlm_addr, stranger_cap,
+                       confirm_depth, order_row, req)
 
 
 def _pending_send_total(asset):
@@ -1243,21 +1225,27 @@ def _response_dict(resp):
 # Step receipts: emitting this node's own, and checking somebody else's
 # ---------------------------------------------------------------------------
 #
-# Emission needs nothing new watched: it runs exactly where advance() and
-# consider_abandonment() already determine a leg settled or a trade
-# abandoned, and only packages that already-made determination into a
-# small signed, gossipable record. See market.py's step-receipts section
-# for what the record proves and why its signature is not what it is
-# trusted for.
+# Emission needs nothing new watched: it runs exactly where advance()
+# already determines a leg settled, and where is_delinquent (above) says
+# a stall has crossed into counting against the peer, and only packages
+# that already-made determination into a small signed, gossipable
+# record. See market.py's step-receipts section for what the record
+# proves and why its signature is not what it is trusted for.
 
 def emit_receipts_for_trade(engine, node, kek, trade):
     """This node's own receipts for whatever `trade` has newly settled or
-    (once genuinely abandoned) missed. Returns how many were newly stored.
+    is currently delinquent (see is_delinquent). Returns how many were
+    newly stored.
 
     Idempotent and cheap to call every pass: each receipt this node would
     produce for a given (session, step, asset, outcome) is looked up
     first and skipped if already on file, so repeating this call changes
-    nothing once every applicable receipt already exists.
+    nothing once every applicable receipt already exists. That is what
+    makes a "missed" receipt safe to re-offer here on every pass a stall
+    remains delinquent, rather than needing to be emitted exactly once
+    at a transition: there is no separate stored transition to catch
+    here any more (see is_delinquent), so idempotent dedup is what
+    prevents this from flooding the network with duplicates instead.
     """
     if kek is None:
         return 0
@@ -1271,7 +1259,7 @@ def emit_receipts_for_trade(engine, node, kek, trade):
                                          addr_a, addr_b)
             emitted += _emit_settled_leg(engine, node, kek, trade, inc, "in",
                                          addr_a, addr_b)
-    if trade.status == TRADE_ABANDONED:
+    if is_delinquent(trade, engine.lapse.height()):
         for inc in steps:
             if inc.out_state == LEG_SETTLED and inc.in_state != LEG_SETTLED:
                 emitted += _emit_missed_leg(engine, node, kek, trade, inc,

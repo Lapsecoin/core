@@ -164,6 +164,27 @@ SWAP_ENABLED = Setting(
          "none, holds no Stellar wallet and contacts no Stellar service.",
 )
 
+# Whether a fill request against one of this node's own orders is
+# accepted automatically, the moment it clears the trust-based exposure
+# cap (see swap.plan), or left pending on the Market page for a person
+# to accept or decline by hand.
+#
+# On by default: the exposure cap is what actually bounds the loss on a
+# bad decision (see swap.py's module docstring), not this switch, so
+# auto-accept is not a weaker safety mode, only a faster one. Someone
+# who wants to see who is asking before a single stroop moves, not just
+# find out afterward from the Trades page, turns this off; nothing about
+# what a request may cost changes either way.
+SWAP_AUTO_ACCEPT_FILLS = Setting(
+    "swap_auto_accept_fills", True, bool,
+    label="Auto-accept fill requests",
+    help="Accept a fill against your own order the moment it clears "
+         "your exposure cap, without waiting for you to look at it. "
+         "Turn this off to review every request yourself on the Market "
+         "page (with the same trust detail either way) before anything "
+         "is agreed to.",
+)
+
 # Two settings used to live here alongside this one: a switch to advertise
 # a separate address instead of this node's own, and an env-only override
 # naming any address at all. Both existed because a node had to tell its
@@ -173,7 +194,7 @@ SWAP_ENABLED = Setting(
 # is no advertised address to make private, and no second key to hold the
 # proceeds.
 ALL = [DRAW_WINDOW_SECONDS, SWAP_ENABLED, SWAP_CONFIRM_DEPTH,
-       SWAP_STRANGER_CAP_STROOPS]
+       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_FILLS]
 
 
 # How long a value read from storage is reused before going back to the

@@ -16,19 +16,53 @@ precisely how a restart pays twice.
 Only then does the loop begin, and each pass re-derives what it needs, so
 a pass is safe to interrupt and safe to repeat.
 
-Why this is allowed to be slow
-------------------------------
-A step is paced by LapseCoin confirmations, minutes at a time, so polling
-every few seconds is already far finer than anything can change. The
-interval is set by what is polite to a public API rather than by what the
-trade needs.
+Woken, not polled
+-----------------
+There used to be one number here, POLL_SECONDS, and this thread ran a
+full pass against it whether or not anything had happened: every 20
+seconds, forever, for as long as swaps were enabled, doing real work
+(chain reads, a possible Horizon call) even while nothing about any
+trade had changed since the last pass.
+
+Nothing here needs to be discovered by asking again on a clock. Every
+fact a pass could learn arrives at this node as a specific event first:
+a matching transaction lands in the mempool or a block (node's own
+gossip handlers), a new block changes what height means for every
+pending deadline (node._commit, node.apply_better_chain), a step
+receipt or fill request/response naming one of this node's own trades
+is gossiped in. node calls wake() at each of those points (see
+node._wake_swap_worker and its call sites) and this thread simply runs
+one pass in response, on its own thread, off whatever hot path noticed
+the event. A pass that finds nothing to do costs one idle query per
+open trade, which is cheap enough that reacting eagerly, rather than
+batching reactions until some interval elapses, costs nothing extra.
+
+BACKSTOP_SECONDS below is not the mechanism, it is insurance against the
+mechanism: gossip is UDP, delivery is not guaranteed, and this is what
+notices if a relevant event was simply never seen. It fires rarely
+enough that, on a quiet node, this thread spends nearly all its time
+blocked on wake() rather than doing anything.
+
+Reacting to every event has one cost the old fixed poll never had:
+nothing here rate-limits how often wake() itself can fire. node calls it
+on every admitted transaction, among other things, and admission is
+cheap and already something a peer decides how much of to send this
+node (a flood of small, individually-valid transactions costs the
+sender little and would otherwise wake this thread once per transaction,
+turning gossip volume directly into swap-worker chain I/O). MIN_PASS_
+INTERVAL_SECONDS is the floor under that: passes still run back to back
+under sustained pressure, just never faster than this, so the worst case
+is bounded regardless of how fast something outside this node's control
+can make wake() fire. An idle node never notices it, since nothing is
+re-firing wake() for it to throttle.
 
 Blame
 -----
-Abandonment is considered here because this is the only place that knows
-how long a trade has been stuck.
+Whether a stall currently counts against a peer is computed fresh from
+that trade's own rows every pass (see swap_engine.is_delinquent), not
+decided once and stored; see trust.py's module docstring for why.
 
-What it no longer consults is whether the peer looked "alive". That
+What this no longer consults is whether the peer looked "alive". That
 signal came from the liveness notes the uptime rewarder gossiped, and it
 was wrong twice over: those notes said a node was powered on, not that
 its swap worker had seen the trade and declined to pay, and broadcasting
@@ -39,7 +73,7 @@ What replaces it is stronger and comes from the chain: a peer is only
 blamed once they have themselves reciprocated an earlier step. Their own
 signed transaction is the acceptance, so an unsolicited payment nobody
 answered can never be dressed up as abandonment. See
-swap_engine.consider_abandonment.
+swap_engine.is_delinquent.
 """
 
 import logging
@@ -50,17 +84,26 @@ import market as market_mod
 import settings as settings_mod
 import swap_engine
 import trade_storage
-import trust as trust_mod
 import xlm as xlm_mod
-from trade_storage import Trade, TRADE_ACTIVE, TRADE_STALLED, TRADE_ABANDONED
+from trade_storage import Trade, TRADE_ACTIVE, TRADE_STALLED
 
 log = logging.getLogger("ec.swap_worker")
 
-# How often to look at active trades. Well below the pace anything can
-# actually change, and chosen for Horizon's sake rather than the trade's:
-# a step takes minutes, so this could be far slower without a trade
-# noticing.
-POLL_SECONDS = 20
+# The defensive backstop only: how long this thread will wait for wake()
+# before running a pass anyway, in case a relevant event was gossiped and
+# simply never arrived (see the module docstring). Not the detection
+# mechanism, and deliberately far above the pace anything actually
+# changes at: a step is paced by LapseCoin confirmations, minutes at a
+# time.
+BACKSTOP_SECONDS = 300
+
+# The floor between the start of one pass and the start of the next,
+# however fast wake() keeps re-firing. Short enough that a real event
+# still gets a prompt reaction (a person is not going to notice a
+# two-second difference on a trade paced by two-minute confirmations),
+# long enough that a burst of cheap gossip cannot turn this thread into
+# a tight loop of real chain work. See the module docstring.
+MIN_PASS_INTERVAL_SECONDS = 2.0
 
 # Backoff after a chain is unreachable, so an outage does not turn into a
 # tight retry loop against a public endpoint that is already struggling.
@@ -77,12 +120,19 @@ BACKFILL_RETRY_SECONDS = 300
 class SwapWorker:
     """Drives active trades. One instance per node."""
 
-    def __init__(self, node, xlm_keyfile, poll_seconds=POLL_SECONDS):
+    def __init__(self, node, xlm_keyfile, backstop_seconds=BACKSTOP_SECONDS,
+                min_pass_interval=MIN_PASS_INTERVAL_SECONDS):
         self.node = node
         self.xlm_keyfile = xlm_keyfile
-        self.poll_seconds = poll_seconds
+        self.backstop_seconds = backstop_seconds
+        self.min_pass_interval = min_pass_interval
         self.running = False
         self._thread = None
+        # Set by wake() whenever node sees something that could move a
+        # trade forward; cleared right before each pass runs, not right
+        # after wake() sets it, so an event arriving mid-pass is not lost
+        # (see _run).
+        self._wake = threading.Event()
         self._unreachable_until = 0.0
         self._last_error = ""
         self._passes = 0
@@ -131,6 +181,16 @@ class SwapWorker:
 
     def stop(self):
         self.running = False
+        self._wake.set()
+
+    def wake(self):
+        """Ask for a pass soon: something node saw might move a trade
+        forward. Cheap and safe from any thread (an Event set), and safe
+        to call when swaps are disabled or this worker was never started;
+        the next pass (or none, if nothing is running) is what actually
+        decides whether there is anything to do.
+        """
+        self._wake.set()
 
     def _run(self):
         try:
@@ -143,11 +203,37 @@ class SwapWorker:
             # retried per trade inside advance(), which re-reads the chain
             # before any send regardless.
         while self.running:
-            try:
-                self.run_once()
-            except Exception:
-                log.exception("[swap] worker pass failed")
-            time.sleep(self.poll_seconds)
+            self._run_one_iteration()
+
+    def _run_one_iteration(self):
+        """One trip round the loop: a pass, the debounce floor, then the
+        wake/backstop wait. Split out from _run so the debounce and wait
+        logic can be exercised directly, one call at a time, rather than
+        only by spinning up the real background thread.
+        """
+        # Cleared before the pass runs, not after: node can call
+        # wake() from another thread at any moment, including while
+        # this pass is already in flight, and clearing afterwards
+        # would silently discard an event that arrived during the
+        # pass that noticed it too late to act on it. Clearing first
+        # means such a wake() re-arms the flag during the pass, and
+        # the wait() below then returns immediately instead of
+        # sleeping through it.
+        self._wake.clear()
+        started = time.monotonic()
+        try:
+            self.run_once()
+        except Exception:
+            log.exception("[swap] worker pass failed")
+        # Debounce floor: never start the next pass sooner than this
+        # after starting this one, no matter how fast wake() keeps
+        # re-firing (see MIN_PASS_INTERVAL_SECONDS). An idle node
+        # never reaches this sleep at all, since wake() below simply
+        # blocks for the rest of backstop_seconds instead.
+        remaining = self.min_pass_interval - (time.monotonic() - started)
+        if remaining > 0:
+            time.sleep(remaining)
+        self._wake.wait(timeout=self.backstop_seconds)
 
     # -- work ----------------------------------------------------------
 
@@ -229,7 +315,8 @@ class SwapWorker:
                     engine, self.node, my_xlm_addr,
                     self.node.settings.get(settings_mod.SWAP_STRANGER_CAP_STROOPS),
                     max(self.node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
-                        swap_engine.MIN_CONFIRM_DEPTH))
+                        swap_engine.MIN_CONFIRM_DEPTH),
+                    auto=self.node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_FILLS))
             except Exception:
                 # A bug answering requests must not stop trades already
                 # running from being advanced.
@@ -254,28 +341,27 @@ class SwapWorker:
         except Exception:
             log.exception("[swap] pruning the order book failed")
 
-        # A bounded batch per pass, not everything pending at once: this
-        # is the one place trust's network-sourced tally does real chain
-        # I/O (see trust.verify_pending_receipts), and every trust lookup
-        # elsewhere only ever reads what this has already resolved, so a
-        # page render or a fill decision is never the thing waiting on
-        # Horizon.
-        try:
-            trust_mod.verify_pending_receipts(self.node)
-        except Exception:
-            log.exception("[swap] verifying pending receipts failed")
-
+        # Nothing runs here to verify network-sourced receipts: that chain
+        # I/O now happens lazily, on whichever thread actually asks for a
+        # specific address's trust (see trust._verify_addr_receipts),
+        # bounded to that address's own receipts rather than a batch of
+        # whatever happens to be oldest. A page render or a fill decision
+        # pays for it directly, once, instead of a background sweep
+        # paying for it on a schedule regardless of whether anyone is
+        # looking.
         touched = 0
+        # A trade stays in this set for as long as it is missing a leg,
+        # however long that is: there is no separate status or pass for
+        # one that has been stalled a long time (see trust.py's module
+        # docstring for why not). The same advance() call both keeps
+        # trying to move it and, via _emit_receipts below, is what lets
+        # is_delinquent's verdict reach the network once it applies.
         for trade in Trade.select().where(
                 Trade.status.in_([TRADE_ACTIVE, TRADE_STALLED])):
             try:
                 engine.advance(trade)
                 touched += 1
                 self._emit_receipts(engine, kek, trade)
-                fresh = Trade.get_or_none(Trade.session_id == trade.session_id)
-                if fresh is not None and fresh.status == TRADE_STALLED:
-                    engine.consider_abandonment(fresh)
-                    self._emit_receipts(engine, kek, fresh)
             except swap_engine.Unreachable as e:
                 # An outage says nothing about any trade, so nothing is
                 # concluded and nothing is blamed. Back off rather than
@@ -291,26 +377,6 @@ class SwapWorker:
             except Exception:
                 # One bad trade must not stop the others.
                 log.exception("[swap] %s could not be advanced",
-                              trade.session_id)
-
-        # Redemption: an abandoned trade is not dropped, only lightly
-        # watched from here on, in case the leg that was missing arrives
-        # late from a counterparty who was genuinely offline rather than
-        # dishonest (see swap_engine.Engine.recheck_abandoned). Un-
-        # abandoning is the entire fix; the next pass's ordinary loop
-        # above picks a freshly-active trade back up on its own.
-        for trade in Trade.select().where(Trade.status == TRADE_ABANDONED):
-            try:
-                if engine.recheck_abandoned(trade):
-                    self._emit_receipts(engine, kek, trade)
-            except swap_engine.Unreachable as e:
-                self._last_error = str(e)
-                self._unreachable_until = time.time() + UNREACHABLE_BACKOFF_SECONDS
-                log.info("[swap] a chain is unreachable (%s); pausing %ds",
-                         e, UNREACHABLE_BACKOFF_SECONDS)
-                break
-            except Exception:
-                log.exception("[swap] %s: rechecking abandonment failed",
                               trade.session_id)
 
         self._passes += 1

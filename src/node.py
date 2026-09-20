@@ -312,6 +312,35 @@ class Node:
         # scraping the log file.
         self.status_line = "starting"
 
+        # Set from outside (see main.py) once a SwapWorker exists for
+        # this node. Optional and checked at every call site: a node
+        # that never trades has none, and nothing here should care.
+        self.swap_worker = None
+
+    def _wake_swap_worker(self):
+        """Tell the swap worker something changed that could move a trade
+        forward, without waiting for its own backstop interval.
+
+        This is the entire replacement for the swap worker's old fixed
+        poll: rather than that thread asking "did anything happen?" on a
+        clock, the places that actually know the answer (a tx admitted
+        to the mempool, a new block committed, a step receipt or fill
+        message gossiped in) say so directly, right here, the moment
+        they know it. Cheap and safe from any thread: wake() only sets
+        an Event, and is a no-op if the worker was never started or
+        swaps are disabled (the next pass decides that, not this call).
+        Wrapped so a bug in a caller of this method, or in the worker
+        itself reacting, can never break the chain/gossip path that
+        noticed the event in the first place.
+        """
+        worker = self.swap_worker
+        if worker is None:
+            return
+        try:
+            worker.wake()
+        except Exception:
+            log.exception("[swap] waking the swap worker failed")
+
     # ------------------------------------------------------------------
     # Startup
     # ------------------------------------------------------------------
@@ -1081,6 +1110,11 @@ class Node:
         self.storage.save_block_and_state(blk, self.cs.state)
         self.mempool.remove_many(confirmed)
         self.view = NodeView(self.cs)
+        # A new height changes what every pending swap step's
+        # deadline_height means (see swap_engine.deadline_height) and
+        # what confirmation depth every submitted leg now has; let the
+        # worker re-check rather than wait for its backstop.
+        self._wake_swap_worker()
 
         # Nothing is propagated from here. A peer block was already passed
         # on when it arrived (_handle_inbound_block), and our own candidate
@@ -1534,6 +1568,9 @@ class Node:
                 log.warning("[market] failed to handle an inbound fill request",
                             exc_info=True)
                 return
+            # New, and might be against one of this node's own orders;
+            # let the worker decide it now rather than on its backstop.
+            self._wake_swap_worker()
 
         self.gossip.relay(item, gossip_mod.KIND_FILL_REQUEST, item_hash,
                           sender, stemming=stemming)
@@ -1579,6 +1616,10 @@ class Node:
                 log.warning("[market] failed to handle an inbound fill response",
                             exc_info=True)
                 return
+            # Might be the answer to one of this node's own outstanding
+            # requests; let the worker open the trade now rather than on
+            # its backstop.
+            self._wake_swap_worker()
 
         self.gossip.relay(item, gossip_mod.KIND_FILL_RESPONSE, item_hash,
                           sender, stemming=stemming)
@@ -1624,6 +1665,13 @@ class Node:
                 log.warning("[market] failed to handle an inbound receipt",
                             exc_info=True)
                 return
+            # A "settled" receipt is the one signal this node gets, other
+            # than asking Horizon itself, that an XLM leg it is waiting
+            # on might have just landed (there is no gossiped tx for the
+            # Stellar side the way there is for LapseCoin); let the
+            # worker's ordinary check_inbound confirm it against the
+            # chain now rather than waiting for the next LapseCoin block.
+            self._wake_swap_worker()
 
         self.gossip.relay(item, gossip_mod.KIND_RECEIPT, item_hash,
                           sender, stemming=stemming)
@@ -1741,11 +1789,17 @@ class Node:
             if added:
                 log.debug("[tx] fluffed here, keeping it  hash=%s  from=%s",
                           h_or_err[:12], origin)
+                # A newly-seen tx may be the very leg a pending swap step
+                # is waiting on (see swap_engine.Engine.check_inbound);
+                # let the worker look now rather than on its next
+                # backstop pass.
+                self._wake_swap_worker()
             return
 
         added, h_or_err = self.mempool.add(tx_dict)
         if added:
             log.debug("[tx] inbound accepted  hash=%s  from=%s", h_or_err[:12], origin)
+            self._wake_swap_worker()
         else:
             log.debug("[tx] inbound duplicate  from=%s", origin)
         # Relayed either way. Whether our mempool already held this and
@@ -1938,6 +1992,17 @@ class Node:
         except Exception:
             log.exception("[reorg] mempool re-add failed; chain state already "
                           "committed, mempool may hold stale entries until pruned")
+
+        # A reorg can specifically un-settle a swap leg this node already
+        # marked confirmed (see swap_engine.Engine.check_outbound/
+        # check_inbound's own reorg handling): the transaction that
+        # settled it may now sit on the abandoned branch, either gone
+        # from every chain (re-added to the mempool above, to be mined
+        # again) or superseded by a conflicting one on the new branch.
+        # Either way a pending trade's view of what has and has not
+        # settled needs re-deriving against the chain that is now
+        # canonical, immediately, not on the worker's backstop pace.
+        self._wake_swap_worker()
 
         # How much of our own chain was thrown away, which is not the same
         # as how much we took on: a heavier fork can be shorter.

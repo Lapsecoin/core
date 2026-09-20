@@ -208,8 +208,8 @@ class TestUnreachable:
         trade = make_trade()
         w.lapse.unreachable = True
         w.run_once()
-        assert Trade.get(Trade.session_id == trade.session_id).status != \
-            trade_storage.TRADE_ABANDONED
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        assert swap_engine.is_delinquent(trade, w.lapse.current_height) is False
 
     def test_recovers_after_the_backoff(self):
         w = Worker(FakeNode())
@@ -234,21 +234,22 @@ class TestBlame:
 
     def test_peer_who_never_reciprocated_is_blamed(self):
         """A Trade row here only ever exists through a verified handshake
-        (see swap_engine.consider_abandonment's docstring for why that
-        closes the old worry this test used to guard against, an
-        unsolicited payment tagged with a session nobody agreed to). A
-        peer who defects on the very first step they owe is the common
-        case, not an edge case, and must be blamed like any other."""
+        (see swap_engine.is_delinquent's docstring for why that closes
+        the old worry this test used to guard against, an unsolicited
+        payment tagged with a session nobody agreed to). A peer who
+        defects on the very first step they owe is the common case, not
+        an edge case, and must be blamed like any other."""
         w = Worker(FakeNode())
         trade = make_trade()
         w.run_once()
         trade = Trade.get(Trade.session_id == trade.session_id)
         trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
         trade.save()
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        w.lapse.current_height = inc.deadline_height + swap_engine.ABANDON_AFTER_BLOCKS + 1
         w.run_once()
-        assert Trade.get(Trade.session_id == trade.session_id).status == \
-            trade_storage.TRADE_ABANDONED
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        assert swap_engine.is_delinquent(trade, w.lapse.current_height) is True
 
     def test_peer_who_accepted_then_stopped_is_blamed(self):
         w = Worker(FakeNode())
@@ -266,16 +267,73 @@ class TestBlame:
 
         trade = Trade.get(Trade.session_id == trade.session_id)
         trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
         trade.save()
         # Steps 1 and 2 completing pushed step 3's deadline_height forward
         # from wherever the (fixed, fake) chain height was when each did;
-        # simulate real blocks having actually been mined since, same as
-        # stalled_since simulates wall-clock time passing.
+        # simulate real blocks having actually been mined well past that
+        # margin since.
         w.lapse.current_height += 10**6
         w.run_once()
-        assert Trade.get(Trade.session_id == trade.session_id).status == \
-            trade_storage.TRADE_ABANDONED
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        assert swap_engine.is_delinquent(trade, w.lapse.current_height) is True
+
+
+class TestDebounce:
+    """MIN_PASS_INTERVAL_SECONDS: the floor that stops a flood of cheap
+    wake() calls (e.g. one per admitted transaction) from turning this
+    thread into a tight loop of real chain work. Exercised one call to
+    _run_one_iteration at a time, never via the real background thread."""
+
+    def test_a_fast_pass_is_padded_up_to_the_floor(self, monkeypatch):
+        w = Worker(FakeNode(enabled=False), min_pass_interval=5.0,
+                  backstop_seconds=0.01)
+        slept = []
+        monkeypatch.setattr(swap_worker.time, "sleep", lambda s: slept.append(s))
+        w._run_one_iteration()
+        assert len(slept) == 1
+        assert slept[0] == pytest.approx(5.0, abs=0.1)
+
+    def test_a_pass_already_slower_than_the_floor_is_not_padded_further(
+            self, monkeypatch):
+        w = Worker(FakeNode(enabled=False), min_pass_interval=0.01,
+                  backstop_seconds=0.01)
+        real_sleep = time.sleep
+        w.run_once = lambda: real_sleep(0.05) or 0   # pretend this pass took a while
+        slept = []
+        monkeypatch.setattr(swap_worker.time, "sleep", lambda s: slept.append(s))
+        w._run_one_iteration()
+        assert slept == []
+
+
+class TestWaking:
+    """The replacement for a fixed poll interval: node calls wake()
+    whenever it sees something a pending trade might care about, and
+    the worker's own loop reacts to that Event instead of waiting out a
+    clock. backstop_seconds is only the defensive fallback (see the
+    module docstring). Exercised here at the Event level rather than by
+    spinning a real background thread against the shared in-memory test
+    database, which a second thread can only touch safely through the
+    worker's own loop, never concurrently from the test itself."""
+
+    def test_wake_before_start_is_harmless(self):
+        w = Worker(FakeNode())
+        w.wake()   # no thread running yet; must not raise
+
+    def test_wake_sets_the_flag_the_run_loop_waits_on(self):
+        w = Worker(FakeNode())
+        assert not w._wake.is_set()
+        w.wake()
+        assert w._wake.is_set()
+
+    def test_stop_also_wakes_it(self):
+        """So a thread blocked in wait() for up to backstop_seconds
+        notices `running` went False right away, instead of sitting out
+        the rest of that interval before it can exit."""
+        w = Worker(FakeNode())
+        w.running = True
+        w.stop()
+        assert w.running is False
+        assert w._wake.is_set()
 
 
 class TestStatus:
@@ -371,14 +429,16 @@ class TestDiscoveryWiring:
         w, pub = self._worker_with_wallet(tmp_path)
         calls = []
         monkeypatch.setattr(swap_engine, "answer_fill_requests",
-                            lambda *a: calls.append(a) or 0)
+                            lambda *a, **kw: calls.append((a, kw)) or 0)
         w.run_once()
         assert len(calls) == 1
-        _engine, node, my_xlm_addr, cap, depth = calls[0]
+        args, kwargs = calls[0]
+        _engine, node, my_xlm_addr, cap, depth = args
         assert my_xlm_addr == pub
         assert node is w.node
         assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
         assert depth >= swap_engine.MIN_CONFIRM_DEPTH
+        assert kwargs["auto"] == settings_mod.SWAP_AUTO_ACCEPT_FILLS.default
 
     def test_response_checking_runs_with_the_right_arguments(
             self, tmp_path, monkeypatch):
@@ -396,7 +456,7 @@ class TestDiscoveryWiring:
         w = Worker(DiscoveryFakeNode())   # default xlm_keyfile is nonexistent
         calls = []
         monkeypatch.setattr(swap_engine, "answer_fill_requests",
-                            lambda *a: calls.append(a) or 0)
+                            lambda *a, **kw: calls.append(a) or 0)
         monkeypatch.setattr(swap_engine, "check_fill_responses",
                             lambda *a: calls.append(a) or 0)
         w.run_once()
@@ -462,7 +522,7 @@ class TestDiscoveryWiring:
         w, _pub = self._worker_with_wallet(tmp_path)
         order = []
         monkeypatch.setattr(swap_engine, "answer_fill_requests",
-                            lambda *a: order.append("discover") or 0)
+                            lambda *a, **kw: order.append("discover") or 0)
         monkeypatch.setattr(market_mod, "prune_fill_requests",
                             lambda: order.append("prune"))
         w.run_once()

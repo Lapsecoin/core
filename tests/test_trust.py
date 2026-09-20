@@ -15,9 +15,10 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import storage as storage_mod
+import swap_engine
 import trade_storage
 import trust
-from trade_storage import Trade, TRADE_COMPLETED, TRADE_ABANDONED
+from trade_storage import Trade, TRADE_COMPLETED, TRADE_STALLED
 
 
 LAPSE = 100_000_000
@@ -42,6 +43,24 @@ def make_trade(peer_addr, status, my_addr="me", lapse_total=50 * LAPSE,
         peer_xlm_addr="GPEER", i_send="lapse", lapse_total=lapse_total,
         xlm_total=1, increment_count=1, confirm_depth=2, status=status,
         created_at=now, updated_at=now)
+
+
+def make_delinquent_trade(peer_addr, my_addr="me", lapse_total=50 * LAPSE,
+                          session_id=None):
+    """A STALLED Trade plus the one Increment that makes
+    swap_engine.is_delinquent actually say so: this node's leg settled,
+    long enough ago (deadline_height=1) that any height a test then
+    checks against, if it clears ABANDON_AFTER_BLOCKS, counts against
+    the peer. Standing here is computed from exactly these rows, never
+    from the status alone, so a test exercising it has to set both up."""
+    trade = make_trade(peer_addr, TRADE_STALLED, my_addr=my_addr,
+                       lapse_total=lapse_total, session_id=session_id)
+    trade_storage.Increment.create(
+        id=f"{trade.session_id}:1", session_id=trade.session_id, n=1,
+        lapse_amount=lapse_total, xlm_amount=1, i_move_first=True,
+        out_state=trade_storage.LEG_SETTLED, in_state=trade_storage.LEG_PENDING,
+        created_at=time.time(), deadline_height=1)
+    return trade
 
 
 @pytest.fixture(autouse=True)
@@ -146,38 +165,63 @@ class TestSlashing:
                            now=now) == 0.0
 
     def test_slashing_is_not_undone_by_more_trades(self):
-        """As long as an abandoned Trade row is still sitting there
-        unresolved, not just once, historically, in the past."""
-        make_trade("bad.peer", TRADE_ABANDONED, session_id="session-x")
+        """As long as the delinquent trade's missing leg is still
+        missing, not just once, historically, in the past."""
+        make_delinquent_trade("bad.peer", session_id="session-x")
         for _ in range(50):
             make_trade("bad.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
-        assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
+        node = FakeNode("me", height=AGED)
+        assert trust.get_detail("bad.peer", AGED, FUNDED, node=node)["score"] == 0.0
 
-    def test_abandonment_records_its_evidence(self):
-        make_trade("bad.peer", TRADE_ABANDONED, session_id="session-abc")
-        detail = trust.get_detail("bad.peer", AGED, FUNDED)
+    def test_delinquency_records_its_evidence(self):
+        make_delinquent_trade("bad.peer", session_id="session-abc")
+        node = FakeNode("me", height=AGED)
+        detail = trust.get_detail("bad.peer", AGED, FUNDED, node=node)
         assert detail["abandoned_count"] == 1
         assert detail["last_abandon_session"] == "session-abc"
 
     def test_recovery_requires_a_new_address(self):
         """Which is the cost that makes the number mean anything."""
-        make_trade("bad.peer", TRADE_ABANDONED)
+        make_delinquent_trade("bad.peer")
         make_trade("fresh.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
-        assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
-        assert trust.get_detail("fresh.peer", AGED, FUNDED)["score"] > 0.0
+        node = FakeNode("me", height=AGED)
+        assert trust.get_detail("bad.peer", AGED, FUNDED, node=node)["score"] == 0.0
+        assert trust.get_detail("fresh.peer", AGED, FUNDED, node=node)["score"] > 0.0
 
     def test_a_late_settlement_lifts_the_slash(self):
-        """The whole point of deriving this from Trade.status rather than
-        an incremented counter: nothing needs reversing, a status flip
-        (see swap_engine.Engine.recheck_abandoned) is the entire fix."""
-        trade = make_trade("bad.peer", TRADE_ABANDONED, session_id="s-late")
-        assert trust.get_detail("bad.peer", AGED, FUNDED)["score"] == 0.0
+        """The whole point of computing this fresh from Increment rows
+        every time rather than an incremented counter: nothing needs
+        reversing, the missing leg simply settling is the entire fix
+        (see swap_engine.is_delinquent)."""
+        trade = make_delinquent_trade("bad.peer", session_id="s-late")
+        node = FakeNode("me", height=AGED)
+        assert trust.get_detail("bad.peer", AGED, FUNDED, node=node)["score"] == 0.0
 
+        # The missing leg lands late, and the ordinary advance loop
+        # (tested in test_swap_engine.py) drives the trade to
+        # TRADE_COMPLETED from there; simulated directly here since this
+        # is a trust-layer test, not an engine one.
+        inc = trade_storage.Increment.get(
+            trade_storage.Increment.session_id == trade.session_id)
+        inc.in_state = trade_storage.LEG_SETTLED
+        inc.save()
         trade.status = TRADE_COMPLETED
         trade.save()
-        detail = trust.get_detail("bad.peer", AGED, FUNDED)
+        detail = trust.get_detail("bad.peer", AGED, FUNDED, node=node)
         assert detail["abandoned_count"] == 0
         assert detail["score"] > 0.0
+
+    def test_not_yet_delinquent_does_not_slash(self):
+        """A stalled trade whose margin has not elapsed by the chain's
+        own clock must not already count against the peer, unlike an
+        actually-delinquent one, which would zero this same history."""
+        make_trade("bad.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
+        trade = make_delinquent_trade("bad.peer")
+        node = FakeNode("me", height=1)   # right at deadline_height, no margin yet
+        detail = trust.get_detail("bad.peer", AGED, FUNDED, node=node)
+        assert detail["abandoned_count"] == 0
+        assert detail["score"] > 0.0
+        assert trade.status == TRADE_STALLED  # sanity: still stalled, just not delinquent yet
 
 
 class TestRecords:
@@ -221,6 +265,7 @@ class FakeState:
 
 class FakeView:
     def __init__(self, height, balances=None):
+        self.height = height
         self.chain = [{"height": height}]
         self.state = FakeState(balances)
 
@@ -298,7 +343,7 @@ class TestMutualScores:
         channel carrying the reverse (see the docstring on mutual_scores),
         so it is applied to both rather than only to my_trust_of_peer."""
         make_trade("peer", TRADE_COMPLETED)
-        make_trade("peer", TRADE_ABANDONED)
+        make_delinquent_trade("peer")
         node = FakeNode(
             "me", height=AGED,
             heights_by_addr={"peer": [(0, "h")], "me": [(0, "h")]},
@@ -402,7 +447,14 @@ class TestNetworkTally:
 
     def test_get_detail_with_node_folds_in_network_receipts(self):
         make_receipt("r1", "a", "b", "s1", outcome="missed")
-        detail = trust.get_detail("b", node=object())
+        # Pre-mark it checked at this exact height so get_detail's own
+        # lazy verification pass (see trust._verify_addr_receipts) has
+        # nothing left to do and this stays a pure DB-reading test of
+        # _network_tally's folding, not of chain verification.
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        row.verified_at_height = 100
+        row.save()
+        detail = trust.get_detail("b", node=FakeNode("me", height=100))
         assert detail["abandoned_count"] == 1
         assert detail["network_abandoned_count"] == 1
         assert detail["score"] == 0.0
@@ -412,73 +464,106 @@ class TestNetworkTally:
         make_trade("b", TRADE_COMPLETED, lapse_total=6 * LAPSE)
         make_trade("b", TRADE_COMPLETED, lapse_total=4 * LAPSE)
         make_receipt("r1", "a", "b", "s1", outcome="settled", amount=3 * LAPSE)
-        detail = trust.get_detail("b", node=object())
+        detail = trust.get_detail("b", node=FakeNode("me", height=100))
         assert detail["completed_count"] == 3
         assert detail["completed_lapse"] == 13 * LAPSE
         assert detail["network_completed_count"] == 1
 
 
-class TestVerifyPendingReceipts:
-    def test_resolves_pending_receipts_up_to_the_limit(self, monkeypatch):
-        import swap_engine
+class TestVerifyAddrReceipts:
+    """trust._verify_addr_receipts: the lazy, per-address chain check
+    that replaced a scheduled background sweep over every receipt on
+    file. Called with a bare object() standing in for node, exactly as
+    the old sweep's tests did: _lightweight_engine only ever wraps the
+    reference, and verify_receipt_against_chain is monkeypatched away
+    below, so nothing here ever dereferences it."""
+
+    def test_resolves_every_unverified_receipt_for_the_address(self, monkeypatch):
         make_receipt("r1", "a", "b", "s1", verified=None)
         make_receipt("r2", "a", "b", "s2", verified=None)
         monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
                             lambda engine, r: True)
-        resolved = trust.verify_pending_receipts(node=object(), limit=1)
-        assert resolved == 1
-        verified_count = sum(1 for r in trade_storage.StepReceipt.select()
-                             if r.verified is True)
-        assert verified_count == 1
+        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
+        assert checked == 2
+        assert all(r.verified is True for r in trade_storage.StepReceipt.select())
+
+    def test_a_flood_of_receipts_is_capped_per_call(self, monkeypatch):
+        """A reporter can only spend its own MAX_RECEIPTS_PER_REPORTER
+        slots, but nothing stops an attacker from doing that from many
+        cheaply-generated reporter addresses, all naming one victim.
+        This cap is what stops a single trust lookup for that victim
+        from paying for a chain call per spammed receipt in one request."""
+        extra = 5
+        for i in range(trust.MAX_CHAIN_CHECKS_PER_LOOKUP + extra):
+            make_receipt(f"r{i}", f"attacker{i}", "victim", f"s{i}",
+                        verified=None, reporter=f"attacker{i}")
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
+                            lambda engine, r: True)
+        checked = trust._verify_addr_receipts(object(), "victim", current_height=100)
+        assert checked == trust.MAX_CHAIN_CHECKS_PER_LOOKUP
+        still_pending = sum(1 for r in trade_storage.StepReceipt.select()
+                            if r.verified is None)
+        assert still_pending == extra
 
     def test_unreachable_leaves_it_pending(self, monkeypatch):
-        import swap_engine
         make_receipt("r1", "a", "b", "s1", verified=None)
 
         def boom(engine, r):
             raise swap_engine.Unreachable("down")
 
         monkeypatch.setattr(swap_engine, "verify_receipt_against_chain", boom)
-        resolved = trust.verify_pending_receipts(node=object(), limit=10)
-        assert resolved == 0
+        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
+        assert checked == 0
         row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
         assert row.verified is None
 
-    def test_already_verified_missed_claims_are_rechecked(self, monkeypatch):
+    def test_already_verified_missed_claims_are_rechecked_at_a_new_height(self, monkeypatch):
         """Unlike settled, missed is not a monotonic fact: a late, honest
-        payment can falsify it at any time after it was first true. This
-        is the network-wide half of redemption, matching
-        swap_engine.Engine.recheck_abandoned's local half."""
-        import swap_engine
+        payment can falsify it at any time after it was first true."""
         make_receipt("r1", "a", "b", "s1", outcome="missed", verified=True)
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        row.verified_at_height = 50   # checked once already, at an earlier height
+        row.save()
         monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
                             lambda engine, r: False)  # the payment showed up
-        resolved = trust.verify_pending_receipts(node=object(), limit=10)
-        assert resolved == 1
+        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
+        assert checked == 1
         row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
         assert row.verified is False
         # And the moment it flips, trust stops counting it.
         assert trust._network_tally("b")[0] == 0
 
-    def test_already_verified_settled_claims_are_not_rechecked(self, monkeypatch):
-        """Settled is monotonic, so it is not worth the extra chain call
-        every pass: only unverified and previously-missed claims are
-        candidates."""
-        import swap_engine
+    def test_missed_claim_is_not_rechecked_twice_at_the_same_height(self, monkeypatch):
+        """A page rendered twice inside one block must not pay for the
+        same chain lookup twice."""
+        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=True)
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        row.verified_at_height = 100
+        row.save()
+        calls = []
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
+                            lambda engine, r: calls.append(r.receipt_id) or True)
+        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
+        assert checked == 0
+        assert calls == []
+
+    def test_already_verified_settled_claims_are_never_rechecked(self, monkeypatch):
+        """Settled is monotonic, so it is not worth the extra chain call:
+        only unverified and previously-missed claims are candidates."""
         make_receipt("r1", "a", "b", "s1", outcome="settled", verified=True)
         calls = []
         monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
                             lambda engine, r: calls.append(r.receipt_id) or True)
-        trust.verify_pending_receipts(node=object(), limit=10)
+        trust._verify_addr_receipts(object(), "b", current_height=999_999)
         assert calls == []
 
-    def test_unverified_receipts_take_priority_over_rechecks(self, monkeypatch):
-        import swap_engine
-        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=True)
-        make_receipt("r2", "a", "b", "s2", outcome="settled", verified=None)
+    def test_a_caught_false_claim_is_never_rechecked_either(self, monkeypatch):
+        """False is permanent whichever outcome it was claiming: a false
+        settle can never become true, and a missed claim caught false
+        means the payment already exists, which cannot un-happen."""
+        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=False)
+        calls = []
         monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: True)
-        resolved = trust.verify_pending_receipts(node=object(), limit=1)
-        assert resolved == 1
-        row2 = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r2")
-        assert row2.verified is True
+                            lambda engine, r: calls.append(r.receipt_id) or True)
+        trust._verify_addr_receipts(object(), "b", current_height=999_999)
+        assert calls == []

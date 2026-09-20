@@ -271,6 +271,75 @@
   </form>
 </div>
 
+{# --------------------------------------------------- pending fill requests #}
+{% if pending_maker_requests %}
+<h2>Requests waiting on your decision</h2>
+{% if auto_accept_fills %}
+<p style="font-size:.85rem; color:var(--ink-dim)">
+  Auto-accept is on, so most requests are answered the moment they arrive;
+  anything still listed here could not be, for a reason worth checking below
+  (a locked wallet, funds already committed elsewhere, or a step larger than
+  your current exposure cap for this counterparty).
+</p>
+{% else %}
+<p style="font-size:.85rem; color:var(--ink-dim)">
+  Auto-accept is off, so nothing here starts a trade until you say so. Turn
+  it back on in Settings if you would rather these be answered as they arrive.
+</p>
+{% endif %}
+<div class="table-wrap">
+<table class="stacked">
+  <thead>
+    <tr><th>Order</th><th>From</th><th>Amount</th><th>Their standing</th><th>Fits your cap?</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for r in pending_maker_requests %}
+    <tr>
+      <td data-label="Order">
+        <span style="color:{{ 'var(--gain)' if r.direction == 'buy' else 'var(--loss)' }}">
+          {{ 'Buying' if r.direction == 'buy' else 'Selling' }}
+        </span>
+      </td>
+      <td data-label="From" class="hash">
+        {{ short_addr(r.taker_lapse_addr) }}{{ trust_badge(r.taker_lapse_addr) | safe }}
+      </td>
+      <td data-label="Amount">{{ fmt_lapse_dp(r.lapse_total, 2) }}</td>
+      <td data-label="Their standing">
+        {% if r.trust.abandoned_count %}
+          <span style="color:var(--loss); font-weight:bold">Took a payment, did not reciprocate</span>
+        {% elif r.trust.score > 0 %}
+          <span style="color:var(--gain)">
+            {{ r.trust.completed_count }} completed trade{{ '' if r.trust.completed_count == 1 else 's' }}
+          </span>
+        {% else %}
+          <span style="color:var(--ink-dim)">No history with this node</span>
+        {% endif %}
+      </td>
+      <td data-label="Fits your cap?">
+        {% if r.fits_cap %}
+          <span style="color:var(--gain)">Yes</span>
+        {% else %}
+          <span style="color:var(--loss)" title="{{ r.fit_note }}">No</span>
+        {% endif %}
+      </td>
+      <td data-label="">
+        <form method="post" style="display:flex; gap:.3rem; align-items:center; flex-wrap:wrap">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="action" value="answer_fill_request">
+          <input type="hidden" name="request_id" value="{{ r.request_id }}">
+          <input type="password" name="passphrase" placeholder="passphrase"
+                 required style="width:9rem">
+          <button type="submit" name="decision" value="accept" class="btn-sm">Accept</button>
+          <button type="submit" name="decision" value="decline" class="btn-sm">Decline</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
 {# --------------------------------------------------------- your own orders #}
 {% if my_orders %}
 <h2>Your open orders</h2>

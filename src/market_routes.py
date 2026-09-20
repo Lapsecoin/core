@@ -184,6 +184,85 @@ def register(app, node, csrf_token):
                     '&#10003;</span>')
         return ""
 
+    def pending_maker_requests():
+        """Live fill requests against this node's own orders that have
+        not yet been answered, each with the same trust detail and cap
+        check the automatic decision (swap_engine._answer_one) would
+        use, so accepting or declining by hand is as informed as
+        auto-accept is. Shown regardless of SWAP_AUTO_ACCEPT_FILLS: even
+        in auto mode a request can be stuck here (a locked wallet, an
+        unfundable leg), and a maker deserves to see why rather than
+        silence.
+        """
+        rows = []
+        for order_row in market_mod.orders_by_maker_with_claims(node.addr):
+            for req in market_mod.requests_for_order(order_row.order_id):
+                if market_mod.get_fill_response(req.request_id) is not None:
+                    continue
+                if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
+                    continue
+                detail = peer_trust(req.taker_lapse_addr)
+                xlm_total = swap_mod.xlm_for_lapse(
+                    req.lapse_total, order_row.price_stroops_per_lapse)
+                try:
+                    swap_mod.plan(req.lapse_total, xlm_total, detail["score"],
+                                  stranger_cap=stranger_cap())
+                    fits, fit_note = True, "fits your current exposure cap"
+                except swap_mod.TradeTooLarge as e:
+                    fits, fit_note = False, str(e)
+                rows.append({
+                    "request_id": req.request_id,
+                    "order_id": order_row.order_id,
+                    "direction": order_row.direction,
+                    "taker_lapse_addr": req.taker_lapse_addr,
+                    "lapse_total": req.lapse_total,
+                    "received_at": req.received_at,
+                    "trust": detail,
+                    "fits_cap": fits,
+                    "fit_note": fit_note,
+                })
+        rows.sort(key=lambda r: -r["received_at"])
+        return rows
+
+    def answer_fill_request_action():
+        """Accept or decline one pending request, from the Market page's
+        manual-review section. Same signing requirement as cancelling an
+        order (_cancel_order): a freshly entered passphrase, because
+        this produces a new signed FillResponse exactly as cancelling
+        produces a new signed cancellation.
+        """
+        passphrase = request.form.get("passphrase", "").strip()
+        if not passphrase:
+            raise ValueError("a passphrase is required")
+        request_id = request.form.get("request_id", "")
+        decision = request.form.get("decision", "")
+        if not request_id or decision not in ("accept", "decline"):
+            raise ValueError("choose accept or decline")
+
+        kek = crypto_mod.derive_kek(node.keyfile, passphrase)
+        my_xlm_addr = xlm_mod.load_public_key(xlm_keyfile())
+        if my_xlm_addr is None:
+            raise ValueError("create a Stellar address first")
+
+        def secrets():
+            try:
+                seed = xlm_mod.decrypt_seed(xlm_keyfile(), kek=kek)
+            except (OSError, ValueError):
+                return None, None
+            return kek, seed
+
+        engine = swap_engine.Engine(
+            swap_engine.LapseAdapter(node), swap_engine.XLMAdapter(xlm_keyfile()),
+            secrets)
+        ok = swap_engine.decide_fill_request(
+            engine, node, my_xlm_addr, stranger_cap(), confirm_depth(),
+            request_id, accept=(decision == "accept"))
+        if not ok:
+            raise ValueError("that request could not be answered (it may "
+                             "already have been handled)")
+        return ("Accepted; the trade will start shortly." if decision == "accept"
+                else "Declined.")
+
     app.jinja_env.globals.update(
         fmt_xlm=fmt_xlm, fmt_price=fmt_price, short_addr=short_addr,
         leg_label=leg_label, trust_badge=trust_badge)
@@ -212,6 +291,8 @@ def register(app, node, csrf_token):
                         result = _auto_fill(node, xlm_keyfile(), height,
                                             confirm_depth(), stranger_cap())
                         alert_ok = _auto_fill_message(result)
+                    elif action == "answer_fill_request":
+                        alert_ok = answer_fill_request_action()
                 except ValueError as e:
                     alert_err = str(e)
                 except market_mod.OrderRejected as e:
@@ -256,6 +337,8 @@ def register(app, node, csrf_token):
             xlm_usd=xlm_mod.get_xlm_usd(),
             suggested_price=_suggested_price(best, ticker),
             my_orders=_my_orders(node, height),
+            pending_maker_requests=pending_maker_requests() if swaps_on() else [],
+            auto_accept_fills=node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_FILLS),
             csrf_token=csrf_token)
 
     # -- Taking an order -----------------------------------------------
@@ -777,14 +860,16 @@ def _pending_requests(node):
     """This node's own outstanding fill requests, as a taker, that have
     not yet become a trade one way or the other.
 
-    Deliberately the taker's own view only: the maker never gets a
-    matching list of its own, because there is nothing for the maker to
-    do with one. swap_engine.answer_fill_requests already decides every
-    live request against its own orders automatically, every worker
-    pass, the instant that pass runs; a maker-facing list of "requests
-    I have not gotten to yet" would show a state that resolves itself
-    within one poll interval and invites clicking on something that
-    was never a click's job to resolve.
+    The taker's own view. The maker's matching view, requests still
+    waiting on a decision against this node's own orders, is
+    register()'s pending_maker_requests helper on the Market page, not
+    here: those two lists serve different questions (mine, waiting on
+    somebody else vs. somebody else's, waiting on me) and a person
+    looking at either page is asking one or the other, never both at
+    once. With settings.SWAP_AUTO_ACCEPT_FILLS on, most of a maker's
+    requests never sit long enough to be worth a list; with it off, or
+    when one is stuck (a locked wallet, a step over the exposure cap),
+    that other list is exactly where a click belongs.
 
     A request that already became a trade (swap_engine.check_fill
     _responses opened it) is excluded here on purpose: it belongs in the
@@ -819,11 +904,14 @@ def _pending_requests(node):
 
 def _receipt_stats():
     """How much network-sourced reputation data this node currently
-    holds, and how much of it is still waiting on the background chain
-    check that turns a claim into something trust actually counts (see
-    trust.verify_pending_receipts). Without this a page has no way to
-    show whether a thin-looking track record means "nobody has reported
-    anything" or "something is reported but not yet confirmed"."""
+    holds, and how much of it has not yet been chain-checked into
+    something trust actually counts. Verification here is lazy (see
+    trust._verify_addr_receipts): a receipt sits unverified until
+    something actually asks for that specific address's standing, so
+    "pending" is not a queue waiting its turn, it is simply "nobody has
+    needed this one yet". Without this a page has no way to show whether
+    a thin-looking track record means "nobody has reported anything" or
+    "something is reported but not yet confirmed"."""
     from trade_storage import StepReceipt
     ensure_tables()
     total = StepReceipt.select().count()

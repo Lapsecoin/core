@@ -36,11 +36,11 @@
           </span>
           <div class="stat-sub">
             As of the last check, a payment they owed on a past trade still
-            has not arrived. That is re-checked in the background, not
-            assumed forever: if it turns out they were simply offline and
-            it eventually shows up, this clears on its own. Until then you
-            can still deal with them, but the steps will be as small as
-            this node allows.
+            has not arrived. That is re-checked against the chain every time
+            their standing is looked at, not assumed forever: if it turns
+            out they were simply offline and it eventually shows up, this
+            clears on its own. Until then you can still deal with them, but
+            the steps will be as small as this node allows.
           </div>
         {% else %}
           <span style="color:var(--ink-dim)">No history with this node</span>

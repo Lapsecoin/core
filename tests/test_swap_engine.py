@@ -28,7 +28,7 @@ import xlm as xlm_mod
 from trade_storage import (
     Increment, Trade,
     LEG_PENDING, LEG_INTENT, LEG_SUBMITTED, LEG_SETTLED, LEG_DEAD,
-    TRADE_ABANDONED, TRADE_ACTIVE, TRADE_COMPLETED, TRADE_STALLED,
+    TRADE_ACTIVE, TRADE_COMPLETED, TRADE_STALLED,
 )
 
 
@@ -785,13 +785,22 @@ class TestBlame:
     """A restarting node must never be mistaken for a defector."""
 
     def test_missed_deadline_only_stalls(self):
-        engine, _l, _x = make_engine()
-        trade = make_trade()
+        engine, lapse, _x = make_engine()
+        trade = make_trade(accepted_height=1000, confirm_depth=2)
+        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
+        # Right at the deadline: the fake chain's own default height
+        # (10**9) is used elsewhere to mean "so many blocks have passed
+        # that any confirmation trivially clears", which would make this
+        # trade look absurdly overdue rather than freshly stalled; pin
+        # it to the real deadline so the test means what it says.
+        lapse.current_height = inc.deadline_height
         Increment.update(deadline_at=time.time() - 1).execute()
         engine.advance(trade)
         trade = Trade.get(Trade.session_id == trade.session_id)
         assert trade.status == TRADE_STALLED
-        assert trust.local_tally("peer.lapse")["abandoned_count"] == 0
+        # Freshly stalled, nowhere near ABANDON_AFTER_BLOCKS past its
+        # deadline yet, so it must not already count against the peer.
+        assert trust.local_tally("peer.lapse", lapse.current_height)["abandoned_count"] == 0
 
     def test_stall_clears_when_the_peer_comes_back(self):
         engine, _l, _x = make_engine()
@@ -806,18 +815,11 @@ class TestBlame:
         engine.advance(trade)
         assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ACTIVE
 
-    def _stall(self, trade, age=None):
+    def _stall(self, trade):
         trade = Trade.get(Trade.session_id == trade.session_id)
         trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - (
-            age if age is not None else swap_engine.ABANDON_AFTER_SECONDS + 10)
         trade.save()
         return trade
-
-    def test_no_blame_before_the_margin_elapses(self):
-        engine, _l, _x = make_engine()
-        trade = make_trade()
-        assert engine.consider_abandonment(self._stall(trade, age=10)) is False
 
     def test_blame_fires_on_first_step_defection_with_no_prior_reciprocation(self):
         """The gap this closes: a Trade row here can only exist through a
@@ -830,40 +832,39 @@ class TestBlame:
         defects on the very first step they owe, the common case, could
         never be blamed at all. Now the chain-anchored deadline alone
         decides it."""
-        engine, _l, _x = make_engine()
+        engine, lapse, _x = make_engine()
         trade = make_trade()
         engine.advance(trade)            # we paid; they never reciprocated
-        assert engine.consider_abandonment(self._stall(trade)) is True
-        assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
-        assert trust.local_tally("peer.lapse")["abandoned_count"] == 1
+        current_height = lapse.current_height + swap_engine.ABANDON_AFTER_BLOCKS + 1
+        assert swap_engine.is_delinquent(self._stall(trade), current_height) is True
+        assert trust.local_tally("peer.lapse", current_height)["abandoned_count"] == 1
 
     def test_no_blame_before_the_chain_height_margin_elapses(self):
-        """The wall-clock stalled_since check is only ever a cheap
-        pre-filter; the verdict that actually matters is chain height
-        against deadline_height + ABANDON_AFTER_BLOCKS. A trade whose
-        wall clock looks overdue but whose chain has not actually moved
-        far enough must not be blamed yet."""
+        """The verdict is chain height against deadline_height +
+        ABANDON_AFTER_BLOCKS. A trade whose chain has not moved far
+        enough past its deadline must not be blamed yet."""
         engine, lapse, _x = make_engine()
         trade = make_trade(accepted_height=1000, confirm_depth=2)
         inc = Increment.get(Increment.id == f"{trade.session_id}:1")
         lapse.current_height = inc.deadline_height  # right at the deadline, no margin yet
         engine.advance(trade)            # we paid; they never reciprocated
-        assert engine.consider_abandonment(self._stall(trade)) is False
-        assert trust.local_tally("peer.lapse")["abandoned_count"] == 0
+        assert swap_engine.is_delinquent(self._stall(trade), lapse.current_height) is False
+        assert trust.local_tally("peer.lapse", lapse.current_height)["abandoned_count"] == 0
 
     def test_no_blame_when_this_node_owes_the_move(self):
-        engine, _l, _x = make_engine()
+        engine, lapse, _x = make_engine()
         trade = make_trade()
         first = Increment.get(Increment.id == f"{trade.session_id}:1")
         engine.advance(trade)
         settle_peer_leg(trade, first, engine)
         engine.advance(trade)            # step 2 is ours and unsent
-        assert engine.consider_abandonment(self._stall(trade)) is False
+        far_height = lapse.current_height + 10**6
+        assert swap_engine.is_delinquent(self._stall(trade), far_height) is False
 
     def test_blame_once_they_accepted_then_stopped(self):
         """Their own settled leg is the acceptance: a signed transaction
         carrying this session's tag, which only they could produce."""
-        engine, _l, _x = make_engine()
+        engine, lapse, _x = make_engine()
         trade = make_trade()
         first = Increment.get(Increment.id == f"{trade.session_id}:1")
         engine.advance(trade)
@@ -878,12 +879,10 @@ class TestBlame:
         # Steps 1 and 2 completing pushed step 3's deadline_height forward
         # from whatever height the chain was at when each did (see
         # _propagate_deadline); simulate the chain having actually moved
-        # well past it since, the same way _stall simulates wall-clock
-        # time having passed.
-        _l.current_height += 10**6
-        assert engine.consider_abandonment(self._stall(trade)) is True
-        assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
-        assert trust.local_tally("peer.lapse")["abandoned_count"] == 1
+        # well past it since.
+        lapse.current_height += 10**6
+        assert swap_engine.is_delinquent(self._stall(trade), lapse.current_height) is True
+        assert trust.local_tally("peer.lapse", lapse.current_height)["abandoned_count"] == 1
 
     def test_acceptance_cannot_be_forged_by_the_accuser(self):
         """Only an inbound leg counts. Our own payments, however many,
@@ -895,57 +894,66 @@ class TestBlame:
         assert engine._peer_ever_reciprocated(trade) is False
 
 
-class TestRecheckAbandoned:
-    """Redemption: a counterparty who was genuinely offline, not
-    dishonest, must be able to still complete the trade late and have
-    that be the whole fix, since trust reads straight off Trade.status."""
+class TestRedemption:
+    """A counterparty who was genuinely offline, not dishonest, must be
+    able to still complete the trade late and have that be the whole
+    fix: is_delinquent is computed fresh from Trade/Increment rows every
+    time, so nothing was ever written down that needs to be written
+    back once the missing leg settles."""
 
-    def _abandon(self, engine, trade):
+    def _make_delinquent(self, engine, trade):
         engine.advance(trade)          # we pay; they never reciprocate
         engine.lapse.current_height += 10**6
         trade = Trade.get(Trade.session_id == trade.session_id)
         trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
         trade.save()
-        assert engine.consider_abandonment(trade) is True
-        return Trade.get(Trade.session_id == trade.session_id)
+        assert swap_engine.is_delinquent(trade, engine.lapse.current_height) is True
+        return trade
 
-    def test_a_late_settlement_un_abandons_the_trade(self):
+    def test_a_late_settlement_stops_counting_immediately(self):
         engine, lapse, _x = make_engine()
         trade = make_trade()
-        trade = self._abandon(engine, trade)
-        assert trust.local_tally("peer.lapse")["abandoned_count"] == 1
+        trade = self._make_delinquent(engine, trade)
+        assert trust.local_tally("peer.lapse", lapse.current_height)["abandoned_count"] == 1
 
         first = Increment.get(Increment.id == f"{trade.session_id}:1")
         settle_peer_leg(trade, first, engine)   # the missing leg finally lands
-        assert engine.recheck_abandoned(trade) is True
+        engine.advance(trade)                   # the ordinary loop notices it
 
         trade = Trade.get(Trade.session_id == trade.session_id)
         assert trade.status == TRADE_ACTIVE
-        assert trust.local_tally("peer.lapse")["abandoned_count"] == 0
+        assert swap_engine.is_delinquent(trade, lapse.current_height) is False
+        assert trust.local_tally("peer.lapse", lapse.current_height)["abandoned_count"] == 0
 
-    def test_still_missing_leg_is_not_redeemed(self):
-        engine, _lapse, _x = make_engine()
+    def test_still_missing_leg_keeps_counting(self):
+        engine, lapse, _x = make_engine()
         trade = make_trade()
-        trade = self._abandon(engine, trade)
-        assert engine.recheck_abandoned(trade) is False
-        assert Trade.get(Trade.session_id == trade.session_id).status == TRADE_ABANDONED
+        trade = self._make_delinquent(engine, trade)
+        engine.advance(trade)   # nothing new to find
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        assert swap_engine.is_delinquent(trade, lapse.current_height) is True
 
-    def test_only_abandoned_trades_are_rechecked(self):
-        engine, _lapse, _x = make_engine()
+    def test_completed_trade_is_never_delinquent(self):
+        engine, lapse, _x = make_engine()
         trade = make_trade()
-        assert engine.recheck_abandoned(trade) is False
+        for _ in range(20):
+            inc = engine.advance(trade)
+            if inc is None:
+                break
+            settle_peer_leg(trade, inc, engine)
+        trade = Trade.get(Trade.session_id == trade.session_id)
+        assert trade.status == TRADE_COMPLETED
+        assert swap_engine.is_delinquent(trade, lapse.current_height + 10**6) is False
 
-    def test_redemption_lets_the_trade_finish_on_the_next_pass(self):
-        """Un-abandoning does not itself finish the trade, later steps
-        may never even have been attempted; it hands the trade back to
-        the ordinary loop to drive the rest."""
+    def test_redemption_lets_the_trade_finish_on_its_own(self):
+        """Nothing but the ordinary advance loop is needed to drive the
+        rest, including steps that never got a chance to run while the
+        trade looked delinquent."""
         engine, lapse, _x = make_engine()
         trade = make_trade(count=2)
-        trade = self._abandon(engine, trade)
+        trade = self._make_delinquent(engine, trade)
         first = Increment.get(Increment.id == f"{trade.session_id}:1")
         settle_peer_leg(trade, first, engine)
-        engine.recheck_abandoned(trade)
 
         trade = Trade.get(Trade.session_id == trade.session_id)
         for _ in range(6):
@@ -1287,6 +1295,89 @@ class TestAnswerFillRequests:
         assert first.i_move_first is False
 
 
+class TestManualFillDecisions:
+    """settings.SWAP_AUTO_ACCEPT_FILLS off: answer_fill_requests leaves
+    every live request pending instead of deciding it, and
+    decide_fill_request is the one-at-a-time counterpart a person clicks
+    from the Market page."""
+
+    def test_auto_false_answers_nothing(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, auto=False) == 0
+        assert Trade.select().count() == 0
+        assert node.publish_fill_response_calls == []
+
+    def test_decide_fill_request_accepts_exactly_like_auto_would(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.decide_fill_request(
+            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=True) is True
+        trade = Trade.get(Trade.session_id == req.session_id)
+        assert trade.role == "maker"
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is True
+
+    def test_decide_fill_request_still_enforces_the_exposure_cap(self, tmp_path):
+        """A manual accept is not a weaker check than an automatic one:
+        the same trust/cap decision runs either way."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(lapse_total=1000 * LAPSE, price=1000, maker_lapse=node.addr)
+        req = make_request(lapse_total=1000 * LAPSE)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = 1000 * LAPSE
+
+        tiny_cap = 1000
+        assert swap_engine.decide_fill_request(
+            engine, node, "GMAKER", tiny_cap, 2, req.request_id, accept=True) is False
+        assert Trade.select().count() == 0
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is False
+
+    def test_decide_fill_request_can_decline_without_touching_trust(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        # Deliberately no balance given: a decline must never need to
+        # fund anything, unlike an accept.
+
+        assert swap_engine.decide_fill_request(
+            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=False) is True
+        assert Trade.select().count() == 0
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is False
+        assert resp["reason"] == "declined by the maker"
+
+    def test_an_already_answered_request_cannot_be_decided_again(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        swap_engine.decide_fill_request(
+            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=True)
+        assert swap_engine.decide_fill_request(
+            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=False) is False
+        assert Trade.select().count() == 1
+
+    def test_an_unknown_request_id_is_reported_as_not_handled(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        assert swap_engine.decide_fill_request(
+            engine, node, "GMAKER", 5 * XLM, 2, "no-such-request", accept=False) is False
+
+
 # ---------------------------------------------------------------------------
 # Step receipts: emission and chain verification
 # ---------------------------------------------------------------------------
@@ -1336,9 +1427,8 @@ class TestEmitReceipts:
         lapse.current_height += 10**6
         trade = Trade.get(Trade.session_id == trade.session_id)
         trade.status = TRADE_STALLED
-        trade.stalled_since = time.time() - swap_engine.ABANDON_AFTER_SECONDS - 10
         trade.save()
-        assert engine.consider_abandonment(trade) is True
+        assert swap_engine.is_delinquent(trade, lapse.current_height) is True
 
         emitted = swap_engine.emit_receipts_for_trade(engine, node, kek, trade)
         assert emitted == 1
