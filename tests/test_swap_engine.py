@@ -1275,30 +1275,38 @@ class TestAnswerFillRequests:
 
     def test_a_tie_in_trust_never_makes_both_sides_believe_they_open(self, tmp_path):
         """The unsafe reading of a tie: if the maker independently
-        tie-broke its own opening_mover call the same way the taker's
-        _start_trade does ('an even match still needs somebody to
-        start' -> True), both sides would believe they open and step 1
-        would deadlock. answer_fill_requests must derive the maker's
-        decision as the negation of what the taker computed, never in
-        parallel."""
+        tie-broke its own opening_mover call differently from how the
+        taker's own _open_taker_trade would, both sides would believe
+        they open (or neither would) and step 1 would deadlock.
+        answer_fill_requests must derive the maker's decision as the
+        exact negation of what the taker independently computes, never
+        in parallel.
+
+        No trade history for either address and no chain history: every
+        trust score here is 0, which is the exact tie
+        swap.opening_mover's score comparison passes through to its
+        alphabetical fallback (see that function's own docstring for
+        why a tie is no longer broken by a fixed 'taker always opens'
+        role - that was the exploitable lever a bait-order attacker
+        used, see market.py's notes). The alphabetical answer itself is
+        not what this test cares about (it depends on two addresses,
+        one of them a freshly generated real FALCON one, so asserting a
+        specific direction would be flaky); what has to hold regardless
+        is that both sides land on complementary answers.
+        """
         node = FakeDiscoveryNode(tmp_path, balances={})
         make_order(maker_lapse=node.addr)
-        # No trade history for either address and no chain history: every
-        # trust score here is 0, which is the exact tie opening_mover
-        # returns None for.
         req = make_request()
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total
 
         assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
         first = Increment.get(Increment.id == f"{req.session_id}:1")
-        # The taker's own _start_trade ties to i_open=True, which makes
-        # the taker move first on step 1. The maker's step 1 must be the
-        # complement of that, or neither side would send: this is the
-        # assertion that would catch the deadlock a naive,
-        # independently-tie-broken opening_mover call on the maker's
-        # side would produce.
-        assert first.i_move_first is False
+
+        # What the taker's own node independently derives for itself,
+        # computed the exact same way _open_taker_trade does.
+        taker_i_open = swap.opening_mover(0.0, 0.0, req.taker_lapse_addr, node.addr)
+        assert first.i_move_first is not taker_i_open
 
 
 class TestAnswerFillRequestsIsSerializedAcrossThreads:

@@ -1190,9 +1190,8 @@ def _answer_one_locked(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     # step one to either side any more: the reason it used to be forced
     # to the taker (the maker had no other way to learn the trade
     # existed) is gone now that the maker agrees before anything is paid.
-    taker_i_open = swap.opening_mover(taker_trust_of_me, my_trust_of_taker)
-    if taker_i_open is None:
-        taker_i_open = True
+    taker_i_open = swap.opening_mover(taker_trust_of_me, my_trust_of_taker,
+                                      req.taker_lapse_addr, node.addr)
     maker_i_open = not taker_i_open
 
     now = time.time()
@@ -1347,7 +1346,9 @@ def _send_auto_match(engine, node, my_xlm_addr, stranger_cap, kek, order_id,
     detail = trust_mod.get_detail(
         order_row.maker_lapse_addr,
         trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
-        node.view.state.get_balance(order_row.maker_lapse_addr), node=node)
+        node.view.state.get_balance(order_row.maker_lapse_addr),
+        trust_mod.blocks_since_last_significant_topup(node, order_row.maker_lapse_addr),
+        node=node)
     cap = swap.exposure_cap_stroops(detail["score"], stranger_cap)
     max_safe_lapse = swap.lapse_for_xlm(
         swap.max_safe_trade_stroops(cap), order_row.price_stroops_per_lapse)
@@ -1619,9 +1620,8 @@ def _open_taker_trade(node, req, resp, order_row, confirm_depth):
 
     i_send = "xlm" if order_row.direction == "sell" else "lapse"
     i_open = swap.opening_mover(
-        *trust_mod.mutual_scores(node, order_row.maker_lapse_addr))
-    if i_open is None:
-        i_open = True   # an even match still needs somebody to start
+        *trust_mod.mutual_scores(node, order_row.maker_lapse_addr),
+        node.addr, order_row.maker_lapse_addr)
 
     now = time.time()
     Trade.create(

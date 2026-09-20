@@ -168,7 +168,9 @@ def register(app, node, csrf_token):
         return trust_mod.get_detail(
             addr,
             trust_mod.address_age_blocks(node, addr),
-            node.view.state.get_balance(addr), node=node)
+            node.view.state.get_balance(addr),
+            trust_mod.blocks_since_last_significant_topup(node, addr),
+            node=node)
 
     def trust_badge(addr):
         detail = peer_trust(addr)
@@ -649,7 +651,9 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     detail = trust_mod.get_detail(
         order_row.maker_lapse_addr,
         trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
-        node.view.state.get_balance(order_row.maker_lapse_addr), node=node)
+        node.view.state.get_balance(order_row.maker_lapse_addr),
+        trust_mod.blocks_since_last_significant_topup(node, order_row.maker_lapse_addr),
+        node=node)
     swap_mod.plan(lapse_total, xlm_total, detail["score"], stranger_cap=cap)
 
     session_id = swap_mod.new_session_id(order_row.order_id, node.addr)

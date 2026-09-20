@@ -223,6 +223,27 @@ class TestFirstMover:
     def test_even_match_defers_to_the_caller(self):
         assert swap.opening_mover(0.0, 0.0) is None
 
+    def test_even_match_breaks_by_address_when_given(self):
+        """A tie no longer defaults to a fixed role ('taker always
+        opens'): that was a free, repeatable lever, since a maker
+        posting bait orders from a fresh throwaway address could always
+        count on an honest taker being tied at trust 0 and opening
+        first, every time (see market.py's notes on this). With trust's
+        own score formula reworked so a genuine first contact between
+        two established addresses is no longer forced to an exact tie
+        (see trust.STANDING_WEIGHT), an exact tie is now the rare case
+        of two addresses with literally identical stake - at which
+        point neither side has more to lose than the other, so a plain,
+        content-derived comparison is enough."""
+        assert swap.opening_mover(0.0, 0.0, "a.addr", "b.addr") is True
+        assert swap.opening_mover(0.0, 0.0, "b.addr", "a.addr") is False
+
+    def test_address_tiebreak_never_overrides_a_real_score_difference(self):
+        # Even if the "wrong" address would win the alphabetical
+        # fallback, a genuine score difference always decides first.
+        assert swap.opening_mover(5.0, 1.0, "z.addr", "a.addr") is True
+        assert swap.opening_mover(1.0, 5.0, "z.addr", "a.addr") is False
+
     def test_first_move_alternates(self):
         assert swap.i_move_first(1, True) is True
         assert swap.i_move_first(2, True) is False

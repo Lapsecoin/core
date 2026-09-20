@@ -76,29 +76,38 @@ def fresh_db():
 
 AGED = trust.AGE_FULL_BLOCKS
 FUNDED = trust.STAKE_FULL_TICKS
+# Comfortably past SEASONING_FLOOR_BLOCKS, for a test that wants a
+# balance to count as real rather than "just moved in" (see
+# trust.stake_component / trust.SEASONING_FLOOR_BLOCKS).
+SEASONED = trust.SEASONING_FLOOR_BLOCKS * 10
 
 
 class TestSybilCost:
-    """The centre of the design: history alone buys nothing."""
+    """The centre of the design: history alone buys nothing, and (since
+    the standing-floor/seasoning rework) neither does pure stake claimed
+    for free or reused in sequence - see TestStandingFloor,
+    TestSeasoning and TestDiversityWeighting below for the properties
+    added alongside this one."""
 
     def test_fresh_address_scores_zero_however_good_its_record(self):
         now = time.time()
-        assert trust.score(completed_count=500, completed_ticks=10_000 * LAPSE,
+        assert trust.score(per_counterparty=[(10_000 * LAPSE, 500)],
                            abandoned_count=0, last_completed_at=now,
                            address_age_blocks=0, balance_ticks=FUNDED,
-                           now=now) == 0.0
+                           blocks_since_last_topup=SEASONED, now=now) == 0.0
 
     def test_empty_address_scores_zero_however_old(self):
         now = time.time()
-        assert trust.score(completed_count=500, completed_ticks=10_000 * LAPSE,
+        assert trust.score(per_counterparty=[(10_000 * LAPSE, 500)],
                            abandoned_count=0, last_completed_at=now,
                            address_age_blocks=AGED, balance_ticks=0,
-                           now=now) == 0.0
+                           blocks_since_last_topup=SEASONED, now=now) == 0.0
 
     def test_both_age_and_stake_are_required(self):
         now = time.time()
-        args = dict(completed_count=10, completed_ticks=100 * LAPSE,
-                    abandoned_count=0, last_completed_at=now, now=now)
+        args = dict(per_counterparty=[(100 * LAPSE, 10)],
+                    abandoned_count=0, last_completed_at=now,
+                    blocks_since_last_topup=SEASONED, now=now)
         neither = trust.score(address_age_blocks=0, balance_ticks=0, **args)
         age_only = trust.score(address_age_blocks=AGED, balance_ticks=0, **args)
         stake_only = trust.score(address_age_blocks=0, balance_ticks=FUNDED, **args)
@@ -107,61 +116,228 @@ class TestSybilCost:
         assert both > 0.0
 
     def test_age_below_the_floor_counts_for_nothing(self):
-        assert trust.stake_component(trust.AGE_FLOOR_BLOCKS - 1, FUNDED) == 0.0
+        assert trust.stake_component(
+            trust.AGE_FLOOR_BLOCKS - 1, FUNDED, SEASONED) == 0.0
 
     def test_stake_component_is_bounded(self):
-        assert trust.stake_component(AGED * 100, FUNDED * 1000) <= 1.0
+        assert trust.stake_component(AGED * 100, FUNDED * 1000, SEASONED) <= 1.0
 
     def test_stake_rises_with_both_inputs(self):
         half_age = (trust.AGE_FLOOR_BLOCKS + AGED) // 2
-        assert trust.stake_component(AGED, FUNDED) > \
-               trust.stake_component(half_age, FUNDED)
-        assert trust.stake_component(AGED, FUNDED) > \
-               trust.stake_component(AGED, FUNDED // 2)
+        assert trust.stake_component(AGED, FUNDED, SEASONED) > \
+               trust.stake_component(half_age, FUNDED, SEASONED)
+        assert trust.stake_component(AGED, FUNDED, SEASONED) > \
+               trust.stake_component(AGED, FUNDED // 2, SEASONED)
+
+    def test_balance_below_the_minimum_counts_for_nothing(self):
+        """A hard floor, not a ramp from zero: a linear-from-zero curve
+        rewards ANY nonzero balance a little, which is exactly backwards
+        for Sybil resistance (it makes spreading a fixed budget thin
+        across many addresses profitable). Below STAKE_MIN_TICKS must
+        score identically to holding nothing at all."""
+        assert trust.stake_component(AGED, trust.STAKE_MIN_TICKS - 1, SEASONED) == 0.0
+        assert trust.stake_component(AGED, 1, SEASONED) == 0.0
+        assert trust.stake_component(AGED, 0, SEASONED) == 0.0
+
+    def test_spreading_a_fixed_budget_thin_is_worse_than_concentrating(self):
+        """The point of the hard floor: N addresses each holding
+        budget/N must never together outscore one address holding the
+        whole budget, or thin-spreading would be the profitable move."""
+        budget = 20 * trust.STAKE_MIN_TICKS
+        concentrated = trust.stake_component(AGED, budget, SEASONED)
+        n = 10
+        thin = trust.stake_component(AGED, budget // n, SEASONED)
+        assert thin == 0.0 or n * thin < concentrated
 
 
 class TestHistory:
+    """history_component now takes per_counterparty, an iterable of
+    (ticks, count) - one entry per distinct address this history is
+    drawn from - rather than flat totals, and sums a concave term per
+    entry instead of taking one sqrt/log1p of a pooled total. See
+    TestDiversityWeighting for why (an earlier, pooled-then-scaled
+    version of this passed every test in this class and still let a
+    wash-trading ring outscore genuine diversity; these numbers alone
+    do not catch that, which is the whole reason that class exists)."""
+
     def test_no_trades_is_zero(self):
-        assert trust.history_component(0, 0, 0) == 0.0
+        assert trust.history_component([], 0) == 0.0
 
     def test_completed_trades_earn_standing(self):
         now = time.time()
-        assert trust.history_component(1, 10 * LAPSE, now, now=now) > 0
+        assert trust.history_component([(10 * LAPSE, 1)], now, now=now) > 0
 
     def test_volume_has_diminishing_returns(self):
+        # Kept well under HISTORY_SATURATION_CEILING so the ceiling
+        # itself (tested separately below) doesn't mask this check.
         now = time.time()
-        small = trust.history_component(1, 1 * LAPSE, now, now=now)
-        huge = trust.history_component(1, 10_000 * LAPSE, now, now=now)
+        small = trust.history_component([(1 * LAPSE, 1)], now, now=now)
+        huge = trust.history_component([(4_000 * LAPSE, 1)], now, now=now)
         assert huge > small
         assert huge < small * 1000, "volume should be sublinear"
 
     def test_count_has_diminishing_returns(self):
         now = time.time()
-        few = trust.history_component(2, 100 * LAPSE, now, now=now)
-        many = trust.history_component(200, 100 * LAPSE, now, now=now)
+        few = trust.history_component([(100 * LAPSE, 2)], now, now=now)
+        many = trust.history_component([(100 * LAPSE, 100)], now, now=now)
         assert many > few
         assert many < few * 100
 
     def test_standing_decays_with_time(self):
         now = time.time()
-        fresh = trust.history_component(10, 100 * LAPSE, now, now=now)
+        fresh = trust.history_component([(100 * LAPSE, 10)], now, now=now)
         stale = trust.history_component(
-            10, 100 * LAPSE, now - trust.DECAY_HALFLIFE_SECONDS, now=now)
+            [(100 * LAPSE, 10)], now - trust.DECAY_HALFLIFE_SECONDS, now=now)
         assert stale == pytest.approx(fresh / 2, rel=0.01)
 
     def test_a_month_off_does_not_reset_standing(self):
         now = time.time()
-        fresh = trust.history_component(10, 100 * LAPSE, now, now=now)
-        month = trust.history_component(10, 100 * LAPSE, now - 30 * DAY, now=now)
+        fresh = trust.history_component([(100 * LAPSE, 10)], now, now=now)
+        month = trust.history_component([(100 * LAPSE, 10)], now - 30 * DAY, now=now)
         assert month > fresh * 0.5
+
+    def test_saturates_rather_than_growing_unbounded(self):
+        """Diversity-weighting (see TestDiversityWeighting) makes faking
+        many distinct-looking relationships cost real per-identity setup,
+        but says nothing about magnitude: a ring willing to cycle a
+        large, genuinely-held balance many times (cheap - the LapseCoin
+        leg of a trade carries no mandatory fee, see tx.py) can still
+        post an arbitrarily large raw number even after diversity-
+        weighting. Unlike swap.exposure_cap_stroops, which already
+        refuses to let a raw score push a step past MAX_TRUST_MULTIPLIER
+        regardless of magnitude, swap.opening_mover compares two raw
+        scores directly with nothing downstream to cap it - so the cap
+        has to live here."""
+        now = time.time()
+        modest = trust.history_component([(50 * LAPSE, 5)], now, now=now)
+        enormous = trust.history_component(
+            [(200_000 * LAPSE, 200)], now, now=now)
+        assert enormous == trust.HISTORY_SATURATION_CEILING
+        assert modest < enormous
+
+
+class TestDiversityWeighting:
+    """Two self-owned addresses can loop real, chain-settled trades with
+    EACH OTHER indefinitely for near-zero cost (the LapseCoin leg of a
+    trade carries no mandatory fee - tx.py, swap legs use fee=0 - and
+    the same balance round-trips intact each time rather than being
+    spent), building a large, portable completed-trade tally that gets
+    presented to a genuine stranger via network-verified receipts. Real
+    payments, fake evidence of GENERAL trustworthiness. Summing a
+    concave (sqrt x log1p) term per distinct counterparty, rather than
+    pooling every counterparty's ticks/count into one sqrt/log1p call,
+    is what makes spreading the same resources across more distinct
+    partners score higher: sqrt(a) + sqrt(b) > sqrt(a+b) for positive a,
+    b. This does not (and cannot) prove two addresses are controlled by
+    different people - nothing on-chain can - it only makes faking N
+    independent-looking relationships cost the same age+balance+
+    seasoning setup as N real ones, closing the specific shortcut of
+    reusing the same two keys forever.
+
+    An earlier version of this weighting used mean(per_peer) *
+    log1p(distinct_count) instead of summing the per-peer terms
+    directly, which looked plausible and was wrong: the mean canceled
+    out almost exactly the concentration bonus sqrt's concavity gives a
+    single fat relationship, so spreading the SAME total volume/count
+    across 20 partners scored LOWER than concentrating it in one -
+    backwards from the goal. Caught only by computing both by hand and
+    comparing; test_diversifying_beats_concentrating_for_equal_totals
+    exists specifically so that regression cannot come back silently.
+    """
+
+    def test_diversifying_beats_concentrating_for_equal_totals(self):
+        # Kept well under HISTORY_SATURATION_CEILING (50) on both sides -
+        # once either hits the ceiling the comparison stops meaning
+        # anything, since both would just read 50.
+        now = time.time()
+        total_ticks, total_count, n = 100 * LAPSE, 30, 10
+        one_partner = trust.history_component(
+            [(total_ticks, total_count)], now, now=now)
+        ten_partners = trust.history_component(
+            [(total_ticks // n, total_count // n) for _ in range(n)],
+            now, now=now)
+        assert one_partner < 50 and ten_partners < 50, \
+            "raise the saturation ceiling check first if this fires"
+        assert ten_partners > one_partner
+
+    def test_looping_the_same_partner_forever_does_not_buy_diversity(self):
+        """distinct_counterparties stuck at 1 caps the diversity effect
+        permanently: every additional unit of credit has to come from
+        an actually-new counterparty, which costs the full age+balance+
+        seasoning setup again (see trust.get_detail)."""
+        now = time.time()
+        one_partner_looped = trust.history_component(
+            [(80 * LAPSE, 10)], now, now=now)
+        two_real_partners = trust.history_component(
+            [(80 * LAPSE, 10), (80 * LAPSE, 10)], now, now=now)
+        assert one_partner_looped < 50 and two_real_partners < 50, \
+            "raise the saturation ceiling check first if this fires"
+        # A second distinct partner contributing the SAME modest amount
+        # the first one did beats looping the first one indefinitely.
+        assert two_real_partners > one_partner_looped
+
+
+class TestSeasoning:
+    """stake_component's balance term now requires BOTH a hard floor
+    (STAKE_MIN_TICKS) and seasoning (SEASONING_FLOOR_BLOCKS since the
+    last significant inbound transfer) before a balance counts as real
+    stake. The floor alone stops spreading a fixed budget thin across
+    many SIMULTANEOUS addresses; it says nothing about the cheaper
+    version of the same attack: bulk-backdating a queue of addresses'
+    AGE for free (storage.py's AddrIndex indexes an address the instant
+    it appears as sender or ANY recipient of ANY tx, so one multi-output
+    transaction can backdate thousands at once), then moving ONE pool of
+    real capital through that queue sequentially, funding each address
+    seconds before it's used. A live balance snapshot cannot tell that
+    apart from a genuinely-held balance; seasoning can, because it asks
+    not "how much is here now" but "how long has it been here"."""
+
+    def test_a_balance_that_just_arrived_does_not_count(self):
+        assert trust.stake_component(AGED, FUNDED, 0) == 0.0
+
+    def test_the_same_balance_counts_once_seasoned(self):
+        assert trust.stake_component(AGED, FUNDED, SEASONED) > 0.0
+
+    def test_never_topped_up_is_treated_as_fully_seasoned(self):
+        """A balance with no inbound transfer on record at all can only
+        have come from mining a block reward (credited directly via
+        state.credit(), never through a transaction - see
+        chainstate._apply_builder_reward - so it never shows up in
+        AddrIndex for blocks_since_last_significant_topup to find).
+        Winning a block is real, sequential, unparallelizable work,
+        so treating "nothing to find" as seasoned is correct here,
+        just for a different reason than for a plain snapshot."""
+        assert trust.stake_component(AGED, FUNDED, float("inf")) > 0.0
+
+    def test_sequential_reuse_of_one_pool_scores_like_a_fresh_address(self):
+        """The attack this exists to close: bulk-backdate age for free,
+        then cycle ONE small real capital pool through a queue of
+        already-aged addresses, funding each right before it's used.
+        Without seasoning this scores as real stake (a live snapshot
+        cannot tell the difference); with it, it scores exactly like an
+        address that was never funded at all."""
+        cycled_in_seconds_ago = trust.stake_component(
+            AGED, trust.STAKE_MIN_TICKS + LAPSE, blocks_since_last_topup=0)
+        never_funded = trust.stake_component(AGED, 0, SEASONED)
+        assert cycled_in_seconds_ago == never_funded == 0.0
+
+    def test_actually_parking_the_capital_the_full_window_is_rewarded(self):
+        """The attacker who stops cycling and genuinely parks the
+        capital for the real duration isn't attacking any more at that
+        point - they're paying the same price a real trader would, and
+        get the same credit for it."""
+        paid_the_real_cost = trust.stake_component(
+            AGED, trust.STAKE_MIN_TICKS + LAPSE, SEASONED)
+        assert paid_the_real_cost > 0.0
 
 
 class TestSlashing:
     def test_one_abandonment_zeroes_the_score(self):
         now = time.time()
-        assert trust.score(completed_count=1000, completed_ticks=10_000 * LAPSE,
+        assert trust.score(per_counterparty=[(10_000 * LAPSE, 1000)],
                            abandoned_count=1, last_completed_at=now,
                            address_age_blocks=AGED, balance_ticks=FUNDED,
+                           blocks_since_last_topup=SEASONED,
                            now=now) == 0.0
 
     def test_slashing_is_not_undone_by_more_trades(self):
@@ -171,12 +347,12 @@ class TestSlashing:
         for _ in range(50):
             make_trade("bad.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
         node = FakeNode("me", height=AGED)
-        assert trust.get_detail("bad.peer", AGED, FUNDED, node=node)["score"] == 0.0
+        assert trust.get_detail("bad.peer", AGED, FUNDED, SEASONED, node=node)["score"] == 0.0
 
     def test_delinquency_records_its_evidence(self):
         make_delinquent_trade("bad.peer", session_id="session-abc")
         node = FakeNode("me", height=AGED)
-        detail = trust.get_detail("bad.peer", AGED, FUNDED, node=node)
+        detail = trust.get_detail("bad.peer", AGED, FUNDED, SEASONED, node=node)
         assert detail["abandoned_count"] == 1
         assert detail["last_abandon_session"] == "session-abc"
 
@@ -185,8 +361,8 @@ class TestSlashing:
         make_delinquent_trade("bad.peer")
         make_trade("fresh.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
         node = FakeNode("me", height=AGED)
-        assert trust.get_detail("bad.peer", AGED, FUNDED, node=node)["score"] == 0.0
-        assert trust.get_detail("fresh.peer", AGED, FUNDED, node=node)["score"] > 0.0
+        assert trust.get_detail("bad.peer", AGED, FUNDED, SEASONED, node=node)["score"] == 0.0
+        assert trust.get_detail("fresh.peer", AGED, FUNDED, SEASONED, node=node)["score"] > 0.0
 
     def test_a_late_settlement_lifts_the_slash(self):
         """The whole point of computing this fresh from Increment rows
@@ -195,7 +371,7 @@ class TestSlashing:
         (see swap_engine.is_delinquent)."""
         trade = make_delinquent_trade("bad.peer", session_id="s-late")
         node = FakeNode("me", height=AGED)
-        assert trust.get_detail("bad.peer", AGED, FUNDED, node=node)["score"] == 0.0
+        assert trust.get_detail("bad.peer", AGED, FUNDED, SEASONED, node=node)["score"] == 0.0
 
         # The missing leg lands late, and the ordinary advance loop
         # (tested in test_swap_engine.py) drives the trade to
@@ -207,7 +383,7 @@ class TestSlashing:
         inc.save()
         trade.status = TRADE_COMPLETED
         trade.save()
-        detail = trust.get_detail("bad.peer", AGED, FUNDED, node=node)
+        detail = trust.get_detail("bad.peer", AGED, FUNDED, SEASONED, node=node)
         assert detail["abandoned_count"] == 0
         assert detail["score"] > 0.0
 
@@ -218,15 +394,27 @@ class TestSlashing:
         make_trade("bad.peer", TRADE_COMPLETED, lapse_total=100 * LAPSE)
         trade = make_delinquent_trade("bad.peer")
         node = FakeNode("me", height=1)   # right at deadline_height, no margin yet
-        detail = trust.get_detail("bad.peer", AGED, FUNDED, node=node)
+        detail = trust.get_detail("bad.peer", AGED, FUNDED, SEASONED, node=node)
         assert detail["abandoned_count"] == 0
         assert detail["score"] > 0.0
         assert trade.status == TRADE_STALLED  # sanity: still stalled, just not delinquent yet
 
 
 class TestRecords:
-    def test_unknown_peer_scores_zero(self):
-        assert trust.get_detail("never.seen", AGED, FUNDED)["score"] == 0.0
+    def test_a_completely_fresh_unfunded_peer_scores_zero(self):
+        assert trust.get_detail("never.seen", 0, 0, 0)["score"] == 0.0
+
+    def test_an_unknown_but_established_peer_scores_above_zero(self):
+        """The actual fix this whole rework exists for: a peer with no
+        trade history at all (never "known" in the trade-evidence sense)
+        but real, seasoned age and balance must not tie with a bare
+        throwaway at 0.0 any more - see TestSybilCost/TestSeasoning for
+        why that tie was exploitable."""
+        detail = trust.get_detail("never.seen", AGED, FUNDED, SEASONED)
+        assert detail["score"] > 0.0
+        # Still correctly "unknown" in the trade-evidence sense: stake
+        # buys standing, not a fabricated track record.
+        assert detail["known"] is False
 
     def test_unknown_peer_detail_is_marked_unknown(self):
         assert trust.get_detail("never.seen")["known"] is False
@@ -241,11 +429,12 @@ class TestRecords:
     def test_detail_explains_the_score(self):
         """A score with no stated reason is a verdict, not information."""
         make_trade("peer", TRADE_COMPLETED)
-        detail = trust.get_detail("peer", AGED, FUNDED)
+        detail = trust.get_detail("peer", AGED, FUNDED, SEASONED)
         assert detail["history"] > 0
         assert detail["stake"] > 0
         assert detail["score"] == pytest.approx(
-            detail["history"] * detail["stake"], rel=1e-6)
+            trust.STANDING_WEIGHT * detail["stake"]
+            + detail["history"] * detail["stake"], rel=1e-6)
 
 class FakeStorage:
     def __init__(self, heights_by_addr=None):
@@ -266,7 +455,14 @@ class FakeState:
 class FakeView:
     def __init__(self, height, balances=None):
         self.height = height
-        self.chain = [{"height": height}]
+        # "transactions": [] so blocks_since_last_significant_topup can
+        # scan it without a real chain: none of these fixtures name a
+        # transaction that actually appears here, so every lookup falls
+        # through to "nothing found" (float("inf"), fully seasoned),
+        # which is the correct default for a fixture that isn't
+        # specifically testing seasoning (see TestSeasoning for the
+        # ones that are, via trust.stake_component directly).
+        self.chain = [{"height": height, "transactions": []}]
         self.state = FakeState(balances)
 
 
@@ -388,13 +584,13 @@ class TestMutualScores:
 class TestNegativeAndOddInputs:
     def test_negative_volume_does_not_create_standing(self):
         now = time.time()
-        assert trust.history_component(1, -1000, now, now=now) == 0.0
+        assert trust.history_component([(-1000, 1)], now, now=now) == 0.0
 
     def test_negative_balance_scores_zero_stake(self):
-        assert trust.stake_component(AGED, -500) == 0.0
+        assert trust.stake_component(AGED, -500, SEASONED) == 0.0
 
     def test_negative_age_scores_zero_stake(self):
-        assert trust.stake_component(-10, FUNDED) == 0.0
+        assert trust.stake_component(-10, FUNDED, SEASONED) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -416,17 +612,18 @@ def make_receipt(receipt_id, addr_a, addr_b, session_id, outcome="settled",
 class TestNetworkTally:
     def test_unverified_receipts_are_not_counted(self):
         make_receipt("r1", "a", "b", "s1", verified=None)
-        abandoned, count, lapse_amt, _last = trust._network_tally("b")
-        assert (abandoned, count, lapse_amt) == (0, 0, 0)
+        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        assert (abandoned, by_peer) == (0, {})
 
     def test_verified_settled_receipt_counts_toward_completed(self):
         make_receipt("r1", "a", "b", "s1", outcome="settled", amount=5 * LAPSE)
-        abandoned, count, lapse_amt, _last = trust._network_tally("b")
-        assert (abandoned, count, lapse_amt) == (0, 1, 5 * LAPSE)
+        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        assert abandoned == 0
+        assert by_peer == {"a": (5 * LAPSE, 1)}
 
     def test_verified_missed_receipt_counts_as_abandonment(self):
         make_receipt("r1", "a", "b", "s1", outcome="missed")
-        abandoned, count, _lapse, _last = trust._network_tally("b")
+        abandoned, _by_peer, _last = trust._network_tally_by_counterparty("b")
         assert abandoned == 1
 
     def test_session_already_known_locally_is_not_double_counted(self):
@@ -437,8 +634,20 @@ class TestNetworkTally:
             increment_count=2, confirm_depth=2, status="completed",
             created_at=time.time(), updated_at=time.time())
         make_receipt("r1", "a", "b", "s1", outcome="settled")
-        abandoned, count, lapse_amt, _last = trust._network_tally("b")
-        assert (abandoned, count, lapse_amt) == (0, 0, 0)
+        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        assert (abandoned, by_peer) == (0, {})
+
+    def test_two_sessions_with_the_same_counterparty_are_grouped(self):
+        """A trade carries several 'settled' receipts (one per step's
+        LAPSE leg), all naming the same counterparty and session; two
+        DIFFERENT sessions with that same counterparty must still be
+        counted as one counterparty, two sessions - not two counterparty
+        entries - for diversity-weighting to mean anything."""
+        make_receipt("r1", "a", "b", "s1", outcome="settled", amount=3 * LAPSE)
+        make_receipt("r2", "a", "b", "s2", outcome="settled", amount=4 * LAPSE)
+        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        assert abandoned == 0
+        assert by_peer == {"a": (7 * LAPSE, 2)}
 
     def test_get_detail_without_node_ignores_network_receipts(self):
         make_receipt("r1", "a", "b", "s1", outcome="missed")
@@ -450,7 +659,7 @@ class TestNetworkTally:
         # Pre-mark it checked at this exact height so get_detail's own
         # lazy verification pass (see trust._verify_addr_receipts) has
         # nothing left to do and this stays a pure DB-reading test of
-        # _network_tally's folding, not of chain verification.
+        # _network_tally_by_counterparty's folding, not chain verification.
         row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
         row.verified_at_height = 100
         row.save()
@@ -531,7 +740,7 @@ class TestVerifyAddrReceipts:
         row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
         assert row.verified is False
         # And the moment it flips, trust stops counting it.
-        assert trust._network_tally("b")[0] == 0
+        assert trust._network_tally_by_counterparty("b")[0] == 0
 
     def test_missed_claim_is_not_rechecked_twice_at_the_same_height(self, monkeypatch):
         """A page rendered twice inside one block must not pay for the

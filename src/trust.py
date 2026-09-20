@@ -81,6 +81,72 @@ AGE_FULL_BLOCKS = 21_600
 # wealth ranking.
 STAKE_FULL_TICKS = 100 * 100_000_000
 
+# Below this, a balance does not count as stake at all - not "a little",
+# zero. A linear ramp from zero looks harmless but is exactly backwards
+# for Sybil resistance: it rewards spreading a fixed budget across many
+# addresses a little each, since sqrt/linear curves have their steepest
+# marginal value near zero. A hard floor makes splitting strictly worse
+# than concentrating, the same shape AGE_FLOOR_BLOCKS already gives age.
+# Simulated against a spray of thin-funded addresses before picking this
+# (see the design notes this was built from); tune alongside
+# STAKE_FULL_TICKS if LAPSE's expected value changes materially.
+STAKE_MIN_TICKS = 5 * 100_000_000
+
+# How many blocks since an address's balance last grew by a non-dust
+# amount before that balance counts as stake. Exists because a snapshot
+# balance check, however high its floor, can always be satisfied by
+# moving ONE pool of capital through a queue of addresses one at a time
+# right before each is used - the floor stops spreading thin, nothing
+# stops reusing thin in sequence instead. This is what actually closes
+# that: an address topped up seconds ago scores exactly like an empty
+# one regardless of the amount, so fielding N simultaneously-usable
+# identities needs N x the capital genuinely parked for this long, not
+# one pool cycled through N addresses for free. Same span as
+# AGE_FLOOR_BLOCKS on purpose - it is measuring the same kind of claim
+# ("this took genuine time to accumulate"), just anchored to the most
+# recent significant inbound transfer instead of to first appearance.
+SEASONING_FLOOR_BLOCKS = AGE_FLOOR_BLOCKS
+
+# The smallest inbound transfer that counts as "topping up" for
+# SEASONING_FLOOR_BLOCKS purposes. Far below STAKE_MIN_TICKS on purpose:
+# this only exists to stop a griefer resetting a stranger's seasoning
+# clock by sending them dust, not to gate real funding events.
+SEASONING_SIGNIFICANCE_TICKS = 100_000_000 // 100   # 0.01 LAPSE
+
+# How many of an address's most recent transactions
+# blocks_since_last_significant_topup will look through before giving up
+# and treating it as fully seasoned. Bounds the cost of the lookup the
+# same way trust._verify_addr_receipts' own MAX_CHAIN_CHECKS_PER_LOOKUP
+# bounds that one: a real trader's recent history is short, and an
+# address with none, or none significant, in this many is a genuine
+# "nothing recent", not a scan this call should keep paying to confirm.
+SEASONING_SCAN_LIMIT = 50
+
+# Ceiling on the history component, applied after decay. Diversity-
+# weighting (see history_component) makes faking N independent-looking
+# relationships cost the same as building N real ones, but says nothing
+# about magnitude: two self-owned addresses cycling a large, genuinely-
+# held balance back and forth can still rack up an arbitrarily large
+# raw number, cheaply, since the LAPSE leg of a trade carries no
+# mandatory fee (tx.py: fee is sender-chosen, swap legs use fee=0) and
+# the same balance round-trips intact every time rather than being
+# spent. exposure_cap_stroops already refuses to let a raw score push a
+# step past MAX_TRUST_MULTIPLIER regardless of magnitude; this applies
+# the identical discipline to the score itself, which matters
+# separately because swap.opening_mover compares two raw scores directly
+# with no ceiling of its own downstream of it.
+HISTORY_SATURATION_CEILING = 50.0
+
+# How much of the total score pure stake (age + seasoned balance, no
+# proven delivery at all) can supply on its own. Deliberately well below
+# what real delivered history can reach (a trader with a genuine, modest
+# track record should always outscore a merely well-capitalized
+# stranger), but large enough that two established, mutually-unfamiliar
+# parties get real, distinguishable numbers on first contact instead of
+# both hitting exactly zero - which is the actual defect this whole
+# formula exists to fix (see score()'s own docstring).
+STANDING_WEIGHT = 0.3
+
 TICKS_PER_LAPSE = 100_000_000
 
 
@@ -88,57 +154,119 @@ TICKS_PER_LAPSE = 100_000_000
 # Scoring
 # ---------------------------------------------------------------------------
 
-def history_component(completed_count, completed_ticks, last_completed_at,
-                      now=None):
-    """Standing earned by trades that actually settled.
+def history_component(per_counterparty, last_completed_at, now=None):
+    """Standing earned by trades that actually settled, weighted by how
+    many DISTINCT counterparties they were settled with.
 
-    Square root in volume and logarithmic in count, so neither one large
-    trade nor a burst of tiny ones buys standing out of proportion to it.
-    Decays with time since the last completed trade.
+    per_counterparty: an iterable of (ticks, count) pairs, one entry per
+    distinct address this trade history is drawn from - this node's own
+    bilateral experience counts as exactly one such entry (see
+    get_detail), and each network-verified counterparty another (see
+    _network_tally_by_counterparty). There is deliberately no separate
+    "local" vs "network" formula any more: both are just entries in the
+    same list, weighted identically, because the mechanism that matters
+    (concavity rewarding diversity) does not care which is which.
+
+    Square root in volume and logarithmic in count *within* one
+    counterparty, so neither one large trade nor a burst of tiny ones
+    with the SAME partner buys standing out of proportion to it. Summed,
+    not pooled, ACROSS counterparties: sqrt(a) + sqrt(b) > sqrt(a+b) for
+    positive a, b, so spreading the same total volume/count across more
+    distinct partners is worth strictly more than concentrating it in
+    one, with no separately-tuned "diversity bonus" needed on top - the
+    same concavity that dampens one relationship's own inflation is what
+    rewards spreading across several. (An earlier version of this
+    function pooled every counterparty's ticks/count into one sqrt/log1p
+    call, which a two-address wash-trading ring could inflate for free:
+    the LapseCoin leg of a trade carries no mandatory fee, so the same
+    balance can round-trip between two self-owned addresses indefinitely.
+    Diversity-weighting does not make that impossible - nothing on-chain
+    can prove two addresses are controlled by different people - but it
+    does make faking N independent-looking relationships cost the same
+    age+balance+seasoning setup as N real ones, closing the specific
+    shortcut of reusing the same two keys forever.)
+
+    Decays with time since the most recent completed trade, then
+    saturates at HISTORY_SATURATION_CEILING: without a ceiling here, a
+    wash-trading ring willing to cycle a large, genuinely-held balance
+    many times can still post an arbitrarily large raw number even after
+    diversity-weighting, and unlike the exposure cap (which already
+    refuses to let a raw score push a step past MAX_TRUST_MULTIPLIER
+    regardless of magnitude), swap.opening_mover compares two raw scores
+    directly with nothing downstream to cap it.
     """
-    if completed_count <= 0:
+    pairs = [(ticks, count) for ticks, count in per_counterparty if count > 0]
+    if not pairs:
         return 0.0
     now = time.time() if now is None else now
-    volume = math.sqrt(max(completed_ticks, 0) / TICKS_PER_LAPSE)
-    breadth = math.log1p(completed_count)
-    earned = volume * breadth
+    total = sum(math.sqrt(max(ticks, 0) / TICKS_PER_LAPSE) * math.log1p(count)
+               for ticks, count in pairs)
     age = max(now - (last_completed_at or 0), 0)
-    return earned * (0.5 ** (age / DECAY_HALFLIFE_SECONDS))
+    decayed = total * (0.5 ** (age / DECAY_HALFLIFE_SECONDS))
+    return min(decayed, HISTORY_SATURATION_CEILING)
 
 
-def stake_component(address_age_blocks, balance_ticks):
+def stake_component(address_age_blocks, balance_ticks, blocks_since_last_topup=0):
     """What the address would cost to replace, as a multiplier in [0, 1].
 
-    The two halves are multiplied rather than added, so both are required:
-    a freshly minted address holding a fortune scores zero, and so does an
-    ancient empty one. Either alone is cheap to manufacture, which is
-    precisely the case this exists to price.
+    Age and balance are multiplied rather than added, so both are
+    required: a freshly minted address holding a fortune scores zero,
+    and so does an ancient empty one. Either alone is cheap to
+    manufacture, which is precisely the case this exists to price.
+
+    balance_ticks only counts once BOTH of its own gates pass (see
+    _balance_factor): it is above STAKE_MIN_TICKS, and it has sat there
+    for at least SEASONING_FLOOR_BLOCKS. The floor alone stops spreading
+    a fixed budget thin across many simultaneous addresses; seasoning is
+    what stops the cheaper version of the same attack, moving ONE pool
+    of capital through a queue of already-aged addresses one at a time,
+    which a floor-only check cannot tell apart from a genuinely-held
+    balance since both look identical in an instantaneous snapshot.
     """
     if address_age_blocks < AGE_FLOOR_BLOCKS:
         return 0.0
     span = max(AGE_FULL_BLOCKS - AGE_FLOOR_BLOCKS, 1)
     age = min((address_age_blocks - AGE_FLOOR_BLOCKS) / span, 1.0)
-    stake = min(max(balance_ticks, 0) / STAKE_FULL_TICKS, 1.0)
-    return age * stake
+    return age * _balance_factor(balance_ticks, blocks_since_last_topup)
 
 
-def score(completed_count, completed_ticks, abandoned_count,
-          last_completed_at, address_age_blocks=0, balance_ticks=0,
+def _balance_factor(balance_ticks, blocks_since_last_topup):
+    if blocks_since_last_topup < SEASONING_FLOOR_BLOCKS:
+        return 0.0
+    if balance_ticks < STAKE_MIN_TICKS:
+        return 0.0
+    span = max(STAKE_FULL_TICKS - STAKE_MIN_TICKS, 1)
+    return min((balance_ticks - STAKE_MIN_TICKS) / span, 1.0)
+
+
+def score(per_counterparty, abandoned_count, last_completed_at,
+          address_age_blocks=0, balance_ticks=0, blocks_since_last_topup=0,
           now=None):
     """A peer's standing. Zero for anyone who has ever walked away.
 
-    History is multiplied by stake rather than added to it, so a record
-    built on a throwaway address is worth nothing however long it is.
-    That multiplication is the entire Sybil defence: it makes standing
-    non-transferable to a fresh identity.
+    Two terms, not one: a standing floor from stake alone
+    (STANDING_WEIGHT * stake), and delivered history multiplied by stake
+    exactly as before (history's own Sybil defence: a record built on a
+    throwaway address is worth nothing, however long it is, because
+    stake is what makes it non-transferable to a fresh identity).
+
+    The old version was history_component(...) * stake_component(...)
+    with nothing else, which meant ANY address with zero completed
+    trades - a first contact, which is most of them - hit exactly 0.0
+    regardless of how established it otherwise was, discarding real
+    age/balance information at precisely the moment it mattered most
+    for deciding who should have to move first (swap.opening_mover).
+    The standing term restores that: two established-but-unfamiliar
+    strangers now get real, distinguishable numbers instead of both
+    tying at zero, without letting pure capital ever outscore genuine,
+    proven delivery (STANDING_WEIGHT keeps the floor well under what
+    history can reach).
     """
     if abandoned_count > 0:
         return 0.0
-    history = history_component(completed_count, completed_ticks,
-                                last_completed_at, now=now)
-    if history <= 0:
-        return 0.0
-    return history * stake_component(address_age_blocks, balance_ticks)
+    stake = stake_component(address_age_blocks, balance_ticks, blocks_since_last_topup)
+    history = history_component(per_counterparty, last_completed_at, now=now)
+    return STANDING_WEIGHT * stake + history * stake
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +326,8 @@ def local_tally(addr, current_height=None):
     }
 
 
-def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None):
+def get_detail(addr, address_age_blocks=0, balance_ticks=0,
+               blocks_since_last_topup=0, now=None, node=None):
     """Standing plus the figures behind it.
 
     Broken out because a score with no stated reason is a verdict, and a
@@ -215,9 +344,9 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
     personally ran with addr, with no stall of its own counted as
     delinquent (current height unknown) and nothing network-sourced
     folded in; a caller that never passes node keeps behaving exactly as
-    before. See _network_tally for what "verified" means here and why a
-    receipt this node cannot currently check contributes nothing either
-    way rather than being guessed at.
+    before. See _network_tally_by_counterparty for what "verified" means
+    here and why a receipt this node cannot currently check contributes
+    nothing either way rather than being guessed at.
     """
     ensure_tables()
     current_height = node.view.height if node is not None else None
@@ -230,6 +359,17 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
     last_abandon_session = local["last_abandon_session"]
     known = bool(completed_count or abandoned_count)
 
+    # This node's own bilateral experience with addr is exactly one
+    # counterparty entry in the diversity-weighted sum history_component
+    # runs over (see that function): it is not diversity-derated the way
+    # a network-sourced entry conceptually could be, because this is
+    # first-hand, personally-verified experience, not a claim relayed by
+    # someone else. Every network-verified counterparty below is another
+    # entry in the same list.
+    per_counterparty = []
+    if completed_count > 0:
+        per_counterparty.append((completed_lapse, completed_count))
+
     # Broken out from the merged totals below so a caller (see
     # market_take.html's Track record card) can say plainly which part
     # of this is this node's own experience and which part is this node
@@ -239,8 +379,12 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
     net_abandoned = net_count = net_lapse = 0
     if node is not None:
         _verify_addr_receipts(node, addr, current_height)
-        net_abandoned, net_count, net_lapse, net_last_completed = \
-            _network_tally(addr)
+        net_abandoned, net_by_counterparty, net_last_completed = \
+            _network_tally_by_counterparty(addr)
+        for peer_lapse, peer_count in net_by_counterparty.values():
+            per_counterparty.append((peer_lapse, peer_count))
+        net_count = sum(c for _l, c in net_by_counterparty.values())
+        net_lapse = sum(l for l, _c in net_by_counterparty.values())
         if net_abandoned or net_count:
             known = True
         abandoned_count += net_abandoned
@@ -248,16 +392,17 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
         completed_lapse += net_lapse
         last_completed_at = max(last_completed_at, net_last_completed)
 
-    history = history_component(completed_count, completed_lapse,
-                                last_completed_at, now=now)
-    stake = stake_component(address_age_blocks, balance_ticks)
+    history = history_component(per_counterparty, last_completed_at, now=now)
+    stake = stake_component(address_age_blocks, balance_ticks, blocks_since_last_topup)
     return {
-        "score": score(completed_count, completed_lapse, abandoned_count,
-                       last_completed_at, address_age_blocks, balance_ticks, now),
+        "score": score(per_counterparty, abandoned_count, last_completed_at,
+                       address_age_blocks, balance_ticks,
+                       blocks_since_last_topup, now),
         "completed_count": completed_count,
         "completed_lapse": completed_lapse,
         "network_completed_count": net_count,
         "network_abandoned_count": net_abandoned,
+        "distinct_counterparties": len(per_counterparty),
         "abandoned_count": abandoned_count,
         "last_completed_at": last_completed_at,
         "last_abandoned_at": last_abandoned_at,
@@ -265,16 +410,27 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0, now=None, node=None)
         "history": history,
         "stake": stake,
         "known": known,
+        # Exposed so mutual_scores can re-run the exact same trade
+        # history through this node's OWN stake instead of the
+        # subject's, to approximate the subject's opinion of this node
+        # without needing to ask them (see mutual_scores).
+        "per_counterparty": per_counterparty,
     }
 
 
-def _network_tally(addr):
-    """(abandoned, completed_count, completed_lapse, last_completed_at)
+def _network_tally_by_counterparty(addr):
+    """(abandoned_count, {counterparty_addr: (ticks, count)}, last_completed_at)
     from already-verified step receipts naming addr, excluding any
     session this node already has a local Trade row for (see
     local_tally: those are already counted above, and counting them
     again from a receipt this node itself likely emitted would double
     them).
+
+    Grouped by counterparty rather than pooled into one flat total,
+    because that grouping is the entire input history_component's
+    diversity-weighting needs: a receipt names both parties of the
+    session it describes, so "who else was in this session" is read
+    straight off addr_a/addr_b, not inferred.
 
     DB-only: reads whatever verified cache _verify_addr_receipts (called
     first by get_detail, whenever it has a node to verify with) already
@@ -290,25 +446,38 @@ def _network_tally(addr):
     way in, never for what a receipt is worth once verified.
     """
     import market as market_mod
-    from trade_storage import Trade, StepReceipt
+    from trade_storage import Trade
 
     known_sessions = {t.session_id for t in
                       Trade.select(Trade.session_id).where(Trade.peer_lapse_addr == addr)}
 
     abandoned = 0
-    completed_sessions = set()
-    completed_lapse = 0
-    last_completed_at = 0.0
+    # session_id -> [counterparty, ticks, last_completed_at]: accumulated
+    # per session first, since a single trade can carry several
+    # "settled" receipts (one per step's LAPSE leg), all naming the same
+    # counterparty; only once collapsed to one entry per session does
+    # counting distinct sessions per counterparty mean anything.
+    sessions = {}
     for r in market_mod.receipts_for_addr(addr):
         if r.verified is not True or r.session_id in known_sessions:
             continue
         if r.outcome == "missed":
             abandoned += 1
-        elif r.outcome == "settled" and r.asset == "lapse":
-            completed_sessions.add(r.session_id)
-            completed_lapse += r.amount
-            last_completed_at = max(last_completed_at, r.received_at)
-    return abandoned, len(completed_sessions), completed_lapse, last_completed_at
+            continue
+        if r.outcome != "settled" or r.asset != "lapse":
+            continue
+        counterparty = r.addr_b if r.addr_a == addr else r.addr_a
+        entry = sessions.setdefault(r.session_id, [counterparty, 0, 0.0])
+        entry[1] += r.amount
+        entry[2] = max(entry[2], r.received_at)
+
+    by_counterparty = {}
+    last_completed_at = 0.0
+    for counterparty, ticks, received_at in sessions.values():
+        peer_ticks, peer_count = by_counterparty.get(counterparty, (0, 0))
+        by_counterparty[counterparty] = (peer_ticks + ticks, peer_count + 1)
+        last_completed_at = max(last_completed_at, received_at)
+    return abandoned, by_counterparty, last_completed_at
 
 
 
@@ -425,12 +594,68 @@ def address_age_blocks(node, addr):
     Read from the transaction index rather than tracked separately, so it
     cannot be inflated by anything a peer says. An address with no history
     is brand new by definition and scores zero age.
+
+    Cheap to bulk-produce: AddrIndex indexes an address the moment it
+    appears as sender OR any recipient of ANY transaction (storage.py's
+    _index_block), so a single multi-output transaction, at whatever fee
+    the sender chooses to pay (possibly zero), can backdate thousands of
+    addresses' first-seen height at once. That is exactly why age alone
+    is never trusted on its own downstream of this (see stake_component):
+    it bounds how fast a *single* identity can be escalated to "old
+    enough", nothing about how many can be warehoused in parallel for
+    later. blocks_since_last_significant_topup is the signal that
+    actually costs per-identity capital, not merely patience.
     """
     heights = node.storage.get_tx_heights_for_addr(addr)
     if not heights:
         return 0
     first_seen = min(height for height, _tx_hash in heights)
     return max(node.view.chain[-1]["height"] - first_seen, 0)
+
+
+def blocks_since_last_significant_topup(node, addr):
+    """How many blocks since addr last received a non-dust transfer -
+    the seasoning signal stake_component gates a balance on. See
+    SEASONING_FLOOR_BLOCKS for why a live balance snapshot needs this at
+    all: without it, a balance floor can always be satisfied by moving
+    one pool of capital through a queue of pre-aged addresses one at a
+    time, right before each is used.
+
+    float("inf") ("never") covers two different, equally fine cases: an
+    address with no inbound transfers in its recent history at all, and
+    one whose entire balance came from mining a block reward. The
+    latter is never seasoned by *this* check because a block reward is
+    credited via state.credit()/apply_reward_distribution directly (see
+    chainstate._apply_builder_reward), never through a transaction, so
+    it never appears in AddrIndex for this function to find - but
+    winning a block is real, sequential, unparallelizable work, so
+    treating "nothing recent to find" as fully seasoned is correct
+    there for a different reason than for a genuinely untouched address:
+    earning it already took longer than any seasoning window could ask.
+
+    Bounded to the SEASONING_SCAN_LIMIT most recent transactions
+    touching addr, newest first (storage.py already orders this way),
+    stopping at the first qualifying transfer found: a real trader's
+    recent history is short, and this is the same "bound the cost of a
+    per-address lookup" reasoning as trust._verify_addr_receipts'
+    MAX_CHAIN_CHECKS_PER_LOOKUP.
+    """
+    import tx as tx_mod
+
+    heights = node.storage.get_tx_heights_for_addr(addr)
+    chain = node.view.chain
+    tip = chain[-1]["height"]
+    for height, tx_hash in heights[:SEASONING_SCAN_LIMIT]:
+        if not 0 <= height < len(chain):
+            continue
+        for candidate in chain[height]["transactions"]:
+            if tx_mod.tx_hash(candidate) != tx_hash:
+                continue
+            paid = sum(o["amount"] for o in candidate.get("outputs", [])
+                      if o.get("to") == addr)
+            if paid >= SEASONING_SIGNIFICANCE_TICKS:
+                return tip - height
+    return float("inf")
 
 
 def mutual_scores(node, peer_addr):
@@ -443,8 +668,8 @@ def mutual_scores(node, peer_addr):
     both sides watched the same legs settle on the same public chains, so
     this node's own Trade rows against the peer (see local_tally) already
     hold the number the peer's own node would derive too. Standing is
-    public on both sides too: anyone's address age and balance are chain
-    facts, not something told to you.
+    public on both sides too: anyone's address age, balance and
+    seasoning are chain facts, not something told to you.
 
     A defection is no longer only a private opinion, either: get_detail's
     node argument folds in any gossiped step receipt this node can
@@ -455,19 +680,27 @@ def mutual_scores(node, peer_addr):
     would: a false claim fails verification regardless of who signed it,
     and, unlike this node's own Trade rows, a "missed" claim is
     re-checked on demand rather than trusted forever (see
-    _verify_addr_receipts). Bilateral history and network-verified
-    history are simply added together before either half of this
-    function reads them.
+    _verify_addr_receipts).
+
+    peer_trust_of_me reuses get_detail(peer_addr, ...)'s own
+    per_counterparty breakdown (the same trades, since both sides
+    watched them settle) run back through this node's OWN stake instead
+    of the peer's: the same approximation the pre-diversity-weighting
+    version of this function already made by reusing the peer's
+    completed_count/completed_lapse totals, just now correctly shaped
+    for the per-counterparty formula.
     """
     peer_age = address_age_blocks(node, peer_addr)
     peer_balance = node.view.state.get_balance(peer_addr)
-    detail = get_detail(peer_addr, peer_age, peer_balance, node=node)
+    peer_seasoning = blocks_since_last_significant_topup(node, peer_addr)
+    detail = get_detail(peer_addr, peer_age, peer_balance, peer_seasoning, node=node)
     my_trust_of_peer = detail["score"]
 
     my_age = address_age_blocks(node, node.addr)
     my_balance = node.view.state.get_balance(node.addr)
+    my_seasoning = blocks_since_last_significant_topup(node, node.addr)
     peer_trust_of_me = score(
-        detail["completed_count"], detail["completed_lapse"],
+        detail["per_counterparty"],
         detail["abandoned_count"], detail["last_completed_at"],
-        my_age, my_balance)
+        my_age, my_balance, my_seasoning)
     return my_trust_of_peer, peer_trust_of_me

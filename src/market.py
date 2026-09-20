@@ -842,7 +842,9 @@ def executed_trade_prices(node, limit=200):
         detail = trust_mod.get_detail(
             row.peer_lapse_addr,
             trust_mod.address_age_blocks(node, row.peer_lapse_addr),
-            node.view.state.get_balance(row.peer_lapse_addr), node=node)
+            node.view.state.get_balance(row.peer_lapse_addr),
+            trust_mod.blocks_since_last_significant_topup(node, row.peer_lapse_addr),
+            node=node)
         weight = max(detail["score"], _TICKER_MIN_WEIGHT)
         out.append((price, weight))
     return out

@@ -329,20 +329,41 @@ def plan(lapse_total, xlm_total, trust_score,
 # Who moves first
 # ---------------------------------------------------------------------------
 
-def opening_mover(my_trust_of_peer, peer_trust_of_me):
+def opening_mover(my_trust_of_peer, peer_trust_of_me, my_addr=None, peer_addr=None):
     """Which side sends first on step one: True if this node does.
 
     The less-established side opens. They are the one asking to be
     trusted, so they are the one who demonstrates it, and the probe step
     keeps what they risk small.
 
-    Ties go to the taker, decided by the caller passing its own role; an
-    even match still needs somebody to start, and picking the side that
-    chose to engage is arbitrary but stable, which is what matters.
+    Used to break a tie by role instead ("taker always opens"), which
+    was a real, exploitable lever: two never-before-seen addresses tied
+    at trust 0 on every first contact under the old trust.score formula
+    (any address with zero completed trades scored exactly 0.0
+    regardless of its own age or balance), so a maker posting bait
+    orders from a fresh throwaway address could always count on the
+    honest taker opening and paying first, every single time, for free.
+    trust.score no longer collapses every first contact to an identical
+    0.0 (see its own docstring and trust.STANDING_WEIGHT), which makes an
+    exact tie the genuinely rare case of two addresses with identical
+    stake, rather than the default outcome of any first meeting - at
+    which point neither side has more real, verifiable standing than
+    the other, so a role-based default no longer has anything principled
+    to lean on. Broken instead by comparing the two addresses' own text
+    (both sides compute the same comparison, so this never needs
+    negotiating), which is fine precisely because the case has been
+    narrowed down to one where it barely matters which way it falls.
+
+    my_addr/peer_addr are optional only so every existing direct caller
+    (tests included) that only cares about the score comparison keeps
+    working; a tie with either omitted still needs the caller to break
+    it, which is why None remains a possible return in that case only.
     """
-    if my_trust_of_peer == peer_trust_of_me:
-        return None      # caller breaks the tie by role
-    return my_trust_of_peer > peer_trust_of_me
+    if my_trust_of_peer != peer_trust_of_me:
+        return my_trust_of_peer > peer_trust_of_me
+    if my_addr is not None and peer_addr is not None:
+        return my_addr < peer_addr
+    return None
 
 
 def i_move_first(step_n, i_open):
