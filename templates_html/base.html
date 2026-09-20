@@ -94,20 +94,25 @@
   nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
   nav.mainnav .sep { color: var(--rule-lt); align-self: flex-start; }
   /* Trades section subnav (market.html, market_book.html, market_take.html,
-     trades.html): same active-underline convention as nav.mainnav, one
-     level down, so the two read as one system rather than two different
-     navs bolted together. */
+     trades.html): a centered, boxed set of tabs rather than a plain link
+     row, so it reads as "you are inside a section with sub-pages" at a
+     glance instead of blending into ordinary body text. The active tab
+     gets the site's one accent colour as a solid fill, the same colour
+     nav.mainnav only ever uses as a thin underline, since a subnav one
+     level down needs a stronger signal to still be noticeable. */
   .section-nav {
-    display: flex; flex-wrap: wrap; column-gap: 1.1rem; row-gap: .3rem;
-    margin-bottom: .7rem; padding-bottom: .45rem;
-    border-bottom: 1px solid var(--rule-lt); font-size: .92rem;
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: .35rem; margin-bottom: .8rem; padding: .35rem;
+    border: 1px solid var(--rule); background: var(--paper-2);
   }
   .section-nav a {
-    color: var(--ink); text-decoration: none; padding-bottom: .2rem;
-    border-bottom: 2px solid transparent;
+    color: var(--ink-dim); text-decoration: none; font-weight: bold;
+    font-size: .88rem; padding: .32rem 1rem; border: 1px solid transparent;
   }
-  .section-nav a:hover { text-decoration: underline; }
-  .section-nav a.active { font-weight: bold; border-bottom-color: var(--accent); }
+  .section-nav a:hover { color: var(--ink); border-color: var(--rule-lt); }
+  .section-nav a.active {
+    color: var(--paper); background: var(--accent); border-color: var(--accent);
+  }
 
   .version-alert {
     display: table; margin: .35rem auto 0; padding: .15rem .65rem;
