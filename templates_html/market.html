@@ -277,9 +277,9 @@
 {% if auto_accept_fills %}
 <p style="font-size:.85rem; color:var(--ink-dim)">
   Auto-accept is on, so most requests are answered the moment they arrive;
-  anything still listed here could not be, for a reason worth checking below
-  (a locked wallet, funds already committed elsewhere, or a step larger than
-  your current exposure cap for this counterparty).
+  anything still listed here could not be, for the reason shown below (a
+  locked wallet, funds already committed elsewhere, a step larger than your
+  current exposure cap, or a counterparty below your trust floor).
 </p>
 {% else %}
 <p style="font-size:.85rem; color:var(--ink-dim)">
@@ -290,7 +290,7 @@
 <div class="table-wrap">
 <table class="stacked">
   <thead>
-    <tr><th>Order</th><th>From</th><th>Amount</th><th>Their standing</th><th>Fits your cap?</th><th></th></tr>
+    <tr><th>Order</th><th>From</th><th>Amount</th><th>Their standing</th><th>Why it's waiting</th><th></th></tr>
   </thead>
   <tbody>
     {% for r in pending_maker_requests %}
@@ -315,11 +315,15 @@
           <span style="color:var(--ink-dim)">No history with this node</span>
         {% endif %}
       </td>
-      <td data-label="Fits your cap?">
-        {% if r.fits_cap %}
-          <span style="color:var(--gain)">Yes</span>
+      <td data-label="Why it's waiting">
+        {% if not r.fits_cap %}
+          <span style="color:var(--loss)" title="{{ r.fit_note }}">Over your exposure cap</span>
+        {% elif r.below_trust_floor %}
+          <span style="color:var(--ink-dim)">Below your auto-accept trust floor</span>
+        {% elif auto_accept_fills %}
+          <span style="color:var(--ink-dim)">Could not fund this leg right now</span>
         {% else %}
-          <span style="color:var(--loss)" title="{{ r.fit_note }}">No</span>
+          <span style="color:var(--gain)">Would auto-accept; auto-accept is off</span>
         {% endif %}
       </td>
       <td data-label="">
@@ -383,7 +387,14 @@
         </div>
         <span class="stat-sub">{{ o.pct_delivered }}% delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} accepted{% endif %}</span>
       </td>
-      <td data-label="Left">{{ fmt_lapse_dp(o.remaining, 2) }}</td>
+      <td data-label="Left">
+        {{ fmt_lapse_dp(o.remaining, 2) }}
+        {% if o.below_min_fill %}
+          <div class="stat-sub" style="color:var(--ink-dim)">
+            below your own minimum fill; nobody can take this remainder any more
+          </div>
+        {% endif %}
+      </td>
       <td data-label="Price">{{ fmt_price(o.price_stroops_per_lapse) }} XLM</td>
       <td data-label="Expires">
         {% if o.blocks_left > 0 %}~{{ fmt_duration(o.blocks_left * 120) }}{% else %}expired{% endif %}

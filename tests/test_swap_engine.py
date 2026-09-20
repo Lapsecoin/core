@@ -1295,6 +1295,72 @@ class TestAnswerFillRequests:
         assert first.i_move_first is False
 
 
+class TestAutoAcceptTrustFloor:
+    """settings.SWAP_AUTO_ACCEPT_MIN_TRUST: a per-request trust gate on
+    top of the (always-enforced) exposure cap. A request that clears the
+    cap but not this floor is left pending, not declined, for
+    decide_fill_request to answer by hand."""
+
+    def test_a_stranger_below_the_floor_is_left_pending(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        # No trade history and no chain history for the taker, so its
+        # trust score is 0; any positive floor excludes it.
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, min_trust=0.1) == 0
+        assert Trade.select().count() == 0
+        assert node.publish_fill_response_calls == []
+
+    def test_zero_floor_keeps_accepting_everyone(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, min_trust=0.0) == 1
+        assert Trade.select().count() == 1
+
+    def test_a_request_left_pending_by_the_floor_can_still_be_accepted_by_hand(
+            self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", 5 * XLM, 2, min_trust=0.1) == 0
+
+        # decide_fill_request never takes min_trust: a person clicking
+        # Accept has already made the call the floor exists to require.
+        assert swap_engine.decide_fill_request(
+            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=True) is True
+        assert Trade.select().count() == 1
+
+    def test_the_exposure_cap_still_declines_outright_regardless_of_the_floor(
+            self, tmp_path):
+        """A request that cannot fit even manually is not something a
+        person can rescue by clicking Accept, so it is still auto-
+        declined rather than left pending."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(lapse_total=1000 * LAPSE, price=1000, maker_lapse=node.addr)
+        req = make_request(lapse_total=1000 * LAPSE)
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = 1000 * LAPSE
+
+        tiny_cap = 1000
+        assert swap_engine.answer_fill_requests(
+            engine, node, "GMAKER", tiny_cap, 2, min_trust=0.1) == 0
+        resp = node.publish_fill_response_calls[0]
+        assert resp["accepted"] is False
+
+
 class TestManualFillDecisions:
     """settings.SWAP_AUTO_ACCEPT_FILLS off: answer_fill_requests leaves
     every live request pending instead of deciding it, and

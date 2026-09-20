@@ -416,7 +416,17 @@ def validate_fill(order_row, lapse_total):
 
 
 def open_orders(current_height, exclude_maker=None):
-    """Every order still on offer here, newest first."""
+    """Every order still on offer here, newest first.
+
+    Excludes an order whose remaining is below its own min_fill, not
+    just one at zero: validate_fill would reject any request against
+    that remainder anyway (see its own min_fill check), so listing it
+    would only ever cost a taker a wasted, guaranteed-declined fill
+    request. Such an order is not cancelled or otherwise touched, a
+    maker still sees the true remainder on their own orders page
+    (orders_by_maker); this only ever affects what a taker is offered
+    to act on.
+    """
     ensure_tables()
     query = (Order.select()
              .where(Order.cancelled == False,          # noqa: E712
@@ -424,7 +434,8 @@ def open_orders(current_height, exclude_maker=None):
              .order_by(Order.received_at.desc()))
     if exclude_maker:
         query = query.where(Order.maker_lapse_addr != exclude_maker)
-    return [row for row in query if remaining_ticks(row) > 0]
+    return [row for row in query
+           if remaining_ticks(row) >= max(row.min_fill, 1)]
 
 
 def orders_by_maker(addr, current_height):

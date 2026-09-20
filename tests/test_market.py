@@ -323,6 +323,44 @@ class TestStorage:
         assert market.remaining_ticks(row) == 10 * LAPSE
 
 
+class TestUnfillableRemainderIsHiddenFromTakers:
+    """Once an order's remaining drops below its own min_fill, no request
+    against it could ever be honoured (validate_fill would reject any
+    amount smaller than min_fill, and nothing larger is left). Listing
+    it anyway would only cost a taker a fill request guaranteed to come
+    back declined."""
+
+    def test_a_remainder_below_min_fill_is_excluded(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(order["order_id"], "s" * 16, 7 * LAPSE)
+        assert market.remaining_ticks(row) == 3 * LAPSE   # nonzero, but < min_fill
+        assert market.open_orders(current_height=100) == []
+
+    def test_a_remainder_at_or_above_min_fill_still_shows(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(order["order_id"], "s" * 16, 5 * LAPSE)
+        assert market.remaining_ticks(row) == 5 * LAPSE   # exactly min_fill
+        assert len(market.open_orders(current_height=100)) == 1
+
+    def test_no_min_fill_set_shows_any_nonzero_remainder(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=0)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(order["order_id"], "s" * 16, 9 * LAPSE)
+        assert market.remaining_ticks(row) == 1 * LAPSE
+        assert len(market.open_orders(current_height=100)) == 1
+
+    def test_fully_delivered_is_excluded_same_as_before(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
+        market.store_order(order)
+        _accepted_response(order["order_id"], "s" * 16, 10 * LAPSE)
+        assert market.open_orders(current_height=100) == []
+
+
 def _accepted_response(order_id, session_id, lapse_total, request_id=None):
     trade_storage.FillResponse.create(
         request_id=request_id or session_id, order_id=order_id,

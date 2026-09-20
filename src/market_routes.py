@@ -190,10 +190,12 @@ def register(app, node, csrf_token):
         check the automatic decision (swap_engine._answer_one) would
         use, so accepting or declining by hand is as informed as
         auto-accept is. Shown regardless of SWAP_AUTO_ACCEPT_FILLS: even
-        in auto mode a request can be stuck here (a locked wallet, an
-        unfundable leg), and a maker deserves to see why rather than
-        silence.
+        in auto mode a request can be stuck here for any of several
+        reasons (a locked wallet, an unfundable leg, a step over the
+        exposure cap, or a counterparty below SWAP_AUTO_ACCEPT_MIN_TRUST),
+        and a maker deserves to see which one rather than silence.
         """
+        min_trust = node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST)
         rows = []
         for order_row in market_mod.orders_by_maker_with_claims(node.addr):
             for req in market_mod.requests_for_order(order_row.order_id):
@@ -210,6 +212,7 @@ def register(app, node, csrf_token):
                     fits, fit_note = True, "fits your current exposure cap"
                 except swap_mod.TradeTooLarge as e:
                     fits, fit_note = False, str(e)
+                below_trust_floor = min_trust > 0 and detail["score"] < min_trust
                 rows.append({
                     "request_id": req.request_id,
                     "order_id": order_row.order_id,
@@ -220,6 +223,7 @@ def register(app, node, csrf_token):
                     "trust": detail,
                     "fits_cap": fits,
                     "fit_note": fit_note,
+                    "below_trust_floor": below_trust_floor,
                 })
         rows.sort(key=lambda r: -r["received_at"])
         return rows
@@ -976,6 +980,13 @@ def _my_orders(node, height):
             "pct_delivered": int(delivered * 100 / row.lapse_total) if row.lapse_total else 0,
             "price_stroops_per_lapse": row.price_stroops_per_lapse,
             "blocks_left": max(row.expiry_block - height, 0),
+            # What's left cannot actually be taken any more (see
+            # market.open_orders, which hides such an order from takers
+            # for exactly this reason): below min_fill, but still above
+            # zero, so it never showed up as "fully delivered" either.
+            # Without this a maker sees a nonzero remainder with no clue
+            # that nobody can act on it until it expires.
+            "below_min_fill": (0 < max(row.lapse_total - delivered - reserved, 0) < row.min_fill),
         })
     return rows
 

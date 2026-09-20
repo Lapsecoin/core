@@ -927,7 +927,7 @@ def reconcile_all(engine):
 # needs anything paid first to learn a session exists.
 
 def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
-                         auto=True):
+                         auto=True, min_trust=0.0):
     """Decide every live fill request against this node's own orders.
     Returns how many were accepted.
 
@@ -939,8 +939,12 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     request exactly where it is instead: still pending, still visible on
     the Market page with the same trust detail a click there would show,
     answered only by decide_fill_request once a person actually clicks
-    Accept or Decline. Nothing about the decision itself changes between
-    the two modes, this only decides who makes the call.
+    Accept or Decline. min_trust (see settings.SWAP_AUTO_ACCEPT_MIN_TRUST)
+    does the same for one request at a time, based on this specific
+    counterparty's trust score rather than a blanket switch: a request
+    that would otherwise auto-accept is left pending instead if it falls
+    short (see _answer_one). Nothing about the decision itself changes
+    in any of these cases, they only decide who makes the call.
     """
     ensure_tables()
     if not auto:
@@ -960,7 +964,7 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
             if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
                 continue
             if _answer_one(engine, node, my_xlm_addr, stranger_cap,
-                          confirm_depth, order_row, req):
+                          confirm_depth, order_row, req, min_trust=min_trust):
                 accepted += 1
     if accepted:
         log.info("[swap] accepted %d new fill request(s) as maker", accepted)
@@ -1043,13 +1047,30 @@ def _pending_send_total(asset):
 
 
 def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
-                order_row, req):
+                order_row, req, min_trust=0.0):
     """Decide one fill request against one order. Returns True if it was
-    accepted; a decline is still an answer, just not a trade.
+    accepted; a decline is still an answer, just not a trade. Returning
+    False can also mean the request is being left pending rather than
+    answered at all (see min_trust below), which is not the same thing
+    as a decline: nothing here has told the taker anything yet.
 
-    Every request answered exactly once: the caller already filters out
-    anything with a stored response, so reaching here means this is the
-    first and only look this request gets.
+    Every request that gets an actual answer, accept or decline, gets it
+    exactly once: the caller already filters out anything with a stored
+    response, so reaching here means this is the first and only look a
+    request that ends up answered gets. A request left pending for
+    falling short of min_trust is looked at again on the next call,
+    since nothing was recorded to remember that it was already seen.
+
+    min_trust (see settings.SWAP_AUTO_ACCEPT_MIN_TRUST) only ever makes
+    this stricter than the hard checks above it (funding, the exposure
+    cap): those can still auto-decline a request outright regardless of
+    this argument, because there is nothing left to decide by hand once
+    a request structurally cannot be honoured. This argument exists so
+    decide_fill_request's manual Accept (default min_trust=0.0) can
+    answer a request that answer_fill_requests's automatic pass, called
+    with a positive floor, left pending for exactly this reason: the
+    request was otherwise fine, a person just had to be the one to say
+    yes.
     """
     kek, _seed = engine.secrets()
     if kek is None:
@@ -1119,6 +1140,15 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
             req.request_id[:16], req.taker_lapse_addr[:24],
             maker_i_send, have, already_owed, need)
         respond(False, reason="the maker cannot currently fund this fill")
+        return False
+
+    if my_trust_of_taker < min_trust:
+        # Otherwise acceptable: funded, within the exposure cap, just
+        # not from a counterparty with enough standing to clear this
+        # node's own auto-accept floor. Left unanswered rather than
+        # declined, so it surfaces on the Market page's pending list
+        # (market_routes.pending_maker_requests) for decide_fill_request
+        # to accept or decline by hand instead.
         return False
 
     # opening_mover is computed from the same mutual, unforgeable data

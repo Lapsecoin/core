@@ -164,25 +164,53 @@ SWAP_ENABLED = Setting(
          "none, holds no Stellar wallet and contacts no Stellar service.",
 )
 
-# Whether a fill request against one of this node's own orders is
+# Whether a fill request against one of this node's own orders is ever
 # accepted automatically, the moment it clears the trust-based exposure
-# cap (see swap.plan), or left pending on the Market page for a person
-# to accept or decline by hand.
+# cap (see swap.plan), rather than always left pending on the Market
+# page for a person to accept or decline by hand.
 #
 # On by default: the exposure cap is what actually bounds the loss on a
 # bad decision (see swap.py's module docstring), not this switch, so
 # auto-accept is not a weaker safety mode, only a faster one. Someone
-# who wants to see who is asking before a single stroop moves, not just
-# find out afterward from the Trades page, turns this off; nothing about
-# what a request may cost changes either way.
+# who wants to look at every single request before a stroop moves, not
+# just find out afterward from the Trades page, turns this off; nothing
+# about what a request may cost changes either way. SWAP_AUTO_ACCEPT_
+# MIN_TRUST below is the finer control most people actually want: off
+# for everyone is the blunt version of "trust nobody automatically",
+# raising the floor there is the graduated one.
 SWAP_AUTO_ACCEPT_FILLS = Setting(
     "swap_auto_accept_fills", True, bool,
     label="Auto-accept fill requests",
     help="Accept a fill against your own order the moment it clears "
-         "your exposure cap, without waiting for you to look at it. "
-         "Turn this off to review every request yourself on the Market "
-         "page (with the same trust detail either way) before anything "
-         "is agreed to.",
+         "your exposure cap and this node's trust floor (see below), "
+         "without waiting for you to look at it. Turn this off to "
+         "review every request yourself on the Market page (with the "
+         "same trust detail either way) before anything is agreed to.",
+)
+
+# The trust score (trust.get_detail's "score") a counterparty must have
+# with this node before a fill request against your own order auto-
+# accepts, when SWAP_AUTO_ACCEPT_FILLS is on. Below it, the request is
+# not declined, it sits on the Market page exactly like it would with
+# auto-accept off, waiting for a person to accept or decline it by hand.
+#
+# Zero, the default, auto-accepts anyone, including a total stranger
+# (score 0), same as this node has always done: the exposure cap already
+# bounds what a stranger can cost you in one step, so nothing unsafe
+# changes by leaving this at zero. Raising it is for someone who wants
+# automatic trading to stay within counterparties who have already
+# earned some standing, and to see everyone else before committing,
+# without having to turn auto-accept off altogether and review every
+# single request, established counterparties included.
+SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
+    "swap_auto_accept_min_trust", 0.0, float, minimum=0.0,
+    label="Minimum trust to auto-accept",
+    help="A fill request auto-accepts only if this counterparty's trust "
+         "score is at least this. Zero (the default) auto-accepts "
+         "anyone; your exposure cap, not this number, is what actually "
+         "limits what a stranger can cost you. Raise it to auto-trade "
+         "only with counterparties who already have some history, and "
+         "review everyone else by hand on the Market page.",
 )
 
 # Two settings used to live here alongside this one: a switch to advertise
@@ -194,7 +222,8 @@ SWAP_AUTO_ACCEPT_FILLS = Setting(
 # is no advertised address to make private, and no second key to hold the
 # proceeds.
 ALL = [DRAW_WINDOW_SECONDS, SWAP_ENABLED, SWAP_CONFIRM_DEPTH,
-       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_FILLS]
+       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_FILLS,
+       SWAP_AUTO_ACCEPT_MIN_TRUST]
 
 
 # How long a value read from storage is reused before going back to the
