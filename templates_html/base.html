@@ -93,6 +93,22 @@
   nav.mainnav a.nav-disabled { color: var(--rule-lt); pointer-events: none; }
   nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
   nav.mainnav .sep { color: var(--rule-lt); align-self: flex-start; }
+  /* Trades section subnav (market.html, market_book.html, market_take.html,
+     trades.html): same active-underline convention as nav.mainnav, one
+     level down, so the two read as one system rather than two different
+     navs bolted together. */
+  .section-nav {
+    display: flex; flex-wrap: wrap; column-gap: 1.1rem; row-gap: .3rem;
+    margin-bottom: .7rem; padding-bottom: .45rem;
+    border-bottom: 1px solid var(--rule-lt); font-size: .92rem;
+  }
+  .section-nav a {
+    color: var(--ink); text-decoration: none; padding-bottom: .2rem;
+    border-bottom: 2px solid transparent;
+  }
+  .section-nav a:hover { text-decoration: underline; }
+  .section-nav a.active { font-weight: bold; border-bottom-color: var(--accent); }
+
   .version-alert {
     display: table; margin: .35rem auto 0; padding: .15rem .65rem;
     border: 1px solid currentcolor; font-size: .72rem; font-weight: bold;
@@ -292,9 +308,7 @@
       <a href="/" class="{{ 'active' if nav_active == 'dashboard' }}">Dashboard</a><span class="sep">&middot;</span>
       {% if is_private %}
       <a href="/send" class="{{ 'active' if nav_active == 'send' }}">Send</a><span class="sep">&middot;</span>
-      <a href="/market" class="{{ 'active' if nav_active == 'market' }}">Market</a><span class="sep">&middot;</span>
-      <a href="/market/book" class="{{ 'active' if nav_active == 'market_book' }}">Order book</a><span class="sep">&middot;</span>
-      <a href="/trades" class="{{ 'active' if nav_active == 'trades' }}">Trades</a><span class="sep">&middot;</span>
+      <a href="/market" class="{{ 'active' if nav_active in ('market', 'market_book', 'trades') }}">Trades</a><span class="sep">&middot;</span>
       {% endif %}
       <a href="/explorer" class="{{ 'active' if nav_active == 'explorer' }}">Explorer</a><span class="sep">&middot;</span>
       <a href="/address" class="{{ 'active' if nav_active == 'address' }}">Balance</a><span class="sep">&middot;</span>

@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 
+<nav class="section-nav" aria-label="Trades">
+  <a href="/market" class="{{ 'active' if nav_active == 'market' }}">Market</a>
+  <a href="/market/book" class="{{ 'active' if nav_active == 'market_book' }}">Order book</a>
+  <a href="/trades" class="{{ 'active' if nav_active == 'trades' }}">Activity</a>
+</nav>
+
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 
 <h2>{{ "Buy" if taking_side == "buy" else "Sell" }} LAPSE</h2>
