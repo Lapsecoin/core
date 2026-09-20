@@ -310,11 +310,7 @@ class SwapWorker:
                     max(self.node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
                         swap_engine.MIN_CONFIRM_DEPTH),
                     min_trust=self.node.settings.get(
-                        settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST),
-                    min_sell_rate=self.node.settings.get(
-                        settings_mod.SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS),
-                    max_buy_rate=self.node.settings.get(
-                        settings_mod.SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS))
+                        settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST))
             except Exception:
                 # A bug answering requests must not stop trades already
                 # running from being advanced.

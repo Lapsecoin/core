@@ -188,49 +188,6 @@ SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
          "detail either way.",
 )
 
-# A second, independent floor on auto-accept, this one on price rather
-# than on who is asking: a fill request against one of your own sell
-# orders auto-accepts only if that order's own price is at least this
-# many stroops per LAPSE. An order is immutable once posted (market.py's
-# module docstring), so its price cannot drift after the fact, but a
-# market can: a rate that looked fine when an order went up can look
-# careless hours or days later if the book has moved since. This is the
-# same shape as SWAP_AUTO_ACCEPT_MIN_TRUST and works the same way: a
-# request that falls short is not declined, it waits on the Market page
-# for a person to look at it, exactly as if a counterparty's trust had
-# fallen short instead. Zero, the default, disables it: every real order
-# has a positive price (market.verify_order refuses zero or negative),
-# so a floor of zero never excludes anything.
-SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS = Setting(
-    "swap_auto_accept_min_sell_rate_stroops", 0.0, float, minimum=0.0,
-    label="Minimum rate to auto-accept a sale (stroops per LAPSE)",
-    help="A fill request against one of your sell orders auto-accepts "
-         "only if that order's own price is at least this many stroops "
-         "per LAPSE (10,000,000 stroops is 1 XLM). Zero, the default, "
-         "never excludes anything: every real order already has a "
-         "positive price. Raise it as a standing floor beneath whatever "
-         "price you actually post, so a stale or careless order still "
-         "waits for you to look at it rather than trading itself away.",
-)
-
-# The buy-side mirror of the setting above: a fill request against one of
-# your own buy orders auto-accepts only if that order's own price is at
-# most this many stroops per LAPSE. inf, the default, disables it the
-# same way SWAP_AUTO_ACCEPT_MIN_TRUST's inf does: no real price is ever
-# above infinity, so nothing is ever excluded on this side until it is
-# actually set.
-SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS = Setting(
-    "swap_auto_accept_max_buy_rate_stroops", float("inf"), float, minimum=0.0,
-    label="Maximum rate to auto-accept a purchase (stroops per LAPSE)",
-    help="A fill request against one of your buy orders auto-accepts "
-         "only if that order's own price is at most this many stroops "
-         "per LAPSE (10,000,000 stroops is 1 XLM). inf, the default, "
-         "never excludes anything. Lower it as a standing ceiling above "
-         "whatever price you actually post, so a stale or careless "
-         "order still waits for you to look at it rather than paying "
-         "more than you meant to.",
-)
-
 # Two settings used to live here alongside this one: a switch to advertise
 # a separate address instead of this node's own, and an env-only override
 # naming any address at all. Both existed because a node had to tell its
@@ -240,9 +197,7 @@ SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS = Setting(
 # is no advertised address to make private, and no second key to hold the
 # proceeds.
 ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH,
-       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_MIN_TRUST,
-       SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS,
-       SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS]
+       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_MIN_TRUST]
 
 
 # How long a value read from storage is reused before going back to the

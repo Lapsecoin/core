@@ -183,21 +183,15 @@ def register(app, node, csrf_token):
 
     def pending_maker_requests():
         """Live fill requests against this node's own orders that have
-        not yet been answered, each with the same trust and rate checks
-        the automatic decision (swap_engine._answer_one) would use, so
-        accepting or declining by hand is as informed as auto-accept is.
-        A request can be stuck here for any of several reasons (a locked
-        wallet, an unfundable leg, a step over the exposure cap, a
-        counterparty below SWAP_AUTO_ACCEPT_MIN_TRUST, or an order priced
-        past SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS /
-        SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS), and a maker deserves to
-        see which one rather than silence.
+        not yet been answered, each with the same trust detail and cap
+        check the automatic decision (swap_engine._answer_one) would
+        use, so accepting or declining by hand is as informed as
+        auto-accept is. A request can be stuck here for any of several
+        reasons (a locked wallet, an unfundable leg, a step over the
+        exposure cap, or a counterparty below SWAP_AUTO_ACCEPT_MIN_TRUST),
+        and a maker deserves to see which one rather than silence.
         """
         min_trust = node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST)
-        min_sell_rate = node.settings.get(
-            settings_mod.SWAP_AUTO_ACCEPT_MIN_SELL_RATE_STROOPS)
-        max_buy_rate = node.settings.get(
-            settings_mod.SWAP_AUTO_ACCEPT_MAX_BUY_RATE_STROOPS)
         rows = []
         for order_row in market_mod.orders_by_maker_with_claims(node.addr):
             for req in market_mod.requests_for_order(order_row.order_id):
@@ -215,10 +209,6 @@ def register(app, node, csrf_token):
                 except swap_mod.TradeTooLarge as e:
                     fits, fit_note = False, str(e)
                 below_trust_floor = detail["score"] < min_trust
-                below_rate_floor = (order_row.direction == "sell"
-                                    and order_row.price_stroops_per_lapse < min_sell_rate)
-                above_rate_ceiling = (order_row.direction == "buy"
-                                      and order_row.price_stroops_per_lapse > max_buy_rate)
                 rows.append({
                     "request_id": req.request_id,
                     "order_id": order_row.order_id,
@@ -230,8 +220,6 @@ def register(app, node, csrf_token):
                     "fits_cap": fits,
                     "fit_note": fit_note,
                     "below_trust_floor": below_trust_floor,
-                    "below_rate_floor": below_rate_floor,
-                    "above_rate_ceiling": above_rate_ceiling,
                 })
         rows.sort(key=lambda r: -r["received_at"])
         return rows
