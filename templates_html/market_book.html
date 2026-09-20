@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+
+<p style="margin-top:-.4rem"><a href="/market">&larr; Back to Market</a></p>
+
+<h1 style="margin-bottom:.3rem">Order book</h1>
+
+<div class="tabs" role="tablist" style="margin-bottom:.7rem">
+  <a class="tab {{ 'is-active' if side == 'sell' }}" role="tab"
+     href="/market/book?side=sell&sort={{ sort }}">Selling (buy from them)</a>
+  <a class="tab {{ 'is-active' if side == 'buy' }}" role="tab"
+     href="/market/book?side=buy&sort={{ sort }}">Buying (sell to them)</a>
+</div>
+
+<div style="display:flex; justify-content:space-between; align-items:baseline;
+            flex-wrap:wrap; gap:.5rem; margin-bottom:.5rem">
+  <p class="stat-sub" style="margin:0">
+    {{ total }} order{{ '' if total == 1 else 's' }} on this side.
+  </p>
+  <div style="font-size:.85rem">
+    Sort:
+    <a href="/market/book?side={{ side }}&sort=price"
+       style="{{ 'font-weight:bold' if sort == 'price' }}">best price</a> &middot;
+    <a href="/market/book?side={{ side }}&sort=amount"
+       style="{{ 'font-weight:bold' if sort == 'amount' }}">largest</a> &middot;
+    <a href="/market/book?side={{ side }}&sort=recent"
+       style="{{ 'font-weight:bold' if sort == 'recent' }}">newest</a>
+  </div>
+</div>
+
+{% if not rows %}
+  <p style="color:var(--ink-dim); font-style:italic">
+    {% if total == 0 %}
+      Nobody is {{ 'selling' if side == 'sell' else 'buying' }} right now.
+    {% else %}
+      No orders on this page. <a href="/market/book?side={{ side }}&sort={{ sort }}">Back to page 1</a>.
+    {% endif %}
+  </p>
+{% else %}
+<div class="table-wrap">
+<table class="stacked">
+  <thead>
+    <tr>
+      <th>Price</th>
+      <th>{{ 'Available' if side == 'sell' else 'Wanted' }}</th>
+      <th>{{ 'Seller' if side == 'sell' else 'Buyer' }}</th>
+      <th>Min fill</th>
+      <th>Expires</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in rows %}
+    <tr>
+      <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
+      <td data-label="{{ 'Available' if side == 'sell' else 'Wanted' }}">{{ fmt_lapse_dp(e.remaining, 2) }}</td>
+      <td data-label="{{ 'Seller' if side == 'sell' else 'Buyer' }}" class="hash-short">
+        {{ short_addr(e.maker) }}{{ trust_badge(e.maker) | safe }}
+      </td>
+      <td data-label="Min fill">
+        {% if e.min_fill %}{{ fmt_lapse_dp(e.min_fill, 2) }}{% else %}<span class="stat-sub">none</span>{% endif %}
+      </td>
+      <td data-label="Expires">
+        {% set blocks_left = e.expiry_block - height %}
+        {% if blocks_left > 0 %}~{{ fmt_duration(blocks_left * 120) }}{% else %}expired{% endif %}
+      </td>
+      <td data-label="">
+        {% if swap_enabled %}
+          <a class="btn-sm" href="/market/take/{{ e.order_id }}">{{ 'Buy' if side == 'sell' else 'Sell' }}</a>
+        {% else %}
+          <span class="stat-sub" title="Turn on swaps in Settings to trade">off</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-top:.6rem">
+  <span class="stat-sub">Page {{ page }} of {{ last_page }}</span>
+  <div>
+    {% if page > 1 %}
+      <a class="btn-sm" href="/market/book?side={{ side }}&sort={{ sort }}&page={{ page - 1 }}">&larr; Newer page</a>
+    {% endif %}
+    {% if page < last_page %}
+      <a class="btn-sm" href="/market/book?side={{ side }}&sort={{ sort }}&page={{ page + 1 }}">Next page &rarr;</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<style>
+  .tabs { display: flex; gap: .4rem; border-bottom: 1px solid var(--rule-lt); }
+  .tab { background: var(--paper); color: var(--ink-dim);
+         border: 1px solid var(--rule-lt); border-bottom: none;
+         padding: .3rem 1rem; font-size: .85rem; text-decoration: none; }
+  .tab.is-active { color: var(--ink); font-weight: bold;
+                   border-color: var(--rule); background: var(--paper-2); }
+  .trust-badge { font-size: .72rem; margin-left: .25rem; }
+</style>
+
+{% endblock %}

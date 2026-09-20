@@ -41,7 +41,7 @@
         {% endif %}
       </td>
       <td data-label="Amount">{{ fmt_lapse_dp(r.lapse_total, 4) }}</td>
-      <td data-label="Maker" class="hash">{{ short_addr(r.maker_lapse_addr) if r.maker_lapse_addr else "—" }}</td>
+      <td data-label="Maker" class="hash-short">{{ short_addr(r.maker_lapse_addr) if r.maker_lapse_addr else "n/a" }}</td>
       <td data-label="Sent">{{ fmt_duration(now - r.sent_at) }} ago</td>
       <td data-label="Status">
         <span style="color:{{ {'pending': 'var(--live)', 'accepted': 'var(--gain)', 'declined': 'var(--loss)'}[r.status] }}">
@@ -163,10 +163,10 @@
 {% if receipts.total %}
 <p class="stat-sub" style="margin-bottom:.3rem">
   This node holds {{ receipts.total }} step receipt{{ '' if receipts.total == 1 else 's' }}
-  gossiped from across the network &mdash; {{ receipts.verified }} independently
-  checked against the chain and counted above, {{ receipts.pending }} still
-  waiting on that check (a background pass, not this page; reload later to
-  see them settle one way or the other).
+  gossiped from across the network: {{ receipts.verified }} independently
+  checked against the chain and counted above, {{ receipts.pending }} not
+  yet needed for anyone's standing (checked the moment they are, not on a
+  schedule).
 </p>
 {% endif %}
 
@@ -219,7 +219,7 @@
         {% elif p.score > 0 %}
           <span style="color:var(--gain); font-weight:bold">{{ "%.1f"|format(p.score) }}</span>
         {% else %}
-          <span style="color:var(--ink-dim)">&mdash;</span>
+          <span style="color:var(--ink-dim)">n/a</span>
         {% endif %}
       </td>
       <td data-label="Completed">

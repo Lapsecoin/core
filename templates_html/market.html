@@ -21,7 +21,7 @@
   <div class="stat">
     <div class="stat-label">Best price to buy</div>
     <div class="stat-value">
-      {% if best.best_sell %}{{ fmt_price(best.best_sell) }}{% else %}&mdash;{% endif %}
+      {% if best.best_sell %}{{ fmt_price(best.best_sell) }}{% else %}n/a{% endif %}
     </div>
     <div class="stat-sub">
       {% if best.best_sell %}XLM per LAPSE{% else %}nobody is selling{% endif %}
@@ -30,7 +30,7 @@
   <div class="stat">
     <div class="stat-label">Best price to sell</div>
     <div class="stat-value">
-      {% if best.best_buy %}{{ fmt_price(best.best_buy) }}{% else %}&mdash;{% endif %}
+      {% if best.best_buy %}{{ fmt_price(best.best_buy) }}{% else %}n/a{% endif %}
     </div>
     <div class="stat-sub">
       {% if best.best_buy %}XLM per LAPSE{% else %}nobody is buying{% endif %}
@@ -71,6 +71,66 @@
     That figure comes from a public price feed and is for orientation only;
     it never affects a trade.
   </p>
+{% endif %}
+
+{# ------------------------------------------------------------- the book #}
+<h2 style="margin-bottom:.3rem">Order book</h2>
+{% if not depth.sells and not depth.buys %}
+  <p style="color:var(--ink-dim); font-style:italic; margin-top:0">
+    Nobody has posted an order yet. On a new coin that is the normal
+    starting point, not a fault: the first order posted is also the
+    first price this market has ever had.
+  </p>
+{% else %}
+<div class="book">
+  <div class="book-side">
+    <h3 style="margin:.2rem 0">Selling</h3>
+    {% if depth.sells %}
+    <div class="table-wrap">
+    <table class="stacked compact">
+      <thead><tr><th>Price</th><th>Available</th><th></th></tr></thead>
+      <tbody>
+        {% for e in depth.sells[:5] %}
+        <tr>
+          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
+          <td data-label="Available">{{ fmt_lapse_dp(e.remaining, 2) }}{{ trust_badge(e.maker)|safe }}</td>
+          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Buy</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      <p class="stat-sub" style="font-style:italic">Nobody is selling.</p>
+    {% endif %}
+  </div>
+
+  <div class="book-side">
+    <h3 style="margin:.2rem 0">Buying</h3>
+    {% if depth.buys %}
+    <div class="table-wrap">
+    <table class="stacked compact">
+      <thead><tr><th>Price</th><th>Wanted</th><th></th></tr></thead>
+      <tbody>
+        {% for e in depth.buys[:5] %}
+        <tr>
+          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
+          <td data-label="Wanted">{{ fmt_lapse_dp(e.remaining, 2) }}{{ trust_badge(e.maker)|safe }}</td>
+          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Sell</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      <p class="stat-sub" style="font-style:italic">Nobody is buying.</p>
+    {% endif %}
+  </div>
+</div>
+<p class="stat-sub" style="margin:.3rem 0 0">
+  Best 5 each side shown here.
+  <a href="/market/book?side=sell">Full order book</a> has all of it, sortable and paged.
+</p>
 {% endif %}
 
 {# ------------------------------------------------------------ your wallet #}
@@ -119,8 +179,106 @@
 </div>
 
 {% if xlm_addr %}
+{# ---------------------------------------------------------------- trade #}
+<h2 style="margin-bottom:.2rem">Trade</h2>
+<p class="stat-sub" style="margin-top:0">
+  Post an order to name your own price and let it wait in the book, or
+  take now to fill immediately against what is already there.
+</p>
+<div class="mode-tabs" role="tablist">
+  <button type="button" class="mode-tab is-active" data-mode="order" role="tab">Post an order</button>
+  <button type="button" class="mode-tab" data-mode="take" role="tab">Take now</button>
+</div>
+
+<div class="mode-panel" data-mode="order">
+{# --------------------------------------------------------- resting order #}
+<div class="card">
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab is-active" data-side="buy" role="tab">Buy LAPSE</button>
+    <button type="button" class="tab" data-side="sell" role="tab">Sell LAPSE</button>
+  </div>
+
+  <form method="post" id="order-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="place_order">
+    <input type="hidden" name="direction" id="direction" value="buy">
+
+    <div class="form-row">
+      <label for="amount">Amount</label>
+      <input id="amount" type="text" name="amount_lapse" inputmode="decimal"
+             placeholder="0.00" required autocomplete="off">
+      <span>LAPSE</span>
+    </div>
+
+    <div class="form-row">
+      <label for="price">Price</label>
+      <input id="price" type="text" name="price_xlm" inputmode="decimal"
+             placeholder="0.0000000" required autocomplete="off"
+             value="{{ suggested_price }}">
+      <span>XLM each</span>
+      <div class="stat-sub">
+        {% if best.best_sell or best.best_buy %}
+          Prefilled with the best price on the book. Change it to whatever
+          you are willing to trade at.
+        {% elif ticker %}
+          The book is empty, so this is prefilled from this node's own
+          last traded price instead, not a live quote. Change it to
+          whatever you are willing to trade at.
+        {% else %}
+          The book is empty and this node has no trade history either, so
+          there is no reference price yet. Whatever you pick here is the
+          first quote anyone sees.
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Total</label>
+      <div class="stat-value" id="total-line">n/a</div>
+    </div>
+
+    <details style="margin:.4rem 0">
+      <summary class="stat-sub" style="cursor:pointer">More options</summary>
+      <div class="form-row">
+        <label for="min_fill">Smallest fill</label>
+        <input id="min_fill" type="text" name="min_fill_lapse" inputmode="decimal"
+               placeholder="0" autocomplete="off">
+        <span>LAPSE</span>
+        <div class="stat-sub">Refuse anyone wanting to take less than this. Leave blank for no minimum.</div>
+      </div>
+      <div class="form-row">
+        <label for="expiry_hours">Expires in</label>
+        <input id="expiry_hours" type="number" name="expiry_hours" min="1"
+               max="720" value="168">
+        <span>hours</span>
+        <div class="stat-sub">
+          The order disappears by itself after this. It exists to be filled
+          and then be gone, not to sit advertised.
+        </div>
+      </div>
+    </details>
+
+    <div class="form-row">
+      <label for="order_pass">Passphrase</label>
+      <input id="order_pass" type="password" name="passphrase" required>
+    </div>
+
+    <div style="padding-top:.5rem">
+      <button type="submit" id="submit-btn" data-buy-label="Place buy order"
+              data-sell-label="Place sell order">Place buy order</button>
+    </div>
+    <p class="stat-sub" style="margin-top:.5rem">
+      Waits in the book at your price until somebody takes it (or your own
+      "Take now" does), or it expires. Anyone who takes it still only ever
+      moves this node's own safe step size at a time (see
+      <a href="/settings">Settings</a>), whatever they ask for.
+    </p>
+  </form>
+</div>
+</div>
+
+<div class="mode-panel" data-mode="take" hidden>
 {# ------------------------------------------------------------- trade now #}
-<h2>Trade now</h2>
 <div class="card">
   <div class="tabs" role="tablist">
     <button type="button" class="tab is-active" data-side="buy" role="tab">Buy LAPSE</button>
@@ -186,89 +344,6 @@
     </p>
   </form>
 </div>
-
-{# --------------------------------------------------------- resting order #}
-<h2>Or, post a standing order</h2>
-<p class="stat-sub" style="margin-top:-.3rem">
-  For when you are not in a hurry: this waits in the book at your price
-  until somebody (or your own next "Trade now") fills it, or it expires.
-</p>
-<div class="card">
-  <div class="tabs" role="tablist">
-    <button type="button" class="tab is-active" data-side="buy" role="tab">Buy LAPSE</button>
-    <button type="button" class="tab" data-side="sell" role="tab">Sell LAPSE</button>
-  </div>
-
-  <form method="post" id="order-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="action" value="place_order">
-    <input type="hidden" name="direction" id="direction" value="buy">
-
-    <div class="form-row">
-      <label for="amount">Amount</label>
-      <input id="amount" type="text" name="amount_lapse" inputmode="decimal"
-             placeholder="0.00" required autocomplete="off">
-      <span>LAPSE</span>
-    </div>
-
-    <div class="form-row">
-      <label for="price">Price</label>
-      <input id="price" type="text" name="price_xlm" inputmode="decimal"
-             placeholder="0.0000000" required autocomplete="off"
-             value="{{ suggested_price }}">
-      <span>XLM each</span>
-      <div class="stat-sub">
-        {% if best.best_sell or best.best_buy %}
-          Prefilled with the best price on the book. Change it to whatever
-          you are willing to trade at.
-        {% elif ticker %}
-          The book is empty, so this is prefilled from this node's own
-          last traded price instead, not a live quote. Change it to
-          whatever you are willing to trade at.
-        {% else %}
-          The book is empty and this node has no trade history either, so
-          there is no reference price yet. Whatever you pick here is the
-          first quote anyone sees.
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="form-row">
-      <label>Total</label>
-      <div class="stat-value" id="total-line">&mdash;</div>
-    </div>
-
-    <details style="margin:.4rem 0">
-      <summary class="stat-sub" style="cursor:pointer">More options</summary>
-      <div class="form-row">
-        <label for="min_fill">Smallest fill</label>
-        <input id="min_fill" type="text" name="min_fill_lapse" inputmode="decimal"
-               placeholder="0" autocomplete="off">
-        <span>LAPSE</span>
-        <div class="stat-sub">Refuse anyone wanting to take less than this. Leave blank for no minimum.</div>
-      </div>
-      <div class="form-row">
-        <label for="expiry_hours">Expires in</label>
-        <input id="expiry_hours" type="number" name="expiry_hours" min="1"
-               max="720" value="168">
-        <span>hours</span>
-        <div class="stat-sub">
-          The order disappears by itself after this. It exists to be filled
-          and then be gone, not to sit advertised.
-        </div>
-      </div>
-    </details>
-
-    <div class="form-row">
-      <label for="order_pass">Passphrase</label>
-      <input id="order_pass" type="password" name="passphrase" required>
-    </div>
-
-    <div style="padding-top:.5rem">
-      <button type="submit" id="submit-btn" data-buy-label="Place buy order"
-              data-sell-label="Place sell order">Place buy order</button>
-    </div>
-  </form>
 </div>
 
 {# --------------------------------------------------- pending fill requests #}
@@ -300,7 +375,7 @@
           {{ 'Buying' if r.direction == 'buy' else 'Selling' }}
         </span>
       </td>
-      <td data-label="From" class="hash">
+      <td data-label="From" class="hash-short">
         {{ short_addr(r.taker_lapse_addr) }}{{ trust_badge(r.taker_lapse_addr) | safe }}
       </td>
       <td data-label="Amount">{{ fmt_lapse_dp(r.lapse_total, 2) }}</td>
@@ -417,64 +492,6 @@
 {% endif %}
 {% endif %}
 
-{# ------------------------------------------------------------ the book #}
-<h2>Order book</h2>
-{% if not depth.sells and not depth.buys %}
-  <p style="color:var(--ink-dim); font-style:italic">
-    Nobody has posted an order yet. On a new coin that is the normal
-    starting point rather than a fault: the first order posted is also the
-    first price this market has ever had.
-  </p>
-{% else %}
-<div class="book">
-  <div class="book-side">
-    <h3>On sale</h3>
-    {% if depth.sells %}
-    <div class="table-wrap">
-    <table class="stacked">
-      <thead><tr><th>Price</th><th>Available</th><th>Seller</th><th></th></tr></thead>
-      <tbody>
-        {% for e in depth.sells %}
-        <tr>
-          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
-          <td data-label="Available">{{ fmt_lapse_dp(e.remaining, 2) }}</td>
-          <td data-label="Seller">{{ short_addr(e.maker) }}{{ trust_badge(e.maker)|safe }}</td>
-          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Buy</a></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-      <p class="stat-sub" style="font-style:italic">Nobody is selling.</p>
-    {% endif %}
-  </div>
-
-  <div class="book-side">
-    <h3>Wanted</h3>
-    {% if depth.buys %}
-    <div class="table-wrap">
-    <table class="stacked">
-      <thead><tr><th>Price</th><th>Wanted</th><th>Buyer</th><th></th></tr></thead>
-      <tbody>
-        {% for e in depth.buys %}
-        <tr>
-          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
-          <td data-label="Wanted">{{ fmt_lapse_dp(e.remaining, 2) }}</td>
-          <td data-label="Buyer">{{ short_addr(e.maker) }}{{ trust_badge(e.maker)|safe }}</td>
-          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Sell</a></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-      <p class="stat-sub" style="font-style:italic">Nobody is buying.</p>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-
 <style>
   .tabs { display: flex; gap: .4rem; margin-bottom: .5rem;
           border-bottom: 1px solid var(--rule-lt); }
@@ -483,8 +500,15 @@
          padding: .3rem 1rem; font-size: .85rem; cursor: pointer; }
   .tab.is-active { color: var(--ink); font-weight: bold;
                    border-color: var(--rule); background: var(--paper-2); }
+  .mode-tabs { display: flex; gap: .4rem; margin-bottom: .6rem; }
+  .mode-tab { background: var(--paper); color: var(--ink-dim);
+              border: 1px solid var(--rule-lt); border-radius: 4px;
+              padding: .4rem 1.1rem; font-size: .9rem; cursor: pointer; }
+  .mode-tab.is-active { color: var(--paper); font-weight: bold;
+                        border-color: var(--ink); background: var(--ink); }
   .book { display: flex; flex-wrap: wrap; gap: 1.2rem; }
   .book-side { flex: 1 1 320px; min-width: 0; }
+  .stacked.compact th, .stacked.compact td { padding: .25rem .5rem; }
   .trust-badge { font-size: .72rem; margin-left: .25rem; }
   .progress { background: var(--paper-2); border: 1px solid var(--rule-lt);
               height: 10px; overflow: hidden; }
@@ -493,9 +517,26 @@
 
 <script>
 (function () {
+  // Post an order / Take now: only one panel shown at a time, so the
+  // page never has to show two full forms nobody asked to compare.
+  var modeTabs = document.querySelectorAll(".mode-tab");
+  Array.prototype.forEach.call(modeTabs, function (tab) {
+    tab.addEventListener("click", function () {
+      Array.prototype.forEach.call(modeTabs, function (t) {
+        t.classList.remove("is-active");
+      });
+      tab.classList.add("is-active");
+      Array.prototype.forEach.call(document.querySelectorAll(".mode-panel"), function (panel) {
+        panel.hidden = panel.dataset.mode !== tab.dataset.mode;
+      });
+    });
+  });
+})();
+
+(function () {
   // Each .tabs group lives in its own card, alongside its own hidden
   // "direction" input and its own submit button; scoped per-card so the
-  // "Trade now" and "post a standing order" forms toggle independently
+  // order form and the take-now form toggle buy/sell independently
   // instead of one click flipping both.
   Array.prototype.forEach.call(document.querySelectorAll(".tabs"), function (group) {
     var card = group.closest(".card");
@@ -532,7 +573,7 @@
   function recalc() {
     var a = parseFloat(amount.value), p = parseFloat(price.value);
     if (!isFinite(a) || !isFinite(p) || a <= 0 || p <= 0) {
-      total.textContent = "—";
+      total.textContent = "n/a";
       return;
     }
     var xlm = a * p;

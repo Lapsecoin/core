@@ -345,6 +345,41 @@ def register(app, node, csrf_token):
             auto_accept_fills=node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_FILLS),
             csrf_token=csrf_token)
 
+    # -- The full order book --------------------------------------------
+
+    @app.route("/market/book")
+    def market_book():
+        """The whole book, one side at a time: paged and sortable,
+        unlike /market's own compact top-of-book preview. Viewable
+        whether or not swaps are on (relaying an order does not depend
+        on this node trading itself); only the Take links need swaps on,
+        and market_take already redirects back to /market if they are
+        not.
+        """
+        height = node.view.height
+        side = request.args.get("side", "sell")
+        if side not in ("sell", "buy"):
+            side = "sell"
+        sort = request.args.get("sort", "price")
+        if sort not in market_mod.BOOK_SORTS:
+            sort = "price"
+        try:
+            page_num = max(int(request.args.get("page", 1)), 1)
+        except ValueError:
+            page_num = 1
+        page_size = market_mod.BOOK_PAGE_SIZE
+        rows, total = market_mod.list_orders(
+            height, side, exclude_maker=node.addr if swaps_on() else None,
+            sort=sort, offset=(page_num - 1) * page_size, limit=page_size)
+        last_page = max((total + page_size - 1) // page_size, 1)
+        if page_num > last_page:
+            page_num = last_page
+        return render_template(
+            "market_book.html", title="Order book",
+            swap_enabled=swaps_on(), height=height,
+            side=side, sort=sort, rows=rows, total=total,
+            page=page_num, last_page=last_page, page_size=page_size)
+
     # -- Taking an order -----------------------------------------------
 
     @app.route("/market/take/<order_id>", methods=["GET", "POST"])

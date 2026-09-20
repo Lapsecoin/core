@@ -589,11 +589,53 @@ def book_depth(current_height, exclude_maker=None):
             "min_fill": row.min_fill,
             "max_fill": row.max_fill,
             "expiry_block": row.expiry_block,
+            "received_at": row.received_at,
         }
         (buys if row.direction == "buy" else sells).append(entry)
     buys.sort(key=lambda e: e["price"], reverse=True)
     sells.sort(key=lambda e: e["price"])
     return {"buys": buys, "sells": sells}
+
+
+# How many rows the order book page shows at a time. The book itself has
+# no such limit (MAX_ORDERS_TOTAL is the only ceiling, and that exists
+# to bound storage and gossip, not display), so a genuinely active
+# market needs paging rather than one page trying to render everything:
+# besides the obvious readability problem, each row's maker gets a
+# trust badge (market_routes.trust_badge), which can mean real chain
+# I/O (see trust._verify_addr_receipts); bounding a page to this many
+# rows is what keeps one page load's worst case bounded too.
+BOOK_PAGE_SIZE = 20
+
+# Ways to order one side of the book for display. "price" is book_depth's
+# own order (best deal first) and needs no further sorting; the others
+# re-sort the same already-fetched entries.
+BOOK_SORTS = ("price", "amount", "recent")
+
+
+def list_orders(current_height, direction, exclude_maker=None,
+                sort="price", offset=0, limit=BOOK_PAGE_SIZE):
+    """One page of one side of the book (direction: "buy" or "sell", the
+    maker's own posted side, matching Order.direction), for the order
+    book page. Returns (page_rows, total_count) so a page can say "21-40
+    of 137" without a second query.
+
+    Reuses book_depth's own entries and its "price" order (best deal
+    first) rather than re-querying: this is a display concern layered on
+    top of the same data book_depth already assembles for the compact
+    preview, not a second source of truth for what the book contains.
+    """
+    ensure_tables()
+    if sort not in BOOK_SORTS:
+        sort = "price"
+    depth = book_depth(current_height, exclude_maker)
+    rows = depth["sells"] if direction == "sell" else depth["buys"]
+    if sort == "amount":
+        rows = sorted(rows, key=lambda e: e["remaining"], reverse=True)
+    elif sort == "recent":
+        rows = sorted(rows, key=lambda e: e["received_at"], reverse=True)
+    total = len(rows)
+    return rows[offset:offset + limit], total
 
 
 def best_prices(current_height, exclude_maker=None):

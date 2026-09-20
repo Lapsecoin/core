@@ -1014,6 +1014,68 @@ class TestDepth:
         assert market.best_prices(100)["sell_depth"] == 8 * LAPSE
 
 
+class TestListOrders:
+    """The order book page's own view: one side, paged and sorted, on
+    top of the same entries book_depth already assembles."""
+
+    def test_default_sort_matches_book_depth_price_order(self, maker):
+        market.store_order(signed_order(maker, direction="sell", price=1200))
+        market.store_order(signed_order(maker, direction="sell", price=1000))
+        page, total = market.list_orders(100, "sell")
+        assert total == 2
+        assert [e["price"] for e in page] == [1000, 1200]
+
+    def test_pagination_slices_without_losing_the_total(self, maker):
+        for i in range(5):
+            market.store_order(signed_order(maker, order_id=f"o{i}", price=1000 + i))
+        page, total = market.list_orders(100, "sell", offset=0, limit=2)
+        assert total == 5
+        assert [e["price"] for e in page] == [1000, 1001]
+        page2, total2 = market.list_orders(100, "sell", offset=2, limit=2)
+        assert total2 == 5
+        assert [e["price"] for e in page2] == [1002, 1003]
+
+    def test_amount_sort_is_largest_first(self, maker):
+        market.store_order(signed_order(maker, order_id="small",
+                                        direction="sell", lapse_total=1 * LAPSE))
+        market.store_order(signed_order(maker, order_id="big",
+                                        direction="sell", lapse_total=9 * LAPSE))
+        page, _total = market.list_orders(100, "sell", sort="amount")
+        assert [e["remaining"] for e in page] == [9 * LAPSE, 1 * LAPSE]
+
+    def test_recent_sort_is_newest_first(self, maker):
+        # received_at is set by store_order itself (time.time()), not
+        # taken from the signed payload, so the two calls are given
+        # explicit, deterministic timestamps afterward rather than
+        # relying on real clock time to differ between them.
+        market.store_order(signed_order(maker, order_id="old", price=1000))
+        market.store_order(signed_order(maker, order_id="new", price=1000))
+        Order.update(received_at=1000).where(Order.order_id == "old").execute()
+        Order.update(received_at=2000).where(Order.order_id == "new").execute()
+        page, _total = market.list_orders(100, "sell", sort="recent")
+        assert [e["order_id"] for e in page] == ["new", "old"]
+
+    def test_an_unknown_sort_falls_back_to_price(self, maker):
+        market.store_order(signed_order(maker, direction="sell", price=1200))
+        market.store_order(signed_order(maker, direction="sell", price=1000))
+        page, _total = market.list_orders(100, "sell", sort="nonsense")
+        assert [e["price"] for e in page] == [1000, 1200]
+
+    def test_buy_and_sell_are_independent(self, maker):
+        market.store_order(signed_order(maker, direction="sell", price=1000))
+        market.store_order(signed_order(maker, direction="buy", price=900))
+        sells, _t1 = market.list_orders(100, "sell")
+        buys, _t2 = market.list_orders(100, "buy")
+        assert len(sells) == 1 and len(buys) == 1
+        assert sells[0]["price"] == 1000
+        assert buys[0]["price"] == 900
+
+    def test_excludes_own_orders_like_open_orders_does(self, maker):
+        market.store_order(signed_order(maker, direction="sell"))
+        page, total = market.list_orders(100, "sell", exclude_maker=maker["addr"])
+        assert page == [] and total == 0
+
+
 # ---------------------------------------------------------------------------
 # Ticker (plan item 5.2): a weighted median of this node's own completed
 # trades, not a network-wide feed.

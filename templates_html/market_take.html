@@ -131,7 +131,7 @@
 
     <div class="form-row">
       <label>{{ "You pay" if taking_side == "buy" else "You receive" }}</label>
-      <div class="stat-value" id="total-line">&mdash;</div>
+      <div class="stat-value" id="total-line">n/a</div>
     </div>
 
     <div class="form-row">
@@ -182,7 +182,7 @@
   function recalc() {
     var a = parseFloat(amount.value);
     if (!isFinite(a) || a <= 0 || !isFinite(price)) {
-      total.textContent = "—";
+      total.textContent = "n/a";
       return;
     }
     total.textContent = (a * price).toFixed(7) + " XLM";
