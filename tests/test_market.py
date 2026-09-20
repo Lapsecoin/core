@@ -287,6 +287,25 @@ class TestStorage:
         assert market.store_order(order) is True
         assert market.store_order(order) is False
 
+    def test_auto_match_margin_defaults_to_zero(self, maker):
+        """A gossiped order never carries a margin (see
+        market.store_order's own docstring): only this node's own
+        posting flow ever passes one."""
+        order = signed_order(maker)
+        market.store_order(order)
+        assert market.get_order(order["order_id"]).auto_match_margin_stroops == 0
+
+    def test_auto_match_margin_is_local_only_and_never_on_the_wire(self, maker):
+        order = signed_order(maker)
+        market.store_order(order, auto_match_margin_stroops=50)
+        row = market.get_order(order["order_id"])
+        assert row.auto_match_margin_stroops == 50
+        # order_to_wire is what a backfill response and gossip both send;
+        # it must never carry this node's private margin to anyone.
+        wire = market.order_to_wire(row)
+        assert "auto_match_margin_stroops" not in wire
+        assert "auto_match_margin_stroops" not in market.SIGNED_FIELDS
+
     def test_one_maker_cannot_fill_the_book(self, maker):
         for _ in range(market.MAX_ORDERS_PER_MAKER):
             market.store_order(signed_order(maker))

@@ -520,6 +520,8 @@ def _place_order(node, xlm_addr, height):
     price = parse_xlm(request.form.get("price_xlm"))
     min_fill_raw = (request.form.get("min_fill_lapse") or "").strip()
     min_fill = parse_lapse(min_fill_raw) if min_fill_raw else 0
+    margin_raw = (request.form.get("auto_match_margin_xlm") or "").strip()
+    auto_match_margin = parse_xlm(margin_raw) if margin_raw else 0
 
     hours = int(request.form.get("expiry_hours") or 168)
     if not 1 <= hours <= 720:
@@ -549,7 +551,11 @@ def _place_order(node, xlm_addr, height):
     kek = crypto_mod.derive_kek(node.keyfile, passphrase)
     market_mod.sign_order(order, node.keyfile, kek)
     market_mod.verify_order(order, current_height=height)
-    market_mod.store_order(order)
+    # auto_match_margin never touches `order`: it is not signed and not
+    # gossiped (see market.store_order and Order.auto_match_margin_stroops),
+    # so publish_order below sends exactly what everyone else's copy of
+    # this order will ever hold, nothing more.
+    market_mod.store_order(order, auto_match_margin_stroops=auto_match_margin)
     node.publish_order(order)
     return "Order posted and sent to your peers."
 
@@ -811,6 +817,7 @@ def _my_orders(node, height):
             "reserved": reserved,
             "pct_delivered": int(delivered * 100 / row.lapse_total) if row.lapse_total else 0,
             "price_stroops_per_lapse": row.price_stroops_per_lapse,
+            "auto_match_margin_stroops": row.auto_match_margin_stroops,
             "blocks_left": max(row.expiry_block - height, 0),
             # What's left cannot actually be taken any more (see
             # market.open_orders, which hides such an order from takers

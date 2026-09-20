@@ -275,12 +275,22 @@ def order_hash(item):
 # Storage
 # ---------------------------------------------------------------------------
 
-def store_order(order):
+def store_order(order, auto_match_margin_stroops=0):
     """Persist a verified order. Returns False if it was already known.
 
     on_conflict_ignore rather than replace: an order is immutable once
     signed, so a second copy carries nothing new, and replacing would let
     a relayed duplicate reset locally-derived columns.
+
+    auto_match_margin_stroops is local-only bookkeeping for this node's
+    own auto-matcher (see swap_engine.auto_match_orders): how much worse
+    a rate this node will privately accept beyond the price above, when
+    this is one of its own orders. It is not a field of `order` and
+    never will be, on purpose: every caller relaying a gossiped order
+    (node.py's inbound handlers) calls this without it, so a remote
+    order always gets the harmless default, 0, never a value the order
+    itself claims. Only market_routes._place_order, posting this node's
+    own order, ever passes something else.
     """
     ensure_tables()
     existing = Order.get_or_none(Order.order_id == order["order_id"])
@@ -313,6 +323,7 @@ def store_order(order):
         created_at=time.time(),
         received_at=time.time(),
         verified=True,
+        auto_match_margin_stroops=max(int(auto_match_margin_stroops), 0),
     )
     return True
 

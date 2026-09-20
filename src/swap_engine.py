@@ -1202,19 +1202,26 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
 # node's own resting orders instead of waiting for a person to browse the
 # book.
 #
-# Two orders cross when the side offering to pay more names a price at
-# least as good as the side offering to accept less: a sell at 1000 and a
-# buy at 1050 cross (the buyer already offered more than the seller
-# asked); a sell at 1000 and a buy at 950 do not, since nobody here is
-# offering to bridge that gap. A crossing request always fills at the
-# resting counter-order's own price (market.validate_fill/xlm_for_lapse),
-# the exact rule a manual taker is already held to, so this can never
-# fill anyone at a price they did not themselves post, and it is decided
-# by the counter-order's own maker through the exact same _answer_one
-# path (trust floor, exposure cap, funding) a request typed in by a
-# person goes through. There is no separate "how close is close enough"
-# setting to configure anywhere: an order's own price already is that
-# number, per order, by construction.
+# Two orders cross outright when the side offering to pay more names a
+# price at least as good as the side offering to accept less: a sell at
+# 1000 and a buy at 1050 cross (the buyer already offered more than the
+# seller asked). A sell at 1000 and a buy at 950 do not cross outright,
+# but this node's own order may still privately be willing to meet it
+# partway: Order.auto_match_margin_stroops (set only by this node, for
+# this node's own orders, never gossiped, see that field's own comment)
+# widens the comparison by that many stroops without ever changing, or
+# telling anyone, the price actually posted. A request sent this way
+# still always fills at the resting counter-order's own price
+# (market.validate_fill/xlm_for_lapse), the exact rule a manual taker is
+# already held to, so this can never fill anyone at a price they did not
+# themselves post, and it is decided by the counter-order's own maker
+# through the exact same _answer_one path (trust floor, exposure cap,
+# funding) a request typed in by a person goes through. Nothing this
+# node ever sends says its margin, or that one was used at all: a
+# completed trade at 950 looks, to anyone watching, exactly like a
+# maker who simply decided by hand that 950 was good enough, which is
+# the whole point of keeping this local rather than making it a term of
+# the fill request.
 
 # How many of the best-priced counter-orders to check per own order, per
 # pass. Bounded rather than the whole side, same reasoning as
@@ -1270,10 +1277,11 @@ def auto_match_orders(engine, node, my_xlm_addr, stranger_cap):
         candidates, _total = market_mod.list_orders(
             height, counter_direction, exclude_maker=node.addr,
             sort="price", limit=AUTO_MATCH_CANDIDATES)
+        margin = max(mine.auto_match_margin_stroops, 0)
         for theirs in candidates:
-            crosses = (theirs["price"] >= mine.price_stroops_per_lapse
+            crosses = (theirs["price"] >= mine.price_stroops_per_lapse - margin
                       if mine.direction == "sell" else
-                      theirs["price"] <= mine.price_stroops_per_lapse)
+                      theirs["price"] <= mine.price_stroops_per_lapse + margin)
             if not crosses:
                 break   # price-sorted best-first; nothing further crosses either
             if theirs["order_id"] in already_asked:

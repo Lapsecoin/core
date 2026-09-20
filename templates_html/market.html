@@ -243,6 +243,20 @@
           and then be gone, not to sit advertised.
         </div>
       </div>
+      <div class="form-row">
+        <label for="auto_match_margin">Auto-match margin</label>
+        <input id="auto_match_margin" type="text" name="auto_match_margin_xlm"
+               inputmode="decimal" placeholder="0" autocomplete="off">
+        <span>XLM per LAPSE</span>
+        <div class="stat-sub">
+          This node will keep looking for an existing order to match this
+          one against, and will privately go up to this much worse than the
+          price above to close one. Kept entirely local: your posted price
+          above is the only number anyone else ever sees, whatever this
+          node actually settles for. Leave blank to only ever match at
+          least as good as your own price.
+        </div>
+      </div>
     </details>
 
     <div class="form-row">
@@ -353,7 +367,7 @@
 <div class="table-wrap">
 <table class="stacked">
   <thead>
-    <tr><th>Side</th><th>Amount</th><th>Progress</th><th>Left</th><th>Price</th><th>Expires</th><th></th></tr>
+    <tr><th>Side</th><th>Amount</th><th>Progress</th><th>Left</th><th>Price</th><th>Margin</th><th>Expires</th><th></th></tr>
   </thead>
   <tbody>
     {% for o in my_orders %}
@@ -380,6 +394,13 @@
         {% endif %}
       </td>
       <td data-label="Price">{{ fmt_price(o.price_stroops_per_lapse) }} XLM</td>
+      <td data-label="Margin">
+        {% if o.auto_match_margin_stroops %}
+          {{ fmt_price(o.auto_match_margin_stroops) }} XLM
+        {% else %}
+          <span class="stat-sub">none</span>
+        {% endif %}
+      </td>
       <td data-label="Expires">
         {% if o.blocks_left > 0 %}~{{ fmt_duration(o.blocks_left * 120) }}{% else %}expired{% endif %}
       </td>

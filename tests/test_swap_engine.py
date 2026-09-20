@@ -1066,12 +1066,13 @@ def make_maker_engine(node, lapse=None, xlm=None):
 
 def make_order(order_id="order-1", direction="sell", lapse_total=10 * LAPSE,
               price=1000, maker_lapse="maker.lapse", maker_xlm="GMAKER",
-              min_fill=0, max_fill=0, expiry_block=10**9):
+              min_fill=0, max_fill=0, expiry_block=10**9, margin=0):
     return Order.create(
         order_id=order_id, maker_lapse_addr=maker_lapse, maker_xlm_addr=maker_xlm,
         direction=direction, lapse_total=lapse_total,
         price_stroops_per_lapse=price, min_fill=min_fill,
         max_fill=max_fill or lapse_total, expiry_block=expiry_block,
+        auto_match_margin_stroops=margin,
         pubkey="ab" * 10, signature="cd" * 10,
         created_at=time.time(), received_at=time.time(), verified=True)
 
@@ -1553,6 +1554,48 @@ class TestAutoMatchOrders:
         node = FakeDiscoveryNode(tmp_path)
         engine, _lapse, _xlm = make_maker_engine(node)
         assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+
+    def test_a_near_miss_within_the_margin_is_matched(self, tmp_path):
+        """A resting buy at 950 does not cross a sell asking 1000
+        outright, but this node's own private margin of 50 says it will
+        still go looking for exactly this: privately good enough, even
+        though nothing publicly posted says so."""
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE", margin=50)
+        make_order(order_id="theirs", direction="buy", price=950,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
+        req = node.publish_fill_request_calls[0]
+        assert req["order_id"] == "theirs"
+
+    def test_a_near_miss_outside_the_margin_is_left_alone(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE", margin=20)
+        make_order(order_id="theirs", direction="buy", price=950,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert node.publish_fill_request_calls == []
+
+    def test_a_sent_request_never_reveals_the_margin(self, tmp_path):
+        """The whole point: whatever this node privately would have
+        accepted, the request it actually sends is indistinguishable
+        from a request sent with no margin set at all."""
+        node = FakeDiscoveryNode(tmp_path)
+        make_order(order_id="mine", direction="sell", price=1000,
+                  maker_lapse=node.addr, maker_xlm="GMINE", margin=50)
+        make_order(order_id="theirs", direction="buy", price=950,
+                  maker_lapse="other.maker", maker_xlm="GOTHER")
+        engine, _lapse, _xlm = make_maker_engine(node)
+
+        swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM)
+        req = node.publish_fill_request_calls[0]
+        assert set(req) - {"signature"} == set(market_mod.FILL_REQUEST_SIGNED_FIELDS)
 
     def test_the_exposure_cap_still_bounds_the_sent_amount(self, tmp_path):
         """A stranger counterparty's exposure cap is small; the amount

@@ -118,6 +118,20 @@ class Order(_TradeBase):
     received_at = FloatField()
     cancelled = BooleanField(default=False)
     verified = BooleanField(default=False)
+    # How much worse a rate this node will privately accept, beyond the
+    # price above, when swap_engine.auto_match_orders goes looking for an
+    # existing counter-order to match this one against on its own (see
+    # that function for the full crossing rule). Deliberately absent from
+    # market.SIGNED_FIELDS: it is never signed, never part of the wire
+    # format order_to_wire builds, and never read off an inbound order
+    # (market.store_order only ever receives it from this node's own
+    # posting flow, market_routes._place_order). A node's copy of
+    # somebody else's order always carries the column's bare default, 0,
+    # which is correct and harmless: nothing here is ever consulted for
+    # an order this node did not itself make. The whole point is that no
+    # message this node ever sends carries this number, so no peer can
+    # ever learn this node would have accepted less than it asked for.
+    auto_match_margin_stroops = IntegerField(default=0)
 
 
 class Trade(_TradeBase):
@@ -372,6 +386,19 @@ def _migrate_receipt_verified_at_height():
                        "INTEGER NOT NULL DEFAULT 0")
 
 
+def _migrate_order_auto_match_margin():
+    """Backfill Order.auto_match_margin_stroops for a database created
+    before that column existed. Existing rows get 0, "match only at
+    least as good as my own posted price", which is exactly what a
+    fresh order (and every order this node did not itself post) already
+    carries, so nothing changes for anyone who upgrades without
+    revisiting their open orders."""
+    cols = {r[1] for r in db.execute_sql("PRAGMA table_info(\"order\")").fetchall()}
+    if "auto_match_margin_stroops" not in cols:
+        db.execute_sql("ALTER TABLE \"order\" ADD COLUMN "
+                       "auto_match_margin_stroops INTEGER NOT NULL DEFAULT 0")
+
+
 def init_tables():
     """Create the swap tables if absent. Safe to call repeatedly.
 
@@ -382,6 +409,7 @@ def init_tables():
     global _initialised
     db.create_tables(TRADE_TABLES, safe=True)
     _migrate_receipt_verified_at_height()
+    _migrate_order_auto_match_margin()
     _initialised = True
 
 
