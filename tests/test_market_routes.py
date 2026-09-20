@@ -392,13 +392,15 @@ class TestSuggestedPrice:
         assert market_routes._suggested_price(best, ticker=777) == \
             market_routes.fmt_xlm(777)
 
-    def test_blank_when_neither_exists(self):
+    def test_falls_back_to_the_default_reference_when_neither_exists(self):
         best = {"best_sell": None, "best_buy": None}
-        assert market_routes._suggested_price(best, ticker=None) == ""
+        assert market_routes._suggested_price(best, ticker=None) == \
+            market_routes.fmt_xlm(market_mod.DEFAULT_PRICE_STROOPS_PER_LAPSE)
 
     def test_ticker_is_optional_for_backward_compatible_callers(self):
         best = {"best_sell": None, "best_buy": None}
-        assert market_routes._suggested_price(best) == ""
+        assert market_routes._suggested_price(best) == \
+            market_routes.fmt_xlm(market_mod.DEFAULT_PRICE_STROOPS_PER_LAPSE)
 
 
 class TestMakerXlmUnfunded:

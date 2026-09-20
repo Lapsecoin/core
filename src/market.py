@@ -749,6 +749,17 @@ def best_prices(current_height, exclude_maker=None):
 # Ticker: what LAPSE actually traded for, from this node's own history
 # ---------------------------------------------------------------------------
 #
+# A starting reference for a market with neither a resting order nor a
+# completed trade to derive a price from: 1 XLM per 1000 LAPSE, i.e.
+# 10,000 stroops per LAPSE. Not a quote from anyone and never treated
+# as one; it exists only so a brand new market shows a real number and
+# a first order's price field starts from something instead of a blank
+# field, and it stops mattering the instant either a real order or a
+# real trade exists, since both always win over it (see
+# market_routes._suggested_price and the Market page's own price
+# display).
+DEFAULT_PRICE_STROOPS_PER_LAPSE = 10_000
+#
 # Both chains carry a matching session memo for every step of every trade,
 # so the price a completed trade actually executed at is public and cheap
 # to compute: it needs nothing beyond the Trade row a completed session

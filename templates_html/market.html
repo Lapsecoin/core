@@ -7,22 +7,9 @@
 {# ---------------------------------------------------------------- price #}
 <div class="stats">
   <div class="stat">
-    <div class="stat-label">Best price to buy</div>
-    <div class="stat-value">
-      {% if best.best_sell %}{{ fmt_price(best.best_sell) }}{% else %}n/a{% endif %}
-    </div>
-    <div class="stat-sub">
-      {% if best.best_sell %}XLM per LAPSE{% else %}nobody is selling{% endif %}
-    </div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Best price to sell</div>
-    <div class="stat-value">
-      {% if best.best_buy %}{{ fmt_price(best.best_buy) }}{% else %}n/a{% endif %}
-    </div>
-    <div class="stat-sub">
-      {% if best.best_buy %}XLM per LAPSE{% else %}nobody is buying{% endif %}
-    </div>
+    <div class="stat-label">Price</div>
+    <div class="stat-value">{{ fmt_price(display_price) }}</div>
+    <div class="stat-sub">XLM per LAPSE{% if not ticker %}, starting reference{% endif %}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Available to buy</div>
@@ -38,24 +25,27 @@
 
 {% if ticker %}
   <p class="stat-sub" style="margin:-.25rem 0 .35rem">
-    Last traded around <strong>{{ fmt_price(ticker) }}</strong> XLM per LAPSE,
-    a weighted median of this node's own recently completed trades
+    A weighted median of this node's own recently completed trades
     (weighted by how much this node trusts each counterparty).
     This is what <em>this node</em> has actually traded at, not a
     network-wide rate; nothing stops two cooperating addresses from
     trading with each other to move it, so treat it as a data point,
-    not a price feed.
+    not a price feed. To see what's actually on offer right now, pick
+    an order from the book below (or the <a href="/market/book">full
+    order book</a>).
+  </p>
+{% else %}
+  <p class="stat-sub" style="margin:-.25rem 0 .35rem">
+    Nobody has traded here yet, so this is a starting reference (1 XLM
+    per 1,000 LAPSE), not a quote from anyone. It stops mattering the
+    moment a real order or a real trade exists.
   </p>
 {% endif %}
 
 {% if xlm_usd %}
   <p class="stat-sub" style="margin:-.25rem 0 .6rem">
-    XLM is about ${{ "%.4f"|format(xlm_usd) }} right now, so
-    {% if best.best_sell %}
-      buying 1 LAPSE costs roughly ${{ "%.4f"|format(best.best_sell / 10000000 * xlm_usd) }}.
-    {% else %}
-      a LAPSE price cannot be shown until someone posts an order.
-    {% endif %}
+    XLM is about ${{ "%.4f"|format(xlm_usd) }} right now, so at the price
+    above, 1 LAPSE costs roughly ${{ "%.4f"|format(display_price / 10000000 * xlm_usd) }}.
     That figure comes from a public price feed and is for orientation only;
     it never affects a trade.
   </p>
@@ -219,8 +209,10 @@
           whatever you are willing to trade at.
         {% else %}
           The book is empty and this node has no trade history either, so
-          there is no reference price yet. Whatever you pick here is the
-          first quote anyone sees.
+          this is prefilled with a starting reference (1 XLM per 1,000
+          LAPSE), not a quote from anyone. Change it to whatever you are
+          willing to trade at; whatever you pick is the first real quote
+          anyone sees.
         {% endif %}
       </div>
     </div>

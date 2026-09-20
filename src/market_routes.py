@@ -330,6 +330,7 @@ def register(app, node, csrf_token):
             xlm_overcommitted=xlm_committed > xlm_spendable,
             xlm_locked=_locked(xlm_addr),
             xlm_usd=xlm_mod.get_xlm_usd(),
+            display_price=ticker or market_mod.DEFAULT_PRICE_STROOPS_PER_LAPSE,
             suggested_price=_suggested_price(best, ticker),
             my_orders=_my_orders(node, height),
             pending_maker_requests=pending_maker_requests(),
@@ -884,12 +885,14 @@ def _suggested_price(best, ticker=None):
 
     Top of book wins when there is one, since it is a live, standing
     offer. An empty book falls back to this node's own ticker (see
-    market.ticker_price) rather than leaving a new poster with nothing:
-    a stale trade price is still a better starting point than a blank
-    field, as long as the page says which one it is (see market.html).
+    market.ticker_price), and a market with neither falls back further
+    to market.DEFAULT_PRICE_STROOPS_PER_LAPSE, so a first-ever order
+    still starts from a real number rather than a blank field, as long
+    as the page says plainly which one it is (see market.html).
     """
-    price = best["best_sell"] or best["best_buy"] or ticker
-    return fmt_xlm(price) if price else ""
+    price = (best["best_sell"] or best["best_buy"] or ticker
+            or market_mod.DEFAULT_PRICE_STROOPS_PER_LAPSE)
+    return fmt_xlm(price)
 
 
 def _account_exists(addr):
