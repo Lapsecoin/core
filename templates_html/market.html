@@ -65,9 +65,15 @@
 <h2 style="margin-bottom:.3rem">Order book</h2>
 {% if not depth.sells and not depth.buys %}
   <p style="color:var(--ink-dim); font-style:italic; margin-top:0">
-    Nobody has posted an order yet. On a new coin that is the normal
-    starting point, not a fault: the first order posted is also the
-    first price this market has ever had.
+    {% if ticker %}
+      Nothing resting right now: every order has been filled, cancelled
+      or expired. Trades have still happened here before (see "Last
+      traded" above); post an order to be the next one waiting.
+    {% else %}
+      Nobody has posted an order yet. On a new coin that is the normal
+      starting point, not a fault: the first order posted is also the
+      first price this market has ever had.
+    {% endif %}
   </p>
 {% else %}
 <div class="book">
