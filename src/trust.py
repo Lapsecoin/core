@@ -379,7 +379,8 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0,
     net_abandoned = net_count = net_lapse = 0
     if node is not None:
         _verify_addr_receipts(node, addr, current_height)
-        net_abandoned, net_by_counterparty, net_last_completed = \
+        (net_abandoned, net_by_counterparty, net_last_completed,
+         net_last_abandoned_at, net_last_abandon_session) = \
             _network_tally_by_counterparty(addr)
         for peer_lapse, peer_count in net_by_counterparty.values():
             per_counterparty.append((peer_lapse, peer_count))
@@ -391,6 +392,14 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0,
         completed_count += net_count
         completed_lapse += net_lapse
         last_completed_at = max(last_completed_at, net_last_completed)
+        # A self-query's own local_tally never has anything here (see
+        # _network_tally_by_counterparty's own docstring for why), so
+        # whichever of the two is more recent is never a real conflict
+        # between two independent verdicts, only "which source actually
+        # has data for this address".
+        if net_last_abandoned_at >= last_abandoned_at:
+            last_abandoned_at = net_last_abandoned_at
+            last_abandon_session = net_last_abandon_session
 
     history = history_component(per_counterparty, last_completed_at, now=now)
     stake = stake_component(address_age_blocks, balance_ticks, blocks_since_last_topup)
@@ -419,12 +428,22 @@ def get_detail(addr, address_age_blocks=0, balance_ticks=0,
 
 
 def _network_tally_by_counterparty(addr):
-    """(abandoned_count, {counterparty_addr: (ticks, count)}, last_completed_at)
-    from already-verified step receipts naming addr, excluding any
-    session this node already has a local Trade row for (see
-    local_tally: those are already counted above, and counting them
-    again from a receipt this node itself likely emitted would double
-    them).
+    """(abandoned_count, {counterparty_addr: (ticks, count)}, last_completed_at,
+    last_abandoned_at, last_abandon_session) from already-verified step
+    receipts naming addr, excluding any session this node already has a
+    local Trade row for (see local_tally: those are already counted
+    above, and counting them again from a receipt this node itself
+    likely emitted would double them).
+
+    last_abandoned_at/last_abandon_session exist so a node asking about
+    its OWN address (see market_routes.trades' my_standing, and the
+    Trades page's own alert) can name the specific session a verified
+    missed claim concerns, not just report a bare count: local_tally's
+    own fields of the same name only ever cover trades this node ran
+    itself, and a self-query's Trade rows never have peer_lapse_addr
+    equal to this node's own address, so for a self-query essentially
+    all of the real signal - including which session it was - comes
+    from here.
 
     Grouped by counterparty rather than pooled into one flat total,
     because that grouping is the entire input history_component's
@@ -452,6 +471,8 @@ def _network_tally_by_counterparty(addr):
                       Trade.select(Trade.session_id).where(Trade.peer_lapse_addr == addr)}
 
     abandoned = 0
+    last_abandoned_at = 0.0
+    last_abandon_session = ""
     # session_id -> [counterparty, ticks, last_completed_at]: accumulated
     # per session first, since a single trade can carry several
     # "settled" receipts (one per step's LAPSE leg), all naming the same
@@ -463,6 +484,9 @@ def _network_tally_by_counterparty(addr):
             continue
         if r.outcome == "missed":
             abandoned += 1
+            if r.received_at >= last_abandoned_at:
+                last_abandoned_at = r.received_at
+                last_abandon_session = r.session_id
             continue
         if r.outcome != "settled" or r.asset != "lapse":
             continue
@@ -477,7 +501,8 @@ def _network_tally_by_counterparty(addr):
         peer_ticks, peer_count = by_counterparty.get(counterparty, (0, 0))
         by_counterparty[counterparty] = (peer_ticks + ticks, peer_count + 1)
         last_completed_at = max(last_completed_at, received_at)
-    return abandoned, by_counterparty, last_completed_at
+    return (abandoned, by_counterparty, last_completed_at,
+           last_abandoned_at, last_abandon_session)
 
 
 

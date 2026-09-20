@@ -329,8 +329,12 @@ def plan(lapse_total, xlm_total, trust_score,
 # Who moves first
 # ---------------------------------------------------------------------------
 
-def opening_mover(my_trust_of_peer, peer_trust_of_me, my_addr=None, peer_addr=None):
+def opening_mover(my_trust_of_peer, peer_trust_of_me, my_addr, peer_addr):
     """Which side sends first on step one: True if this node does.
+    Always returns a definite bool - never None - because both sides of
+    a trade must agree on this before a single stroop moves, and an
+    ambiguous answer that pushes the decision back onto the caller is
+    exactly the shape of bug that lets two call sites quietly disagree.
 
     The less-established side opens. They are the one asking to be
     trusted, so they are the one who demonstrates it, and the probe step
@@ -354,16 +358,20 @@ def opening_mover(my_trust_of_peer, peer_trust_of_me, my_addr=None, peer_addr=No
     negotiating), which is fine precisely because the case has been
     narrowed down to one where it barely matters which way it falls.
 
-    my_addr/peer_addr are optional only so every existing direct caller
-    (tests included) that only cares about the score comparison keeps
-    working; a tie with either omitted still needs the caller to break
-    it, which is why None remains a possible return in that case only.
+    my_addr/peer_addr are required, not optional: this decides who pays
+    first in a real trade, and a caller that reaches this without both
+    addresses to hand has no business calling it at all. An earlier
+    version made them optional and returned None on a tie when either
+    was omitted, "for callers that only care about the score
+    comparison" - a distinction with no real caller behind it (every
+    live call site in swap_engine.py always has both addresses on hand
+    before it ever needs to ask this), and exactly the kind of ambiguous
+    fallback that invites a future call site to skip the handshake by
+    accident. Removed rather than kept "just in case".
     """
     if my_trust_of_peer != peer_trust_of_me:
         return my_trust_of_peer > peer_trust_of_me
-    if my_addr is not None and peer_addr is not None:
-        return my_addr < peer_addr
-    return None
+    return my_addr < peer_addr
 
 
 def i_move_first(step_n, i_open):

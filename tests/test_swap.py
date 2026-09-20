@@ -213,15 +213,28 @@ class TestFirstMover:
         # The peer is well established (score 5) and this node barely is
         # (score 1), so this node is the less established side here, and
         # opening_mover says True: this node opens.
-        assert swap.opening_mover(my_trust_of_peer=5.0, peer_trust_of_me=1.0) is True
+        assert swap.opening_mover(my_trust_of_peer=5.0, peer_trust_of_me=1.0,
+                                  my_addr="me.addr", peer_addr="peer.addr") is True
 
     def test_more_established_side_does_not_open(self):
         # Reversed: this node is the well-established one now, so it does
         # not open, the peer does.
-        assert swap.opening_mover(my_trust_of_peer=1.0, peer_trust_of_me=5.0) is False
+        assert swap.opening_mover(my_trust_of_peer=1.0, peer_trust_of_me=5.0,
+                                  my_addr="me.addr", peer_addr="peer.addr") is False
 
-    def test_even_match_defers_to_the_caller(self):
-        assert swap.opening_mover(0.0, 0.0) is None
+    def test_addresses_are_required_not_optional(self):
+        """Both addresses used to be optional, returning None on a tie
+        with either omitted, 'for callers that only care about the
+        score comparison'. No real call site ever needed that: every
+        live caller (swap_engine.py) always has both addresses on hand
+        before it asks who opens. Made required outright so a future
+        call site that forgets to pass one fails loudly at the call,
+        rather than silently getting an ambiguous None back that lets
+        two sides of a trade disagree about who moves first."""
+        with pytest.raises(TypeError):
+            swap.opening_mover(0.0, 0.0)
+        with pytest.raises(TypeError):
+            swap.opening_mover(0.0, 0.0, "a.addr")
 
     def test_even_match_breaks_by_address_when_given(self):
         """A tie no longer defaults to a fixed role ('taker always

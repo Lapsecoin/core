@@ -569,13 +569,15 @@ class TestMutualScores:
             "taker", height=AGED,
             heights_by_addr={"peer": [(0, "h")], "taker": [(0, "h")]},
             balances={"peer": FUNDED, "taker": FUNDED // 10})
-        taker_i_open = swap.opening_mover(*trust.mutual_scores(taker_node, "peer"))
+        taker_i_open = swap.opening_mover(
+            *trust.mutual_scores(taker_node, "peer"), "taker", "peer")
 
         maker_node = FakeNode(
             "peer", height=AGED,
             heights_by_addr={"taker": [(0, "h")], "peer": [(0, "h")]},
             balances={"taker": FUNDED // 10, "peer": FUNDED})
-        maker_i_open = swap.opening_mover(*trust.mutual_scores(maker_node, "taker"))
+        maker_i_open = swap.opening_mover(
+            *trust.mutual_scores(maker_node, "taker"), "peer", "taker")
 
         assert taker_i_open is True    # taker is the poorer, less established side
         assert maker_i_open is False   # and the maker correctly agrees it is not maker
@@ -612,18 +614,18 @@ def make_receipt(receipt_id, addr_a, addr_b, session_id, outcome="settled",
 class TestNetworkTally:
     def test_unverified_receipts_are_not_counted(self):
         make_receipt("r1", "a", "b", "s1", verified=None)
-        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
         assert (abandoned, by_peer) == (0, {})
 
     def test_verified_settled_receipt_counts_toward_completed(self):
         make_receipt("r1", "a", "b", "s1", outcome="settled", amount=5 * LAPSE)
-        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
         assert abandoned == 0
         assert by_peer == {"a": (5 * LAPSE, 1)}
 
     def test_verified_missed_receipt_counts_as_abandonment(self):
         make_receipt("r1", "a", "b", "s1", outcome="missed")
-        abandoned, _by_peer, _last = trust._network_tally_by_counterparty("b")
+        abandoned, _by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
         assert abandoned == 1
 
     def test_session_already_known_locally_is_not_double_counted(self):
@@ -634,7 +636,7 @@ class TestNetworkTally:
             increment_count=2, confirm_depth=2, status="completed",
             created_at=time.time(), updated_at=time.time())
         make_receipt("r1", "a", "b", "s1", outcome="settled")
-        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
         assert (abandoned, by_peer) == (0, {})
 
     def test_two_sessions_with_the_same_counterparty_are_grouped(self):
@@ -645,7 +647,7 @@ class TestNetworkTally:
         entries - for diversity-weighting to mean anything."""
         make_receipt("r1", "a", "b", "s1", outcome="settled", amount=3 * LAPSE)
         make_receipt("r2", "a", "b", "s2", outcome="settled", amount=4 * LAPSE)
-        abandoned, by_peer, _last = trust._network_tally_by_counterparty("b")
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
         assert abandoned == 0
         assert by_peer == {"a": (7 * LAPSE, 2)}
 
@@ -668,6 +670,24 @@ class TestNetworkTally:
         assert detail["network_abandoned_count"] == 1
         assert detail["score"] == 0.0
         assert detail["known"] is True
+
+    def test_network_sourced_abandonment_names_its_own_session(self):
+        """local_tally's last_abandon_session only ever covers a trade
+        this node ran itself, and a self-query's own Trade rows never
+        have peer_lapse_addr equal to this node's own address (see
+        _network_tally_by_counterparty's docstring) - so for a node
+        checking its OWN standing, essentially all the real signal, the
+        specific session included, has to come from here. Without this,
+        the Trades page's own alert ("your trust just dropped, and
+        here's the session") would have a bare count and nothing to
+        actually point at."""
+        make_receipt("r1", "b", "a", "session-xyz", outcome="missed")
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        row.verified_at_height = 100
+        row.save()
+        detail = trust.get_detail("b", node=FakeNode("me", height=100))
+        assert detail["last_abandon_session"] == "session-xyz"
+        assert detail["last_abandoned_at"] > 0.0
 
     def test_network_and_local_history_add_together(self):
         make_trade("b", TRADE_COMPLETED, lapse_total=6 * LAPSE)

@@ -10,6 +10,23 @@
 {% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 
+{% if my_standing.abandoned_count %}
+  <div class="alert alert-err">
+    <strong>Your standing has a verified missed-payment claim against it:</strong>
+    a step you owed was still unpaid an hour past its deadline
+    {% if my_standing.last_abandoned_at %}, most recently {{ fmt_duration(now - my_standing.last_abandoned_at) }} ago{% endif %}
+    {% if my_standing.last_abandon_session %} (session <span class="hash-short">{{ my_standing.last_abandon_session[:16] }}…</span>, see below){% endif %}.
+    This is independently checked against the chain, not a bare accusation from the other side -
+    see "People you have traded with" below for the exact record.
+    {% if worker.state == 'ok' %}
+      Your wallet is unlocked and the worker is running, so if that step can now be paid it already has been or will be on the next pass;
+      this clears on its own the moment the missing leg settles.
+    {% else %}
+      Your worker is not currently able to send ({{ worker.message }}) - fix that and any payable step goes out automatically, nothing to do by hand.
+    {% endif %}
+  </div>
+{% endif %}
+
 {% if worker.state in ('stopped', 'locked', 'paused') %}
   <div class="alert alert-err">
     <strong>{{ {"stopped": "Worker stopped", "locked": "Wallet locked",

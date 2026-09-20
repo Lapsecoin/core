@@ -685,6 +685,7 @@ class Engine:
             inc.out_state = LEG_SUBMITTED
             inc.out_settled_at = 0.0
             inc.save()
+            self._unpropagate_deadline(trade, inc)
             return
         self._record_outbound(inc, inc.out_tx_hash, depth, required)
 
@@ -707,6 +708,7 @@ class Engine:
                 inc.in_state = LEG_PENDING
                 inc.in_settled_at = 0.0
                 inc.save()
+                self._unpropagate_deadline(trade, inc)
             return
 
         found = adapter.find_payment(from_addr, to_addr, memo, amount)
@@ -718,6 +720,38 @@ class Engine:
             inc.in_state = LEG_SETTLED
             inc.in_settled_at = time.time()
         inc.save()
+
+    def _unpropagate_deadline(self, trade, inc):
+        """Undo _propagate_deadline's effect when a reorg takes back a
+        step this node had already marked fully complete.
+
+        Without this, the next step's deadline_height stays anchored to
+        a completed_height that no longer holds: this step will likely
+        re-settle at a LATER height once the reorg resolves (time only
+        runs one way), so leaving the old, earlier completed_height in
+        place would hand the counterparty an effectively shorter grace
+        period on the next step than the design intends - not a
+        directly exploitable framing (is_delinquent's own margin is
+        generous specifically to absorb this kind of noise), but a real
+        source of an unfair deadline that a careful audit should not
+        wave past.
+
+        Only clears the next step's deadline_height when it still
+        exactly matches what THIS step's own (now-stale) completed_height
+        would have produced, so a deadline the next step earned some
+        other way is never clobbered by coincidence.
+        """
+        if not inc.completed_height:
+            return
+        stale_height = inc.completed_height
+        inc.completed_height = 0
+        inc.save()
+        nxt = Increment.get_or_none(Increment.session_id == trade.session_id,
+                                    Increment.n == inc.n + 1)
+        if nxt is not None and nxt.deadline_height == deadline_height(
+                stale_height, trade.confirm_depth):
+            nxt.deadline_height = 0
+            nxt.save()
 
     # -- driving -------------------------------------------------------
 

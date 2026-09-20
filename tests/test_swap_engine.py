@@ -747,6 +747,37 @@ class TestReorg:
         inc = Increment.get(Increment.id == inc.id)
         assert inc.in_state == LEG_PENDING
 
+    def test_a_reorg_on_a_completed_step_resets_the_next_steps_deadline(self):
+        """A completed step's completed_height is what the NEXT step's
+        deadline_height gets anchored to (see _propagate_deadline). If a
+        reorg later takes that step's leg back, leaving the stale
+        completed_height in place would understate the next step's real
+        grace period once it re-settles: a step can only re-settle at a
+        LATER height than before (time only runs one way), never an
+        earlier one, so an unrefreshed deadline built from the old,
+        too-early height would make the counterparty look overdue on
+        the next step sooner than is actually fair."""
+        engine, lapse, _xlm = make_engine()
+        trade = make_trade()
+        first = Increment.get(Increment.id == f"{trade.session_id}:1")
+        engine.advance(trade)                # we send step 1
+        settle_peer_leg(trade, first, engine)
+        engine.advance(trade)                # both legs settle; step 2's deadline is set
+
+        first = Increment.get(Increment.id == first.id)
+        second = Increment.get(Increment.id == f"{trade.session_id}:2")
+        assert first.completed_height
+        assert second.deadline_height == swap_engine.deadline_height(
+            first.completed_height, trade.confirm_depth)
+
+        lapse.payments.clear()               # the reorg takes step 1's leg back
+        engine.check_outbound(trade, first)
+
+        first = Increment.get(Increment.id == first.id)
+        second = Increment.get(Increment.id == second.id)
+        assert first.completed_height == 0
+        assert second.deadline_height == 0
+
 
 class TestUnreachableChain:
     def test_unreachable_does_not_look_like_failure(self):
