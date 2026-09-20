@@ -153,15 +153,26 @@ SWAP_STRANGER_CAP_STROOPS = Setting(
          "walks away. Lower is safer and splits a trade into more steps.",
 )
 
-# Whether this node runs swaps at all. Off by default: a node that only
-# wants to follow the chain should not be reaching out to Horizon or
-# holding a second wallet, and turning this on is a deliberate act.
+# Whether this node runs swaps at all. This does not itself create a
+# wallet or contact Horizon: a Stellar trading wallet is only ever made
+# by an explicit, passphrase-gated action on the Market page
+# (market_routes._create_wallet), and nothing here touches Horizon until
+# that wallet exists and a trade actually needs it. What this switch
+# actually gates is posting your own orders, answering fill requests,
+# and running the swap worker's trade loop; a node with it off still
+# relays other people's orders and receipts exactly as before, it just
+# never becomes a party to a trade itself. On by default: turning it off
+# is the deliberate act, for someone who wants a LapseCoin node with the
+# market surface switched off entirely.
 SWAP_ENABLED = Setting(
-    "swap_enabled", False, bool,
+    "swap_enabled", True, bool,
     label="Enable peer-to-peer swaps",
-    help="Trade LAPSE for XLM directly with peers. Off by default. When "
-         "off this node still relays other people's orders but posts "
-         "none, holds no Stellar wallet and contacts no Stellar service.",
+    help="Trade LAPSE for XLM directly with peers. On by default; turning "
+         "it off still relays other people's orders (like any other "
+         "gossip) but posts none of your own, answers no fill requests, "
+         "and runs no trade. No Stellar wallet is created and nothing "
+         "contacts Horizon either way until you explicitly create one on "
+         "the Market page.",
 )
 
 # Whether a fill request against one of this node's own orders is ever
