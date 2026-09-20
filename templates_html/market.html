@@ -4,18 +4,6 @@
 {% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 
-{% if not swap_enabled %}
-  <div class="card">
-    <div class="card-title">Swaps are off</div>
-    <p style="font-size:.92rem">
-      Trading LAPSE for XLM directly with peers is disabled on this node.
-      Turn it on in <a href="/settings">Settings</a>. While it is off this
-      node still relays other people's orders, but posts none and contacts
-      no Stellar service.
-    </p>
-  </div>
-{% else %}
-
 {# ---------------------------------------------------------------- price #}
 <div class="stats">
   <div class="stat">
@@ -276,19 +264,13 @@
 {# --------------------------------------------------- pending fill requests #}
 {% if pending_maker_requests %}
 <h2>Requests waiting on your decision</h2>
-{% if auto_accept_fills %}
 <p style="font-size:.85rem; color:var(--ink-dim)">
-  Auto-accept is on, so most requests are answered the moment they arrive;
-  anything still listed here could not be, for the reason shown below (a
-  locked wallet, funds already committed elsewhere, a step larger than your
-  current exposure cap, or a counterparty below your trust floor).
+  Most requests are answered the moment they arrive; anything still listed
+  here could not be, for the reason shown below (a locked wallet, funds
+  already committed elsewhere, a step larger than your current exposure
+  cap, or a counterparty below your auto-accept trust floor, set in
+  <a href="/settings">Settings</a>).
 </p>
-{% else %}
-<p style="font-size:.85rem; color:var(--ink-dim)">
-  Auto-accept is off, so nothing here starts a trade until you say so. Turn
-  it back on in Settings if you would rather these be answered as they arrive.
-</p>
-{% endif %}
 <div class="table-wrap">
 <table class="stacked">
   <thead>
@@ -322,10 +304,8 @@
           <span style="color:var(--loss)" title="{{ r.fit_note }}">Over your exposure cap</span>
         {% elif r.below_trust_floor %}
           <span style="color:var(--ink-dim)">Below your auto-accept trust floor</span>
-        {% elif auto_accept_fills %}
-          <span style="color:var(--ink-dim)">Could not fund this leg right now</span>
         {% else %}
-          <span style="color:var(--gain)">Would auto-accept; auto-accept is off</span>
+          <span style="color:var(--ink-dim)">Could not fund this leg right now</span>
         {% endif %}
       </td>
       <td data-label="">
@@ -510,5 +490,4 @@
 })();
 </script>
 
-{% endif %}
 {% endblock %}

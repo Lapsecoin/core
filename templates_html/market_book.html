@@ -65,11 +65,7 @@
         {% if blocks_left > 0 %}~{{ fmt_duration(blocks_left * 120) }}{% else %}expired{% endif %}
       </td>
       <td data-label="">
-        {% if swap_enabled %}
-          <a class="btn-sm" href="/market/take/{{ e.order_id }}">{{ 'Buy' if side == 'sell' else 'Sell' }}</a>
-        {% else %}
-          <span class="stat-sub" title="Turn on swaps in Settings to trade">off</span>
-        {% endif %}
+        <a class="btn-sm" href="/market/take/{{ e.order_id }}">{{ 'Buy' if side == 'sell' else 'Sell' }}</a>
       </td>
     </tr>
     {% endfor %}

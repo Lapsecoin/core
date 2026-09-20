@@ -40,8 +40,8 @@ def fresh_db():
 
 
 class FakeSettings:
-    def __init__(self, enabled=True):
-        self.values = {settings_mod.SWAP_ENABLED.key: enabled}
+    def __init__(self):
+        self.values = {}
 
     def get(self, setting):
         return self.values.get(setting.key, setting.default)
@@ -51,8 +51,8 @@ class FakeSettings:
 
 
 class FakeNode:
-    def __init__(self, enabled=True, unlocked=True):
-        self.settings = FakeSettings(enabled)
+    def __init__(self, unlocked=True):
+        self.settings = FakeSettings()
         self._kek = b"k" * 32 if unlocked else None
         self.keyfile = "/nonexistent/node.key"
 
@@ -79,12 +79,6 @@ class Worker(swap_worker.SwapWorker):
 
 
 class TestGating:
-    def test_does_nothing_while_swaps_are_off(self):
-        w = Worker(FakeNode(enabled=False))
-        make_trade()
-        assert w.run_once() == 0
-        assert w.lapse.payments == []
-
     def test_does_nothing_while_locked(self):
         """A node that cannot sign must not send, and that is correct
         behaviour rather than an error worth reporting every pass."""
@@ -97,10 +91,6 @@ class TestGating:
         w = Worker(FakeNode(), seed=None)
         make_trade()
         assert w.run_once() == 0
-
-    def test_recover_is_a_no_op_while_swaps_are_off(self):
-        w = Worker(FakeNode(enabled=False))
-        assert w.recover() == 0
 
 
 class TestOrdering:
@@ -285,7 +275,7 @@ class TestDebounce:
     _run_one_iteration at a time, never via the real background thread."""
 
     def test_a_fast_pass_is_padded_up_to_the_floor(self, monkeypatch):
-        w = Worker(FakeNode(enabled=False), min_pass_interval=5.0,
+        w = Worker(FakeNode(), min_pass_interval=5.0,
                   backstop_seconds=0.01)
         slept = []
         monkeypatch.setattr(swap_worker.time, "sleep", lambda s: slept.append(s))
@@ -295,7 +285,7 @@ class TestDebounce:
 
     def test_a_pass_already_slower_than_the_floor_is_not_padded_further(
             self, monkeypatch):
-        w = Worker(FakeNode(enabled=False), min_pass_interval=0.01,
+        w = Worker(FakeNode(), min_pass_interval=0.01,
                   backstop_seconds=0.01)
         real_sleep = time.sleep
         w.run_once = lambda: real_sleep(0.05) or 0   # pretend this pass took a while
@@ -340,7 +330,6 @@ class TestStatus:
     def test_status_reports_the_gates(self):
         w = Worker(FakeNode())
         status = w.status()
-        assert status["enabled"] is True
         assert status["unlocked"] is True
 
     def test_status_shows_locked(self):
@@ -401,8 +390,8 @@ class DiscoveryFakeNode(FakeNode):
     """FakeNode plus the bits discover_trades and its pruning companions
     read: an address and a tip height."""
 
-    def __init__(self, enabled=True, unlocked=True, addr="maker.lapse", height=100):
-        super().__init__(enabled, unlocked)
+    def __init__(self, unlocked=True, addr="maker.lapse", height=100):
+        super().__init__(unlocked)
         self.addr = addr
         self.view = _View(height)
 
@@ -438,7 +427,7 @@ class TestDiscoveryWiring:
         assert node is w.node
         assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
         assert depth >= swap_engine.MIN_CONFIRM_DEPTH
-        assert kwargs["auto"] == settings_mod.SWAP_AUTO_ACCEPT_FILLS.default
+        assert kwargs["min_trust"] == settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST.default
 
     def test_response_checking_runs_with_the_right_arguments(
             self, tmp_path, monkeypatch):

@@ -166,9 +166,6 @@ class SwapWorker:
                 self.node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
                 swap_engine.MIN_CONFIRM_DEPTH))
 
-    def _enabled(self):
-        return self.node.settings.get(settings_mod.SWAP_ENABLED)
-
     # -- lifecycle -----------------------------------------------------
 
     def start(self):
@@ -239,8 +236,6 @@ class SwapWorker:
 
     def recover(self):
         """Rebuild every unfinished trade from the chains. Sends nothing."""
-        if not self._enabled():
-            return 0
         trade_storage.ensure_tables()
         corrected = swap_engine.reconcile_all(self._engine())
         if corrected:
@@ -286,8 +281,6 @@ class SwapWorker:
 
     def run_once(self):
         """One pass over every active trade. Returns how many were touched."""
-        if not self._enabled():
-            return 0
         if time.time() < self._unreachable_until:
             return 0
         self._maybe_backfill_market()
@@ -316,7 +309,6 @@ class SwapWorker:
                     self.node.settings.get(settings_mod.SWAP_STRANGER_CAP_STROOPS),
                     max(self.node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
                         swap_engine.MIN_CONFIRM_DEPTH),
-                    auto=self.node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_FILLS),
                     min_trust=self.node.settings.get(
                         settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST))
             except Exception:
@@ -389,7 +381,6 @@ class SwapWorker:
     def status(self):
         return {
             "running": self.running,
-            "enabled": self._enabled(),
             "unlocked": self._secrets()[0] is not None,
             "passes": self._passes,
             "paused_until": self._unreachable_until,

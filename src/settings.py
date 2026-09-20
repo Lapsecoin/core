@@ -153,66 +153,28 @@ SWAP_STRANGER_CAP_STROOPS = Setting(
          "walks away. Lower is safer and splits a trade into more steps.",
 )
 
-# Whether this node runs swaps at all. This does not itself create a
-# wallet or contact Horizon: a Stellar trading wallet is only ever made
-# by an explicit, passphrase-gated action on the Market page
-# (market_routes._create_wallet), and nothing here touches Horizon until
-# that wallet exists and a trade actually needs it. What this switch
-# actually gates is posting your own orders, answering fill requests,
-# and running the swap worker's trade loop; a node with it off still
-# relays other people's orders and receipts exactly as before, it just
-# never becomes a party to a trade itself. On by default: turning it off
-# is the deliberate act, for someone who wants a LapseCoin node with the
-# market surface switched off entirely.
-SWAP_ENABLED = Setting(
-    "swap_enabled", True, bool,
-    label="Enable peer-to-peer swaps",
-    help="Trade LAPSE for XLM directly with peers. On by default; turning "
-         "it off still relays other people's orders (like any other "
-         "gossip) but posts none of your own, answers no fill requests, "
-         "and runs no trade. No Stellar wallet is created and nothing "
-         "contacts Horizon either way until you explicitly create one on "
-         "the Market page.",
-)
-
-# Whether a fill request against one of this node's own orders is ever
-# accepted automatically, the moment it clears the trust-based exposure
-# cap (see swap.plan), rather than always left pending on the Market
-# page for a person to accept or decline by hand.
-#
-# On by default: the exposure cap is what actually bounds the loss on a
-# bad decision (see swap.py's module docstring), not this switch, so
-# auto-accept is not a weaker safety mode, only a faster one. Someone
-# who wants to look at every single request before a stroop moves, not
-# just find out afterward from the Trades page, turns this off; nothing
-# about what a request may cost changes either way. SWAP_AUTO_ACCEPT_
-# MIN_TRUST below is the finer control most people actually want: off
-# for everyone is the blunt version of "trust nobody automatically",
-# raising the floor there is the graduated one.
-SWAP_AUTO_ACCEPT_FILLS = Setting(
-    "swap_auto_accept_fills", True, bool,
-    label="Auto-accept fill requests",
-    help="Accept a fill against your own order the moment it clears "
-         "your exposure cap and this node's trust floor (see below), "
-         "without waiting for you to look at it. Turn this off to "
-         "review every request yourself on the Market page (with the "
-         "same trust detail either way) before anything is agreed to.",
-)
-
 # The trust score (trust.get_detail's "score") a counterparty must have
 # with this node before a fill request against your own order auto-
-# accepts, when SWAP_AUTO_ACCEPT_FILLS is on. Below it, the request is
-# not declined, it sits on the Market page exactly like it would with
-# auto-accept off, waiting for a person to accept or decline it by hand.
+# accepts. Below it, the request is not declined, it sits on the Market
+# page waiting for a person to accept or decline it by hand.
+#
+# There used to be a second switch here, a plain on/off for auto-accept
+# itself. It was redundant with this one: a trust score can never go
+# negative, so a floor of zero already means "accept anyone" and is the
+# whole of what the switch's "on" position did. Its "off" position (never
+# auto-accept, review everything by hand) has no finite score below it,
+# but this setting still expresses it directly: enter inf and no
+# counterparty, however trusted, will ever clear it, so every request
+# waits for a person on the Market page. One number now covers the
+# entire range from "trust nobody automatically" to "trust everybody
+# automatically" that used to need two settings to say.
 #
 # Zero, the default, auto-accepts anyone, including a total stranger
-# (score 0), same as this node has always done: the exposure cap already
-# bounds what a stranger can cost you in one step, so nothing unsafe
-# changes by leaving this at zero. Raising it is for someone who wants
-# automatic trading to stay within counterparties who have already
-# earned some standing, and to see everyone else before committing,
-# without having to turn auto-accept off altogether and review every
-# single request, established counterparties included.
+# (score 0): the exposure cap already bounds what a stranger can cost
+# you in one step, so nothing unsafe changes by leaving this at zero.
+# Raising it keeps automatic trading within counterparties who have
+# already earned some standing while everyone else waits for a person;
+# inf is the limit of that, everyone waits for a person.
 SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
     "swap_auto_accept_min_trust", 0.0, float, minimum=0.0,
     label="Minimum trust to auto-accept",
@@ -221,7 +183,9 @@ SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
          "anyone; your exposure cap, not this number, is what actually "
          "limits what a stranger can cost you. Raise it to auto-trade "
          "only with counterparties who already have some history, and "
-         "review everyone else by hand on the Market page.",
+         "review everyone else by hand on the Market page. Enter inf to "
+         "review every single request yourself, with the same trust "
+         "detail either way.",
 )
 
 # Two settings used to live here alongside this one: a switch to advertise
@@ -232,9 +196,8 @@ SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
 # Node._handle_inbound_alive), so neither has anything left to do: there
 # is no advertised address to make private, and no second key to hold the
 # proceeds.
-ALL = [DRAW_WINDOW_SECONDS, SWAP_ENABLED, SWAP_CONFIRM_DEPTH,
-       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_FILLS,
-       SWAP_AUTO_ACCEPT_MIN_TRUST]
+ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH,
+       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_MIN_TRUST]
 
 
 # How long a value read from storage is reused before going back to the

@@ -1362,12 +1362,12 @@ class TestAutoAcceptTrustFloor:
 
 
 class TestManualFillDecisions:
-    """settings.SWAP_AUTO_ACCEPT_FILLS off: answer_fill_requests leaves
-    every live request pending instead of deciding it, and
-    decide_fill_request is the one-at-a-time counterpart a person clicks
-    from the Market page."""
+    """min_trust=inf: answer_fill_requests leaves every live request
+    pending instead of deciding it (no counterparty ever clears an
+    infinite floor), and decide_fill_request is the one-at-a-time
+    counterpart a person clicks from the Market page."""
 
-    def test_auto_false_answers_nothing(self, tmp_path):
+    def test_an_infinite_floor_answers_nothing(self, tmp_path):
         node = FakeDiscoveryNode(tmp_path, balances={})
         make_order(direction="sell", maker_lapse=node.addr)
         req = make_request()
@@ -1375,7 +1375,7 @@ class TestManualFillDecisions:
         engine.lapse.balances[node.addr] = req.lapse_total
 
         assert swap_engine.answer_fill_requests(
-            engine, node, "GMAKER", 5 * XLM, 2, auto=False) == 0
+            engine, node, "GMAKER", 5 * XLM, 2, min_trust=float("inf")) == 0
         assert Trade.select().count() == 0
         assert node.publish_fill_response_calls == []
 

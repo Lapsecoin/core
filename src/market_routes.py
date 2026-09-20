@@ -1,7 +1,7 @@
 """The Market and Trades pages.
 
-Kept out of api.py because api.py is already long and this is a separable
-feature: a node with swaps turned off never reaches any of it.
+Kept out of api.py because api.py is already long and this is a
+separable feature on its own.
 
 The pages are written to read as buying and selling. The increment
 machinery underneath is the safety property, not the subject, so it
@@ -153,9 +153,6 @@ def register(app, node, csrf_token):
     def xlm_keyfile():
         return xlm_keyfile_path(node)
 
-    def swaps_on():
-        return node.settings.get(settings_mod.SWAP_ENABLED)
-
     def confirm_depth():
         return max(node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
                    swap_engine.MIN_CONFIRM_DEPTH)
@@ -189,8 +186,7 @@ def register(app, node, csrf_token):
         not yet been answered, each with the same trust detail and cap
         check the automatic decision (swap_engine._answer_one) would
         use, so accepting or declining by hand is as informed as
-        auto-accept is. Shown regardless of SWAP_AUTO_ACCEPT_FILLS: even
-        in auto mode a request can be stuck here for any of several
+        auto-accept is. A request can be stuck here for any of several
         reasons (a locked wallet, an unfundable leg, a step over the
         exposure cap, or a counterparty below SWAP_AUTO_ACCEPT_MIN_TRUST),
         and a maker deserves to see which one rather than silence.
@@ -212,7 +208,7 @@ def register(app, node, csrf_token):
                     fits, fit_note = True, "fits your current exposure cap"
                 except swap_mod.TradeTooLarge as e:
                     fits, fit_note = False, str(e)
-                below_trust_floor = min_trust > 0 and detail["score"] < min_trust
+                below_trust_floor = detail["score"] < min_trust
                 rows.append({
                     "request_id": req.request_id,
                     "order_id": order_row.order_id,
@@ -279,7 +275,7 @@ def register(app, node, csrf_token):
         height = node.view.height
         xlm_addr = xlm_mod.load_public_key(xlm_keyfile())
 
-        if request.method == "POST" and swaps_on():
+        if request.method == "POST":
             if not csrf_ok():
                 alert_err = "That page was stale. Reload and try again."
             else:
@@ -321,7 +317,6 @@ def register(app, node, csrf_token):
 
         return render_template(
             "market.html", title="Market",
-            swap_enabled=swaps_on(),
             alert_ok=alert_ok, alert_err=alert_err,
             depth=depth, best=best, ticker=ticker,
             lapse_addr=node.addr,
@@ -337,20 +332,18 @@ def register(app, node, csrf_token):
             xlm_usd=xlm_mod.get_xlm_usd(),
             suggested_price=_suggested_price(best, ticker),
             my_orders=_my_orders(node, height),
-            pending_maker_requests=pending_maker_requests() if swaps_on() else [],
-            auto_accept_fills=node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_FILLS),
+            pending_maker_requests=pending_maker_requests(),
             csrf_token=csrf_token)
 
     # -- The full order book --------------------------------------------
 
     @app.route("/market/book")
     def market_book():
-        """The whole book, one side at a time: paged and sortable,
-        unlike /market's own compact top-of-book preview. Viewable
-        whether or not swaps are on (relaying an order does not depend
-        on this node trading itself); only the Take links need swaps on,
-        and market_take already redirects back to /market if they are
-        not.
+        """The whole book, one side at a time: paged and sortable, unlike
+        /market's own compact top-of-book preview. Always excludes this
+        node's own orders, same as /market's preview: nobody needs to
+        take their own order, and orders_by_maker (the Market page's
+        "Your open orders" table) is where a maker manages those.
         """
         height = node.view.height
         side = request.args.get("side", "sell")
@@ -365,14 +358,13 @@ def register(app, node, csrf_token):
             page_num = 1
         page_size = market_mod.BOOK_PAGE_SIZE
         rows, total = market_mod.list_orders(
-            height, side, exclude_maker=node.addr if swaps_on() else None,
+            height, side, exclude_maker=node.addr,
             sort=sort, offset=(page_num - 1) * page_size, limit=page_size)
         last_page = max((total + page_size - 1) // page_size, 1)
         if page_num > last_page:
             page_num = last_page
         return render_template(
-            "market_book.html", title="Order book",
-            swap_enabled=swaps_on(), height=height,
+            "market_book.html", title="Order book", height=height,
             side=side, sort=sort, rows=rows, total=total,
             page=page_num, last_page=last_page, page_size=page_size)
 
@@ -380,8 +372,6 @@ def register(app, node, csrf_token):
 
     @app.route("/market/take/<order_id>", methods=["GET", "POST"])
     def market_take(order_id):
-        if not swaps_on():
-            return redirect("/market")
         row = market_mod.get_order(order_id)
         if row is None:
             return render_template("error.html", title="Gone",
@@ -714,10 +704,10 @@ def _pending_requests(node):
     here: those two lists serve different questions (mine, waiting on
     somebody else vs. somebody else's, waiting on me) and a person
     looking at either page is asking one or the other, never both at
-    once. With settings.SWAP_AUTO_ACCEPT_FILLS on, most of a maker's
-    requests never sit long enough to be worth a list; with it off, or
-    when one is stuck (a locked wallet, a step over the exposure cap),
-    that other list is exactly where a click belongs.
+    once. At the default trust floor most of a maker's requests never
+    sit long enough to be worth a list; when one is stuck (a locked
+    wallet, a step over the exposure cap, or a counterparty below the
+    floor), that other list is exactly where a click belongs.
 
     A request that already became a trade (swap_engine.check_fill
     _responses opened it) is excluded here on purpose: it belongs in the
@@ -781,8 +771,6 @@ def _worker_view(node):
         return {"state": "off", "message": "", "last_error": "", "passes": 0}
 
     status = worker.status()
-    if not status["enabled"]:
-        return {"state": "off", "message": "", "last_error": "", "passes": 0}
     if not status["running"]:
         return {"state": "stopped",
                 "message": "The swap worker is not running. Restart this "

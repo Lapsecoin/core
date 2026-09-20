@@ -927,7 +927,7 @@ def reconcile_all(engine):
 # needs anything paid first to learn a session exists.
 
 def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
-                         auto=True, min_trust=0.0):
+                         min_trust=0.0):
     """Decide every live fill request against this node's own orders.
     Returns how many were accepted.
 
@@ -935,20 +935,17 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     locked wallet or an unreachable one just leaves requests unanswered
     for the next pass rather than risking a decision it cannot back.
 
-    auto=False (see settings.SWAP_AUTO_ACCEPT_FILLS) leaves every live
-    request exactly where it is instead: still pending, still visible on
-    the Market page with the same trust detail a click there would show,
-    answered only by decide_fill_request once a person actually clicks
-    Accept or Decline. min_trust (see settings.SWAP_AUTO_ACCEPT_MIN_TRUST)
-    does the same for one request at a time, based on this specific
-    counterparty's trust score rather than a blanket switch: a request
-    that would otherwise auto-accept is left pending instead if it falls
-    short (see _answer_one). Nothing about the decision itself changes
-    in any of these cases, they only decide who makes the call.
+    min_trust (see settings.SWAP_AUTO_ACCEPT_MIN_TRUST) leaves a request
+    pending instead of deciding it, one request at a time, when this
+    specific counterparty's trust score falls short (see _answer_one):
+    still visible on the Market page with the same trust detail a click
+    there would show, answered only by decide_fill_request once a person
+    actually clicks Accept or Decline. Passing inf leaves every live
+    request pending this way, which is how "review everything by hand"
+    is expressed here: there is no separate switch for it. Nothing about
+    the decision itself changes in either case, only who makes the call.
     """
     ensure_tables()
-    if not auto:
-        return 0
     # Not orders_by_maker: that hides a cancelled or expired order, and a
     # request that arrived (and was already accepted) before this node
     # cancelled its own order still deserves completion.
@@ -976,7 +973,7 @@ def decide_fill_request(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     """Answer exactly one fill request against one of this node's own
     orders, by request_id: the manual counterpart to answer_fill_requests,
     for a person clicking Accept or Decline on the Market page instead of
-    SWAP_AUTO_ACCEPT_FILLS deciding on its own.
+    the trust floor deciding on its own.
 
     accept=False never touches trust or the exposure cap; a maker may
     decline anyone for any reason (or none) and always could, auto-accept

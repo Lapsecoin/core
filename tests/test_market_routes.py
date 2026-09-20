@@ -34,7 +34,7 @@ from trade_storage import Increment, Order, Trade
 class FakeWorker:
     def __init__(self, **overrides):
         self._status = {
-            "running": True, "enabled": True, "unlocked": True,
+            "running": True, "unlocked": True,
             "passes": 3, "paused_until": 0.0, "last_error": "",
         }
         self._status.update(overrides)
@@ -52,10 +52,6 @@ class FakeNode:
 class TestWorkerView:
     def test_no_worker_attribute_reads_as_off(self):
         assert market_routes._worker_view(FakeNode())["state"] == "off"
-
-    def test_disabled_reads_as_off(self):
-        node = FakeNode(FakeWorker(enabled=False))
-        assert market_routes._worker_view(node)["state"] == "off"
 
     def test_not_running_is_reported(self):
         node = FakeNode(FakeWorker(running=False))
