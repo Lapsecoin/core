@@ -575,6 +575,17 @@ def _verify_addr_receipts(node, addr, current_height):
         # un-happen (barring a reorg, the same accepted, narrower gap
         # noted above). True is permanent for "settled" but not for
         # "missed", which is re-checked at most once per height.
+        #
+        # A "missed" claim this node's own clock cannot yet confirm has
+        # waited long enough is neither of those: verify_receipt_against_
+        # chain raises NotYetDue for it rather than returning False, and
+        # it is caught below the same way Unreachable is - left exactly
+        # as unresolved as it was, for the next lookup (once this node's
+        # own view of the chain has caught up, if it was merely behind)
+        # to make progress on. Conflating "too early to tell" with a
+        # real, permanent False used to bury a genuinely true claim
+        # forever if this node's chain view happened to be behind at
+        # the moment it first checked.
         if r.verified is False:
             continue
         if r.verified is True and (r.outcome != "missed"
@@ -582,7 +593,7 @@ def _verify_addr_receipts(node, addr, current_height):
             continue
         try:
             r.verified = swap_engine_mod.verify_receipt_against_chain(engine, r)
-        except swap_engine_mod.Unreachable:
+        except (swap_engine_mod.Unreachable, swap_engine_mod.NotYetDue):
             continue
         r.verified_at_height = current_height
         r.save()

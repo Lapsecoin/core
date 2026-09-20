@@ -110,6 +110,30 @@ class Unreachable(SwapError):
     """
 
 
+class NotYetDue(SwapError):
+    """A 'missed' claim whose margin has not elapsed by THIS node's own
+    clock yet: neither proven nor disproven, just too early to tell.
+
+    Distinct from Unreachable (the chain answered fine; there is simply
+    not enough elapsed height yet by this node's own view of it) and
+    distinct from a genuine False (the payment was found, which is a
+    permanent, provable contradiction that can never un-happen).
+    Conflating this with either would be wrong in a different way each
+    time: mistaking it for Unreachable would wrongly pause this node's
+    own swap worker as if a chain were down when it is not; mistaking
+    it for a real False (see verify_receipt_against_chain's caller,
+    trust._verify_addr_receipts, which never rechecks a False) would
+    permanently bury a claim that might still turn out true once enough
+    time genuinely passes and the payment still has not arrived - which
+    is exactly the case a node whose own chain view is temporarily
+    behind (syncing, just started up) would otherwise hit: it checks a
+    receipt sooner, by its own clock, than the reporter (who only ever
+    emits one after already waiting out the full margin on its own
+    chain view) did, and a permanent False from that accident of timing
+    would never be revisited even once this node catches up.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Chain adapters
 # ---------------------------------------------------------------------------
@@ -1612,6 +1636,13 @@ def verify_receipt_against_chain(engine, receipt):
     claim fails to find the tx_hash it names; a false "missed" claim is
     contradicted the moment the payment it says does not exist turns up
     in the very lookup that checks it.
+
+    Raises NotYetDue rather than returning False for a "missed" claim
+    this node's own clock cannot yet confirm has waited long enough:
+    that is a temporary "ask me again later", not the permanent,
+    provable contradiction a real False is (see NotYetDue's own
+    docstring for the bug this distinction fixes: the two used to be
+    the same return value, and the caller never rechecks a False).
     """
     adapter = engine.lapse if receipt.asset == "lapse" else engine.xlm
     found = adapter.find_payment(receipt.from_addr, receipt.to_addr,
@@ -1627,7 +1658,11 @@ def verify_receipt_against_chain(engine, receipt):
     # reporter's word for checked_at_height.
     if found:
         return False
-    return engine.lapse.height() >= receipt.deadline_height + ABANDON_AFTER_BLOCKS
+    if engine.lapse.height() < receipt.deadline_height + ABANDON_AFTER_BLOCKS:
+        raise NotYetDue(
+            f"deadline {receipt.deadline_height}: not enough height has "
+            "passed here yet")
+    return True
 
 
 def _open_taker_trade(node, req, resp, order_row, confirm_depth):

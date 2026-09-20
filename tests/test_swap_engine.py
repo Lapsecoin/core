@@ -1856,6 +1856,23 @@ class TestVerifyReceiptAgainstChain:
             deadline_height=1000)
         assert swap_engine.verify_receipt_against_chain(engine, receipt) is False
 
+    def test_not_yet_due_raises_rather_than_returning_false(self):
+        """Not enough height has passed on THIS node's own clock yet.
+        This is a different claim from 'the payment was found' (a real,
+        permanent False) and must not be reported the same way, or a
+        genuinely true claim checked too early (a syncing node, or one
+        that simply checks sooner than the reporter's own margin
+        implies) would be buried forever - see
+        trust._verify_addr_receipts, which never rechecks a False."""
+        engine, lapse, _xlm = self._engine()
+        lapse.current_height = 1010   # short of deadline_height + ABANDON_AFTER_BLOCKS
+        receipt = _FakeReceiptRow(
+            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
+            amount=500, memo="memo1", outcome="missed", tx_hash="",
+            deadline_height=1000)
+        with pytest.raises(swap_engine.NotYetDue):
+            swap_engine.verify_receipt_against_chain(engine, receipt)
+
     def test_unreachable_propagates_rather_than_guessing(self):
         engine, lapse, _xlm = self._engine()
         lapse.unreachable = True

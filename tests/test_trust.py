@@ -746,6 +746,36 @@ class TestVerifyAddrReceipts:
         row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
         assert row.verified is None
 
+    def test_not_yet_due_leaves_it_pending_rather_than_burying_it(self, monkeypatch):
+        """The bug this exists to catch: a 'missed' claim this node's
+        own clock cannot yet confirm has waited long enough used to come
+        back as a plain False from verify_receipt_against_chain,
+        indistinguishable from 'the payment was found' - and a False is
+        never rechecked (see test_a_caught_false_claim_is_never_
+        rechecked_either), so a claim that might still turn out true
+        later (a syncing node checking sooner, by its own clock, than
+        the reporter's margin implies) would be buried forever instead
+        of getting another look once real time actually passes."""
+        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=None)
+
+        def too_early(engine, r):
+            raise swap_engine.NotYetDue("not yet")
+
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain", too_early)
+        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
+        assert checked == 0
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        assert row.verified is None   # not False - still eligible for a later look
+
+        # And once enough time genuinely has, the very next lookup
+        # picks it back up rather than treating it as already settled.
+        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
+                            lambda engine, r: True)
+        checked = trust._verify_addr_receipts(object(), "b", current_height=200)
+        assert checked == 1
+        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
+        assert row.verified is True
+
     def test_already_verified_missed_claims_are_rechecked_at_a_new_height(self, monkeypatch):
         """Unlike settled, missed is not a monotonic fact: a late, honest
         payment can falsify it at any time after it was first true."""
