@@ -312,6 +312,113 @@ class TestStorage:
         assert "auto_match_margin_stroops" not in wire
         assert "auto_match_margin_stroops" not in market.SIGNED_FIELDS
 
+    def test_order_to_wire_still_verifies_against_the_makers_signature(self, maker):
+        """Regression test: store_order used to normalize a stored
+        max_fill of 0 ("uncapped", the default every order posted from
+        the Market page actually carries) into lapse_total, even though
+        every reader of the column already treats 0 as uncapped at the
+        point it's used (validate_fill, market_routes._open_trade,
+        swap_engine._send_auto_match). That normalization did nothing
+        useful except corrupt order_to_wire's reconstruction of the
+        order for anyone reading it back out of storage instead of off
+        the original gossiped item - a market backfill response is
+        exactly that path (see node._market_provider) - so the maker's
+        own genuine signature, computed at post time over max_fill=0,
+        silently failed to verify for every node that ever tried to
+        catch up on this order after missing the original gossip. This
+        is the one failure mode that must never recur: any order this
+        node stores must re-serialize into something its own maker's
+        signature still verifies against."""
+        order = signed_order(maker)   # max_fill defaults to 0, uncapped
+        assert order["max_fill"] == 0
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        wire = market.order_to_wire(row)
+        assert wire["max_fill"] == 0
+        assert market.verify_order(wire) is True
+
+
+class TestLegacyMaxFillRepair:
+    """A node already running before the store_order fix has existing
+    Order rows with max_fill wrongly overwritten from a genuinely signed
+    0 to lapse_total (see test_order_to_wire_still_verifies_against_the_
+    makers_signature for the bug itself). Pulling the fix alone does not
+    repair a row already written this way - only ensure_tables' one-time
+    pass (market._repair_legacy_max_fill) does, using the row's own
+    signature as proof of what was really signed rather than guessing."""
+
+    def _store_as_if_by_the_old_buggy_code(self, maker, **overrides):
+        order = signed_order(maker, **overrides)
+        assert order["max_fill"] == 0
+        row = market.Order.create(
+            order_id=order["order_id"], maker_lapse_addr=order["maker_lapse_addr"],
+            maker_xlm_addr=order["maker_xlm_addr"], direction=order["direction"],
+            lapse_total=order["lapse_total"],
+            price_stroops_per_lapse=order["price_stroops_per_lapse"],
+            min_fill=order["min_fill"],
+            max_fill=order["lapse_total"],   # the old bug's own normalization
+            expiry_block=order["expiry_block"], pubkey=order["pubkey"],
+            signature=order["signature"], created_at=0.0, received_at=0.0,
+            verified=True)
+        return order, row
+
+    def test_a_corrupted_row_is_repaired_on_the_next_ensure_tables(self, maker):
+        order, row = self._store_as_if_by_the_old_buggy_code(maker)
+        assert row.max_fill == order["lapse_total"]
+
+        market._legacy_max_fill_repaired = False   # force the pass to run again
+        market.ensure_tables()
+
+        fixed = market.get_order(order["order_id"])
+        assert fixed.max_fill == 0
+        assert market.verify_order(market.order_to_wire(fixed)) is True
+
+    def test_the_repair_pass_only_runs_once_per_process(self, maker):
+        """Not just an optimization: repeatedly re-verifying every
+        max_fill==lapse_total row on every single ensure_tables() call
+        (there are many, across nearly every function in this module)
+        would make an otherwise cheap, frequent call pay for a FALCON
+        verification per suspect order, every time."""
+        self._store_as_if_by_the_old_buggy_code(maker)
+        market._legacy_max_fill_repaired = False
+        calls = []
+        real = market.Order.select
+        def counting_select(*a, **kw):
+            calls.append(1)
+            return real(*a, **kw)
+        market.Order.select = staticmethod(counting_select)
+        try:
+            market.ensure_tables()
+            market.ensure_tables()
+            market.ensure_tables()
+        finally:
+            market.Order.select = real
+        # One select from inside the repair pass itself, plus whatever
+        # ensure_tables's own callers already issue elsewhere - the
+        # point is it does not grow with the number of calls.
+        after_first = len(calls)
+        assert after_first > 0
+        market.ensure_tables()
+        assert len(calls) == after_first
+
+    def test_a_genuine_explicit_cap_equal_to_the_whole_order_is_left_alone(self, maker):
+        """The one case this must never touch: a maker who deliberately
+        signed max_fill equal to lapse_total on purpose, not the bug.
+        Indistinguishable from the corrupted shape by the stored value
+        alone (both are max_fill == lapse_total) - only re-checking the
+        signature against 0 and finding it does NOT verify proves this
+        one was never corrupted."""
+        order = signed_order(maker, max_fill=10 * LAPSE, lapse_total=10 * LAPSE)
+        assert order["max_fill"] == order["lapse_total"] == 10 * LAPSE
+        assert market.store_order(order) is True
+
+        market._legacy_max_fill_repaired = False
+        market.ensure_tables()
+
+        row = market.get_order(order["order_id"])
+        assert row.max_fill == 10 * LAPSE   # untouched
+        assert market.verify_order(market.order_to_wire(row)) is True
+
     def test_one_maker_cannot_fill_the_book(self, maker):
         for _ in range(market.MAX_ORDERS_PER_MAKER):
             market.store_order(signed_order(maker))

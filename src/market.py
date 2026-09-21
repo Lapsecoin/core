@@ -40,7 +40,7 @@ from crypto import canonical_json
 from params import TICKS_PER_LAPSE
 from trade_storage import (
     FillRequest, FillResponse, Order, Trade, Increment,
-    ensure_tables, LEG_SETTLED, TRADE_COMPLETED,
+    ensure_tables as _ensure_trade_tables, LEG_SETTLED, TRADE_COMPLETED,
 )
 
 log = logging.getLogger("ec.market")
@@ -69,6 +69,78 @@ MAX_EXPIRY_HORIZON_BLOCKS = 100_000      # ~4.5 months at two minutes
 # against genuine usage and only ever fires against sustained abuse that
 # outpaces expiry and pruning.
 MAX_ORDERS_TOTAL = 50_000
+
+_legacy_max_fill_repaired = False
+
+
+def ensure_tables():
+    """trade_storage.ensure_tables, plus a one-time repair pass for a
+    real corruption a previous version of store_order used to
+    introduce (see _repair_legacy_max_fill). Every bare ensure_tables()
+    call elsewhere in this module resolves to this definition, not the
+    trade_storage one it shadows, since Python looks module globals up
+    by name at call time and this is the last definition of the name in
+    this module.
+    """
+    _ensure_trade_tables()
+    global _legacy_max_fill_repaired
+    if not _legacy_max_fill_repaired:
+        _repair_legacy_max_fill()
+        _legacy_max_fill_repaired = True
+
+
+def _repair_legacy_max_fill():
+    """One-time repair for orders a previous version of store_order
+    corrupted: it overwrote a genuinely-signed max_fill=0 ("uncapped",
+    the whole order - what build_order defaults to and what every order
+    the Market page ever posted actually carried) with lapse_total
+    before saving it, on every node that ever stored the order,
+    including the maker's own. That broke order_to_wire's
+    reconstruction of it for anyone reading the row back out of storage
+    rather than relaying the original gossiped item untouched - a
+    market backfill response (node._market_provider) chief among them -
+    so a newly-joined node backfilling this order got a signature that
+    no longer verified against the maker's own genuine terms, for no
+    reason a maker did anything wrong.
+
+    The corruption is silent and, on its own, permanent: nothing about
+    a stored row distinguishes "max_fill was corrupted from 0" from "the
+    maker genuinely signed a cap equal to the whole order," since both
+    look identical once max_fill == lapse_total. But the row's own
+    signature already settles which one actually happened, without
+    guessing and without the maker doing anything: substituting 0 back
+    in and re-checking the exact same stored signature against it can
+    only verify if 0 is what was actually signed. A genuine explicit
+    max_fill == lapse_total was never touched by the bug in the first
+    place and correctly fails this check, so it is left exactly as
+    signed.
+
+    Runs once per process, only against the one shape the corruption
+    could ever produce (max_fill == lapse_total); every other order is
+    never a suspect and never even read here.
+    """
+    suspects = list(Order.select().where(Order.max_fill == Order.lapse_total))
+    repaired = 0
+    for row in suspects:
+        try:
+            pubkey = bytes.fromhex(row.pubkey)
+            signature = bytes.fromhex(row.signature)
+        except (ValueError, TypeError):
+            continue
+        candidate = {f: getattr(row, f) for f in SIGNED_FIELDS}
+        candidate["max_fill"] = 0
+        try:
+            verified = crypto.verify(_signing_bytes(candidate), signature, pubkey)
+        except Exception:
+            continue
+        if verified:
+            row.max_fill = 0
+            row.save()
+            repaired += 1
+    if repaired:
+        log.info("[market] repaired %d order(s) whose signed max_fill=0 "
+                 "had been corrupted to lapse_total by a previous version "
+                 "of this node", repaired)
 
 
 class OrderRejected(Exception):
@@ -316,7 +388,22 @@ def store_order(order, auto_match_margin_stroops=0):
         lapse_total=order["lapse_total"],
         price_stroops_per_lapse=order["price_stroops_per_lapse"],
         min_fill=order["min_fill"],
-        max_fill=order["max_fill"] or order["lapse_total"],
+        # Stored exactly as signed, 0 included: every reader of this
+        # column already treats 0 as "uncapped, the whole order" at the
+        # point it's used (market_routes._open_trade/market_take,
+        # swap_engine._send_auto_match, validate_fill below), so
+        # normalizing it here to lapse_total used to do nothing useful
+        # except corrupt order_to_wire's reconstruction of this order for
+        # anyone who reads it back out of storage rather than off the
+        # original gossiped item - a market backfill response
+        # (node._market_provider) being the one path that actually does,
+        # which silently invalidated the maker's own signature on every
+        # order posted with the default max_fill=0 the moment a newly
+        # joined node tried to catch up on it (see verify_order's
+        # "signature does not verify", the one rejection reason this
+        # comment cannot itself prevent a reader from hitting if they
+        # still normalize eagerly like this used to).
+        max_fill=order["max_fill"],
         expiry_block=order["expiry_block"],
         pubkey=order["pubkey"],
         signature=order["signature"],
