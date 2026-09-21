@@ -208,6 +208,68 @@ class TestPlan:
         assert exc.value.max_safe_stroops < 10_000 * XLM
 
 
+class TestMutualExposureCap:
+    """The cap that actually governs a trade between two specific
+    parties, not one side's opinion of the other: see
+    swap_engine._answer_one_locked (the maker) and
+    swap_engine._open_taker_trade (the taker's own independent check of
+    the exact same number) for the two places this closes what used to
+    be a real hole - a maker's own trust of a taker, alone, decided a
+    step size the taker's own risk policy had no say in."""
+
+    def test_takes_the_smaller_of_the_two_directions(self):
+        """A maker willing to risk a lot with a stranger taker cannot use
+        that willingness to also hand the taker a step bigger than the
+        taker's own trust of the maker would allow, and vice versa."""
+        generous = swap.exposure_cap_stroops(50.0)
+        stingy = swap.exposure_cap_stroops(0.0)
+        assert generous > stingy
+        assert swap.mutual_exposure_cap_stroops(50.0, 0.0) == stingy
+        assert swap.mutual_exposure_cap_stroops(0.0, 50.0) == stingy
+
+    def test_symmetric_regardless_of_which_side_computes_it(self):
+        """Both my_trust_of_peer and peer_trust_of_me are meant to be
+        independently reconstructable by either party (see
+        trust.mutual_scores), so swapping which side is "mine" and which
+        is "theirs" must land on the same cap - a maker and a taker
+        computing this from their own two mutual_scores() calls have to
+        agree without exchanging anything."""
+        a_side = swap.mutual_exposure_cap_stroops(12.0, 3.0)
+        b_side = swap.mutual_exposure_cap_stroops(3.0, 12.0)
+        assert a_side == b_side
+
+    def test_two_strangers_get_the_stranger_cap(self):
+        assert (swap.mutual_exposure_cap_stroops(0.0, 0.0)
+               == swap.exposure_cap_stroops(0.0))
+
+    def test_two_highly_trusted_parties_still_share_one_cap(self):
+        cap = swap.mutual_exposure_cap_stroops(10**6, 10**6)
+        assert cap == swap.exposure_cap_stroops(10**6)
+
+
+class TestPlanMutual:
+    def test_matches_plan_when_both_sides_agree(self):
+        """With identical trust in both directions, plan_mutual is just
+        plan under a different name - the mutual cap collapses to the
+        same one-directional cap plan() would have used."""
+        mutual = swap.plan_mutual(7 * LAPSE, 3 * XLM, 5.0, 5.0)
+        single = swap.plan(7 * LAPSE, 3 * XLM, trust_score=5.0)
+        assert mutual == single
+
+    def test_the_less_trusting_side_governs_the_schedule(self):
+        """A maker's high trust of the taker cannot buy a bigger step
+        than the taker's own (lower) trust of the maker allows."""
+        sched, count, cap = swap.plan_mutual(20 * LAPSE, 20 * XLM,
+                                             my_trust_of_peer=50.0,
+                                             peer_trust_of_me=0.0)
+        assert cap == swap.exposure_cap_stroops(0.0)
+        assert max(xlm for _lapse, xlm in sched) <= cap
+
+    def test_oversized_trade_still_refused(self):
+        with pytest.raises(swap.TradeTooLarge):
+            swap.plan_mutual(10_000 * LAPSE, 10_000 * XLM, 0.0, 0.0)
+
+
 class TestFirstMover:
     def test_less_established_side_opens(self):
         # The peer is well established (score 5) and this node barely is

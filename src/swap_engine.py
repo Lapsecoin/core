@@ -1070,7 +1070,7 @@ def reconcile_all(engine):
 _ACCEPT_LOCK = threading.Lock()
 
 
-def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+def answer_fill_requests(engine, node, my_xlm_addr, confirm_depth,
                          min_trust=0.0):
     """Decide every live fill request against this node's own orders.
     Returns how many were accepted.
@@ -1104,7 +1104,7 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
                 continue
             if Trade.get_or_none(Trade.session_id == req.session_id) is not None:
                 continue
-            if _answer_one(engine, node, my_xlm_addr, stranger_cap,
+            if _answer_one(engine, node, my_xlm_addr,
                           confirm_depth, order_row, req, min_trust=min_trust):
                 accepted += 1
     if accepted:
@@ -1112,7 +1112,7 @@ def answer_fill_requests(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     return accepted
 
 
-def decide_fill_request(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+def decide_fill_request(engine, node, my_xlm_addr, confirm_depth,
                         request_id, accept):
     """Answer exactly one fill request against one of this node's own
     orders, by request_id: the manual counterpart to answer_fill_requests,
@@ -1159,7 +1159,7 @@ def decide_fill_request(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
         node.publish_fill_response(resp)
         return True
 
-    return _answer_one(engine, node, my_xlm_addr, stranger_cap,
+    return _answer_one(engine, node, my_xlm_addr,
                        confirm_depth, order_row, req)
 
 
@@ -1190,7 +1190,7 @@ def _pending_send_total(asset):
     return total
 
 
-def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+def _answer_one(engine, node, my_xlm_addr, confirm_depth,
                 order_row, req, min_trust=0.0):
     """Decide one fill request against one order. Returns True if it was
     accepted; a decline is still an answer, just not a trade. Returning
@@ -1217,11 +1217,11 @@ def _answer_one(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
     yes.
     """
     with _ACCEPT_LOCK:
-        return _answer_one_locked(engine, node, my_xlm_addr, stranger_cap,
+        return _answer_one_locked(engine, node, my_xlm_addr,
                                   confirm_depth, order_row, req, min_trust)
 
 
-def _answer_one_locked(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
+def _answer_one_locked(engine, node, my_xlm_addr, confirm_depth,
                        order_row, req, min_trust=0.0):
     """The body of _answer_one, run under _ACCEPT_LOCK. Split out only so
     the lock and the decision it guards are each easy to read on their
@@ -1266,16 +1266,23 @@ def _answer_one_locked(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
         respond(False, reason=str(e))
         return False
 
-    # The maker builds the schedule itself now, from its own trust view
-    # of this taker, rather than checking one the taker proposed: nobody
-    # but the side actually at risk on a step gets to decide how large
-    # that step is.
+    # The schedule is sized from BOTH parties' trust of each other, not
+    # the maker's view alone: a maker willing to risk more of itself
+    # cannot use that willingness to also hand the taker a step larger
+    # than the taker's own trust of this maker would allow (see
+    # swap.plan_mutual and mutual_exposure_cap_stroops). my_trust_of_taker
+    # and taker_trust_of_me are both derivable from public chain data
+    # alone (trust.mutual_scores), so this is the one schedule a trade
+    # between these two addresses has - not something either side
+    # proposes and the other accepts. _open_taker_trade independently
+    # recomputes the identical cap and refuses to open anything past it,
+    # so there is nothing to gain by a maker trying to sign a larger step
+    # anyway.
     my_trust_of_taker, taker_trust_of_me = trust_mod.mutual_scores(
         node, req.taker_lapse_addr)
     try:
-        schedule, count, _cap = swap.plan(
-            req.lapse_total, xlm_total, my_trust_of_taker,
-            stranger_cap=stranger_cap)
+        schedule, count, _cap = swap.plan_mutual(
+            req.lapse_total, xlm_total, my_trust_of_taker, taker_trust_of_me)
     except swap.TradeTooLarge:
         respond(False, reason=(
             "more than this node will risk with this counterparty in one go"))
@@ -1402,7 +1409,7 @@ def _answer_one_locked(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
 AUTO_MATCH_CANDIDATES = 5
 
 
-def auto_match_orders(engine, node, my_xlm_addr, stranger_cap):
+def auto_match_orders(engine, node, my_xlm_addr):
     """For each of this node's own live orders, look for an existing
     counter-order that already crosses it and send a fill request
     against it, the same thing a person manually taking that order
@@ -1451,7 +1458,7 @@ def auto_match_orders(engine, node, my_xlm_addr, stranger_cap):
                 break   # price-sorted best-first; nothing further crosses either
             if theirs["order_id"] in already_asked:
                 continue
-            if _send_auto_match(engine, node, my_xlm_addr, stranger_cap,
+            if _send_auto_match(engine, node, my_xlm_addr,
                                 kek, theirs["order_id"], promised_this_pass):
                 sent += 1
                 already_asked.add(theirs["order_id"])
@@ -1460,7 +1467,7 @@ def auto_match_orders(engine, node, my_xlm_addr, stranger_cap):
     return sent
 
 
-def _send_auto_match(engine, node, my_xlm_addr, stranger_cap, kek, order_id,
+def _send_auto_match(engine, node, my_xlm_addr, kek, order_id,
                      promised_this_pass):
     """Send a fill request against one counter-order already known to
     cross, sized to fit everything that already bounds a manual taker.
@@ -1474,13 +1481,14 @@ def _send_auto_match(engine, node, my_xlm_addr, stranger_cap, kek, order_id,
     if remaining < max(order_row.min_fill, 1):
         return False
 
-    detail = trust_mod.get_detail(
-        order_row.maker_lapse_addr,
-        trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
-        node.view.state.get_balance(order_row.maker_lapse_addr),
-        trust_mod.blocks_since_last_significant_topup(node, order_row.maker_lapse_addr),
-        node=node)
-    cap = swap.exposure_cap_stroops(detail["score"], stranger_cap)
+    # Sized from the same mutual cap the counter-order's own maker will
+    # independently compute and enforce when it decides (_answer_one_locked)
+    # and this node will in turn re-verify once it opens its own side
+    # (_open_taker_trade): asking for anything larger only wastes a round
+    # trip on a request the maker's own math cannot honour.
+    my_trust_of_them, their_trust_of_me = trust_mod.mutual_scores(
+        node, order_row.maker_lapse_addr)
+    cap = swap.mutual_exposure_cap_stroops(my_trust_of_them, their_trust_of_me)
     max_safe_lapse = swap.lapse_for_xlm(
         swap.max_safe_trade_stroops(cap), order_row.price_stroops_per_lapse)
 
@@ -1505,7 +1513,7 @@ def _send_auto_match(engine, node, my_xlm_addr, stranger_cap, kek, order_id,
         return False
 
     try:
-        swap.plan(lapse_total, xlm_total, detail["score"], stranger_cap=stranger_cap)
+        swap.plan_mutual(lapse_total, xlm_total, my_trust_of_them, their_trust_of_me)
     except swap.TradeTooLarge:
         return False
     try:
@@ -1564,7 +1572,7 @@ def check_fill_responses(node, confirm_depth):
         try:
             market_mod.verify_fill_response(
                 _response_dict(resp), expected_maker_addr=order_row.maker_lapse_addr,
-                order_row=order_row)
+                order_row=order_row, req_row=req)
         except market_mod.FillResponseRejected as e:
             log.warning("[swap] discarding a fill response for %s: %s",
                        req.request_id[:16], e)
@@ -1628,7 +1636,7 @@ def _reconstructed_step_legs(req, resp, n, lapse_amount, xlm_amount):
     return maker_leg, taker_leg
 
 
-def _leg_settled_height(engine, leg):
+def _leg_settled_height(engine, leg, confirm_depth):
     """(settled, height) for one reconstructed leg. height is the exact
     LapseCoin block a lapse leg confirmed in (recoverable exactly from
     the chain: block_height = tip - depth + 1), or None for an XLM leg,
@@ -1636,6 +1644,16 @@ def _leg_settled_height(engine, leg):
     every deadline here is anchored to LapseCoin height regardless of
     which chain a given leg happens to move on (see deadline_height), so
     only the lapse side of a step ever needs to report one.
+
+    confirm_depth is the trade's own signed resp.confirm_depth, not the
+    protocol floor: the two live parties agreed to hold this trade to a
+    specific depth (possibly deeper than the floor, for a large or
+    otherwise cautious trade), and a step they do not yet consider
+    settled must not be reported as settled by a bystander just because
+    it cleared a shallower, unrelated constant. Engine._required_depth
+    applies the identical rule for the live settlement path; this is
+    the same rule for a reconstruction with no local Trade row to read
+    it from.
     """
     from_addr, to_addr, memo, amount, asset = leg
     adapter = engine.lapse if asset == "lapse" else engine.xlm
@@ -1643,7 +1661,7 @@ def _leg_settled_height(engine, leg):
     if not found:
         return False, None
     _tx_hash, depth = found
-    required = MIN_CONFIRM_DEPTH if asset == "lapse" else 1
+    required = max(confirm_depth, MIN_CONFIRM_DEPTH) if asset == "lapse" else 1
     if depth < required:
         return False, None
     height = engine.lapse.height() - depth + 1 if asset == "lapse" else None
@@ -1691,8 +1709,10 @@ def verify_trade_against_chain(engine, req, resp):
     for n, (lapse_amount, xlm_amount) in enumerate(schedule, start=1):
         maker_leg, taker_leg = _reconstructed_step_legs(
             req, resp, n, lapse_amount, xlm_amount)
-        maker_settled, maker_height = _leg_settled_height(engine, maker_leg)
-        taker_settled, taker_height = _leg_settled_height(engine, taker_leg)
+        maker_settled, maker_height = _leg_settled_height(
+            engine, maker_leg, resp.confirm_depth)
+        taker_settled, taker_height = _leg_settled_height(
+            engine, taker_leg, resp.confirm_depth)
         if maker_settled and taker_settled:
             settled_height = maker_height if maker_height is not None else taker_height
             if settled_height is not None:
@@ -1736,6 +1756,30 @@ def _open_taker_trade(node, req, resp, order_row, confirm_depth):
         log.warning(
             "[swap] the maker's accepted step count for %s does not "
             "build a usable schedule: %s", req.request_id[:16], e)
+        return False
+
+    # The taker's own independent check that every step of the schedule
+    # the maker signed actually fits the one deterministic cap this pair
+    # is entitled to (see swap.plan_mutual and _answer_one_locked, which
+    # builds the maker's own schedule from the identical formula): a
+    # maker's own trust of this taker cannot, on its own, license a step
+    # larger than this taker's own trust of the maker would allow. Both
+    # halves are public, chain-derived numbers (trust.mutual_scores), so
+    # this is verification against a fact, not a negotiation - there is
+    # nothing to propose back, only whether the maker computed the one
+    # correct answer. A response that fails this is refused exactly like
+    # a badly-signed one: nothing is ever paid against it.
+    my_trust_of_maker, maker_trust_of_me = trust_mod.mutual_scores(
+        node, order_row.maker_lapse_addr)
+    cap = swap.mutual_exposure_cap_stroops(my_trust_of_maker, maker_trust_of_me)
+    largest_step = max(xlm for _lapse, xlm in schedule)
+    if largest_step > cap:
+        log.warning(
+            "[swap] refusing accepted fill response %s: a step of %d "
+            "stroops exceeds this node's own %d-stroop exposure cap for "
+            "%s, however the maker signed it",
+            req.request_id[:16], largest_step, cap,
+            order_row.maker_lapse_addr[:24])
         return False
 
     i_send = "xlm" if order_row.direction == "sell" else "lapse"

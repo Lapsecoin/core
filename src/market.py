@@ -1284,9 +1284,38 @@ def sign_fill_response(resp, keyfile_path, kek):
     return resp
 
 
-def verify_fill_response(resp, expected_maker_addr=None, order_row=None):
+def verify_fill_response(resp, expected_maker_addr=None, order_row=None,
+                         req_row=None):
     """Check a fill response arriving from the network. Raises
     FillResponseRejected.
+
+    req_row, when given, additionally checks that resp's own session_id
+    and order_id actually match the FillRequest resp.request_id claims
+    to answer (req_row is that row, looked up by request_id, exactly the
+    way order_row is looked up by resp's order_id). Every other check
+    here treats resp.session_id as freestanding, signed data, never
+    cross-checked against anything - but nothing about a signature stops
+    a maker from signing a well-formed, otherwise-legitimate accept
+    against a REAL request while giving it a DIFFERENT session_id than
+    that request actually opened. Both market.reserved_ticks (which
+    groups accepted responses by resp.session_id to decide how much of
+    an order is spoken for) and swap_engine.verify_trade_against_chain
+    (which builds every step's memo from resp.session_id, see
+    swap.session_tag) trust that field directly; the real Trade/
+    Increment rows this trade actually settles under, on both sides, are
+    always keyed by the FillRequest's own session_id instead (see
+    _answer_one_locked/_open_taker_trade, which never read resp.session_id
+    at all). A mismatch is therefore not merely confusing, it lets a
+    response alias itself onto an unrelated session for bookkeeping
+    purposes while settling under its request's real one - hiding
+    capacity from remaining_ticks, or wrongly excluding an already-
+    completed trade from reserved_ticks - without ever failing a
+    signature check, since the signer is free to sign any session_id it
+    likes. None for the same reason order_row can be: a plain relay
+    cannot always resolve the request it does not itself have kept
+    around, and must not be made to; the caller passes it whenever it
+    does (see node._handle_inbound_fill_response and
+    swap_engine.check_fill_responses).
 
     expected_maker_addr is None for a plain relay check (any peer
     forwarding this cannot know or verify who was supposed to send it,
@@ -1392,6 +1421,14 @@ def verify_fill_response(resp, expected_maker_addr=None, order_row=None):
                 resp["lapse_total"], order_row.price_stroops_per_lapse):
             raise FillResponseRejected(
                 "xlm_total does not match the order's own price")
+
+    if req_row is not None:
+        if resp["session_id"] != req_row.session_id:
+            raise FillResponseRejected(
+                "session_id does not match the request this response answers")
+        if resp["order_id"] != req_row.order_id:
+            raise FillResponseRejected(
+                "order_id does not match the request this response answers")
 
     # Last, and cheaper than the signature check that follows: same
     # reasoning as market._check_admission. Keyed on the claimed

@@ -1197,6 +1197,68 @@ class TestFillResponseOrderTermsCheck:
         assert market.verify_fill_response(resp) is True
 
 
+class TestFillResponseRequestTermsCheck:
+    """req_row, when passed to verify_fill_response, catches a response
+    whose own session_id/order_id diverge from the FillRequest its
+    request_id actually names - a gap no other check here catches, since
+    a signature only proves who signed resp.session_id, never that it
+    matches the request it claims to answer. Without this,
+    market.reserved_ticks (which groups accepted responses by
+    resp.session_id) and swap_engine.verify_trade_against_chain (which
+    builds every step's memo from it) could be fed a session_id that has
+    nothing to do with the trade actually settling under the request's
+    own, real session_id."""
+
+    def test_matching_session_and_order_pass(self, maker, taker):
+        req = signed_fill_request(taker, order_id="order-1", session_id="s" * 16)
+        resp = signed_fill_response(maker, order_id="order-1", session_id="s" * 16,
+                                    request_id=req["request_id"])
+        req_row = market.FillRequest.create(
+            request_id=req["request_id"], order_id=req["order_id"],
+            session_id=req["session_id"], taker_lapse_addr=req["taker_lapse_addr"],
+            taker_xlm_addr=req["taker_xlm_addr"], lapse_total=req["lapse_total"],
+            pubkey=req["pubkey"], signature=req["signature"], received_at=0.0)
+        assert market.verify_fill_response(resp, req_row=req_row) is True
+
+    def test_mismatched_session_id_refused(self, maker, taker):
+        """The concrete exploit this closes: a maker signs a genuine
+        accept for a real request, but gives it a DIFFERENT session_id
+        than that request actually opened - aliasing the response's
+        bookkeeping onto an unrelated session while the real trade still
+        settles under the request's own session_id."""
+        req = signed_fill_request(taker, order_id="order-1", session_id="s" * 16)
+        resp = signed_fill_response(maker, order_id="order-1",
+                                    session_id="t" * 16,   # different!
+                                    request_id=req["request_id"])
+        req_row = market.FillRequest.create(
+            request_id=req["request_id"], order_id=req["order_id"],
+            session_id=req["session_id"], taker_lapse_addr=req["taker_lapse_addr"],
+            taker_xlm_addr=req["taker_xlm_addr"], lapse_total=req["lapse_total"],
+            pubkey=req["pubkey"], signature=req["signature"], received_at=0.0)
+        with pytest.raises(market.FillResponseRejected, match="session_id"):
+            market.verify_fill_response(resp, req_row=req_row)
+
+    def test_mismatched_order_id_refused(self, maker, taker):
+        req = signed_fill_request(taker, order_id="order-1", session_id="s" * 16)
+        resp = signed_fill_response(maker, order_id="order-2",  # different!
+                                    session_id="s" * 16, request_id=req["request_id"])
+        req_row = market.FillRequest.create(
+            request_id=req["request_id"], order_id=req["order_id"],
+            session_id=req["session_id"], taker_lapse_addr=req["taker_lapse_addr"],
+            taker_xlm_addr=req["taker_xlm_addr"], lapse_total=req["lapse_total"],
+            pubkey=req["pubkey"], signature=req["signature"], received_at=0.0)
+        with pytest.raises(market.FillResponseRejected, match="order_id"):
+            market.verify_fill_response(resp, req_row=req_row)
+
+    def test_no_req_row_skips_the_check(self, maker, taker):
+        """Same courtesy order_row=None and expected_maker_addr=None
+        already extend: a plain relay that does not have the request
+        this response answers cannot check it either, and must not be
+        made to."""
+        resp = signed_fill_response(maker, order_id="order-1", session_id="s" * 16)
+        assert market.verify_fill_response(resp) is True
+
+
 class TestFillResponseStorage:
     def test_store_and_read_back(self, maker):
         resp = signed_fill_response(maker, request_id="req1" * 4)
@@ -1213,20 +1275,27 @@ class TestFillResponseStorage:
         only; an accepted response is a different, separately-capped
         population (see test_the_accepted_response_book_has_its_own_ceiling)."""
         monkeypatch.setattr(market, "MAX_FILL_RESPONSES_TOTAL", 2)
+        # Distinct session_id per response, same as request_id: each
+        # FillResponse.session_id is now unique (see trade_storage's own
+        # constraint), matching what a genuine distinct FillRequest
+        # would always carry.
         market.store_fill_response(signed_fill_response(
-            maker, request_id="a" * 16, accepted=False))
+            maker, request_id="a" * 16, session_id="a" * 16, accepted=False))
         market.store_fill_response(signed_fill_response(
-            maker, request_id="b" * 16, accepted=False))
+            maker, request_id="b" * 16, session_id="b" * 16, accepted=False))
         with pytest.raises(market.FillResponseRejected, match="full"):
             market.store_fill_response(signed_fill_response(
-                maker, request_id="c" * 16, accepted=False))
+                maker, request_id="c" * 16, session_id="c" * 16, accepted=False))
 
     def test_the_accepted_response_book_has_its_own_ceiling(self, maker, monkeypatch):
         monkeypatch.setattr(market, "MAX_ACCEPTED_RESPONSES_TOTAL", 2)
-        market.store_fill_response(signed_fill_response(maker, request_id="a" * 16))
-        market.store_fill_response(signed_fill_response(maker, request_id="b" * 16))
+        market.store_fill_response(signed_fill_response(
+            maker, request_id="a" * 16, session_id="a" * 16))
+        market.store_fill_response(signed_fill_response(
+            maker, request_id="b" * 16, session_id="b" * 16))
         with pytest.raises(market.FillResponseRejected, match="full"):
-            market.store_fill_response(signed_fill_response(maker, request_id="c" * 16))
+            market.store_fill_response(signed_fill_response(
+                maker, request_id="c" * 16, session_id="c" * 16))
 
     def test_prune_removes_old_pending_responses(self, maker):
         resp = signed_fill_response(maker, request_id="req1" * 4, accepted=False)

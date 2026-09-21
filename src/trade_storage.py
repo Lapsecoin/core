@@ -305,7 +305,17 @@ class FillResponse(_TradeBase):
     """
     request_id = TextField(primary_key=True)
     order_id = TextField(index=True)
-    session_id = TextField()
+    # Unique because a session_id is a fresh nonce-derived tag
+    # (swap.new_session_id) meant to name exactly one trade attempt: two
+    # FillResponse rows sharing one would let market.reserved_ticks (which
+    # groups accepted responses by this field, not by the FillRequest it
+    # actually answers) double-count or hide capacity for an order,
+    # network-wide. See _migrate_fill_response_session_unique for the
+    # upgrade path on a database that predates this constraint, and
+    # verify_fill_response's own req-cross-check for why the constraint
+    # alone is not the whole fix: it stops two rows colliding, not one
+    # row lying about which session its own request actually opened.
+    session_id = TextField(unique=True)
     lapse_total = IntegerField()
     accepted = BooleanField()
     increment_count = IntegerField(null=True)   # set only when accepted
@@ -376,6 +386,37 @@ def _migrate_order_auto_match_margin():
                        "auto_match_margin_stroops INTEGER NOT NULL DEFAULT 0")
 
 
+def _migrate_fill_response_session_unique():
+    """Add the unique index behind FillResponse.session_id for a database
+    created before that constraint existed.
+
+    create_tables(safe=True) only creates a missing table, never alters
+    an existing one's indexes, so a node that traded before this
+    constraint was added would otherwise keep running without it. Wrapped
+    because a database that, against everything session_id is meant to
+    guarantee (a fresh per-attempt nonce, see swap.new_session_id),
+    somehow already holds a genuine duplicate cannot have a unique index
+    forced onto it retroactively; that is a real, pre-existing data
+    problem this migration cannot silently resolve on its own, so it is
+    logged rather than allowed to crash startup over it.
+    """
+    existing = {r[1] for r in db.execute_sql(
+        "PRAGMA index_list(fillresponse)").fetchall()}
+    if "fillresponse_session_id" in existing:
+        return
+    try:
+        db.execute_sql(
+            "CREATE UNIQUE INDEX fillresponse_session_id "
+            "ON fillresponse(session_id)")
+    except Exception:
+        log.warning(
+            "[trade_storage] could not add a unique index on "
+            "fillresponse.session_id; this database already holds two "
+            "FillResponse rows naming the same session_id, which should "
+            "never happen (see market.reserved_ticks) and needs manual "
+            "review", exc_info=True)
+
+
 def init_tables():
     """Create the swap tables if absent. Safe to call repeatedly.
 
@@ -387,6 +428,7 @@ def init_tables():
     db.create_tables(TRADE_TABLES, safe=True)
     _migrate_fill_response_trade_terms()
     _migrate_order_auto_match_margin()
+    _migrate_fill_response_session_unique()
     _initialised = True
 
 

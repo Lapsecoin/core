@@ -195,14 +195,14 @@ def make_maker_order(order_id="order-1", direction="sell", lapse_total=10 * LAPS
 
 
 class TestStartTrade:
-    def _call(self, node, order_row, form, depth=2, cap=5 * XLM):
+    def _call(self, node, order_row, form):
         fake_request = FakeRequest({"passphrase": node.passphrase,
                                     "amount_lapse": "1", **form})
         original = market_routes.request
         market_routes.request = fake_request
         try:
             return market_routes._start_trade(
-                node, order_row, node.view.height, node.xlm_keyfile, depth, cap)
+                node, order_row, node.view.height, node.xlm_keyfile)
         finally:
             market_routes.request = original
 
@@ -242,7 +242,7 @@ class TestStartTrade:
         try:
             with pytest.raises(ValueError, match="passphrase"):
                 market_routes._start_trade(
-                    node, order, node.view.height, node.xlm_keyfile, 2, 5 * XLM)
+                    node, order, node.view.height, node.xlm_keyfile)
         finally:
             market_routes.request = original
         assert Trade.select().count() == 0
@@ -375,6 +375,79 @@ class TestPlaceOrder:
         with pytest.raises(ValueError, match="XLM"):
             self._call(node, {"direction": "buy", "amount_lapse": "1",
                               "price_xlm": "0.0001"})
+
+
+class TestCancelOrder:
+    """_cancel_order: the maker's own signed withdrawal of an order,
+    posted the same way _place_order posts one, so this exercises the
+    real create-then-cancel flow rather than calling market.
+    apply_cancellation in isolation."""
+
+    def _call(self, node, order_id, passphrase=None):
+        fake_request = FakeRequest({
+            "passphrase": passphrase if passphrase is not None else node.passphrase,
+            "order_id": order_id})
+        original = market_routes.request
+        market_routes.request = fake_request
+        try:
+            return market_routes._cancel_order(node)
+        finally:
+            market_routes.request = original
+
+    def _post_order(self, node, height=1000):
+        fake_request = FakeRequest({
+            "passphrase": node.passphrase, "direction": "sell",
+            "amount_lapse": "1", "price_xlm": "0.0001"})
+        original = market_routes.request
+        market_routes.request = fake_request
+        try:
+            market_routes._place_order(node, node.xlm_addr, height)
+        finally:
+            market_routes.request = original
+        return Order.select().order_by(Order.received_at.desc()).get()
+
+    def test_cancelling_your_own_order_withdraws_it_and_gossips_once(self, tmp_path):
+        node = TakerNode(tmp_path)
+        node.view.state.balances[node.addr] = 10 * LAPSE
+        order = self._post_order(node)
+
+        self._call(node, order.order_id)
+
+        assert Order.get(Order.order_id == order.order_id).cancelled is True
+        assert len(node.publish_order_calls) == 2   # the order, then the cancellation
+        cancellation = node.publish_order_calls[-1]
+        assert cancellation["cancel"] == order.order_id
+        assert market_mod.verify_cancellation(cancellation) == node.addr
+
+    def test_cancelling_a_nonexistent_order_raises_and_gossips_nothing(self, tmp_path):
+        """apply_cancellation returns False, not an exception, for an
+        order that is not here - a stale page, a typo, or a race with
+        another cancel must not still report success and still gossip a
+        cancellation for an order that was never touched."""
+        node = TakerNode(tmp_path)
+        with pytest.raises(ValueError, match="not here"):
+            self._call(node, "no-such-order")
+        assert node.publish_order_calls == []
+
+    def test_cancelling_an_already_cancelled_order_raises_and_gossips_nothing(
+            self, tmp_path):
+        node = TakerNode(tmp_path)
+        node.view.state.balances[node.addr] = 10 * LAPSE
+        order = self._post_order(node)
+        self._call(node, order.order_id)
+        assert len(node.publish_order_calls) == 2
+
+        with pytest.raises(ValueError, match="not here"):
+            self._call(node, order.order_id)
+        assert len(node.publish_order_calls) == 2   # nothing new was gossiped
+
+    def test_cancelling_someone_elses_order_is_refused(self, tmp_path):
+        node = TakerNode(tmp_path)
+        other = make_maker_order(maker_lapse="somebody.else")
+        with pytest.raises(market_mod.OrderRejected, match="only the maker"):
+            self._call(node, other.order_id)
+        assert Order.get(Order.order_id == other.order_id).cancelled is False
+        assert node.publish_order_calls == []
 
 
 class TestSuggestedPrice:

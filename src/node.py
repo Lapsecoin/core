@@ -1515,6 +1515,17 @@ class Node:
                 log.warning("[market] failed to handle an inbound order",
                             exc_info=True)
                 return
+            # New, and might now cross one of this node's own resting
+            # orders (see swap_engine.auto_match_orders, which only runs
+            # from the worker's own pass): waking it here is the same
+            # reasoning _handle_inbound_fill_request/_handle_inbound_
+            # fill_response already apply for a new request/response, just
+            # for the other event that can also make a trade possible.
+            # A cancellation never needs this: it only ever removes
+            # capacity, never creates a crossing opportunity worth acting
+            # on sooner.
+            if not market_mod.is_cancellation(item):
+                self._wake_swap_worker()
 
         # Relayed either way, exactly like a tx or a block: whether we had
         # already verified this and whether gossip has already flooded it
@@ -1616,8 +1627,10 @@ class Node:
 
         if not market_mod.already_known_fill_response(item):
             order_row = market_mod.get_order(item.get("order_id", ""))
+            req_row = market_mod.get_fill_request(item.get("request_id", ""))
             try:
-                market_mod.verify_fill_response(item, order_row=order_row)
+                market_mod.verify_fill_response(
+                    item, order_row=order_row, req_row=req_row)
                 market_mod.store_fill_response(item)
             except market_mod.FillResponseRejected as e:
                 log.debug("[market] rejected a fill response from %s: %s", sender, e)
@@ -1690,6 +1703,17 @@ class Node:
                     orders_added += 1
             except market_mod.OrderRejected:
                 continue
+            except Exception:
+                # Isolated per item, exactly like the gossip handlers
+                # (_handle_inbound_order and friends): one malformed or
+                # unexpectedly-typed row from a peer's backfill batch must
+                # not abort every order still queued behind it. A peer
+                # that wants to make its own backfill useless against it
+                # gets one skipped row for the attempt, not a dropped
+                # batch.
+                log.warning("[market] skipping an unreadable backfilled "
+                           "order from %s", peer_addr, exc_info=True)
+                continue
         fills_added = 0
         for pair in resp.get("fills", []):
             if not isinstance(pair, dict):
@@ -1697,20 +1721,26 @@ class Node:
             req, fresp = pair.get("request"), pair.get("response")
             if not isinstance(req, dict) or not isinstance(fresp, dict):
                 continue
-            if not market_mod.already_known_fill_request(req):
-                try:
-                    market_mod.verify_fill_request(req)
-                    market_mod.store_fill_request(req)
-                except market_mod.FillRequestRejected:
-                    continue
-            if market_mod.already_known_fill_response(fresp):
-                continue
             try:
+                if not market_mod.already_known_fill_request(req):
+                    try:
+                        market_mod.verify_fill_request(req)
+                        market_mod.store_fill_request(req)
+                    except market_mod.FillRequestRejected:
+                        continue
+                if market_mod.already_known_fill_response(fresp):
+                    continue
                 order_row = market_mod.get_order(fresp.get("order_id", ""))
-                market_mod.verify_fill_response(fresp, order_row=order_row)
+                req_row = market_mod.get_fill_request(fresp.get("request_id", ""))
+                market_mod.verify_fill_response(
+                    fresp, order_row=order_row, req_row=req_row)
                 if market_mod.store_fill_response(fresp):
                     fills_added += 1
             except market_mod.FillResponseRejected:
+                continue
+            except Exception:
+                log.warning("[market] skipping an unreadable backfilled "
+                           "fill from %s", peer_addr, exc_info=True)
                 continue
         if orders_added or fills_added:
             log.info("[market] backfilled %d order(s) and %d fill(s) from %s",

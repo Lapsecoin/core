@@ -157,9 +157,6 @@ def register(app, node, csrf_token):
         return max(node.settings.get(settings_mod.SWAP_CONFIRM_DEPTH),
                    swap_engine.MIN_CONFIRM_DEPTH)
 
-    def stranger_cap():
-        return node.settings.get(settings_mod.SWAP_STRANGER_CAP_STROOPS)
-
     def csrf_ok():
         return _secrets.compare_digest(
             request.form.get("csrf_token", ""), csrf_token)
@@ -204,9 +201,17 @@ def register(app, node, csrf_token):
                 detail = peer_trust(req.taker_lapse_addr)
                 xlm_total = swap_mod.xlm_for_lapse(
                     req.lapse_total, order_row.price_stroops_per_lapse)
+                # Mirrors exactly what _answer_one_locked will compute if
+                # this request is accepted (see swap.plan_mutual): sized
+                # from both sides' trust of each other, not this node's
+                # trust of the taker alone, since a step this node would
+                # be willing to risk is not automatically one the taker's
+                # own trust of this node would accept either.
+                my_trust_of_taker, taker_trust_of_me = trust_mod.mutual_scores(
+                    node, req.taker_lapse_addr)
                 try:
-                    swap_mod.plan(req.lapse_total, xlm_total, detail["score"],
-                                  stranger_cap=stranger_cap())
+                    swap_mod.plan_mutual(req.lapse_total, xlm_total,
+                                         my_trust_of_taker, taker_trust_of_me)
                     fits, fit_note = True, "fits your current exposure cap"
                 except swap_mod.TradeTooLarge as e:
                     fits, fit_note = False, str(e)
@@ -257,7 +262,7 @@ def register(app, node, csrf_token):
             swap_engine.LapseAdapter(node), swap_engine.XLMAdapter(xlm_keyfile()),
             secrets)
         ok = swap_engine.decide_fill_request(
-            engine, node, my_xlm_addr, stranger_cap(), confirm_depth(),
+            engine, node, my_xlm_addr, confirm_depth(),
             request_id, accept=(decision == "accept"))
         if not ok:
             raise ValueError("that request could not be answered (it may "
@@ -299,23 +304,50 @@ def register(app, node, csrf_token):
                     log.warning("[market] action %s failed", action, exc_info=True)
                     alert_err = f"That did not work: {e}"
 
-        depth = market_mod.book_depth(height, exclude_maker=node.addr)
-        best = market_mod.best_prices(height, exclude_maker=node.addr)
-        ticker = market_mod.ticker_price(node)
-
         lapse_balance = node.view.state.get_balance(node.addr)
         xlm_spendable = _spendable(xlm_addr)
-        # What this node's own open orders, combined, already ask for on
-        # each side, checked against what it actually holds right now.
-        # Each order was affordable on its own when posted
-        # (market_routes._place_order), but nothing rechecks the sum as
-        # more orders pile up or a balance moves, so this is the one
-        # place a maker sees "you have more posted than you can cover"
-        # before a taker's fill request finds out the hard way (see
-        # market.maker_committed and swap_engine._pending_send_total,
-        # which is what actually keeps that discovery from costing
-        # anyone real money).
-        lapse_committed, xlm_committed = market_mod.maker_committed(node.addr, height)
+
+        # Everything below walks rows this node did not itself produce -
+        # gossiped orders, fill requests, trust history derived from them
+        # - unlike the POST branch above, which is already wrapped and
+        # degrades to an inline error banner. A page render has no such
+        # wrapper of its own, so a single malformed or unexpected row
+        # anywhere in the book used to take the whole page down with a
+        # 500, including the maker's own ability to see and cancel their
+        # orders or answer pending requests - a worse failure mode than
+        # the POST path gets for the exact same kind of untrusted data.
+        # This still surfaces the failure (logged, and shown as an
+        # alert) rather than quietly hiding it, just without losing the
+        # rest of the page over it.
+        try:
+            depth = market_mod.book_depth(height, exclude_maker=node.addr)
+            best = market_mod.best_prices(height, exclude_maker=node.addr)
+            ticker = market_mod.ticker_price(node)
+            # What this node's own open orders, combined, already ask for
+            # on each side, checked against what it actually holds right
+            # now. Each order was affordable on its own when posted
+            # (market_routes._place_order), but nothing rechecks the sum
+            # as more orders pile up or a balance moves, so this is the
+            # one place a maker sees "you have more posted than you can
+            # cover" before a taker's fill request finds out the hard way
+            # (see market.maker_committed and swap_engine._pending_send_total,
+            # which is what actually keeps that discovery from costing
+            # anyone real money).
+            lapse_committed, xlm_committed = market_mod.maker_committed(node.addr, height)
+            my_orders = _my_orders(node, height)
+            pending_requests = pending_maker_requests()
+        except Exception:
+            log.warning("[market] could not render the order book", exc_info=True)
+            if not alert_err:
+                alert_err = ("Part of the order book could not be read; "
+                             "showing what is still available.")
+            depth = {"buys": [], "sells": []}
+            best = {"best_buy": None, "best_sell": None, "spread": None,
+                   "buy_depth": 0, "sell_depth": 0}
+            ticker = None
+            lapse_committed = xlm_committed = 0
+            my_orders = []
+            pending_requests = []
 
         return render_template(
             "market.html", title="Market",
@@ -334,8 +366,8 @@ def register(app, node, csrf_token):
             xlm_usd=xlm_mod.get_xlm_usd(),
             display_price=ticker or market_mod.DEFAULT_PRICE_STROOPS_PER_LAPSE,
             suggested_price=_suggested_price(best, ticker),
-            my_orders=_my_orders(node, height),
-            pending_maker_requests=pending_maker_requests(),
+            my_orders=my_orders,
+            pending_maker_requests=pending_requests,
             csrf_token=csrf_token)
 
     # -- The full order book --------------------------------------------
@@ -382,14 +414,37 @@ def register(app, node, csrf_token):
 
         alert_err = ""
         height = node.view.height
-        remaining = market_mod.remaining_ticks(row, height)
-        detail = peer_trust(row.maker_lapse_addr)
-        cap = swap_mod.exposure_cap_stroops(detail["score"], stranger_cap())
+        # Walks the same kind of untrusted, gossip-derived data /market's
+        # own render does (this order's remaining size, the maker's trust
+        # history, this node's own exposure to them), so it gets the same
+        # protection: a malformed row here must not 500 a page whose own
+        # POST branch below is already exception-hardened.
+        try:
+            remaining = market_mod.remaining_ticks(row, height)
+            detail = peer_trust(row.maker_lapse_addr)
+            # The mutual cap (see swap.mutual_exposure_cap_stroops): what
+            # this node's own trust of the maker allows is only half the
+            # picture, since the maker will size the actual schedule from
+            # both directions when it accepts (_answer_one_locked), and
+            # this node's own taker-side check (_open_taker_trade)
+            # refuses anything past the same number. Showing anything
+            # looser here would preview a trade this node cannot
+            # actually get.
+            my_trust_of_maker, maker_trust_of_me = trust_mod.mutual_scores(
+                node, row.maker_lapse_addr)
+            cap = swap_mod.mutual_exposure_cap_stroops(my_trust_of_maker, maker_trust_of_me)
+            maker_xlm_unfunded = _maker_xlm_unfunded(row, _account_exists)
+            maker_lapse_overcommitted = _maker_lapse_overcommitted(row, node, height)
+        except Exception:
+            log.warning("[market] could not read order %s for the take "
+                       "page", order_id, exc_info=True)
+            return render_template(
+                "error.html", title="Unavailable",
+                message="This order could not be read right now. Try "
+                        "again shortly."), 503
 
         # The taker's side is the opposite of the maker's.
         taking_side = "buy" if row.direction == "sell" else "sell"
-        maker_xlm_unfunded = _maker_xlm_unfunded(row, _account_exists)
-        maker_lapse_overcommitted = _maker_lapse_overcommitted(row, node, height)
         max_fill_ticks = min(remaining, row.max_fill or remaining)
         max_safe_stroops = swap_mod.max_safe_trade_stroops(cap)
         max_safe_lapse = swap_mod.lapse_for_xlm(max_safe_stroops,
@@ -402,9 +457,7 @@ def register(app, node, csrf_token):
                 alert_err = "That page was stale. Reload and try again."
             else:
                 try:
-                    session_id = _start_trade(node, row, height,
-                                              xlm_keyfile(), confirm_depth(),
-                                              stranger_cap())
+                    session_id = _start_trade(node, row, height, xlm_keyfile())
                     return redirect("/trades")
                 except swap_mod.TradeTooLarge as e:
                     alert_err = (
@@ -442,34 +495,61 @@ def register(app, node, csrf_token):
     @app.route("/trades")
     def trades():
         ensure_tables()
-        active, history = [], []
-        for row in Trade.select().order_by(Trade.updated_at.desc()):
-            view = _trade_view(row, stranger_cap(), peer_trust)
-            (active if row.status in (TRADE_ACTIVE, TRADE_STALLED)
-             else history).append(view)
+        alert_err = ""
+        # Trade/Increment rows are this node's own, but trust standing
+        # (peer_trust, my own standing included) independently walks
+        # gossiped, network-sourced accepted-fill pairs and re-verifies
+        # them against both chains (see trust._network_tally_by_counterparty),
+        # so this page is exposed to the same kind of untrusted-data
+        # failure /market and market_take are already hardened against.
+        try:
+            active, history = [], []
+            for row in Trade.select().order_by(Trade.updated_at.desc()):
+                view = _trade_view(row)
+                (active if row.status in (TRADE_ACTIVE, TRADE_STALLED)
+                 else history).append(view)
 
-        # Every address this node has ever traded with, not a separately
-        # maintained list: standing itself is derived straight from
-        # these same Trade rows (trust.local_tally), so there is nothing
-        # to keep in sync between "who do I know" and "what do I know
-        # about them".
-        known_addrs = {row.peer_lapse_addr for row in
-                       Trade.select(Trade.peer_lapse_addr).distinct()}
-        peers = []
-        for addr in known_addrs:
-            detail = peer_trust(addr)
-            peers.append({"addr": addr, **detail})
-        peers.sort(key=lambda p: (-p["score"], p["addr"]))
+            # Every address this node has ever traded with, not a
+            # separately maintained list: standing itself is derived
+            # straight from these same Trade rows (trust.local_tally), so
+            # there is nothing to keep in sync between "who do I know"
+            # and "what do I know about them".
+            known_addrs = {row.peer_lapse_addr for row in
+                           Trade.select(Trade.peer_lapse_addr).distinct()}
+            peers = []
+            for addr in known_addrs:
+                detail = peer_trust(addr)
+                peers.append({"addr": addr, **detail})
+            peers.sort(key=lambda p: (-p["score"], p["addr"]))
+
+            pending_requests = _pending_requests(node)
+            my_standing = peer_trust(node.addr)
+        except Exception:
+            log.warning("[market] could not render the trades page",
+                       exc_info=True)
+            alert_err = ("Part of your trade history could not be read; "
+                        "showing what is still available.")
+            active, history, peers, pending_requests = [], [], [], []
+            # The same shape trust.get_detail always returns, standing
+            # in for "unknown" rather than omitting the key: the template
+            # reads my_standing unconditionally.
+            my_standing = {
+                "score": 0, "completed_count": 0, "completed_lapse": 0,
+                "network_completed_count": 0, "network_abandoned_count": 0,
+                "distinct_counterparties": 0, "abandoned_count": 0,
+                "last_completed_at": 0.0, "last_abandoned_at": 0.0,
+                "last_abandon_session": "", "history": 0.0, "stake": 0.0,
+                "known": False, "per_counterparty": []}
 
         return render_template("trades.html", title="Trades",
                                active=active, history=history[:50],
-                               pending_requests=_pending_requests(node),
+                               pending_requests=pending_requests,
                                peers=peers, now=time.time(),
                                worker=_worker_view(node),
                                fills=_fill_stats(),
-                               my_standing=peer_trust(node.addr),
+                               my_standing=my_standing,
                                my_addr=node.addr,
-                               alert_ok="", alert_err="")
+                               alert_ok="", alert_err=alert_err)
 
 
 # ---------------------------------------------------------------------------
@@ -571,12 +651,20 @@ def _cancel_order(node):
     kek = crypto_mod.derive_kek(node.keyfile, passphrase)
     body = market_mod.cancellation_for(order_id, node.pk_hex,
                                        node.keyfile, kek)
-    market_mod.apply_cancellation(order_id, node.addr)
+    # apply_cancellation returns False for both "no such order" and
+    # "already cancelled" rather than raising (only a mismatched maker
+    # raises, see its own docstring); both must stop here; without this
+    # check a stale page, a typo'd order_id, or a race with another
+    # cancel would still gossip a cancellation for an order that was
+    # never touched and still report success.
+    if not market_mod.apply_cancellation(order_id, node.addr):
+        raise ValueError(
+            "that order is not here to cancel (it may already be gone)")
     node.publish_order(body)
     return "Order withdrawn. Anything already delivered stands."
 
 
-def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
+def _start_trade(node, order_row, height, xlm_keyfile_path):
     """Read the taker's form and send a fill request against one order.
 
     Thin on purpose: _open_trade is the reusable core, taking the amount
@@ -587,11 +675,11 @@ def _start_trade(node, order_row, height, xlm_keyfile_path, depth, cap):
     if not passphrase:
         raise ValueError("a passphrase is required")
     lapse_total = parse_lapse(request.form.get("amount_lapse"))
-    return _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
+    return _open_trade(node, order_row, height, xlm_keyfile_path,
                        lapse_total, passphrase)
 
 
-def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
+def _open_trade(node, order_row, height, xlm_keyfile_path,
                 lapse_total, passphrase):
     """Send a signed fill request against one order. Returns its
     session_id.
@@ -599,10 +687,15 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     Nothing is created here except the request itself: no Trade exists on
     this side until the maker explicitly agrees (see
     swap_engine.check_fill_responses), so nothing is ever paid on the
-    strength of this node's own say-so. depth is accepted for the
-    caller's convenience (every call site already has it to hand) but is
-    no longer used here; the trade that eventually opens reads its own
-    confirm depth fresh when it is created, on whichever side creates it.
+    strength of this node's own say-so. The confirm depth and exposure
+    cap that end up governing the trade are not decided here either: the
+    trade that eventually opens reads its own confirm depth fresh when
+    it is created (on whichever side creates it), and the schedule's
+    step cap is the one deterministic number swap.plan_mutual computes
+    from both parties' trust of each other, not something a taker's own
+    request gets to propose (see _answer_one_locked and
+    swap_engine._open_taker_trade, which enforce this on the maker and
+    taker sides respectively regardless of what this function does).
     """
     if not passphrase:
         raise ValueError("a passphrase is required")
@@ -644,17 +737,16 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     elif lapse_total > node.view.state.get_balance(node.addr):
         raise ValueError("you do not hold that much LAPSE")
 
-    # A local, advisory check only: the real cap that matters is the
-    # maker's own, applied when it decides (swap_engine._answer_one).
-    # This exists so a taker sees "too large" immediately rather than
-    # waiting a full round trip to be told the same thing.
-    detail = trust_mod.get_detail(
-        order_row.maker_lapse_addr,
-        trust_mod.address_age_blocks(node, order_row.maker_lapse_addr),
-        node.view.state.get_balance(order_row.maker_lapse_addr),
-        trust_mod.blocks_since_last_significant_topup(node, order_row.maker_lapse_addr),
-        node=node)
-    swap_mod.plan(lapse_total, xlm_total, detail["score"], stranger_cap=cap)
+    # A local check against the same deterministic cap the maker will
+    # apply when it decides (_answer_one_locked) and this node will
+    # re-verify once the trade actually opens (swap_engine.
+    # _open_taker_trade): sized from both parties' trust of each other,
+    # not this node's trust of the maker alone, so a request that fails
+    # this would fail there too. Catching it here just tells the taker
+    # "too large" immediately instead of after a full round trip.
+    my_trust_of_maker, maker_trust_of_me = trust_mod.mutual_scores(
+        node, order_row.maker_lapse_addr)
+    swap_mod.plan_mutual(lapse_total, xlm_total, my_trust_of_maker, maker_trust_of_me)
 
     session_id = swap_mod.new_session_id(order_row.order_id, node.addr)
 
@@ -674,7 +766,7 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
 # View building
 # ---------------------------------------------------------------------------
 
-def _trade_view(row, cap, peer_trust):
+def _trade_view(row):
     steps = list(Increment.select()
                  .where(Increment.session_id == row.session_id)
                  .order_by(Increment.n))

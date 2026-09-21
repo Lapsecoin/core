@@ -422,10 +422,9 @@ class TestDiscoveryWiring:
         w.run_once()
         assert len(calls) == 1
         args, kwargs = calls[0]
-        _engine, node, my_xlm_addr, cap, depth = args
+        _engine, node, my_xlm_addr, depth = args
         assert my_xlm_addr == pub
         assert node is w.node
-        assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
         assert depth >= swap_engine.MIN_CONFIRM_DEPTH
         assert kwargs["min_trust"] == settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST.default
 
@@ -448,10 +447,9 @@ class TestDiscoveryWiring:
                             lambda *a: calls.append(a) or 0)
         w.run_once()
         assert len(calls) == 1
-        engine, node, my_xlm_addr, cap = calls[0]
+        engine, node, my_xlm_addr = calls[0]
         assert my_xlm_addr == pub
         assert node is w.node
-        assert cap == settings_mod.SWAP_STRANGER_CAP_STROOPS.default
 
     def test_discovery_is_skipped_without_a_trading_wallet(self, monkeypatch):
         w = Worker(DiscoveryFakeNode())   # default xlm_keyfile is nonexistent

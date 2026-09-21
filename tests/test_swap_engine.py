@@ -1190,7 +1190,7 @@ class TestAnswerFillRequests:
         engine, _lapse, xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.answer_fill_requests(engine, node, maker_xlm_addr, 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, maker_xlm_addr, 2) == 1
 
         trade = Trade.get(Trade.session_id == req.session_id)
         assert trade.role == "maker"
@@ -1218,7 +1218,7 @@ class TestAnswerFillRequests:
         engine, _lapse, xlm = make_maker_engine(node)
         xlm.balances["GMAKER"] = swap.xlm_for_lapse(req.lapse_total, 1000)
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 1
         trade = Trade.get(Trade.session_id == req.session_id)
         assert trade.i_send == "xlm"
 
@@ -1236,7 +1236,7 @@ class TestAnswerFillRequests:
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = 10 * LAPSE   # enough for one, not both
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 1
         accepted = [r for r in node.publish_fill_response_calls if r["accepted"]]
         rejected = [r for r in node.publish_fill_response_calls if not r["accepted"]]
         assert len(accepted) == 1
@@ -1252,7 +1252,7 @@ class TestAnswerFillRequests:
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total - 1
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
         assert Trade.select().count() == 0
         resp = node.publish_fill_response_calls[0]
         assert resp["accepted"] is False
@@ -1265,7 +1265,7 @@ class TestAnswerFillRequests:
         xlm_total = swap.xlm_for_lapse(req.lapse_total, 1000)
         xlm.balances["GMAKER"] = xlm_total - 1
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
         assert Trade.select().count() == 0
 
     def test_a_maker_with_exactly_enough_is_not_refused(self, tmp_path):
@@ -1277,13 +1277,13 @@ class TestAnswerFillRequests:
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 1
 
     def test_no_requests_against_an_order_answers_nothing(self, tmp_path):
         node = FakeDiscoveryNode(tmp_path)
         make_order(maker_lapse=node.addr)
         engine, _lapse, _xlm = make_maker_engine(node)
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
 
     def test_a_cancelled_order_with_a_pending_request_is_still_honoured(self, tmp_path):
         """Cancelling withdraws what is unfilled, not a request already in
@@ -1295,13 +1295,13 @@ class TestAnswerFillRequests:
         req = make_request()
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 1
 
     def test_a_request_naming_an_unknown_order_is_ignored(self, tmp_path):
         node = FakeDiscoveryNode(tmp_path)
         make_request(order_id="no-such-order")
         engine, _lapse, _xlm = make_maker_engine(node)
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
 
     def test_fill_larger_than_the_order_is_refused(self, tmp_path):
         node = FakeDiscoveryNode(tmp_path, balances={})
@@ -1309,7 +1309,7 @@ class TestAnswerFillRequests:
         make_request(lapse_total=5 * LAPSE)
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = 5 * LAPSE
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
         assert Trade.select().count() == 0
         resp = node.publish_fill_response_calls[0]
         assert resp["accepted"] is False
@@ -1319,23 +1319,56 @@ class TestAnswerFillRequests:
         make_order(min_fill=5 * LAPSE, maker_lapse=node.addr)
         make_request(lapse_total=1 * LAPSE)
         engine, _lapse, _xlm = make_maker_engine(node)
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
 
     def test_schedule_over_this_nodes_own_cap_is_refused(self, tmp_path):
         """The maker builds its own schedule from its own trust view of
         this taker, so a stranger cannot talk its way into a bigger step
-        than this node is willing to risk with them."""
+        than this node is willing to risk with them. Sized well past
+        swap.max_safe_trade_stroops(DEFAULT_STRANGER_CAP_STROOPS) (about
+        96 XLM at the real, fixed stranger cap - see swap.plan_mutual,
+        which is what replaced a per-node cap setting a test could dial
+        down directly)."""
         node = FakeDiscoveryNode(tmp_path, balances={})
-        make_order(lapse_total=1000 * LAPSE, price=1000, maker_lapse=node.addr)
-        make_request(lapse_total=1000 * LAPSE)
+        lapse_total = 2000 * LAPSE
+        price = 1_000_000   # xlm_total works out to 200 XLM, well past the cap
+        make_order(lapse_total=lapse_total, price=price, maker_lapse=node.addr)
+        make_request(lapse_total=lapse_total)
         engine, _lapse, _xlm = make_maker_engine(node)
-        engine.lapse.balances[node.addr] = 1000 * LAPSE
+        engine.lapse.balances[node.addr] = lapse_total
 
-        tiny_cap = 1000   # far below what any split of this trade needs
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", tiny_cap, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
         assert Trade.select().count() == 0
         resp = node.publish_fill_response_calls[0]
         assert resp["accepted"] is False
+
+    def test_the_takers_own_weaker_trust_still_governs_the_schedule(
+            self, tmp_path, monkeypatch):
+        """This node (the maker) may trust the taker highly, but the
+        schedule it signs must still respect the TAKER's own trust of
+        THIS node, not just this node's generosity toward them (see
+        swap.plan_mutual). Otherwise a maker's own high trust of someone
+        could hand that counterparty a step bigger than the counterparty
+        would ever agree to risk with this maker itself."""
+        node = FakeDiscoveryNode(tmp_path, balances={})
+        make_order(direction="sell", maker_lapse=node.addr)
+        req = make_request()
+        engine, _lapse, _xlm = make_maker_engine(node)
+        engine.lapse.balances[node.addr] = req.lapse_total
+
+        # my_trust_of_taker is generous, taker_trust_of_me is a total
+        # stranger's zero.
+        monkeypatch.setattr(swap_engine.trust_mod, "mutual_scores",
+                            lambda _node, _addr: (10**6, 0.0))
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 1
+
+        trade = Trade.get(Trade.session_id == req.session_id)
+        expected_cap = swap.exposure_cap_stroops(0.0)   # the taker's own view
+        steps = list(Increment.select()
+                    .where(Increment.session_id == req.session_id))
+        assert max(s.xlm_amount for s in steps) <= expected_cap
+        assert trade.increment_count == swap.increment_count(
+            trade.xlm_total, expected_cap)
 
     def test_an_already_answered_request_is_not_answered_twice(self, tmp_path):
         node = FakeDiscoveryNode(tmp_path, balances={})
@@ -1344,8 +1377,8 @@ class TestAnswerFillRequests:
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 0
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 0
         assert Trade.select().count() == 1
         assert len(node.publish_fill_response_calls) == 1
 
@@ -1359,7 +1392,7 @@ class TestAnswerFillRequests:
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = 10 * LAPSE
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 2
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 2
 
     def test_a_tie_in_trust_never_makes_both_sides_believe_they_open(self, tmp_path):
         """The unsafe reading of a tie: if the maker independently
@@ -1388,7 +1421,7 @@ class TestAnswerFillRequests:
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 2) == 1
         first = Increment.get(Increment.id == f"{req.session_id}:1")
 
         # What the taker's own node independently derives for itself,
@@ -1464,7 +1497,7 @@ class TestAnswerFillRequestsIsSerializedAcrossThreads:
             def run(name, order_row, req):
                 barrier.wait(timeout=5)
                 results[name] = swap_engine._answer_one(
-                    engine, node, "GMAKER", 5 * XLM, 2, order_row, req)
+                    engine, node, "GMAKER", 2, order_row, req)
 
             t1 = threading.Thread(target=run, args=("worker", order_a, req_a),
                                   name="worker")
@@ -1514,7 +1547,7 @@ class TestAutoAcceptTrustFloor:
         # No trade history and no chain history for the taker, so its
         # trust score is 0; any positive floor excludes it.
         assert swap_engine.answer_fill_requests(
-            engine, node, "GMAKER", 5 * XLM, 2, min_trust=0.1) == 0
+            engine, node, "GMAKER", 2, min_trust=0.1) == 0
         assert Trade.select().count() == 0
         assert node.publish_fill_response_calls == []
 
@@ -1526,7 +1559,7 @@ class TestAutoAcceptTrustFloor:
         engine.lapse.balances[node.addr] = req.lapse_total
 
         assert swap_engine.answer_fill_requests(
-            engine, node, "GMAKER", 5 * XLM, 2, min_trust=0.0) == 1
+            engine, node, "GMAKER", 2, min_trust=0.0) == 1
         assert Trade.select().count() == 1
 
     def test_a_request_left_pending_by_the_floor_can_still_be_accepted_by_hand(
@@ -1538,28 +1571,32 @@ class TestAutoAcceptTrustFloor:
         engine.lapse.balances[node.addr] = req.lapse_total
 
         assert swap_engine.answer_fill_requests(
-            engine, node, "GMAKER", 5 * XLM, 2, min_trust=0.1) == 0
+            engine, node, "GMAKER", 2, min_trust=0.1) == 0
 
         # decide_fill_request never takes min_trust: a person clicking
         # Accept has already made the call the floor exists to require.
         assert swap_engine.decide_fill_request(
-            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=True) is True
+            engine, node, "GMAKER", 2, req.request_id, accept=True) is True
         assert Trade.select().count() == 1
 
     def test_the_exposure_cap_still_declines_outright_regardless_of_the_floor(
             self, tmp_path):
         """A request that cannot fit even manually is not something a
         person can rescue by clicking Accept, so it is still auto-
-        declined rather than left pending."""
+        declined rather than left pending. Sized well past
+        swap.max_safe_trade_stroops(DEFAULT_STRANGER_CAP_STROOPS), the
+        real, fixed cap (see plan_mutual's own comment above for why a
+        test can no longer dial a per-node cap down directly)."""
         node = FakeDiscoveryNode(tmp_path, balances={})
-        make_order(lapse_total=1000 * LAPSE, price=1000, maker_lapse=node.addr)
-        req = make_request(lapse_total=1000 * LAPSE)
+        lapse_total = 2000 * LAPSE
+        price = 1_000_000
+        make_order(lapse_total=lapse_total, price=price, maker_lapse=node.addr)
+        req = make_request(lapse_total=lapse_total)
         engine, _lapse, _xlm = make_maker_engine(node)
-        engine.lapse.balances[node.addr] = 1000 * LAPSE
+        engine.lapse.balances[node.addr] = lapse_total
 
-        tiny_cap = 1000
         assert swap_engine.answer_fill_requests(
-            engine, node, "GMAKER", tiny_cap, 2, min_trust=0.1) == 0
+            engine, node, "GMAKER", 2, min_trust=0.1) == 0
         resp = node.publish_fill_response_calls[0]
         assert resp["accepted"] is False
 
@@ -1578,7 +1615,7 @@ class TestManualFillDecisions:
         engine.lapse.balances[node.addr] = req.lapse_total
 
         assert swap_engine.answer_fill_requests(
-            engine, node, "GMAKER", 5 * XLM, 2, min_trust=float("inf")) == 0
+            engine, node, "GMAKER", 2, min_trust=float("inf")) == 0
         assert Trade.select().count() == 0
         assert node.publish_fill_response_calls == []
 
@@ -1590,7 +1627,7 @@ class TestManualFillDecisions:
         engine.lapse.balances[node.addr] = req.lapse_total
 
         assert swap_engine.decide_fill_request(
-            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=True) is True
+            engine, node, "GMAKER", 2, req.request_id, accept=True) is True
         trade = Trade.get(Trade.session_id == req.session_id)
         assert trade.role == "maker"
         resp = node.publish_fill_response_calls[0]
@@ -1598,16 +1635,19 @@ class TestManualFillDecisions:
 
     def test_decide_fill_request_still_enforces_the_exposure_cap(self, tmp_path):
         """A manual accept is not a weaker check than an automatic one:
-        the same trust/cap decision runs either way."""
+        the same trust/cap decision runs either way. Sized well past
+        swap.max_safe_trade_stroops(DEFAULT_STRANGER_CAP_STROOPS), the
+        real, fixed cap."""
         node = FakeDiscoveryNode(tmp_path, balances={})
-        make_order(lapse_total=1000 * LAPSE, price=1000, maker_lapse=node.addr)
-        req = make_request(lapse_total=1000 * LAPSE)
+        lapse_total = 2000 * LAPSE
+        price = 1_000_000
+        make_order(lapse_total=lapse_total, price=price, maker_lapse=node.addr)
+        req = make_request(lapse_total=lapse_total)
         engine, _lapse, _xlm = make_maker_engine(node)
-        engine.lapse.balances[node.addr] = 1000 * LAPSE
+        engine.lapse.balances[node.addr] = lapse_total
 
-        tiny_cap = 1000
         assert swap_engine.decide_fill_request(
-            engine, node, "GMAKER", tiny_cap, 2, req.request_id, accept=True) is False
+            engine, node, "GMAKER", 2, req.request_id, accept=True) is False
         assert Trade.select().count() == 0
         resp = node.publish_fill_response_calls[0]
         assert resp["accepted"] is False
@@ -1621,7 +1661,7 @@ class TestManualFillDecisions:
         # fund anything, unlike an accept.
 
         assert swap_engine.decide_fill_request(
-            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=False) is True
+            engine, node, "GMAKER", 2, req.request_id, accept=False) is True
         assert Trade.select().count() == 0
         resp = node.publish_fill_response_calls[0]
         assert resp["accepted"] is False
@@ -1635,16 +1675,16 @@ class TestManualFillDecisions:
         engine.lapse.balances[node.addr] = req.lapse_total
 
         swap_engine.decide_fill_request(
-            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=True)
+            engine, node, "GMAKER", 2, req.request_id, accept=True)
         assert swap_engine.decide_fill_request(
-            engine, node, "GMAKER", 5 * XLM, 2, req.request_id, accept=False) is False
+            engine, node, "GMAKER", 2, req.request_id, accept=False) is False
         assert Trade.select().count() == 1
 
     def test_an_unknown_request_id_is_reported_as_not_handled(self, tmp_path):
         node = FakeDiscoveryNode(tmp_path)
         engine, _lapse, _xlm = make_maker_engine(node)
         assert swap_engine.decide_fill_request(
-            engine, node, "GMAKER", 5 * XLM, 2, "no-such-request", accept=False) is False
+            engine, node, "GMAKER", 2, "no-such-request", accept=False) is False
 
 
 class TestCheckFillResponses:
@@ -1697,6 +1737,72 @@ class TestCheckFillResponses:
         assert swap_engine.check_fill_responses(node, confirm_depth=2) == 0
         assert Trade.select().count() == 0
 
+    def test_a_step_the_taker_would_not_have_risked_is_refused(
+            self, tmp_path, monkeypatch):
+        """Regression test for the hole where only the maker's own trust
+        of the taker sized a step: a maker who trusts this taker highly
+        could otherwise sign a schedule with steps far above what this
+        taker's own (much lower) trust of the maker would ever allow,
+        and this node used to open that trade anyway, on the maker's
+        signature alone. _open_taker_trade must independently recompute
+        the mutual cap (swap.mutual_exposure_cap_stroops) and refuse a
+        response whose schedule exceeds it, even though the response is
+        genuinely signed by the order's real maker and every other
+        field matches the order."""
+        node = FakeDiscoveryNode(tmp_path)
+        sk, pk = crypto.generate_keypair()
+        maker_addr = crypto.public_key_to_address(pk)
+        keyfile = str(tmp_path / "maker3.key")
+        crypto.save_key(keyfile, sk, pk, "pw")
+        kek = crypto.derive_kek(keyfile, "pw")
+
+        lapse_total = 20 * LAPSE
+        price = 1000
+        xlm_total = swap.xlm_for_lapse(lapse_total, price)
+        make_order(direction="sell", maker_lapse=maker_addr, price=price,
+                  lapse_total=lapse_total)
+        req = make_request(taker_lapse=node.addr, taker_xlm="GTAKER",
+                           lapse_total=lapse_total)
+
+        # The maker "trusts" this taker a great deal (so it is willing
+        # to accept in just MIN_INCREMENTS steps), but this taker's own
+        # trust of the maker is zero - a total stranger by this node's
+        # own reckoning.
+        monkeypatch.setattr(swap_engine.trust_mod, "mutual_scores",
+                            lambda _node, _addr: (0.0, 0.0))
+        # What the maker's one-sided generosity alone would have signed,
+        # were nothing here checking the taker's own (much lower) trust
+        # of the maker too - the exact schedule this test crafts below.
+        _sched, generous_count, generous_cap = swap.plan(
+            lapse_total, xlm_total, trust_score=10**6)
+        stranger_cap = swap.exposure_cap_stroops(0.0)
+        assert generous_cap > stranger_cap   # sanity: the scenario is real
+
+        resp = market_mod.build_fill_response(
+            request_id=req.request_id, order_id=req.order_id,
+            session_id=req.session_id, lapse_total=req.lapse_total,
+            accepted=True, maker_pubkey_hex=pk.hex(),
+            accepted_height=1000, confirm_depth=2,
+            xlm_total=xlm_total, direction="sell", maker_xlm_addr="GMAKER",
+            maker_opens=True, increment_count=generous_count)
+        market_mod.sign_fill_response(resp, keyfile, kek)
+        trade_storage.FillResponse.create(
+            request_id=resp["request_id"], order_id=resp["order_id"],
+            session_id=resp["session_id"], lapse_total=resp["lapse_total"],
+            accepted=resp["accepted"], increment_count=resp["increment_count"],
+            reason=resp["reason"], maker_pubkey=resp["maker_pubkey"],
+            accepted_height=resp["accepted_height"], confirm_depth=resp["confirm_depth"],
+            xlm_total=resp["xlm_total"], direction=resp["direction"],
+            maker_xlm_addr=resp["maker_xlm_addr"], maker_opens=resp["maker_opens"],
+            signature=resp["signature"], received_at=time.time())
+
+        # This node's own mutual_scores (both directions zero, a total
+        # stranger) is what check_fill_responses actually consults; the
+        # generous schedule above was only ever built to show what the
+        # maker COULD have signed under its own, one-sided view.
+        assert swap_engine.check_fill_responses(node, confirm_depth=2) == 0
+        assert Trade.select().count() == 0
+
 
 class TestAutoMatchOrders:
     """Proactively taking a compatible order already resting in the
@@ -1718,7 +1824,7 @@ class TestAutoMatchOrders:
                   maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 1
         assert len(node.publish_fill_request_calls) == 1
         req = node.publish_fill_request_calls[0]
         assert req["order_id"] == "theirs"
@@ -1736,7 +1842,7 @@ class TestAutoMatchOrders:
                   maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 0
         assert node.publish_fill_request_calls == []
 
     def test_a_buy_order_matching_a_cheaper_sell_pays_lapse_or_xlm_correctly(
@@ -1754,7 +1860,7 @@ class TestAutoMatchOrders:
                   maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 1
         req = node.publish_fill_request_calls[0]
         assert req["order_id"] == "theirs"
 
@@ -1766,8 +1872,8 @@ class TestAutoMatchOrders:
                   maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 1
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 0
         assert len(node.publish_fill_request_calls) == 1
 
     def test_insufficient_funding_skips_the_match(self, tmp_path):
@@ -1783,7 +1889,7 @@ class TestAutoMatchOrders:
         engine, lapse, _xlm = make_maker_engine(node)
         lapse.balances[node.addr] = 0
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 0
         assert node.publish_fill_request_calls == []
 
     def test_a_locked_wallet_sends_nothing(self, tmp_path):
@@ -1796,13 +1902,13 @@ class TestAutoMatchOrders:
                                     FakeChain("xlm", "GMINE"),
                                     lambda: (None, None))
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 0
         assert node.publish_fill_request_calls == []
 
     def test_no_own_orders_is_a_no_op(self, tmp_path):
         node = FakeDiscoveryNode(tmp_path)
         engine, _lapse, _xlm = make_maker_engine(node)
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 0
 
     def test_a_near_miss_within_the_margin_is_matched(self, tmp_path):
         """A resting buy at 950 does not cross a sell asking 1000
@@ -1816,7 +1922,7 @@ class TestAutoMatchOrders:
                   maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 1
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 1
         req = node.publish_fill_request_calls[0]
         assert req["order_id"] == "theirs"
 
@@ -1828,7 +1934,7 @@ class TestAutoMatchOrders:
                   maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM) == 0
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 0
         assert node.publish_fill_request_calls == []
 
     def test_a_sent_request_never_reveals_the_margin(self, tmp_path):
@@ -1842,23 +1948,23 @@ class TestAutoMatchOrders:
                   maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        swap_engine.auto_match_orders(engine, node, "GMINE", 5 * XLM)
+        swap_engine.auto_match_orders(engine, node, "GMINE")
         req = node.publish_fill_request_calls[0]
         assert set(req) - {"signature"} == set(market_mod.FILL_REQUEST_SIGNED_FIELDS)
 
     def test_the_exposure_cap_still_bounds_the_sent_amount(self, tmp_path):
-        """A stranger counterparty's exposure cap is small; the amount
-        this node asks for must fit inside it rather than the whole of
-        either order."""
+        """A stranger counterparty's exposure cap (the real, fixed
+        DEFAULT_STRANGER_CAP_STROOPS - see swap.plan_mutual) is small
+        relative to a high-priced order; the amount this node asks for
+        must fit inside it rather than the whole of either order."""
         node = FakeDiscoveryNode(tmp_path)
-        make_order(order_id="mine", direction="sell", price=1000,
+        make_order(order_id="mine", direction="sell", price=1_000_000,
                   lapse_total=1000 * LAPSE, maker_lapse=node.addr, maker_xlm="GMINE")
-        make_order(order_id="theirs", direction="buy", price=1050,
+        make_order(order_id="theirs", direction="buy", price=1_050_000,
                   lapse_total=1000 * LAPSE, maker_lapse="other.maker", maker_xlm="GOTHER")
         engine, _lapse, _xlm = make_maker_engine(node)
 
-        tiny_cap = 1000
-        assert swap_engine.auto_match_orders(engine, node, "GMINE", tiny_cap) == 1
+        assert swap_engine.auto_match_orders(engine, node, "GMINE") == 1
         req = node.publish_fill_request_calls[0]
         assert req["lapse_total"] < 1000 * LAPSE
 
@@ -1946,6 +2052,34 @@ class TestVerifyTradeAgainstChain:
             self._deliver_step(lapse, xlm, req, resp, maker_addr, n, la, xa)
         settled, total, at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
         assert (settled, total, at_fault) == (2, 2, None)
+
+    def test_respects_the_trades_own_deeper_confirm_depth_not_just_the_floor(self):
+        """Regression test: a bystander reconstructing this trade must
+        hold a LapseCoin leg to the depth the two parties actually
+        agreed to (resp.confirm_depth), not the bare protocol floor
+        (MIN_CONFIRM_DEPTH). Otherwise a trade that chose a deeper depth
+        for extra reorg safety could be reported settled here before
+        either real party would consider it so - exactly the gap a
+        reorg between the floor and the agreed depth could exploit to
+        misjudge blame."""
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=1, confirm_depth=5)
+        schedule = swap.build_schedule(resp.lapse_total, resp.xlm_total, resp.increment_count)
+        la, xa = schedule[0]
+        self._deliver_step(lapse, xlm, req, resp, maker_addr, 1, la, xa)
+
+        # Buried deeper than the bare MIN_CONFIRM_DEPTH floor (2), but
+        # short of this trade's own agreed depth (5): the old, wrong
+        # behaviour (using MIN_CONFIRM_DEPTH unconditionally) would
+        # already call this settled.
+        lapse.depth = 3
+        settled, total, _at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total) == (0, 1)
+
+        # Once it actually reaches the agreed depth, it counts.
+        lapse.depth = 5
+        settled, total, _at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total) == (1, 1)
 
     def test_nobody_has_moved_yet_blames_nobody(self):
         engine, lapse, xlm, maker_addr = self._engine()

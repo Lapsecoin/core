@@ -132,27 +132,22 @@ SWAP_CONFIRM_DEPTH = Setting(
          "blocks.",
 )
 
-# The most this node will have outstanding in one step of a swap with a
-# counterparty it has no history with, in stroops (10,000,000 to the XLM).
+# There used to be a per-node setting here, the most this node would
+# have outstanding in one step with a stranger. It was never really node-
+# local policy the way it claimed to be, despite living in this file
+# ("operator policy, never protocol", see the module docstring): it fed
+# straight into the exposure cap a maker computed when accepting a fill,
+# which is a number the maker signs into the FillResponse and the other
+# side (and any bystander reconstructing the trade later, see
+# trust._network_tally_by_counterparty) has to be able to recompute
+# identically to check it. A value either side could privately tune made
+# that impossible to verify and turned trade sizing into something a
+# maker unilaterally decided rather than a fact both parties' own public
+# trust history determines - exactly the asymmetry swap.plan_mutual and
+# swap_engine._open_taker_trade's own cap check now close. What used to
+# be this setting is swap.DEFAULT_STRANGER_CAP_STROOPS: one fixed number
+# every node computes a trade's terms from, not an operator dial.
 #
-# This is the number that decides how much a stranger can actually take
-# from you: a swap is delivered in steps and a step is only sent once the
-# previous one settled, so the worst case is exactly one step. Lowering it
-# makes that worst case smaller and the trade longer, since the same total
-# is delivered in more pieces.
-#
-# Trust raises this per counterparty and never removes it, and the trade
-# is refused outright rather than made riskier if it cannot be split
-# finely enough (see swap.plan).
-SWAP_STRANGER_CAP_STROOPS = Setting(
-    "swap_stranger_cap_stroops", 50_000_000, int, minimum=1_000,
-    label="Maximum exposure per step (stroops)",
-    help="The most that can be outstanding at any moment when trading "
-         "with someone you have no history with. 10,000,000 stroops is 1 "
-         "XLM. This is your worst case if a stranger takes a payment and "
-         "walks away. Lower is safer and splits a trade into more steps.",
-)
-
 # The trust score (trust.get_detail's "score") a counterparty must have
 # with this node before a fill request against your own order auto-
 # accepts. Below it, the request is not declined, it sits on the Market
@@ -196,8 +191,7 @@ SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
 # Node._handle_inbound_alive), so neither has anything left to do: there
 # is no advertised address to make private, and no second key to hold the
 # proceeds.
-ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH,
-       SWAP_STRANGER_CAP_STROOPS, SWAP_AUTO_ACCEPT_MIN_TRUST]
+ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH, SWAP_AUTO_ACCEPT_MIN_TRUST]
 
 
 # How long a value read from storage is reused before going back to the

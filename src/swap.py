@@ -300,22 +300,17 @@ def build_schedule(lapse_total, xlm_total, count):
     return list(zip(lapse_parts, xlm_parts))
 
 
-def plan(lapse_total, xlm_total, trust_score,
-         stranger_cap=DEFAULT_STRANGER_CAP_STROOPS, peer_stake_stroops=None):
-    """Everything about how a trade will be executed, decided up front.
+def _plan_for_cap(lapse_total, xlm_total, cap):
+    """Everything about how a trade will be executed, given a cap already
+    decided. Returns (schedule, count, cap).
 
-    Returns (schedule, count, cap). Raising TradeTooLarge here, before a
-    trade exists, is what keeps the refusal cheap and legible: the user is
-    told the limit while they are still choosing an amount.
-
-    The cap is then checked against the schedule that was actually built,
+    The cap is checked against the schedule that was actually built,
     rather than trusted from the arithmetic that chose the count. Integer
     rounding can leave one step a little above what the formula solved
     for, and this is the number that decides how much is at risk, so it is
     verified rather than assumed. A step over the line adds another step
     and rebuilds.
     """
-    cap = exposure_cap_stroops(trust_score, stranger_cap, peer_stake_stroops)
     count = increment_count(xlm_total, cap)
     while count <= MAX_INCREMENTS:
         schedule = build_schedule(lapse_total, xlm_total, count)
@@ -323,6 +318,74 @@ def plan(lapse_total, xlm_total, trust_score,
             return schedule, count, cap
         count += 1
     raise TradeTooLarge(xlm_total, max_safe_trade_stroops(cap), cap)
+
+
+def plan(lapse_total, xlm_total, trust_score,
+         stranger_cap=DEFAULT_STRANGER_CAP_STROOPS, peer_stake_stroops=None):
+    """Everything about how a trade will be executed, decided up front from
+    a single one-directional trust score. Returns (schedule, count, cap).
+
+    Raising TradeTooLarge here, before a trade exists, is what keeps the
+    refusal cheap and legible: the user is told the limit while they are
+    still choosing an amount.
+
+    This sizes a step from only one side's opinion of the other, which is
+    the shape that used to let a maker unilaterally hand a taker a
+    schedule the taker's own risk policy would never have picked (see
+    plan_mutual, which is what an actual trade between two parties must
+    use instead: nobody but the side actually at risk on a step gets to
+    decide how large it is, and neither side may pick a smaller one to
+    weaken the other's protection). Kept for callers that only ever
+    reason about their own exposure to someone else's already-fixed
+    resting order (market_routes.pending_maker_requests' own "would this
+    fit" preview; auto_match_orders' initial sizing of how much to even
+    ask for, before the resting order's own maker independently applies
+    plan_mutual when it decides).
+    """
+    cap = exposure_cap_stroops(trust_score, stranger_cap, peer_stake_stroops)
+    return _plan_for_cap(lapse_total, xlm_total, cap)
+
+
+def mutual_exposure_cap_stroops(my_trust_of_peer, peer_trust_of_me,
+                                stranger_cap=DEFAULT_STRANGER_CAP_STROOPS,
+                                peer_stake_stroops=None, my_stake_stroops=None):
+    """The cap that actually governs a step between two specific parties:
+    the smaller of what each side's own trust of the other would allow.
+
+    A trade has exactly one schedule, not one proposed by whichever side
+    happens to be the maker and rubber-stamped by the other. Both
+    my_trust_of_peer and peer_trust_of_me come from trust.mutual_scores,
+    which either party (or a bystander) can compute identically from
+    public chain data alone (see that function's own docstring), so this
+    number is a fact both sides land on independently, not something
+    either one gets to negotiate, offer, or unilaterally set larger than
+    the other would accept. Taking the minimum is what makes it binding
+    on the side actually bearing the risk of a given step, whichever side
+    that is: the maker's cap alone protected only the maker, and nothing
+    protected the taker but the maker's own discretion.
+    """
+    my_cap = exposure_cap_stroops(my_trust_of_peer, stranger_cap, peer_stake_stroops)
+    peer_cap = exposure_cap_stroops(peer_trust_of_me, stranger_cap, my_stake_stroops)
+    return min(my_cap, peer_cap)
+
+
+def plan_mutual(lapse_total, xlm_total, my_trust_of_peer, peer_trust_of_me,
+                stranger_cap=DEFAULT_STRANGER_CAP_STROOPS,
+                peer_stake_stroops=None, my_stake_stroops=None):
+    """plan(), but sized from both parties' trust of each other rather
+    than one side's opinion alone (see mutual_exposure_cap_stroops).
+
+    This is the one schedule a trade between two specific addresses has:
+    computed the same way by the maker deciding whether to accept and by
+    the taker independently checking what it is about to open (see
+    swap_engine._answer_one_locked and _open_taker_trade), with no round
+    of either side proposing a number the other might want changed.
+    Returns (schedule, count, cap).
+    """
+    cap = mutual_exposure_cap_stroops(my_trust_of_peer, peer_trust_of_me,
+                                      stranger_cap, peer_stake_stroops,
+                                      my_stake_stroops)
+    return _plan_for_cap(lapse_total, xlm_total, cap)
 
 
 # ---------------------------------------------------------------------------
