@@ -148,8 +148,9 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 No LAPSE exchange listings yet.
 
-In the meantime, [Discord](https://discord.gg/FP2d8JmK6r) hosts direct trades: 1 LAPSE for 1 SATOX. SATOX (Satoxcoin) is listed on the exchanges linked from the [satoxcoin repo](https://github.com/satoverse/satoxcoin).
-
+In the meantime, [Discord](https://discord.gg/FP2d8JmK6r) hosts direct trades: 1 LAPSE for 25 SATOX. SATOX (Satoxcoin) is listed on the exchanges linked from the [satoxcoin repo](https://github.com/satoverse/satoxcoin).
+Market page allows p2p exchanges LAPSE <-> XLM.
+Default rate is 1 XLM for 1000 LAPSE.
 ---
 
 <div align="center" id="support">
