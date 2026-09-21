@@ -510,7 +510,9 @@ class TestMyOrders:
             request_id="r" * 16, order_id="o1", session_id="s" * 16,
             lapse_total=4 * LAPSE, accepted=True, increment_count=3,
             reason="", maker_pubkey_hex=pk.hex(),
-            accepted_height=100, confirm_depth=2)
+            accepted_height=100, confirm_depth=2,
+            xlm_total=4000 * XLM, direction="sell", maker_xlm_addr="GMAKER",
+            maker_opens=True)
         market_mod.sign_fill_response(resp, keyfile, kek)
         market_mod.store_fill_response(resp)
         rows = market_routes._my_orders(self._Node(maker_addr), height=100)

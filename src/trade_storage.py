@@ -283,6 +283,25 @@ class FillResponse(_TradeBase):
     schedule; it always carries increment_count, so nothing about how
     many steps a trade will run is decided anywhere but here, once, by
     the side actually accepting the exposure.
+
+    xlm_total/direction/maker_xlm_addr make an ACCEPTED response, paired
+    with its own FillRequest (which already carries the taker's two
+    addresses and lapse_total), a fully self-sufficient record of one
+    trade's terms - nothing about the Order that produced it needs to
+    survive for anyone to independently recompute the whole schedule,
+    every step's memo, and every step's deadline_height (see
+    swap.build_schedule, swap.session_tag, swap_engine.deadline_height).
+    This is what let step-receipt gossip be removed outright (see
+    market.py's former "step receipts" section, and prune_fill_responses/
+    prune_fill_requests, which now keep an ACCEPTED pair indefinitely
+    instead of pruning it within the hour): a receipt only ever existed
+    to hand a third party a pointer to data that would otherwise have
+    been thrown away, and its own verdict was always independently
+    recomputed from the chain regardless of what the reporter claimed
+    (see swap_engine.verify_trade_against_chain). Once the terms
+    themselves are what's kept, the pointer, and the entire signed-
+    claim-plus-admission-control apparatus around it, has nothing left
+    to do.
     """
     request_id = TextField(primary_key=True)
     order_id = TextField(index=True)
@@ -298,92 +317,50 @@ class FillResponse(_TradeBase):
     # declined included, so the schema is one shape regardless of outcome.
     accepted_height = IntegerField(default=0)
     confirm_depth = IntegerField(default=0)
+    # The order's own terms, echoed here at accept time for the same
+    # reason lapse_total already was: an order can expire and be pruned
+    # (market.prune_expired) long before anyone needs to recompute an
+    # old trade's schedule from what's left in this table.
+    xlm_total = IntegerField(default=0)
+    direction = TextField(default="")           # the ORDER's own "buy"/"sell"
+    maker_xlm_addr = TextField(default="")
+    # Which side opens the first increment (see swap.opening_mover), fixed
+    # at accept time and signed here rather than left for a reader to
+    # recompute later: trust scores move as new trades settle, so a
+    # bystander re-deriving this from "current" trust could disagree with
+    # what the two parties actually used to build their schedule.
+    maker_opens = BooleanField(default=True)
     signature = TextField()
     received_at = FloatField()
 
 
-class StepReceipt(_TradeBase):
-    """A compact, signed claim that one step of one trade settled or was
-    missed, gossiped exactly like an order so any node can eventually see
-    it, verify it, and fold it into trust for an address it never itself
-    traded with.
-
-    The signature identifies who is reporting, for admission control and
-    dedup, nothing more: the claim's actual weight comes from being
-    checkable against public chain data, not from trusting the reporter.
-    A false "settled" claim fails the tx-hash lookup it points to; a false
-    "missed" claim is contradicted the moment a checker finds the payment
-    it says does not exist. See swap_engine.verify_receipt_against_chain.
-
-    Deliberately not pruned on FillRequest/FillResponse's short timer:
-    unlike those, which exist only to arbitrate a brief window of live
-    capacity, a receipt is the reputation record itself and is meant to
-    outlive the trade it describes.
-    """
-    receipt_id = TextField(primary_key=True)
-    order_id = TextField(index=True)
-    session_id = TextField(index=True)
-    n = IntegerField()
-    # Whoever is reporting: the party who can see the outcome directly,
-    # i.e. the one who sent the leg (for "settled") or the one still
-    # owed it (for "missed"). Signed with this address's LapseCoin key.
-    reporter_lapse_addr = TextField(index=True)
-    # The two addresses this receipt is *about*, sorted so a given pair
-    # always lands in the same two columns regardless of which one sent
-    # this particular leg; both indexed so a trust lookup for either
-    # address is a plain indexed query, not a string scan.
-    addr_a = TextField(index=True)
-    addr_b = TextField(index=True)
-    asset = TextField()                  # "lapse" | "xlm"
-    from_addr = TextField()
-    to_addr = TextField()
-    amount = IntegerField()
-    memo = TextField()
-    outcome = TextField()                # "settled" | "missed"
-    tx_hash = TextField(default="")      # set when outcome == "settled"
-    # The LapseCoin height the leg was due by, and the height at which a
-    # "missed" claim asserts it still had not arrived. Both public and
-    # independently recomputable; see swap_engine.deadline_height.
-    deadline_height = IntegerField(default=0)
-    checked_at_height = IntegerField(default=0)
-    pubkey = TextField()
-    signature = TextField()
-    received_at = FloatField()
-    # This node's own re-check of the claim against the chain(s): None
-    # until looked at, then True/False. Lazy on purpose, see trust.py:
-    # a receipt sits here unverified, at the cost of one row, until
-    # something actually needs this specific address's trust, and that
-    # lookup happens on the caller's own thread at query time, not in a
-    # background sweep.
-    verified = BooleanField(null=True, default=None)
-    # The LapseCoin height verified was last set at. A "settled" verdict
-    # is monotonic (see trust.py) and never re-checked once true or once
-    # a false claim is caught, so this only matters for "missed": it is
-    # what lets a trust lookup skip re-verifying a claim it already
-    # checked at this exact height, without needing a scheduled sweep to
-    # decide when a re-check is "due".
-    verified_at_height = IntegerField(default=0)
-
-
-TRADE_TABLES = [Order, Trade, Increment, FillRequest, FillResponse, StepReceipt]
+TRADE_TABLES = [Order, Trade, Increment, FillRequest, FillResponse]
 
 _initialised = False
 
 
-def _migrate_receipt_verified_at_height():
-    """Backfill StepReceipt.verified_at_height for a database created
-    before that column existed. create_tables(safe=True) below only
-    creates missing tables, not missing columns on one that already
-    exists, so an upgrade needs this the same way storage.py's own
-    _migrate_addrindex_memo does for the chain database. Existing rows
-    get 0, "never checked at any height", which is exactly what a fresh
-    row would carry, so nothing is lost by defaulting rather than
-    recomputing.
+def _migrate_fill_response_trade_terms():
+    """Backfill FillResponse's xlm_total/direction/maker_xlm_addr for a
+    database created before they existed. create_tables(safe=True)
+    below only creates missing tables, not missing columns on one that
+    already exists, so an upgrade needs this the same way storage.py's
+    own _migrate_addrindex_memo does for the chain database. A response
+    from before this column existed was pruned within the hour under
+    the old rules regardless, so there is nothing meaningful to backfill
+    into it - defaulting is exactly as informative as the row already
+    was by the time anyone could ask about it again.
     """
-    cols = {r[1] for r in db.execute_sql("PRAGMA table_info(stepreceipt)").fetchall()}
-    if "verified_at_height" not in cols:
-        db.execute_sql("ALTER TABLE stepreceipt ADD COLUMN verified_at_height "
-                       "INTEGER NOT NULL DEFAULT 0")
+    cols = {r[1] for r in db.execute_sql("PRAGMA table_info(fillresponse)").fetchall()}
+    if "xlm_total" not in cols:
+        db.execute_sql("ALTER TABLE fillresponse ADD COLUMN "
+                       "xlm_total INTEGER NOT NULL DEFAULT 0")
+        db.execute_sql("ALTER TABLE fillresponse ADD COLUMN "
+                       "direction TEXT NOT NULL DEFAULT ''")
+        db.execute_sql("ALTER TABLE fillresponse ADD COLUMN "
+                       "maker_xlm_addr TEXT NOT NULL DEFAULT ''")
+    if "maker_opens" not in cols:
+        db.execute_sql("ALTER TABLE fillresponse ADD COLUMN "
+                       "maker_opens INTEGER NOT NULL DEFAULT 1")
 
 
 def _migrate_order_auto_match_margin():
@@ -408,7 +385,7 @@ def init_tables():
     """
     global _initialised
     db.create_tables(TRADE_TABLES, safe=True)
-    _migrate_receipt_verified_at_height()
+    _migrate_fill_response_trade_terms()
     _migrate_order_auto_match_margin()
     _initialised = True
 

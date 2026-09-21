@@ -126,17 +126,20 @@ MT_ORDER     = 0x0F
 MT_FILL_REQUEST  = 0x11
 MT_FILL_RESPONSE = 0x12
 
-# A compact, signed claim that one leg of one step settled or was missed
-# (see market.py's step-receipts section). Same propagation and the same
-# backward-compatibility story as MT_ORDER: an older node simply falls
-# through _dispatch on a type it does not know, no floor bump needed.
-MT_RECEIPT = 0x13
+# 0x13 was MT_RECEIPT, a compact, signed claim that one leg of one step
+# settled or was missed. Retired outright rather than reused, the same
+# story as 0x10 above: an accepted (FillRequest, FillResponse) pair
+# already signs everything a schedule is built from, so any node can
+# reconstruct and check a step directly against the chain itself (see
+# swap_engine.verify_trade_against_chain) and no separate signed claim
+# about it is needed at all. A datagram still carrying 0x13 matches no
+# branch and is ignored.
 
 # A market backfill request/response, same shape and same reflection
 # protection as MT_GETSYNC/MT_SYNC: a newly-joined or long-disconnected
-# node's own copy of the order book and known receipts is otherwise only
-# ever whatever gossip happened to reach it after it started listening.
-# See request_market/_serve_market.
+# node's own copy of the order book and known accepted fills is
+# otherwise only ever whatever gossip happened to reach it after it
+# started listening. See request_market/_serve_market.
 MT_GET_MARKET = 0x14
 MT_MARKET     = 0x15
 
@@ -204,13 +207,13 @@ PUNCH_BURST_SPACING = 0.05
 MAX_SYNC_BLOCKS   = 500
 
 # Same reflection concern as MAX_SYNC_BLOCKS, for a market backfill: caps
-# how many orders and receipts one GET_MARKET can pull in a single
+# how many orders and accepted fills one GET_MARKET can pull in a single
 # response. A node that wants more asks again; there is no cursor or
 # pagination in this first cut, only a best-effort bootstrap that gets a
-# newly-joined node the current book and known receipts without it having
-# to wait for gossip to happen to reach it, see _serve_market.
+# newly-joined node the current book and known accepted fills without it
+# having to wait for gossip to happen to reach it, see _serve_market.
 MAX_MARKET_ORDERS = 2000
-MAX_MARKET_RECEIPTS = 5000
+MAX_MARKET_FILLS = 5000
 
 # Envelope room on top of a block: the genesis hash, the stemming flag, and
 # msgpack's own framing. Small and fixed, but the ceilings below have to
@@ -725,7 +728,7 @@ class UDPTransport:
         # (one-way, fire-and-forget) uses. See request_market.
         self._pending_market: dict[int, _PendingSync] = {}
         self._market_lock = threading.Lock()
-        self._get_market_fn = None  # set by main; (kinds) -> {"orders": [...], "receipts": [...]}
+        self._get_market_fn = None  # set by main; (kinds) -> {"orders": [...], "fills": [...]}
         # (target_addr, msg_id) -> {"chunks": {idx: bytes}, "acked": set(),
         # "msg_type": int, "event": Event}. Keyed by target too, not just
         # msg_id, because a broadcast (send_block) reuses one
@@ -775,7 +778,6 @@ class UDPTransport:
         self._on_order      = None  # set by main; swap orders from the network
         self._on_fill_request  = None  # set by main; fill requests from the network
         self._on_fill_response = None  # set by main; fill responses from the network
-        self._on_receipt = None        # set by main; step receipts from the network
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
         self._on_peer_hint  = None  # set by discovery; called with candidate addrs from a PING
@@ -980,15 +982,6 @@ class UDPTransport:
         self._broadcast(MT_FILL_RESPONSE, {"fill_response": response}, peers,
                         stemming, "fill response")
 
-    def send_receipt(self, receipt: dict, peers=None, stemming: bool = False):
-        """Put a signed step receipt on the wire. Same propagation as an
-        order: the reporter does not know who else holds the order or
-        session this receipt is about, only their addresses, so it has to
-        travel the same broadcast path everything else in this handshake
-        does."""
-        self._broadcast(MT_RECEIPT, {"receipt": receipt}, peers,
-                        stemming, "receipt")
-
     def send_peers(self, addr: str, peers: list[str]):
         """Send peer list to addr."""
         self._send_one(MT_PEERS, self._new_msg_id(),
@@ -1015,13 +1008,13 @@ class UDPTransport:
             self._pending_sync.pop(msg_id, None)
         return None
 
-    def request_market(self, addr: str, kinds=("order", "receipt"),
+    def request_market(self, addr: str, kinds=("order", "fill"),
                        timeout: float = SYNC_TIMEOUT):
-        """Ask addr for its current order book and/or known receipts.
-        Returns {"orders": [...], "receipts": [...]} or None on timeout.
+        """Ask addr for its current order book and/or known accepted fills.
+        Returns {"orders": [...], "fills": [...]} or None on timeout.
 
         Best-effort and single-shot: the response is capped
-        (MAX_MARKET_ORDERS/MAX_MARKET_RECEIPTS) and there is no cursor to
+        (MAX_MARKET_ORDERS/MAX_MARKET_FILLS) and there is no cursor to
         ask for more beyond that cap in this first cut, unlike chain sync's
         from_h/to_h paging. Good enough to get a newly-joined node off
         zero without waiting on gossip; not a substitute for gossip, which
@@ -1419,19 +1412,6 @@ class UDPTransport:
                     self._on_fill_response(response, sender_addr,
                                            bool(data.get("stemming", False)))
 
-        elif msg_type == MT_RECEIPT:
-            if self._is_new(msg_id):
-                self._pool.touch(sender_addr)
-                receipt = data.get("receipt")
-                # Handed up unverified, exactly as an order is: whether
-                # the signature holds, and separately whether the claim
-                # itself checks out against chain data, are both decided
-                # where the keys and the chains live, not at the
-                # transport. See Node._handle_inbound_receipt.
-                if isinstance(receipt, dict) and self._on_receipt:
-                    self._on_receipt(receipt, sender_addr,
-                                     bool(data.get("stemming", False)))
-
         elif msg_type == MT_GETSYNC:
             self._handle_getsync(msg_id, data, sender)
 
@@ -1567,11 +1547,11 @@ class UDPTransport:
                                      lambda: self._serve_market(msg_id, data, sender))
 
     def _serve_market(self, msg_id: int, data: dict, sender: tuple):
-        kinds = data.get("kinds", ["order", "receipt"])
+        kinds = data.get("kinds", ["order", "fill"])
         if not isinstance(kinds, list):
-            kinds = ["order", "receipt"]
+            kinds = ["order", "fill"]
         payload = (self._get_market_fn(kinds) if self._get_market_fn
-                  else {"orders": [], "receipts": []})
+                  else {"orders": [], "fills": []})
         compressed = zlib.compress(
             _encode({"genesis": self.genesis_hash, **payload}),
             BLOCK_COMPRESS_LEVEL)
@@ -1765,16 +1745,12 @@ class UDPTransport:
         """fn(response, sender_addr, stemming). Set by main after Node init."""
         self._on_fill_response = fn
 
-    def set_receipt_callback(self, fn):
-        """fn(receipt, sender_addr, stemming). Set by main after Node init."""
-        self._on_receipt = fn
-
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""
         self._get_chain_fn = fn
 
     def set_market_provider(self, fn):
-        """fn(kinds) -> {"orders": [...], "receipts": [...]}. Set by Node
+        """fn(kinds) -> {"orders": [...], "fills": [...]}. Set by Node
         after init; see _serve_market."""
         self._get_market_fn = fn
 

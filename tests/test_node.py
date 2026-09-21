@@ -743,6 +743,10 @@ def _signed_fill_response(maker, request_id="r" * 16, order_id="order-1",
         maker_pubkey_hex=maker["pubkey"],
         accepted_height=overrides.pop("accepted_height", 1000),
         confirm_depth=overrides.pop("confirm_depth", 2),
+        xlm_total=overrides.pop("xlm_total", 1000),
+        direction=overrides.pop("direction", "sell"),
+        maker_xlm_addr=overrides.pop("maker_xlm_addr", maker.get("xlm", "G" + "A" * 55)),
+        maker_opens=overrides.pop("maker_opens", True),
         increment_count=overrides.pop("increment_count", 3 if accepted else None),
         reason=overrides.pop("reason", "" if accepted else "no room"))
     resp.update(overrides)
@@ -2243,9 +2247,9 @@ class TestMarketProvider:
         market_mod.verify_order(order, current_height=0)
         market_mod.store_order(order)
 
-        out = node._market_provider(["order", "receipt"])
+        out = node._market_provider(["order", "fill"])
         assert out["orders"] == [market_mod.order_to_wire(market_mod.get_order(order["order_id"]))]
-        assert out["receipts"] == []
+        assert out["fills"] == []
 
     def test_only_the_requested_kinds_are_returned(self, node_env, tmp_path):
         node, *_rest = node_env
@@ -2255,35 +2259,30 @@ class TestMarketProvider:
         market_mod.verify_order(order, current_height=0)
         market_mod.store_order(order)
 
-        out = node._market_provider(["receipt"])
+        out = node._market_provider(["fill"])
         assert out["orders"] == []
 
 
 class TestBackfillMarketFrom:
-    def test_valid_orders_and_receipts_are_admitted(self, node_env, tmp_path):
+    def test_valid_orders_and_fills_are_admitted(self, node_env, tmp_path):
         node, *_rest = node_env
         trade_storage.init_tables()
         maker = _maker_identity(tmp_path)
         taker = _maker_identity(tmp_path, name="taker")
         order = _signed_order(maker)
 
-        addr_a, addr_b = sorted((maker["addr"], taker["addr"]))
-        receipt = market_mod.build_receipt(
-            order_id=order["order_id"], session_id="s" * 16, n=1,
-            reporter_lapse_addr=maker["addr"], addr_a=addr_a, addr_b=addr_b,
-            asset="lapse", from_addr=maker["addr"], to_addr=taker["addr"],
-            amount=1_000, memo="aaaaaaaa:bbbbbbbb:1", outcome="settled",
-            tx_hash="tx1", deadline_height=0, checked_at_height=0,
-            pubkey_hex=maker["pubkey"])
-        market_mod.sign_receipt(receipt, maker["keyfile"], maker["kek"])
+        req = _signed_fill_request(taker, order_id=order["order_id"])
+        resp = _signed_fill_response(
+            maker, request_id=req["request_id"], order_id=order["order_id"],
+            session_id=req["session_id"], maker_xlm_addr=maker["xlm"])
 
         node.gossip.udp.request_market.return_value = {
-            "orders": [order], "receipts": [receipt]}
+            "orders": [order], "fills": [{"request": req, "response": resp}]}
 
-        orders_added, receipts_added = node.backfill_market_from("1.2.3.4:9000")
-        assert (orders_added, receipts_added) == (1, 1)
+        orders_added, fills_added = node.backfill_market_from("1.2.3.4:9000")
+        assert (orders_added, fills_added) == (1, 1)
         assert market_mod.get_order(order["order_id"]) is not None
-        assert len(market_mod.receipts_for_addr(maker["addr"])) == 1
+        assert len(market_mod.accepted_fills_for_addr(maker["addr"])) == 1
 
     def test_a_forged_order_is_not_admitted(self, node_env, tmp_path):
         node, *_rest = node_env
@@ -2293,8 +2292,8 @@ class TestBackfillMarketFrom:
         order["lapse_total"] = order["lapse_total"] * 2   # tamper after signing
 
         node.gossip.udp.request_market.return_value = {
-            "orders": [order], "receipts": []}
-        orders_added, _receipts_added = node.backfill_market_from("1.2.3.4:9000")
+            "orders": [order], "fills": []}
+        orders_added, _fills_added = node.backfill_market_from("1.2.3.4:9000")
         assert orders_added == 0
         assert market_mod.get_order(order["order_id"]) is None
 

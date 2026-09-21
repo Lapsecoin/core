@@ -466,7 +466,7 @@ def register(app, node, csrf_token):
                                pending_requests=_pending_requests(node),
                                peers=peers, now=time.time(),
                                worker=_worker_view(node),
-                               receipts=_receipt_stats(),
+                               fills=_fill_stats(),
                                my_standing=peer_trust(node.addr),
                                my_addr=node.addr,
                                alert_ok="", alert_err="")
@@ -751,22 +751,20 @@ def _pending_requests(node):
     return rows
 
 
-def _receipt_stats():
-    """How much network-sourced reputation data this node currently
-    holds, and how much of it has not yet been chain-checked into
-    something trust actually counts. Verification here is lazy (see
-    trust._verify_addr_receipts): a receipt sits unverified until
-    something actually asks for that specific address's standing, so
-    "pending" is not a queue waiting its turn, it is simply "nobody has
-    needed this one yet". Without this a page has no way to show whether
-    a thin-looking track record means "nobody has reported anything" or
-    "something is reported but not yet confirmed"."""
-    from trade_storage import StepReceipt
+def _fill_stats():
+    """How much network-sourced trade data this node currently holds.
+
+    There is no "verified"/"pending" split any more (see
+    trust._network_tally_by_counterparty): nothing here is cached as
+    true or false ahead of time, every accepted (FillRequest,
+    FillResponse) pair is reconstructed and checked against the chain
+    fresh, only when something actually asks for a specific address's
+    standing.
+    """
+    from trade_storage import FillResponse
     ensure_tables()
-    total = StepReceipt.select().count()
-    verified = StepReceipt.select().where(StepReceipt.verified == True).count()  # noqa: E712
-    pending = StepReceipt.select().where(StepReceipt.verified.is_null()).count()
-    return {"total": total, "verified": verified, "pending": pending}
+    total = FillResponse.select().where(FillResponse.accepted == True).count()  # noqa: E712
+    return {"total": total}
 
 
 def _worker_view(node):

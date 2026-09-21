@@ -112,14 +112,6 @@ KIND_TX    = "tx"
 KIND_ORDER = "order"
 KIND_FILL_REQUEST  = "fill_request"
 KIND_FILL_RESPONSE = "fill_response"
-KIND_RECEIPT = "receipt"
-
-# Receipts are meant to be kept indefinitely (see market.StepReceipt), so
-# over a node's lifetime it accumulates far more of these than it ever
-# holds live fill requests/responses at once; sized closer to orders'
-# budget for that reason, on its own cache so a flood of receipts can
-# never touch the order, block or tx caches either.
-RECEIPT_SEEN_CACHE_SIZE = 20_000
 
 _SEEN_CACHE_SIZES = {
     KIND_BLOCK: SEEN_CACHE_SIZE,
@@ -127,7 +119,6 @@ _SEEN_CACHE_SIZES = {
     KIND_ORDER: ORDER_SEEN_CACHE_SIZE,
     KIND_FILL_REQUEST: FILL_REQUEST_SEEN_CACHE_SIZE,
     KIND_FILL_RESPONSE: FILL_RESPONSE_SEEN_CACHE_SIZE,
-    KIND_RECEIPT: RECEIPT_SEEN_CACHE_SIZE,
 }
 
 
@@ -263,8 +254,6 @@ class Gossip:
             self.udp.send_fill_request(item, peers=peers, stemming=stemming)
         elif kind == KIND_FILL_RESPONSE:
             self.udp.send_fill_response(item, peers=peers, stemming=stemming)
-        elif kind == KIND_RECEIPT:
-            self.udp.send_receipt(item, peers=peers, stemming=stemming)
         elif kind == KIND_TX:
             self.udp.send_tx(item, peers=peers, stemming=stemming)
         else:

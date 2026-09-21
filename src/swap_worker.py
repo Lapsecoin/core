@@ -28,9 +28,9 @@ Nothing here needs to be discovered by asking again on a clock. Every
 fact a pass could learn arrives at this node as a specific event first:
 a matching transaction lands in the mempool or a block (node's own
 gossip handlers), a new block changes what height means for every
-pending deadline (node._commit, node.apply_better_chain), a step
-receipt or fill request/response naming one of this node's own trades
-is gossiped in. node calls wake() at each of those points (see
+pending deadline (node._commit, node.apply_better_chain), a fill
+request or response naming one of this node's own trades is gossiped
+in. node calls wake() at each of those points (see
 node._wake_swap_worker and its call sites) and this thread simply runs
 one pass in response, on its own thread, off whatever hot path noticed
 the event. A pass that finds nothing to do costs one idle query per
@@ -110,10 +110,10 @@ MIN_PASS_INTERVAL_SECONDS = 2.0
 UNREACHABLE_BACKOFF_SECONDS = 120
 
 # How often to retry a market backfill (Node.backfill_market_from) while
-# this node's own book and receipt store are still both completely empty.
-# Only fires in that narrow condition, so this is a bootstrap aid, not a
-# replacement for gossip: once anything at all has arrived, by gossip or
-# by one successful backfill, this stops trying.
+# this node's own book and accepted-fill store are still both completely
+# empty. Only fires in that narrow condition, so this is a bootstrap aid,
+# not a replacement for gossip: once anything at all has arrived, by
+# gossip or by one successful backfill, this stops trying.
 BACKFILL_RETRY_SECONDS = 300
 
 
@@ -243,20 +243,9 @@ class SwapWorker:
                      corrected)
         return corrected
 
-    def _emit_receipts(self, engine, kek, trade):
-        """Wrap emit_receipts_for_trade so a bug or a missing signing key
-        in this best-effort, purely additive step can never stop the
-        trade-advancing or blame logic around it from running; those are
-        the ones that actually move or protect money."""
-        try:
-            swap_engine.emit_receipts_for_trade(engine, self.node, kek, trade)
-        except Exception:
-            log.exception("[swap] %s: emitting step receipts failed",
-                          trade.session_id)
-
     def _maybe_backfill_market(self):
         """Try once, every BACKFILL_RETRY_SECONDS, to pull the order book
-        and known receipts from a peer, but only while this node has
+        and known accepted fills from a peer, but only while this node has
         found precisely nothing of either kind yet: a book with even one
         row in it, gossiped or backfilled, is left to gossip from there.
         Needs no wallet and runs even while locked, since it only ever
@@ -268,7 +257,10 @@ class SwapWorker:
         if now < self._next_backfill_attempt:
             return
         self._next_backfill_attempt = now + BACKFILL_RETRY_SECONDS
-        if trade_storage.Order.select().count() or trade_storage.StepReceipt.select().count():
+        if (trade_storage.Order.select().count()
+                or trade_storage.FillResponse.select()
+                       .where(trade_storage.FillResponse.accepted == True)  # noqa: E712
+                       .count()):
             return
         pool = getattr(self.node, "pool", None)
         peer = pool.random() if pool is not None else None
@@ -341,27 +333,29 @@ class SwapWorker:
         except Exception:
             log.exception("[swap] pruning the order book failed")
 
-        # Nothing runs here to verify network-sourced receipts: that chain
+        # Nothing runs here to verify network-sourced trades: that chain
         # I/O now happens lazily, on whichever thread actually asks for a
-        # specific address's trust (see trust._verify_addr_receipts),
-        # bounded to that address's own receipts rather than a batch of
-        # whatever happens to be oldest. A page render or a fill decision
-        # pays for it directly, once, instead of a background sweep
-        # paying for it on a schedule regardless of whether anyone is
-        # looking.
+        # specific address's trust (see trust._network_tally_by_counterparty),
+        # bounded to that address's own accepted fills rather than a batch
+        # of whatever happens to be oldest. A page render or a fill
+        # decision pays for it directly, once, instead of a background
+        # sweep paying for it on a schedule regardless of whether anyone
+        # is looking.
         touched = 0
         # A trade stays in this set for as long as it is missing a leg,
         # however long that is: there is no separate status or pass for
         # one that has been stalled a long time (see trust.py's module
-        # docstring for why not). The same advance() call both keeps
-        # trying to move it and, via _emit_receipts below, is what lets
-        # is_delinquent's verdict reach the network once it applies.
+        # docstring for why not). Nothing needs to be emitted for a
+        # bystander to eventually notice a stall either: the accepted
+        # (FillRequest, FillResponse) pair that opened this trade was
+        # already gossiped at accept time, which is all
+        # swap_engine.verify_trade_against_chain needs to independently
+        # recompute is_delinquent's verdict for itself, on demand.
         for trade in Trade.select().where(
                 Trade.status.in_([TRADE_ACTIVE, TRADE_STALLED])):
             try:
                 engine.advance(trade)
                 touched += 1
-                self._emit_receipts(engine, kek, trade)
             except swap_engine.Unreachable as e:
                 # An outage says nothing about any trade, so nothing is
                 # concluded and nothing is blamed. Back off rather than

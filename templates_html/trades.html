@@ -183,25 +183,26 @@
   <p style="color:var(--ink-dim); font-style:italic">Nothing yet.</p>
 {% endif %}
 
-{% if receipts.total %}
+{% if fills.total %}
 <p class="stat-sub" style="margin-bottom:.3rem">
-  This node holds {{ receipts.total }} step receipt{{ '' if receipts.total == 1 else 's' }}
-  gossiped from across the network: {{ receipts.verified }} independently
-  checked against the chain and counted above, {{ receipts.pending }} not
-  yet needed for anyone's standing (checked the moment they are, not on a
-  schedule).
+  This node holds {{ fills.total }} accepted trade{{ '' if fills.total == 1 else 's' }}
+  gossiped from across the network, each independently reconstructed and
+  checked against the chain the moment anyone's standing actually needs
+  it - there is nothing to verify ahead of time and nothing cached, so a
+  trade counted above was just re-derived fresh from public data, not
+  taken on anyone's word.
 </p>
 {% endif %}
 
 <h2>Your own standing</h2>
 <p class="stat-sub" style="margin-bottom:.4rem">
   What this node itself can currently verify about your own address, the
-  same way it would compute anyone else's: completed trades from receipts
-  this node has checked against the chain, and any still-unresolved
-  "missed" claim. A different node may see a different picture if it has
-  verified different receipts, and this one keeps re-checking: a missed
-  claim is not permanent, it stops counting the moment the payment it
-  named actually shows up (see the pending count above).
+  same way it would compute anyone else's: completed trades and any
+  still-outstanding step, both reconstructed straight from accepted
+  trades and checked against the chain on the spot. A different node may
+  see a different picture if its own chain view differs, and this one
+  keeps re-checking: an outstanding step is not permanent, it stops
+  counting the moment the payment it names actually shows up.
 </p>
 <div class="card" style="margin-bottom:1rem">
   <table class="kv-table">

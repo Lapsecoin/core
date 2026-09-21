@@ -94,6 +94,10 @@ def signed_fill_response(maker, request_id="r" * 16, order_id="order-1",
         maker_pubkey_hex=maker["pubkey"],
         accepted_height=overrides.pop("accepted_height", 1000),
         confirm_depth=overrides.pop("confirm_depth", 2),
+        xlm_total=overrides.pop("xlm_total", 1000 * XLM),
+        direction=overrides.pop("direction", "sell"),
+        maker_xlm_addr=overrides.pop("maker_xlm_addr", maker["xlm"]),
+        maker_opens=overrides.pop("maker_opens", True),
         increment_count=overrides.pop("increment_count", 3 if accepted else None),
         reason=overrides.pop("reason", "" if accepted else "no room"))
     resp.update(overrides)
@@ -949,6 +953,20 @@ class TestFillRequestStorage:
         assert market.prune_fill_requests(now=time.time()) == 0
         assert market.get_fill_request(req["request_id"]) is not None
 
+    def test_a_request_with_an_accepted_response_is_never_pruned(self, taker, maker):
+        """Paired with its own accepted FillResponse, a request is now
+        part of the durable trade record itself (see
+        market.accepted_fills_for_addr) and must survive regardless of
+        age, the same way the accepted response beside it does."""
+        req = signed_fill_request(taker, request_id="req1" * 4)
+        market.store_fill_request(req)
+        resp = signed_fill_response(maker, request_id="req1" * 4, accepted=True)
+        market.store_fill_response(resp)
+        removed = market.prune_fill_requests(
+            now=time.time() + market.FILL_REQUEST_MAX_AGE_SECONDS + 100_000)
+        assert removed == 0
+        assert market.get_fill_request("req1" * 4) is not None
+
 
 class TestAlreadyKnownFillRequest:
     def test_unknown_request_is_not_known(self, taker):
@@ -987,7 +1005,9 @@ class TestFillResponses:
     def test_unsigned_response_is_refused(self, maker):
         resp = market.build_fill_response(
             "r" * 16, "order-1", "s" * 16, 1 * LAPSE, True, maker["pubkey"],
-            accepted_height=1000, confirm_depth=2, increment_count=3)
+            accepted_height=1000, confirm_depth=2,
+            xlm_total=1000 * XLM, direction="sell", maker_xlm_addr=maker["xlm"],
+            maker_opens=True, increment_count=3)
         with pytest.raises(market.FillResponseRejected, match="signature"):
             market.verify_fill_response(resp)
 
@@ -1030,6 +1050,27 @@ class TestFillResponses:
         with pytest.raises(market.FillResponseRejected):
             market.verify_fill_response("not a response")
 
+    def test_bad_direction_refused(self, maker):
+        resp = signed_fill_response(maker, direction="sideways")
+        with pytest.raises(market.FillResponseRejected, match="direction"):
+            market.verify_fill_response(resp)
+
+    def test_invalid_maker_xlm_addr_refused(self, maker):
+        resp = signed_fill_response(maker, maker_xlm_addr="not-a-stellar-address")
+        with pytest.raises(market.FillResponseRejected, match="Stellar"):
+            market.verify_fill_response(resp)
+
+    def test_non_positive_xlm_total_refused(self, maker):
+        resp = signed_fill_response(maker, xlm_total=0)
+        with pytest.raises(market.FillResponseRejected, match="xlm_total"):
+            market.verify_fill_response(resp)
+
+    def test_non_bool_maker_opens_refused(self, maker):
+        resp = signed_fill_response(maker)
+        resp["maker_opens"] = "yes"
+        with pytest.raises(market.FillResponseRejected, match="maker_opens"):
+            market.verify_fill_response(resp)
+
 
 class TestFillResponseStorage:
     def test_store_and_read_back(self, maker):
@@ -1042,15 +1083,28 @@ class TestFillResponseStorage:
         assert market.store_fill_response(resp) is True
         assert market.store_fill_response(resp) is False
 
-    def test_the_response_book_itself_has_a_ceiling(self, maker, monkeypatch):
+    def test_the_pending_response_book_has_a_ceiling(self, maker, monkeypatch):
+        """MAX_FILL_RESPONSES_TOTAL bounds the pending/declined population
+        only; an accepted response is a different, separately-capped
+        population (see test_the_accepted_response_book_has_its_own_ceiling)."""
         monkeypatch.setattr(market, "MAX_FILL_RESPONSES_TOTAL", 2)
+        market.store_fill_response(signed_fill_response(
+            maker, request_id="a" * 16, accepted=False))
+        market.store_fill_response(signed_fill_response(
+            maker, request_id="b" * 16, accepted=False))
+        with pytest.raises(market.FillResponseRejected, match="full"):
+            market.store_fill_response(signed_fill_response(
+                maker, request_id="c" * 16, accepted=False))
+
+    def test_the_accepted_response_book_has_its_own_ceiling(self, maker, monkeypatch):
+        monkeypatch.setattr(market, "MAX_ACCEPTED_RESPONSES_TOTAL", 2)
         market.store_fill_response(signed_fill_response(maker, request_id="a" * 16))
         market.store_fill_response(signed_fill_response(maker, request_id="b" * 16))
         with pytest.raises(market.FillResponseRejected, match="full"):
             market.store_fill_response(signed_fill_response(maker, request_id="c" * 16))
 
-    def test_prune_removes_old_responses(self, maker):
-        resp = signed_fill_response(maker, request_id="req1" * 4)
+    def test_prune_removes_old_pending_responses(self, maker):
+        resp = signed_fill_response(maker, request_id="req1" * 4, accepted=False)
         market.store_fill_response(resp)
         removed = market.prune_fill_responses(
             now=time.time() + market.FILL_RESPONSE_MAX_AGE_SECONDS + 1)
@@ -1058,9 +1112,21 @@ class TestFillResponseStorage:
         assert market.get_fill_response("req1" * 4) is None
 
     def test_prune_leaves_recent_responses(self, maker):
-        resp = signed_fill_response(maker, request_id="req1" * 4)
+        resp = signed_fill_response(maker, request_id="req1" * 4, accepted=False)
         market.store_fill_response(resp)
         assert market.prune_fill_responses(now=time.time()) == 0
+        assert market.get_fill_response("req1" * 4) is not None
+
+    def test_an_accepted_response_is_never_pruned(self, maker):
+        """The whole point of the redesign this covers: paired with its
+        own FillRequest, an accepted response is now the durable trade
+        record itself (see market.py's FILL_RESPONSE_SIGNED_FIELDS), so
+        it must survive prune_fill_responses regardless of age."""
+        resp = signed_fill_response(maker, request_id="req1" * 4, accepted=True)
+        market.store_fill_response(resp)
+        removed = market.prune_fill_responses(
+            now=time.time() + market.FILL_RESPONSE_MAX_AGE_SECONDS + 100_000)
+        assert removed == 0
         assert market.get_fill_response("req1" * 4) is not None
 
 
@@ -1358,116 +1424,90 @@ class TestTicker:
 
 
 # ---------------------------------------------------------------------------
-# Step receipts
+# Accepted fills: the durable trade record that replaced step receipts
 # ---------------------------------------------------------------------------
 
-def signed_receipt(reporter, other_addr, outcome="settled", **overrides):
-    addr_a, addr_b = sorted((reporter["addr"], other_addr))
-    receipt = market.build_receipt(
-        order_id=overrides.pop("order_id", "order-1"),
-        session_id=overrides.pop("session_id", "s" * 16),
-        n=overrides.pop("n", 1),
-        reporter_lapse_addr=overrides.pop("reporter_lapse_addr", reporter["addr"]),
-        addr_a=addr_a, addr_b=addr_b,
-        asset=overrides.pop("asset", "lapse"),
-        from_addr=overrides.pop("from_addr", reporter["addr"]),
-        to_addr=overrides.pop("to_addr", other_addr),
-        amount=overrides.pop("amount", 1 * LAPSE),
-        memo=overrides.pop("memo", "aaaaaaaa:bbbbbbbb:1"),
-        outcome=outcome,
-        tx_hash=overrides.pop("tx_hash", "tx1" if outcome == "settled" else ""),
-        deadline_height=overrides.pop("deadline_height", 1000),
-        checked_at_height=overrides.pop("checked_at_height", 1030),
-        pubkey_hex=reporter["pubkey"])
-    receipt.update(overrides)
-    return market.sign_receipt(receipt, reporter["keyfile"], reporter["kek"])
+def _stored_accepted_fill(maker, taker, request_id="r" * 16, order_id="order-1",
+                          session_id="s" * 16, **overrides):
+    """Store and return (request, response) for one accepted fill,
+    admitted through the exact same verify-then-store path an inbound
+    gossip message would use."""
+    req = signed_fill_request(taker, order_id=order_id, session_id=session_id,
+                              request_id=request_id)
+    resp = signed_fill_response(maker, request_id=request_id, order_id=order_id,
+                                session_id=session_id, accepted=True, **overrides)
+    market.store_fill_request(req)
+    market.store_fill_response(resp)
+    return req, resp
 
 
-class TestReceiptSigning:
-    def test_signed_settled_receipt_verifies(self, maker, taker):
-        assert market.verify_receipt(signed_receipt(maker, taker["addr"])) is True
+class TestAcceptedFillsForAddr:
+    def test_found_for_both_maker_and_taker(self, maker, taker):
+        _stored_accepted_fill(maker, taker)
+        assert len(market.accepted_fills_for_addr(maker["addr"])) == 1
+        assert len(market.accepted_fills_for_addr(taker["addr"])) == 1
 
-    def test_signed_missed_receipt_verifies(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"], outcome="missed")
-        assert market.verify_receipt(r) is True
+    def test_not_found_for_an_unrelated_address(self, maker, taker):
+        _stored_accepted_fill(maker, taker)
+        assert market.accepted_fills_for_addr("someone.else") == []
 
-    def test_tampering_breaks_the_signature(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        r["amount"] = 5 * LAPSE
-        with pytest.raises(market.ReceiptRejected, match="signature"):
-            market.verify_receipt(r)
+    def test_a_declined_response_is_not_an_accepted_fill(self, maker, taker):
+        req = signed_fill_request(taker, request_id="r" * 16)
+        resp = signed_fill_response(maker, request_id="r" * 16, accepted=False)
+        market.store_fill_request(req)
+        market.store_fill_response(resp)
+        assert market.accepted_fills_for_addr(maker["addr"]) == []
 
-    def test_reporter_must_be_one_of_the_two_addresses(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        addr_a, addr_b = sorted((maker["addr"], taker["addr"]))
-        # A third address masquerading as addr_a/addr_b without being one
-        # of them: forge the field, breaking the signature, which is the
-        # thing that actually has to fail here.
-        r["addr_a"], r["addr_b"] = addr_a, addr_b
-        r["reporter_lapse_addr"] = "not." + addr_a
-        with pytest.raises(market.ReceiptRejected):
-            market.verify_receipt(r)
-
-    def test_settled_outcome_requires_a_tx_hash(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"], outcome="settled", tx_hash="")
-        with pytest.raises(market.ReceiptRejected, match="tx_hash"):
-            market.verify_receipt(r)
-
-    def test_missed_outcome_must_not_carry_a_tx_hash(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"], outcome="missed", tx_hash="tx1")
-        with pytest.raises(market.ReceiptRejected, match="tx_hash"):
-            market.verify_receipt(r)
-
-    def test_unsorted_addresses_refused(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        hi, lo = max(r["addr_a"], r["addr_b"]), min(r["addr_a"], r["addr_b"])
-        r["addr_a"], r["addr_b"] = hi, lo
-        with pytest.raises(market.ReceiptRejected, match="sorted"):
-            market.verify_receipt(r)
-
-    def test_extra_field_is_refused_not_ignored(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        r["extra"] = "junk"
-        with pytest.raises(market.ReceiptRejected, match="unexpected"):
-            market.verify_receipt(r)
+    def test_pair_carries_both_signed_rows(self, maker, taker):
+        req, resp = _stored_accepted_fill(maker, taker)
+        [(got_req, got_resp)] = market.accepted_fills_for_addr(maker["addr"])
+        assert got_req.request_id == req["request_id"]
+        assert got_resp.request_id == resp["request_id"]
+        assert got_resp.maker_opens == resp["maker_opens"]
 
 
-class TestReceiptStorage:
-    def test_store_and_read_back(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        assert market.store_receipt(r) is True
-        rows = market.receipts_for_addr(maker["addr"])
-        assert len(rows) == 1
-        assert rows[0].verified is None   # unverified until trust checks it
+class TestRecentAcceptedFills:
+    def test_orders_newest_first(self, maker, taker, monkeypatch):
+        clock = [1000.0]
+        monkeypatch.setattr(market.time, "time", lambda: clock[0])
+        _stored_accepted_fill(maker, taker, request_id="a" * 16, session_id="a" * 16)
+        clock[0] += 10
+        _stored_accepted_fill(maker, taker, request_id="b" * 16, session_id="b" * 16)
+        pairs = market.recent_accepted_fills(10)
+        assert [resp.request_id for _req, resp in pairs] == ["b" * 16, "a" * 16]
 
-    def test_duplicate_receipt_id_is_not_stored_twice(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        assert market.store_receipt(r) is True
-        assert market.store_receipt(r) is False
-        assert len(market.receipts_for_addr(maker["addr"])) == 1
+    def test_limit_is_respected(self, maker, taker):
+        for i in range(3):
+            _stored_accepted_fill(maker, taker, request_id=f"r{i}" * 8,
+                                  session_id=f"s{i}" * 8)
+        assert len(market.recent_accepted_fills(2)) == 2
 
-    def test_findable_by_either_subject_address(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        market.store_receipt(r)
-        assert len(market.receipts_for_addr(maker["addr"])) == 1
-        assert len(market.receipts_for_addr(taker["addr"])) == 1
+    def test_declined_responses_are_excluded(self, maker, taker):
+        req = signed_fill_request(taker, request_id="r" * 16)
+        resp = signed_fill_response(maker, request_id="r" * 16, accepted=False)
+        market.store_fill_request(req)
+        market.store_fill_response(resp)
+        assert market.recent_accepted_fills(10) == []
 
-    def test_already_known_receipt(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        assert market.already_known_receipt(r) is False
-        market.store_receipt(r)
-        assert market.already_known_receipt(r) is True
 
-    def test_the_receipt_store_has_a_ceiling(self, maker, taker, monkeypatch):
-        monkeypatch.setattr(market, "MAX_RECEIPTS_TOTAL", 1)
-        market.store_receipt(signed_receipt(maker, taker["addr"], session_id="s1" * 8))
-        with pytest.raises(market.ReceiptRejected, match="full"):
-            market.store_receipt(signed_receipt(maker, taker["addr"], session_id="s2" * 8))
+class TestAcceptedFillWireHelpers:
+    def test_request_wire_round_trip(self, maker, taker):
+        req, _resp = _stored_accepted_fill(maker, taker)
+        row = market.get_fill_request(req["request_id"])
+        wire = market.fill_request_to_wire(row)
+        assert market.verify_fill_request(wire) is True
+        assert wire == req
 
-    def test_wire_round_trip(self, maker, taker):
-        r = signed_receipt(maker, taker["addr"])
-        market.store_receipt(r)
-        row = market.receipts_for_addr(maker["addr"])[0]
-        wire = market.receipt_to_wire(row)
-        assert market.verify_receipt(wire) is True
-        assert wire == {k: r[k] for k in wire}
+    def test_response_wire_round_trip(self, maker, taker):
+        _req, resp = _stored_accepted_fill(maker, taker)
+        row = market.get_fill_response(resp["request_id"])
+        wire = market.fill_response_to_wire(row)
+        assert market.verify_fill_response(wire) is True
+        assert wire == resp
+
+    def test_accepted_fill_to_wire_bundles_both(self, maker, taker):
+        req, resp = _stored_accepted_fill(maker, taker)
+        [(req_row, resp_row)] = market.accepted_fills_for_addr(maker["addr"])
+        bundle = market.accepted_fill_to_wire(req_row, resp_row)
+        assert bundle["request"] == req
+        assert bundle["response"] == resp

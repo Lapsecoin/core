@@ -596,37 +596,90 @@ class TestNegativeAndOddInputs:
 
 
 # ---------------------------------------------------------------------------
-# Network-sourced trust: verified step receipts about an address this
-# node never itself traded with
+# Network-sourced trust: independently reconstructed and verified accepted
+# fills naming an address this node never itself traded with
 # ---------------------------------------------------------------------------
 
-def make_receipt(receipt_id, addr_a, addr_b, session_id, outcome="settled",
-                 asset="lapse", amount=LAPSE, verified=True, reporter=None):
-    return trade_storage.StepReceipt.create(
-        receipt_id=receipt_id, order_id="o1", session_id=session_id, n=1,
-        reporter_lapse_addr=reporter or addr_a, addr_a=addr_a, addr_b=addr_b,
-        asset=asset, from_addr=addr_a, to_addr=addr_b, amount=amount,
-        memo="m", outcome=outcome, tx_hash=("tx1" if outcome == "settled" else ""),
-        deadline_height=0, checked_at_height=0, pubkey="pk", signature="sig",
-        received_at=time.time(), verified=verified)
+import crypto
+
+MAKER_PUBKEY = "aa" * 10
+MAKER_ADDR = crypto.public_key_to_address(bytes.fromhex(MAKER_PUBKEY))
+
+
+def make_accepted_fill(request_id, taker_addr, session_id, maker_pubkey=MAKER_PUBKEY,
+                       order_id="o1", lapse_total=LAPSE, xlm_total=1,
+                       increment_count=1, direction="sell", maker_xlm_addr="GMAKER",
+                       accepted_height=0, confirm_depth=2, maker_opens=True):
+    """An accepted (FillRequest, FillResponse) pair naming taker_addr as
+    the taker and maker_pubkey's derived address as the maker - the
+    durable trade record that replaced a signed step receipt. Built
+    directly rather than through market.build_fill_request/build_fill_
+    response, the same way make_trade bypasses a real Trade-opening flow:
+    what is under test here is _network_tally_by_counterparty's folding
+    of this data, not the signing path."""
+    trade_storage.FillRequest.create(
+        request_id=request_id, order_id=order_id, session_id=session_id,
+        taker_lapse_addr=taker_addr, taker_xlm_addr="GTAKER",
+        lapse_total=lapse_total, pubkey="pk", signature="sig",
+        received_at=time.time())
+    return trade_storage.FillResponse.create(
+        request_id=request_id, order_id=order_id, session_id=session_id,
+        lapse_total=lapse_total, accepted=True, increment_count=increment_count,
+        reason="", maker_pubkey=maker_pubkey, accepted_height=accepted_height,
+        confirm_depth=confirm_depth, xlm_total=xlm_total, direction=direction,
+        maker_xlm_addr=maker_xlm_addr, maker_opens=maker_opens,
+        signature="sig", received_at=time.time())
 
 
 class TestNetworkTally:
-    def test_unverified_receipts_are_not_counted(self):
-        make_receipt("r1", "a", "b", "s1", verified=None)
-        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
+    """trust._network_tally_by_counterparty: independently reconstructs
+    and checks every accepted fill naming an address against the chain
+    (see swap_engine.verify_trade_against_chain, mocked out here since
+    what is under test is the folding/attribution logic, not chain
+    reconstruction itself, which test_swap_engine.py's
+    TestVerifyTradeAgainstChain already covers directly)."""
+
+    def test_unreachable_chain_contributes_nothing(self, monkeypatch):
+        """Not knowing is not the same as knowing it's fine: an outage
+        must never zero, or otherwise affect, anyone's standing."""
+        make_accepted_fill("r1", "b", "s1")
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (_ for _ in ()).throw(
+                                swap_engine.Unreachable("down")))
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty(
+            FakeNode("me", height=100), "b", 100)
         assert (abandoned, by_peer) == (0, {})
 
-    def test_verified_settled_receipt_counts_toward_completed(self):
-        make_receipt("r1", "a", "b", "s1", outcome="settled", amount=5 * LAPSE)
-        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
+    def test_settled_steps_count_toward_completed_history(self, monkeypatch):
+        make_accepted_fill("r1", "b", "s1", lapse_total=5 * LAPSE)
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (1, 1, None))
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty(
+            FakeNode("me", height=100), "b", 100)
         assert abandoned == 0
-        assert by_peer == {"a": (5 * LAPSE, 1)}
+        assert by_peer == {MAKER_ADDR: (5 * LAPSE, 1)}
 
-    def test_verified_missed_receipt_counts_as_abandonment(self):
-        make_receipt("r1", "a", "b", "s1", outcome="missed")
-        abandoned, _by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
+    def test_at_fault_addr_matching_the_queried_addr_counts_as_abandonment(self, monkeypatch):
+        make_accepted_fill("r1", "b", "s1")
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (0, 2, "b"))
+        abandoned, _by_peer, _last, _lat, _las = trust._network_tally_by_counterparty(
+            FakeNode("me", height=100), "b", 100)
         assert abandoned == 1
+
+    def test_at_fault_addr_not_matching_the_queried_addr_is_not_counted(self, monkeypatch):
+        """The fix for the old step-receipt design's real hole: its
+        addr_a/addr_b 'subjects' had no fault distinction of their own,
+        so looking up the VICTIM's own standing could count their
+        counterparty's defection against them. Here, a pair only ever
+        counts against whichever specific address
+        verify_trade_against_chain names, never the other one."""
+        make_accepted_fill("r1", "b", "s1")
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (0, 2, MAKER_ADDR))
+        abandoned, _by_peer, _last, _lat, _las = trust._network_tally_by_counterparty(
+            FakeNode("me", height=100), "b", 100)
+        assert abandoned == 0
 
     def test_session_already_known_locally_is_not_double_counted(self):
         trade_storage.Trade.create(
@@ -635,43 +688,40 @@ class TestNetworkTally:
             peer_xlm_addr="GB", i_send="lapse", lapse_total=LAPSE, xlm_total=10_000_000,
             increment_count=2, confirm_depth=2, status="completed",
             created_at=time.time(), updated_at=time.time())
-        make_receipt("r1", "a", "b", "s1", outcome="settled")
-        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
+        make_accepted_fill("r1", "b", "s1")
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty(
+            FakeNode("me", height=100), "b", 100)
         assert (abandoned, by_peer) == (0, {})
 
-    def test_two_sessions_with_the_same_counterparty_are_grouped(self):
-        """A trade carries several 'settled' receipts (one per step's
-        LAPSE leg), all naming the same counterparty and session; two
-        DIFFERENT sessions with that same counterparty must still be
-        counted as one counterparty, two sessions - not two counterparty
-        entries - for diversity-weighting to mean anything."""
-        make_receipt("r1", "a", "b", "s1", outcome="settled", amount=3 * LAPSE)
-        make_receipt("r2", "a", "b", "s2", outcome="settled", amount=4 * LAPSE)
-        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty("b")
+    def test_two_sessions_with_the_same_counterparty_are_grouped(self, monkeypatch):
+        """Two DIFFERENT sessions with the same counterparty must still
+        be counted as one counterparty, two sessions - not two
+        counterparty entries - for diversity-weighting to mean anything."""
+        make_accepted_fill("r1", "b", "s1", lapse_total=3 * LAPSE)
+        make_accepted_fill("r2", "b", "s2", lapse_total=4 * LAPSE)
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (1, 1, None))
+        abandoned, by_peer, _last, _lat, _las = trust._network_tally_by_counterparty(
+            FakeNode("me", height=100), "b", 100)
         assert abandoned == 0
-        assert by_peer == {"a": (7 * LAPSE, 2)}
+        assert by_peer == {MAKER_ADDR: (7 * LAPSE, 2)}
 
-    def test_get_detail_without_node_ignores_network_receipts(self):
-        make_receipt("r1", "a", "b", "s1", outcome="missed")
+    def test_get_detail_without_node_ignores_network_fills(self):
+        make_accepted_fill("r1", "b", "s1")
         detail = trust.get_detail("b")
         assert detail["abandoned_count"] == 0
 
-    def test_get_detail_with_node_folds_in_network_receipts(self):
-        make_receipt("r1", "a", "b", "s1", outcome="missed")
-        # Pre-mark it checked at this exact height so get_detail's own
-        # lazy verification pass (see trust._verify_addr_receipts) has
-        # nothing left to do and this stays a pure DB-reading test of
-        # _network_tally_by_counterparty's folding, not chain verification.
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        row.verified_at_height = 100
-        row.save()
+    def test_get_detail_with_node_folds_in_network_fills(self, monkeypatch):
+        make_accepted_fill("r1", "b", "s1")
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (0, 2, "b"))
         detail = trust.get_detail("b", node=FakeNode("me", height=100))
         assert detail["abandoned_count"] == 1
         assert detail["network_abandoned_count"] == 1
         assert detail["score"] == 0.0
         assert detail["known"] is True
 
-    def test_network_sourced_abandonment_names_its_own_session(self):
+    def test_network_sourced_abandonment_names_its_own_session(self, monkeypatch):
         """local_tally's last_abandon_session only ever covers a trade
         this node ran itself, and a self-query's own Trade rows never
         have peer_lapse_addr equal to this node's own address (see
@@ -681,148 +731,37 @@ class TestNetworkTally:
         the Trades page's own alert ("your trust just dropped, and
         here's the session") would have a bare count and nothing to
         actually point at."""
-        make_receipt("r1", "b", "a", "session-xyz", outcome="missed")
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        row.verified_at_height = 100
-        row.save()
+        make_accepted_fill("r1", "b", "session-xyz")
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (0, 2, "b"))
         detail = trust.get_detail("b", node=FakeNode("me", height=100))
         assert detail["last_abandon_session"] == "session-xyz"
         assert detail["last_abandoned_at"] > 0.0
 
-    def test_network_and_local_history_add_together(self):
+    def test_network_and_local_history_add_together(self, monkeypatch):
         make_trade("b", TRADE_COMPLETED, lapse_total=6 * LAPSE)
         make_trade("b", TRADE_COMPLETED, lapse_total=4 * LAPSE)
-        make_receipt("r1", "a", "b", "s1", outcome="settled", amount=3 * LAPSE)
+        make_accepted_fill("r1", "b", "s1", lapse_total=3 * LAPSE)
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (1, 1, None))
         detail = trust.get_detail("b", node=FakeNode("me", height=100))
         assert detail["completed_count"] == 3
         assert detail["completed_lapse"] == 13 * LAPSE
         assert detail["network_completed_count"] == 1
 
-
-class TestVerifyAddrReceipts:
-    """trust._verify_addr_receipts: the lazy, per-address chain check
-    that replaced a scheduled background sweep over every receipt on
-    file. Called with a bare object() standing in for node, exactly as
-    the old sweep's tests did: _lightweight_engine only ever wraps the
-    reference, and verify_receipt_against_chain is monkeypatched away
-    below, so nothing here ever dereferences it."""
-
-    def test_resolves_every_unverified_receipt_for_the_address(self, monkeypatch):
-        make_receipt("r1", "a", "b", "s1", verified=None)
-        make_receipt("r2", "a", "b", "s2", verified=None)
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: True)
-        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
-        assert checked == 2
-        assert all(r.verified is True for r in trade_storage.StepReceipt.select())
-
-    def test_a_flood_of_receipts_is_capped_per_call(self, monkeypatch):
-        """A reporter can only spend its own MAX_RECEIPTS_PER_REPORTER
-        slots, but nothing stops an attacker from doing that from many
-        cheaply-generated reporter addresses, all naming one victim.
-        This cap is what stops a single trust lookup for that victim
-        from paying for a chain call per spammed receipt in one request."""
+    def test_a_flood_of_accepted_fills_is_capped_per_call(self, monkeypatch):
+        """Nothing stops an attacker minting many cheaply-generated maker
+        keys, each accepting one throwaway fill against the same victim
+        taker address. This cap is what stops a single trust lookup for
+        that victim from paying for a chain call per such fill in one
+        request."""
         extra = 5
+        calls = []
         for i in range(trust.MAX_CHAIN_CHECKS_PER_LOOKUP + extra):
-            make_receipt(f"r{i}", f"attacker{i}", "victim", f"s{i}",
-                        verified=None, reporter=f"attacker{i}")
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: True)
-        checked = trust._verify_addr_receipts(object(), "victim", current_height=100)
-        assert checked == trust.MAX_CHAIN_CHECKS_PER_LOOKUP
-        still_pending = sum(1 for r in trade_storage.StepReceipt.select()
-                            if r.verified is None)
-        assert still_pending == extra
-
-    def test_unreachable_leaves_it_pending(self, monkeypatch):
-        make_receipt("r1", "a", "b", "s1", verified=None)
-
-        def boom(engine, r):
-            raise swap_engine.Unreachable("down")
-
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain", boom)
-        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
-        assert checked == 0
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        assert row.verified is None
-
-    def test_not_yet_due_leaves_it_pending_rather_than_burying_it(self, monkeypatch):
-        """The bug this exists to catch: a 'missed' claim this node's
-        own clock cannot yet confirm has waited long enough used to come
-        back as a plain False from verify_receipt_against_chain,
-        indistinguishable from 'the payment was found' - and a False is
-        never rechecked (see test_a_caught_false_claim_is_never_
-        rechecked_either), so a claim that might still turn out true
-        later (a syncing node checking sooner, by its own clock, than
-        the reporter's margin implies) would be buried forever instead
-        of getting another look once real time actually passes."""
-        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=None)
-
-        def too_early(engine, r):
-            raise swap_engine.NotYetDue("not yet")
-
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain", too_early)
-        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
-        assert checked == 0
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        assert row.verified is None   # not False - still eligible for a later look
-
-        # And once enough time genuinely has, the very next lookup
-        # picks it back up rather than treating it as already settled.
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: True)
-        checked = trust._verify_addr_receipts(object(), "b", current_height=200)
-        assert checked == 1
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        assert row.verified is True
-
-    def test_already_verified_missed_claims_are_rechecked_at_a_new_height(self, monkeypatch):
-        """Unlike settled, missed is not a monotonic fact: a late, honest
-        payment can falsify it at any time after it was first true."""
-        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=True)
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        row.verified_at_height = 50   # checked once already, at an earlier height
-        row.save()
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: False)  # the payment showed up
-        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
-        assert checked == 1
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        assert row.verified is False
-        # And the moment it flips, trust stops counting it.
-        assert trust._network_tally_by_counterparty("b")[0] == 0
-
-    def test_missed_claim_is_not_rechecked_twice_at_the_same_height(self, monkeypatch):
-        """A page rendered twice inside one block must not pay for the
-        same chain lookup twice."""
-        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=True)
-        row = trade_storage.StepReceipt.get(trade_storage.StepReceipt.receipt_id == "r1")
-        row.verified_at_height = 100
-        row.save()
-        calls = []
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: calls.append(r.receipt_id) or True)
-        checked = trust._verify_addr_receipts(object(), "b", current_height=100)
-        assert checked == 0
-        assert calls == []
-
-    def test_already_verified_settled_claims_are_never_rechecked(self, monkeypatch):
-        """Settled is monotonic, so it is not worth the extra chain call:
-        only unverified and previously-missed claims are candidates."""
-        make_receipt("r1", "a", "b", "s1", outcome="settled", verified=True)
-        calls = []
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: calls.append(r.receipt_id) or True)
-        trust._verify_addr_receipts(object(), "b", current_height=999_999)
-        assert calls == []
-
-    def test_a_caught_false_claim_is_never_rechecked_either(self, monkeypatch):
-        """False is permanent whichever outcome it was claiming: a false
-        settle can never become true, and a missed claim caught false
-        means the payment already exists, which cannot un-happen."""
-        make_receipt("r1", "a", "b", "s1", outcome="missed", verified=False)
-        calls = []
-        monkeypatch.setattr(swap_engine, "verify_receipt_against_chain",
-                            lambda engine, r: calls.append(r.receipt_id) or True)
-        trust._verify_addr_receipts(object(), "b", current_height=999_999)
-        assert calls == []
+            pk = f"{i:02x}" * 10
+            make_accepted_fill(f"r{i}", "victim", f"s{i}", maker_pubkey=pk)
+        monkeypatch.setattr(swap_engine, "verify_trade_against_chain",
+                            lambda engine, req, resp: (calls.append(req.request_id)
+                                                       or (1, 1, None)))
+        trust._network_tally_by_counterparty(FakeNode("me", height=100), "victim", 100)
+        assert len(calls) == trust.MAX_CHAIN_CHECKS_PER_LOOKUP

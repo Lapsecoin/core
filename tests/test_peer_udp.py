@@ -871,16 +871,16 @@ class TestMarketBackfillRoundTrip:
         return made
 
     def test_a_stranger_gets_the_book_on_its_first_request(self):
-        payload = {"orders": [{"order_id": "o1"}], "receipts": [{"receipt_id": "r1"}]}
+        payload = {"orders": [{"order_id": "o1"}], "fills": [{"request": {}, "response": {}}]}
         (server, server_pool), (client, _) = self._pair(
             [19401, 19402], lambda kinds: payload)
         try:
             assert server_pool.all_addrs() == [], "precondition: client is a stranger"
             resp = client.request_market(f"127.0.0.1:{server.port}",
-                                         kinds=["order", "receipt"], timeout=8)
+                                         kinds=["order", "fill"], timeout=8)
             assert resp is not None, "a new node was refused its first backfill"
             assert resp["orders"] == payload["orders"]
-            assert resp["receipts"] == payload["receipts"]
+            assert resp["fills"] == payload["fills"]
         finally:
             server.stop(); client.stop()
 
@@ -888,7 +888,7 @@ class TestMarketBackfillRoundTrip:
         (server, _), (client, __) = self._pair([19403, 19404], None)
         try:
             resp = client.request_market(f"127.0.0.1:{server.port}", timeout=8)
-            assert resp["orders"] == [] and resp["receipts"] == []
+            assert resp["orders"] == [] and resp["fills"] == []
         finally:
             server.stop(); client.stop()
 

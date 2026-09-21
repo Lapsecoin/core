@@ -1071,7 +1071,6 @@ class FakeDiscoveryNode:
         self.storage = _FakeStorage(heights_by_addr)
         self.publish_fill_response_calls = []
         self.publish_fill_request_calls = []
-        self.publish_receipt_calls = []
 
     def publish_fill_response(self, resp):
         self.publish_fill_response_calls.append(resp)
@@ -1081,9 +1080,6 @@ class FakeDiscoveryNode:
 
     def kek(self):
         return crypto.derive_kek(self.keyfile, self.passphrase)
-
-    def publish_receipt(self, receipt):
-        self.publish_receipt_calls.append(receipt)
 
 
 def make_maker_engine(node, lapse=None, xlm=None):
@@ -1128,12 +1124,13 @@ class TestAnswerFillRequests:
         """A 'sell' order: the maker gives LAPSE, so this node pays that
         leg and expects XLM back."""
         node = FakeDiscoveryNode(tmp_path, balances={})
-        make_order(direction="sell", maker_lapse=node.addr)
+        _seed, maker_xlm_addr = xlm_mod.generate_keypair()
+        make_order(direction="sell", maker_lapse=node.addr, maker_xlm=maker_xlm_addr)
         req = make_request()
         engine, _lapse, xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = req.lapse_total
 
-        assert swap_engine.answer_fill_requests(engine, node, "GMAKER", 5 * XLM, 2) == 1
+        assert swap_engine.answer_fill_requests(engine, node, maker_xlm_addr, 5 * XLM, 2) == 1
 
         trade = Trade.get(Trade.session_id == req.session_id)
         assert trade.role == "maker"
@@ -1762,138 +1759,139 @@ class TestAutoMatchOrders:
 import market as market_mod2  # noqa: E402  (mirrors the market_mod import above)
 
 
-class TestEmitReceipts:
-    def test_settled_step_emits_a_receipt_for_each_leg(self, tmp_path):
-        node = FakeDiscoveryNode(tmp_path, balances={})
-        lapse = FakeChain("lapse", node.addr)
-        xlm = FakeChain("xlm", "GME")
-        trade = make_trade(i_send="lapse", count=2, my_lapse_addr=node.addr)
-        kek = node.kek()
-        engine = swap_engine.Engine(lapse, xlm, lambda: (kek, "seed"))
-
-        inc = Increment.get(Increment.id == f"{trade.session_id}:1")
-        engine.advance(trade)             # we send our lapse leg
-        xlm.deliver(*engine._in_terms(trade, inc))   # they send theirs
-        engine.advance(trade)             # notice it settled
-
-        inc = Increment.get(Increment.id == inc.id)
-        assert inc.out_state == LEG_SETTLED and inc.in_state == LEG_SETTLED
-
-        emitted = swap_engine.emit_receipts_for_trade(engine, node, kek, trade)
-        assert emitted == 2
-        receipts = market_mod2.receipts_for_addr(node.addr)
-        assert {r.asset for r in receipts} == {"lapse", "xlm"}
-        assert all(r.outcome == "settled" for r in receipts)
-        assert all(r.tx_hash for r in receipts)
-        assert len(node.publish_receipt_calls) == 2
-
-        # Idempotent: nothing new the second time.
-        again = swap_engine.emit_receipts_for_trade(engine, node, kek, trade)
-        assert again == 0
-        assert len(market_mod2.receipts_for_addr(node.addr)) == 2
-
-    def test_abandoned_step_emits_one_missed_receipt(self, tmp_path):
-        node = FakeDiscoveryNode(tmp_path, balances={})
-        lapse = FakeChain("lapse", node.addr)
-        xlm = FakeChain("xlm", "GME")
-        trade = make_trade(i_send="lapse", count=3, my_lapse_addr=node.addr)
-        kek = node.kek()
-        engine = swap_engine.Engine(lapse, xlm, lambda: (kek, "seed"))
-
-        engine.advance(trade)   # we pay step 1; they never reciprocate
-        lapse.current_height += 10**6
-        trade = Trade.get(Trade.session_id == trade.session_id)
-        trade.status = TRADE_STALLED
-        trade.save()
-        assert swap_engine.is_delinquent(trade, lapse.current_height) is True
-
-        emitted = swap_engine.emit_receipts_for_trade(engine, node, kek, trade)
-        assert emitted == 1
-        receipts = [r for r in market_mod2.receipts_for_addr(node.addr)
-                   if r.outcome == "missed"]
-        assert len(receipts) == 1
-        assert receipts[0].tx_hash == ""
+class _FakeFillRequest:
+    def __init__(self, taker_lapse_addr, taker_xlm_addr):
+        self.taker_lapse_addr = taker_lapse_addr
+        self.taker_xlm_addr = taker_xlm_addr
 
 
-class TestVerifyReceiptAgainstChain:
+class _FakeFillResponse:
+    """Just the attributes verify_trade_against_chain reads off an
+    accepted FillResponse row, without needing the database round trip."""
+
+    def __init__(self, maker_pubkey_hex, order_id, session_id, lapse_total,
+                xlm_total, increment_count, direction, maker_xlm_addr,
+                accepted_height, confirm_depth, maker_opens):
+        self.maker_pubkey = maker_pubkey_hex
+        self.order_id = order_id
+        self.session_id = session_id
+        self.lapse_total = lapse_total
+        self.xlm_total = xlm_total
+        self.increment_count = increment_count
+        self.direction = direction
+        self.maker_xlm_addr = maker_xlm_addr
+        self.accepted_height = accepted_height
+        self.confirm_depth = confirm_depth
+        self.maker_opens = maker_opens
+
+
+class TestVerifyTradeAgainstChain:
+    """verify_trade_against_chain reconstructs a whole trade's schedule
+    from an accepted (request, response) pair's own signed fields alone,
+    then checks every step against both chains - what replaced the
+    signed 'settled'/'missed' step receipt outright: nobody's claim is
+    ever taken as true here, only what these two public ledgers show.
+    """
+
+    MAKER_PUBKEY = "ab" * 10
+    ORDER_ID = "order-1"
+    SESSION_ID = "s" * 16
+
     def _engine(self):
-        lapse = FakeChain("lapse", "a.lapse")
-        xlm = FakeChain("xlm", "GA")
-        return swap_engine.Engine(lapse, xlm, lambda: (None, None)), lapse, xlm
+        maker_addr = crypto.public_key_to_address(bytes.fromhex(self.MAKER_PUBKEY))
+        lapse = FakeChain("lapse", maker_addr)
+        xlm = FakeChain("xlm", "GMAKER")
+        engine = swap_engine.Engine(lapse, xlm, lambda: (None, None))
+        return engine, lapse, xlm, maker_addr
 
-    def test_true_settled_claim_verifies(self):
-        engine, lapse, _xlm = self._engine()
-        lapse.deliver("a.lapse", "b.lapse", "memo1", 500)
-        tx_hash, _depth = lapse.find_payment("a.lapse", "b.lapse", "memo1", 500)
-        receipt = _FakeReceiptRow(
-            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
-            amount=500, memo="memo1", outcome="settled", tx_hash=tx_hash)
-        assert swap_engine.verify_receipt_against_chain(engine, receipt) is True
+    def _pair(self, lapse_total=3 * LAPSE, xlm_total=3000 * XLM, count=3,
+             direction="sell", maker_opens=True, accepted_height=1000,
+             confirm_depth=2):
+        req = _FakeFillRequest(taker_lapse_addr="taker.lapse", taker_xlm_addr="GTAKER")
+        resp = _FakeFillResponse(
+            maker_pubkey_hex=self.MAKER_PUBKEY, order_id=self.ORDER_ID,
+            session_id=self.SESSION_ID, lapse_total=lapse_total, xlm_total=xlm_total,
+            increment_count=count, direction=direction, maker_xlm_addr="GMAKER",
+            accepted_height=accepted_height, confirm_depth=confirm_depth,
+            maker_opens=maker_opens)
+        return req, resp
 
-    def test_false_settled_claim_with_no_matching_payment(self):
-        engine, _lapse, _xlm = self._engine()
-        receipt = _FakeReceiptRow(
-            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
-            amount=500, memo="memo1", outcome="settled", tx_hash="nope")
-        assert swap_engine.verify_receipt_against_chain(engine, receipt) is False
+    def _deliver_step(self, lapse, xlm, req, resp, maker_addr, n, lapse_amount,
+                      xlm_amount, legs=("maker", "taker")):
+        """Simulate whichever of the step's two legs `legs` names actually
+        settling on chain, using the exact same memo/address derivation
+        verify_trade_against_chain itself uses."""
+        memo = swap.session_tag(resp.order_id, resp.session_id, n)
+        if "maker" in legs:
+            lapse.deliver(maker_addr, req.taker_lapse_addr, memo, lapse_amount)
+        if "taker" in legs:
+            xlm.deliver(req.taker_xlm_addr, resp.maker_xlm_addr, memo, xlm_amount)
 
-    def test_true_missed_claim_with_no_payment_and_deadline_passed(self):
-        engine, lapse, _xlm = self._engine()
-        lapse.current_height = 2000
-        receipt = _FakeReceiptRow(
-            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
-            amount=500, memo="memo1", outcome="missed", tx_hash="",
-            deadline_height=1000)
-        assert swap_engine.verify_receipt_against_chain(engine, receipt) is True
+    def test_fully_settled_trade(self):
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=2)
+        schedule = swap.build_schedule(resp.lapse_total, resp.xlm_total, resp.increment_count)
+        for n, (la, xa) in enumerate(schedule, start=1):
+            self._deliver_step(lapse, xlm, req, resp, maker_addr, n, la, xa)
+        settled, total, at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total, at_fault) == (2, 2, None)
 
-    def test_false_missed_claim_when_the_payment_actually_exists(self):
-        engine, lapse, _xlm = self._engine()
-        lapse.deliver("a.lapse", "b.lapse", "memo1", 500)
-        lapse.current_height = 2000
-        receipt = _FakeReceiptRow(
-            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
-            amount=500, memo="memo1", outcome="missed", tx_hash="",
-            deadline_height=1000)
-        assert swap_engine.verify_receipt_against_chain(engine, receipt) is False
+    def test_nobody_has_moved_yet_blames_nobody(self):
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=2)
+        settled, total, at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total, at_fault) == (0, 2, None)
 
-    def test_not_yet_due_raises_rather_than_returning_false(self):
-        """Not enough height has passed on THIS node's own clock yet.
-        This is a different claim from 'the payment was found' (a real,
-        permanent False) and must not be reported the same way, or a
-        genuinely true claim checked too early (a syncing node, or one
-        that simply checks sooner than the reporter's own margin
-        implies) would be buried forever - see
-        trust._verify_addr_receipts, which never rechecks a False."""
-        engine, lapse, _xlm = self._engine()
-        lapse.current_height = 1010   # short of deadline_height + ABANDON_AFTER_BLOCKS
-        receipt = _FakeReceiptRow(
-            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
-            amount=500, memo="memo1", outcome="missed", tx_hash="",
-            deadline_height=1000)
-        with pytest.raises(swap_engine.NotYetDue):
-            swap_engine.verify_receipt_against_chain(engine, receipt)
+    def test_first_mover_paid_second_still_within_grace(self):
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=1, confirm_depth=2, accepted_height=1000)
+        schedule = swap.build_schedule(resp.lapse_total, resp.xlm_total, resp.increment_count)
+        la, xa = schedule[0]
+        self._deliver_step(lapse, xlm, req, resp, maker_addr, 1, la, xa, legs=("maker",))
+        # deadline_height(1000, 2) == 1012; ABANDON_AFTER_BLOCKS == 30.
+        lapse.current_height = 1012 + 29
+        settled, total, at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total, at_fault) == (0, 1, None)
+
+    def test_second_mover_blamed_once_past_grace(self):
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=1, confirm_depth=2, accepted_height=1000,
+                               maker_opens=True)
+        schedule = swap.build_schedule(resp.lapse_total, resp.xlm_total, resp.increment_count)
+        la, xa = schedule[0]
+        self._deliver_step(lapse, xlm, req, resp, maker_addr, 1, la, xa, legs=("maker",))
+        lapse.current_height = 1012 + 30
+        settled, total, at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total, at_fault) == (0, 1, req.taker_lapse_addr)
+
+    def test_the_first_mover_itself_is_never_blamed(self):
+        """maker_opens flips who moves first: with it False, the taker
+        opens, so a stall with nothing paid yet must never point at the
+        maker - only the mover-second side can ever be at fault (see
+        is_delinquent's identical rule for a node's own local trades)."""
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=1, confirm_depth=2, accepted_height=1000,
+                               maker_opens=False)
+        schedule = swap.build_schedule(resp.lapse_total, resp.xlm_total, resp.increment_count)
+        la, xa = schedule[0]
+        self._deliver_step(lapse, xlm, req, resp, maker_addr, 1, la, xa, legs=("taker",))
+        lapse.current_height = 1012 + 30
+        settled, total, at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total, at_fault) == (0, 1, maker_addr)
+
+    def test_partial_settlement_counts_only_completed_steps(self):
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=3)
+        schedule = swap.build_schedule(resp.lapse_total, resp.xlm_total, resp.increment_count)
+        la1, xa1 = schedule[0]
+        self._deliver_step(lapse, xlm, req, resp, maker_addr, 1, la1, xa1)
+        lapse.current_height = resp.accepted_height + 1   # well within grace for step 2
+        settled, total, at_fault = swap_engine.verify_trade_against_chain(engine, req, resp)
+        assert (settled, total, at_fault) == (1, 3, None)
 
     def test_unreachable_propagates_rather_than_guessing(self):
-        engine, lapse, _xlm = self._engine()
+        engine, lapse, xlm, maker_addr = self._engine()
+        req, resp = self._pair(count=1)
         lapse.unreachable = True
-        receipt = _FakeReceiptRow(
-            asset="lapse", from_addr="a.lapse", to_addr="b.lapse",
-            amount=500, memo="memo1", outcome="settled", tx_hash="tx1")
         with pytest.raises(swap_engine.Unreachable):
-            swap_engine.verify_receipt_against_chain(engine, receipt)
-
-
-class _FakeReceiptRow:
-    """Just the attributes verify_receipt_against_chain reads off a
-    StepReceipt row, without needing the database round trip."""
-
-    def __init__(self, asset, from_addr, to_addr, amount, memo, outcome,
-                tx_hash, deadline_height=0):
-        self.asset = asset
-        self.from_addr = from_addr
-        self.to_addr = to_addr
-        self.amount = amount
-        self.memo = memo
-        self.outcome = outcome
-        self.tx_hash = tx_hash
-        self.deadline_height = deadline_height
+            swap_engine.verify_trade_against_chain(engine, req, resp)
