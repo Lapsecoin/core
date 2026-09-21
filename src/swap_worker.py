@@ -245,12 +245,25 @@ class SwapWorker:
 
     def _maybe_backfill_market(self):
         """Try once, every BACKFILL_RETRY_SECONDS, to pull the order book
-        and known accepted fills from a peer, but only while this node has
-        found precisely nothing of either kind yet: a book with even one
-        row in it, gossiped or backfilled, is left to gossip from there.
-        Needs no wallet and runs even while locked, since it only ever
-        stores and relays what a peer sends, exactly like any other
+        and known accepted fills from a peer, but only while this node's
+        own book still looks empty: a book with even one order still
+        worth showing, gossiped or backfilled, is left to gossip from
+        there. Needs no wallet and runs even while locked, since it only
+        ever stores and relays what a peer sends, exactly like any other
         inbound gossip.
+
+        "Still worth showing" means live: not cancelled, and not expired
+        against this node's own current height. The previous version
+        counted every Order row at all, cancelled or expired included -
+        so a single stale, long-cancelled or long-expired order arriving
+        by ordinary gossip (nothing unusual on a network with any real
+        history at all) permanently convinced this node its book was
+        "no longer empty" and disabled backfill for good, even though
+        every order a taker could actually act on was still missing.
+        That is a much worse failure than the cooldown below: it does
+        not resolve itself no matter how long the node is left running,
+        because nothing here ever re-opens the gate once anything at
+        all, live or not, has been seen.
 
         The very first pass runs immediately at startup (see
         _next_backfill_attempt's own initial value), which races peer
@@ -268,7 +281,16 @@ class SwapWorker:
         now = time.time()
         if now < self._next_backfill_attempt:
             return
-        if (trade_storage.Order.select().count()
+        # getattr-guarded the same way pool is looked up below: every
+        # real Node always has a view, but this runs unconditionally
+        # from run_once's very first line, ahead of the wallet check, so
+        # it must not assume anything about the caller beyond what it
+        # actually needs.
+        height = getattr(getattr(self.node, "view", None), "height", 0)
+        if (trade_storage.Order.select()
+                .where(trade_storage.Order.cancelled == False,   # noqa: E712
+                       trade_storage.Order.expiry_block > height)
+                .count()
                 or trade_storage.FillResponse.select()
                        .where(trade_storage.FillResponse.accepted == True)  # noqa: E712
                        .count()):

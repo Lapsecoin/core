@@ -627,3 +627,40 @@ class TestMaybeBackfillMarket:
         assert not hasattr(node, "pool")
         w = self._worker(node)
         w._maybe_backfill_market()   # must not raise
+
+    def test_a_cancelled_order_does_not_block_backfill(self):
+        """Regression test: a single stale, cancelled order arriving by
+        ordinary gossip - nothing unusual on a network with any real
+        history - used to convince this node its book was 'no longer
+        empty' and permanently stop it from ever backfilling again, even
+        though nothing a taker could actually act on had arrived. Unlike
+        the cooldown case, this failure never resolved itself no matter
+        how long the node ran."""
+        market_mod.ensure_tables()
+        trade_storage.Order.create(
+            order_id="stale-cancelled", maker_lapse_addr="someone.else",
+            maker_xlm_addr="GSOMEONE", direction="sell", lapse_total=1,
+            price_stroops_per_lapse=1000, min_fill=0, max_fill=1,
+            expiry_block=10**9, pubkey="ab" * 10, signature="cd" * 10,
+            created_at=time.time(), received_at=time.time(), verified=True,
+            cancelled=True)
+        node = BackfillFakeNode(peer="1.2.3.4:9000")
+        w = self._worker(node)
+
+        w._maybe_backfill_market()
+        assert node.backfill_calls == ["1.2.3.4:9000"]
+
+    def test_an_expired_order_does_not_block_backfill(self):
+        market_mod.ensure_tables()
+        trade_storage.Order.create(
+            order_id="stale-expired", maker_lapse_addr="someone.else",
+            maker_xlm_addr="GSOMEONE", direction="sell", lapse_total=1,
+            price_stroops_per_lapse=1000, min_fill=0, max_fill=1,
+            expiry_block=1,   # long past DiscoveryFakeNode's default height=100
+            pubkey="ab" * 10, signature="cd" * 10,
+            created_at=time.time(), received_at=time.time(), verified=True)
+        node = BackfillFakeNode(peer="1.2.3.4:9000")
+        w = self._worker(node)
+
+        w._maybe_backfill_market()
+        assert node.backfill_calls == ["1.2.3.4:9000"]
