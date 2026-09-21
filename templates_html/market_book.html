@@ -75,7 +75,8 @@
         {% if blocks_left > 0 %}~{{ fmt_duration(blocks_left * 120) }}{% else %}expired{% endif %}
       </td>
       <td data-label="">
-        <a class="btn-sm" href="/market/take/{{ e.order_id }}">{{ 'Buy' if side == 'sell' else 'Sell' }}</a>
+        <a class="btn-sm" href="/market/take/{{ e.order_id }}"
+           title="Choose an amount before anything is sent">{{ 'Buy…' if side == 'sell' else 'Sell…' }}</a>
       </td>
     </tr>
     {% endfor %}
