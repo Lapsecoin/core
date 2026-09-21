@@ -26,15 +26,24 @@
     <tr>
       <td>Track record</td>
       <td>
-        {% if trust.known and trust.score > 0 %}
+        {% if trust.score > 0 %}
           <span style="color:var(--gain)">
-            {{ trust.completed_count }} completed trade{{ '' if trust.completed_count == 1 else 's' }}
+            {{ "%.1f"|format(trust.score) }}
+            {%- if trust.completed_count %}
+              ({{ trust.completed_count }} completed trade{{ '' if trust.completed_count == 1 else 's' }})
+            {%- endif %}
           </span>
           <div class="stat-sub">
-            Their address has been on the chain a while and holds a balance,
-            which is what makes that record worth something: a fresh address
-            with no funds counts for nothing here however long its history
-            claims to be.
+            {% if trust.completed_count %}
+              Their address has been on the chain a while and holds a balance,
+              which is what makes that record worth something: a fresh address
+              with no funds counts for nothing here however long its history
+              claims to be.
+            {% else %}
+              No completed trades yet, but their address's age and balance
+              already give it some standing on their own - what it would
+              forfeit by walking away, not a track record.
+            {% endif %}
           </div>
         {% elif trust.abandoned_count %}
           <span style="color:var(--loss); font-weight:bold">
