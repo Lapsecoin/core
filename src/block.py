@@ -112,9 +112,17 @@ def race_window(chain):
 # 0.5 points here), few enough to be a couple of milliseconds.
 ODDS_TRIALS = 10_000
 
+# How many blocks it takes a field builder's presence weight to halve
+# since its last win (_field_recency_presence). Small on purpose: a
+# machine that won the block right before this one is a live threat
+# regardless of whether it has ever won before, and a machine that has
+# gone this many blocks without a repeat should stop being treated as a
+# standing rival within a handful more.
+RECENCY_HALF_LIFE_BLOCKS = 3
+
 
 def _simulate_draws(own_samples, field_samples, window_s, seed,
-                    trials=ODDS_TRIALS):
+                    field_presence=None, trials=ODDS_TRIALS):
     """Replay the draw `trials` times over the observed intervals.
 
     Returns (odds_pct, in_draw_pct, mean_entrants_when_in).
@@ -137,18 +145,40 @@ def _simulate_draws(own_samples, field_samples, window_s, seed,
     whatever the machine was doing, not a named distribution, so this
     draws from the record instead of fitting a shape to it.
 
-    What it assumes, and cannot check: that every builder seen in the
-    window contends for every height. A peer that is merely offline half
-    the time looks like one that is present and slow. win_share_pct is the
-    check on that, being a measurement of the same quantity, and a gap
-    between the two means this assumption is not holding here.
+    field_presence maps builder to how likely it is to still be racing
+    right now, not how big a share of the whole window it accumulated.
+    Left at 1.0 (or omitted) a builder is assumed to contend for every
+    single height, which is what used to happen unconditionally and is
+    wrong whenever a builder's presence has actually changed: a machine
+    far faster than the field that only shows up for a few blocks then
+    goes quiet reads as a fast machine that is always racing, so every
+    trial it draws one of its rare, fast intervals and beats everyone.
+
+    A plain share of the window (its blocks divided by the window's
+    length) does not fix this either. It fixes the opposite case just as
+    badly: a machine that joined five minutes ago and has raced, and won,
+    every height since is exactly as dangerous right now as a machine
+    that has always been in the field, but a whole-window share reads it
+    as almost absent, because most of the window predates it.
+
+    What actually answers "is this builder active right now" is nothing
+    but how many blocks ago it last won (_field_recency_presence).
+    Winning the block right before this one means full presence, no
+    matter whether that is the builder's first win ever or its
+    thousandth; a burst that stopped several half-lives ago decays to
+    negligible regardless of how many blocks it won while it lasted. Nothing
+    here is normalized against a builder's own history, only against how
+    close its last win sits to the current height.
     """
     rng    = random.Random(seed)
-    others = list(field_samples.values())
+    builders = list(field_samples.keys())
+    presence = {b: 1.0 if field_presence is None
+                else field_presence.get(b, 1.0) for b in builders}
     share_total = in_draw = entrant_total = 0.0
     for _ in range(trials):
         ours  = rng.choice(own_samples)
-        drawn = [rng.choice(s) for s in others]
+        drawn = [rng.choice(field_samples[b]) for b in builders
+                 if rng.random() < presence[b]]
         cutoff = min([ours] + drawn) + window_s
         if ours > cutoff:
             continue        # finished after the draw for this height closed
@@ -159,6 +189,38 @@ def _simulate_draws(own_samples, field_samples, window_s, seed,
     return (100.0 * share_total / trials,
             100.0 * in_draw / trials,
             entrant_total / in_draw if in_draw else None)
+
+
+def _field_recency_presence(field, tip_height):
+    """How likely each field builder is to still be racing right now,
+    from nothing but how many blocks ago it last won. See the
+    field_presence paragraph in _simulate_draws for why recency, not a
+    share of the window, is the right question.
+
+    field is the (height, interval, builder) rows for everyone but us.
+    tip_height is the window's last height, i.e. "now" for this purpose.
+
+    Deliberately not normalized against each builder's own history: a
+    machine that has won exactly once, at H-1, is exactly as live a
+    threat as one with a hundred wins that also last won at H-1. Weighing
+    it against a personal "typical gap" would dilute that single recent
+    win by history it doesn't have yet, which is backwards, since a
+    single win one block ago is the strongest possible evidence a
+    machine is on the network right now. Distance to the current height
+    is the only thing recency can mean here.
+
+    Returns {builder: weight in (0, 1]}, decaying by half every
+    RECENCY_HALF_LIFE_BLOCKS since a builder's last win, the same rate
+    for every builder. Winning the block right before this one gives a
+    weight near 1; a burst that stopped many half-lives ago decays to
+    negligible regardless of how many blocks it won while it lasted.
+    """
+    last_win = {}
+    for h, _interval, builder in field:
+        if h > last_win.get(builder, -1):
+            last_win[builder] = h
+    return {builder: 0.5 ** ((tip_height - h) / RECENCY_HALF_LIFE_BLOCKS)
+            for builder, h in last_win.items()}
 
 
 def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
@@ -201,6 +263,16 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
     coin flip and the second is never winning again. The setting's own
     help text is the giveaway, it is "how much of a speed advantage it
     takes to win outright".
+
+    Each field builder is rolled into a trial at a presence weight based
+    on nothing but distance to the current height: how many blocks ago it
+    last won (_field_recency_presence). A builder is not assumed to
+    contend for every height just because it appears somewhere in the
+    window, and it is not judged against its own history either. A
+    single extremely fast win at the block right before this one tanks
+    the odds exactly as it should, whether it's that builder's first win
+    or its thousandth; a machine that won two blocks and then went quiet
+    decays to a negligible presence within a few blocks of stopping.
 
     A near-tie still lands on one side or the other of draw_window, which
     is not a rounding artifact: that boundary is the rule, and a builder
@@ -268,6 +340,12 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
     own_samples = [i for _h, i, _b in mine] or ([own_pace] if own_pace is not None
                                                 else [])
 
+    # How likely each field builder is to still be racing right now,
+    # judged from recency rather than a raw share of the window. See
+    # _field_recency_presence and the field_presence paragraph in
+    # _simulate_draws.
+    field_presence = _field_recency_presence(field, window[-1][0])
+
     odds_pct = in_draw_pct = entrants = None
     if own_samples:
         # Seeded from the tip, so the figure is stable while the chain is
@@ -276,7 +354,8 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
         # happened.
         seed = int(chain[-1].get("hash", "0")[:8] or "0", 16)
         odds_pct, in_draw_pct, entrants = _simulate_draws(
-            own_samples, field_samples, window_s, seed)
+            own_samples, field_samples, window_s, seed,
+            field_presence=field_presence)
 
     return {"window": window, "median": median,
             "own_seconds": own_seconds, "odds_pct": odds_pct,
