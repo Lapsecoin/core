@@ -146,6 +146,20 @@
       <div class="stat-value" id="total-line"></div>
     </div>
 
+    <div class="form-row">
+      <label for="expiry_value">Expires in</label>
+      <input id="expiry_value" type="number" min="1" value="7"
+             inputmode="numeric" style="width:5rem" autocomplete="off">
+      <select id="expiry_unit" autocomplete="off">
+        <option value="1">hours</option>
+        <option value="24" selected>days</option>
+        <option value="168">weeks</option>
+      </select>
+      <input type="hidden" id="expiry_hours" name="expiry_hours"
+             value="168" data-max="{{ max_expiry_hours }}">
+      <div class="stat-sub">Up to {{ (max_expiry_hours / 24)|round(0, 'floor')|int }} days.</div>
+    </div>
+
     <details style="margin:.4rem 0">
       <summary class="stat-sub" style="cursor:pointer">More options</summary>
       <div class="form-row">
@@ -154,19 +168,6 @@
                placeholder="0" autocomplete="off">
         <span>LAPSE</span>
         <div class="stat-sub">Refuse fills below this. Blank for no minimum.</div>
-      </div>
-      <div class="form-row">
-        <label for="expiry_value">Expires in</label>
-        <input id="expiry_value" type="number" min="1" value="7"
-               inputmode="numeric" style="width:5rem" autocomplete="off">
-        <select id="expiry_unit" autocomplete="off">
-          <option value="1">hours</option>
-          <option value="24" selected>days</option>
-          <option value="168">weeks</option>
-        </select>
-        <input type="hidden" id="expiry_hours" name="expiry_hours"
-               value="168" data-max="{{ max_expiry_hours }}">
-        <div class="stat-sub">Up to {{ (max_expiry_hours / 24)|round(0, 'floor')|int }} days.</div>
       </div>
       <div class="form-row">
         <label for="auto_match_margin">Auto-match margin</label>
