@@ -145,15 +145,24 @@
       <div class="stat-sub">Up to {{ (max_expiry_hours / 24)|round(0, 'floor')|int }} days.</div>
     </div>
 
+    <div class="form-row">
+      <label for="min_fill">Smallest fill</label>
+      <input id="min_fill" type="text" name="min_fill_lapse" inputmode="decimal"
+             placeholder="0" autocomplete="off" readonly>
+      <span>LAPSE</span>
+      <label style="display:inline-flex; align-items:center; gap:.3rem;
+                    font-weight:normal; margin-left:.6rem">
+        <input type="checkbox" id="allow_partial" style="width:auto">
+        allow partial fills
+      </label>
+      <div class="stat-sub" id="min-fill-note">
+        Locked to the full amount: a taker must take it all at once. Check
+        "allow partial fills" to set your own minimum, or none at all.
+      </div>
+    </div>
+
     <details style="margin:.4rem 0">
       <summary class="stat-sub" style="cursor:pointer">More options</summary>
-      <div class="form-row">
-        <label for="min_fill">Smallest fill</label>
-        <input id="min_fill" type="text" name="min_fill_lapse" inputmode="decimal"
-               placeholder="0" autocomplete="off">
-        <span>LAPSE</span>
-        <div class="stat-sub">Refuse fills below this. Blank for no minimum.</div>
-      </div>
       <div class="form-row">
         <label for="auto_match_margin">Auto-match margin</label>
         <input id="auto_match_margin" type="text" name="auto_match_margin_xlm"
@@ -376,6 +385,40 @@
   var card = document.getElementById("order-form").closest(".card");
   if (card) card.addEventListener("side-changed", recalc);
   recalc();
+})();
+
+(function () {
+  // Smallest fill defaults to the full amount (locked, read-only) so an
+  // order cannot be partially taken unless the maker deliberately opts
+  // in - "allow partial fills" swaps it to an ordinary editable field,
+  // starting blank (no minimum) rather than carrying over the amount
+  // that was locked in a moment ago.
+  var amount   = document.getElementById("amount");
+  var minFill  = document.getElementById("min_fill");
+  var allowBox = document.getElementById("allow_partial");
+  var note     = document.getElementById("min-fill-note");
+  if (!amount || !minFill || !allowBox || !note) return;
+
+  function sync() {
+    if (allowBox.checked) return;
+    minFill.value = amount.value;
+  }
+
+  amount.addEventListener("input", sync);
+  allowBox.addEventListener("change", function () {
+    if (allowBox.checked) {
+      minFill.readOnly = false;
+      minFill.value = "";
+      note.textContent = "Refuse fills below this. Blank for no minimum.";
+    } else {
+      minFill.readOnly = true;
+      note.textContent = "Locked to the full amount: a taker must take "
+        + "it all at once. Check \"allow partial fills\" to set your "
+        + "own minimum, or none at all.";
+      sync();
+    }
+  });
+  sync();
 })();
 
 (function () {
