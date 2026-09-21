@@ -449,6 +449,39 @@ def delivered_ticks(order_id):
     return sum(r.lapse_amount for r in rows)
 
 
+def received_ticks(order_id):
+    """How much of an order's maker has actually been PAID, per the
+    chain - the counterparty's own leg settling, regardless of whether
+    this maker's own leg (what it sends out) has settled yet.
+
+    Distinct from delivered_ticks, which requires both legs of a step
+    before counting it at all: that is the right rule for how much of
+    an order is still available to fill (remaining_ticks must not free
+    up capacity for a step this maker has already sent its own side of
+    but not yet been paid back on), but it is the wrong number to show
+    a maker asking "how much have I actually collected so far" - a
+    step this maker sent and is still waiting to be reciprocated on
+    would otherwise show as zero progress despite real money already
+    being out, or as unremarkable progress once it settles despite
+    that being the only leg that was ever genuinely this maker's own
+    risk. This counts the incoming leg alone, in LAPSE-equivalent ticks
+    (Increment.lapse_amount is denominated in ticks for both legs of a
+    step regardless of which asset actually moves), which is what a
+    maker's own trading history actually depends on: what they were
+    paid, not what they sent.
+    """
+    ensure_tables()
+    sessions = [t.session_id for t in
+                Trade.select(Trade.session_id).where(Trade.order_id == order_id)]
+    if not sessions:
+        return 0
+    rows = (Increment
+            .select(Increment.lapse_amount)
+            .where(Increment.session_id.in_(sessions),
+                   Increment.in_state == LEG_SETTLED))
+    return sum(r.lapse_amount for r in rows)
+
+
 def reserved_ticks(order_id, current_height):
     """How much of an order is spoken for by an accepted fill response
     this node has no completed-trade record for.

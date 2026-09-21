@@ -594,7 +594,8 @@ class TestMyOrders:
         assert len(rows) == 1
         assert rows[0]["delivered"] == 0
         assert rows[0]["reserved"] == 0
-        assert rows[0]["pct_delivered"] == 0
+        assert rows[0]["received"] == 0
+        assert rows[0]["pct_received"] == 0
         assert rows[0]["remaining"] == 10 * LAPSE
 
     def test_an_accepted_fill_response_shows_as_reserved_not_delivered(self, tmp_path):
@@ -627,7 +628,8 @@ class TestMyOrders:
         assert rows[0]["delivered"] == 0
         assert rows[0]["reserved"] == 4 * LAPSE
         assert rows[0]["remaining"] == 6 * LAPSE
-        assert rows[0]["pct_delivered"] == 0
+        assert rows[0]["received"] == 0
+        assert rows[0]["pct_received"] == 0
 
     def test_a_settled_step_shows_as_delivered_percentage(self):
         order = make_maker_order(order_id="o1", maker_lapse="me.lapse",
@@ -647,8 +649,41 @@ class TestMyOrders:
         rows = market_routes._my_orders(self._Node("me.lapse"), height=100)
 
         assert rows[0]["delivered"] == 5 * LAPSE
-        assert rows[0]["pct_delivered"] == 50
         assert rows[0]["remaining"] == 5 * LAPSE
+        # Both legs settled here, so received agrees with delivered -
+        # the distinguishing case (paid but not yet reciprocated) is
+        # its own test below.
+        assert rows[0]["received"] == 5 * LAPSE
+        assert rows[0]["pct_received"] == 50
+
+    def test_being_paid_counts_as_received_even_before_this_maker_pays_back(self):
+        """Regression test for the actual gap: market.delivered_ticks
+        (and the old pct_delivered progress bar built from it) requires
+        BOTH legs of a step to settle before counting anything, so a
+        maker who has already been paid by the counterparty but has not
+        yet sent their own leg back used to show 0% progress despite
+        real money already having arrived - the one number a maker
+        watching their own risk actually wants to see. received_ticks
+        counts the incoming leg alone."""
+        make_maker_order(order_id="o1", maker_lapse="me.lapse",
+                         lapse_total=10 * LAPSE)
+        Trade.create(
+            session_id="s" * 16, order_id="o1", role="maker",
+            my_lapse_addr="me.lapse", my_xlm_addr="GME",
+            peer_lapse_addr="taker.lapse", peer_xlm_addr="GTAKER",
+            i_send="lapse", lapse_total=5 * LAPSE, xlm_total=5000 * XLM,
+            increment_count=1, confirm_depth=1, status="active",
+            created_at=time.time(), updated_at=time.time())
+        Increment.create(
+            id="s" * 16 + ":1", session_id="s" * 16, n=1,
+            lapse_amount=5 * LAPSE, xlm_amount=5000 * XLM,
+            i_move_first=False, out_state="pending", in_state="settled",
+            created_at=time.time(), deadline_at=time.time() + 3600)
+        rows = market_routes._my_orders(self._Node("me.lapse"), height=100)
+
+        assert rows[0]["delivered"] == 0        # both legs not settled
+        assert rows[0]["received"] == 5 * LAPSE  # but the incoming leg is
+        assert rows[0]["pct_received"] == 50
 
 
 class TestPendingRequests:

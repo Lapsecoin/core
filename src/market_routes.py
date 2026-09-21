@@ -927,6 +927,7 @@ def _my_orders(node, height):
     for row in market_mod.orders_by_maker(node.addr, height):
         delivered = market_mod.delivered_ticks(row.order_id)
         reserved = market_mod.reserved_ticks(row.order_id, height)
+        received = market_mod.received_ticks(row.order_id)
         rows.append({
             "order_id": row.order_id,
             "direction": row.direction,
@@ -938,7 +939,14 @@ def _my_orders(node, height):
             # actually moved for it yet, which is a different thing to
             # tell a maker than "delivered" is.
             "reserved": reserved,
-            "pct_delivered": int(delivered * 100 / row.lapse_total) if row.lapse_total else 0,
+            # What the counterparty has actually paid this maker,
+            # independent of whether this maker's own leg has settled
+            # yet (see market.received_ticks) - the number the compact
+            # progress indicator is built from, since "how much have I
+            # been paid" is what a maker watching their own risk cares
+            # about, not "how much of the trade overall is done".
+            "received": received,
+            "pct_received": int(received * 100 / row.lapse_total) if row.lapse_total else 0,
             "price_stroops_per_lapse": row.price_stroops_per_lapse,
             "auto_match_margin_stroops": row.auto_match_margin_stroops,
             "blocks_left": max(row.expiry_block - height, 0),

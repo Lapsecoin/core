@@ -261,7 +261,7 @@
 <div class="table-wrap">
 <table class="stacked">
   <thead>
-    <tr><th>Side</th><th>Amount</th><th>Progress</th><th>Left</th><th>Price</th><th>Margin</th><th>Expires</th><th></th></tr>
+    <tr><th>Side</th><th>Amount</th><th>Received</th><th>Price</th><th>Margin</th><th>Expires</th><th></th></tr>
   </thead>
   <tbody>
     {% for o in my_orders %}
@@ -272,20 +272,15 @@
         </span>
       </td>
       <td data-label="Amount">{{ fmt_lapse_dp(o.lapse_total, 2) }}</td>
-      <td data-label="Progress">
-        <div class="progress" style="width:6rem"
-             title="{{ fmt_lapse_dp(o.delivered, 2) }} delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} accepted and awaiting payment{% endif %}">
-          <div class="progress-fill" style="width: {{ o.pct_delivered }}%"></div>
-        </div>
-        <span class="stat-sub">{{ o.pct_delivered }}% delivered{% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} accepted{% endif %}</span>
-      </td>
-      <td data-label="Left">
-        {{ fmt_lapse_dp(o.remaining, 2) }}
-        {% if o.below_min_fill %}
-          <div class="stat-sub" style="color:var(--ink-dim)">
-            below your own minimum fill; nobody can take this remainder any more
-          </div>
-        {% endif %}
+      <td data-label="Received">
+        {# A ring, not a bar: how much the counterparty has actually
+           paid this maker (market.received_ticks), not how much of
+           the trade overall is done - the leg this maker's own risk
+           actually depends on, not what it sent out itself. #}
+        <span class="progress-ring"
+             style="background: conic-gradient(var(--gain) {{ o.pct_received }}%, var(--paper-2) 0)"
+             title="{{ fmt_lapse_dp(o.received, 2) }} of {{ fmt_lapse_dp(o.lapse_total, 2) }} paid in by the other side ({{ o.pct_received }}%){% if o.reserved %}, {{ fmt_lapse_dp(o.reserved, 2) }} accepted and awaiting payment{% endif %}{% if o.below_min_fill %}. The remainder is below your own minimum fill; nobody can take it any more{% endif %}"></span>
+        <span class="stat-sub">{{ o.pct_received }}%</span>
       </td>
       <td data-label="Price">{{ fmt_price(o.price_stroops_per_lapse) }} XLM</td>
       <td data-label="Margin">
@@ -325,9 +320,9 @@
   .tab.is-active { color: var(--ink); font-weight: bold;
                    border-color: var(--rule); background: var(--paper-2); }
   .trust-badge { font-size: .72rem; margin-left: .25rem; }
-  .progress { background: var(--paper-2); border: 1px solid var(--rule-lt);
-              height: 10px; overflow: hidden; }
-  .progress-fill { background: var(--gain); height: 100%; }
+  .progress-ring { display: inline-block; vertical-align: middle;
+                    width: 1.1rem; height: 1.1rem; border-radius: 50%;
+                    border: 1px solid var(--rule-lt); margin-right: .3rem; }
 </style>
 
 <script>
