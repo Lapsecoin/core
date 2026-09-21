@@ -24,6 +24,7 @@ import http_probe
 import info_probe
 import params
 import upnp
+import xlm as xlm_mod
 from api import create_app, create_private_app
 from discovery import Discovery
 from gossip import Gossip
@@ -557,8 +558,22 @@ def main():
     # unfinished trade against both chains before it sends anything, which
     # is what makes a restart mid-trade safe, and it does nothing at all
     # while swaps are off or the node is locked.
-    swap_worker = SwapWorker(node, os.path.join(
-        os.path.dirname(os.path.abspath(args.keyfile)), "xlm_trading.key"))
+    xlm_keyfile = os.path.join(
+        os.path.dirname(os.path.abspath(args.keyfile)), "xlm_trading.key")
+    if not os.path.exists(xlm_keyfile):
+        # Sealed under the same kek this process already holds from the
+        # node passphrase prompt above, exactly like market_routes.
+        # _create_wallet does by hand from the Market page - it holds
+        # nothing until funded, so there is no reason to make a first-run
+        # node sit locked (and the Trades page misreport it as such)
+        # purely for lack of a trading address nobody has any use for
+        # withholding.
+        seed, public = xlm_mod.generate_keypair()
+        xlm_mod.save_key(xlm_keyfile, seed, public, kek=kek)
+        del seed
+        log.info("[startup] created a Stellar trading address: %s", public)
+
+    swap_worker = SwapWorker(node, xlm_keyfile)
     # Handed to the Trades page so a stalled trade can be told apart from a
     # locked wallet or an unreachable Horizon instead of looking identical.
     node.swap_worker = swap_worker
