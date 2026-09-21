@@ -539,15 +539,15 @@ def remaining_ticks(order_row, current_height):
     return max(order_row.lapse_total - committed, 0)
 
 
-def validate_fill(order_row, lapse_total, current_height):
+def validate_fill(order_row, lapse_total, current_height, taker_lapse_addr=None):
     """Check a proposed fill size against an order's own terms. Raises
     OrderRejected with a human-readable reason if it does not fit.
 
     Shared by the taker's own request (market_routes._open_trade) and
     the maker's independent re-check of it (swap_engine.answer_fill_requests):
-    the same three bounds apply to a fill regardless of which side
-    proposes it, and a maker must never take a taker's word that its own
-    order permits what a request states.
+    the same bounds apply to a fill regardless of which side proposes
+    it, and a maker must never take a taker's word that its own order
+    permits what a request states.
 
     current_height is what lets remaining_ticks (see its own docstring
     and reserved_ticks') stop counting a reservation that has stalled
@@ -555,9 +555,28 @@ def validate_fill(order_row, lapse_total, current_height):
     that will never finish would hold an order's capacity hostage
     forever, refusing every other taker even once it is long past any
     reasonable doubt that it is not coming back.
+
+    taker_lapse_addr, when given, refuses a maker filling its own
+    order. Nothing about a "trade" between one address and itself is
+    unsafe to the funds involved (paying yourself back is a wash), but
+    it is a free way to manufacture a completed Trade row - the thing
+    trust.local_tally counts - without a single distinct counterparty
+    ever being involved, which is exactly the standing-for-nothing
+    history trust.py's diversity-weighting exists to make expensive
+    (see history_component's own docstring): a maker cannot even reach
+    for two addresses if using this same one against its own order is
+    left open. Optional because a plain relay checking a request it
+    does not itself own has no taker address of its own to compare
+    against (see verify_fill_request's identical division), and because
+    auto_match_orders' own candidates already exclude this node's own
+    orders before validate_fill ever sees them - this is the one other
+    path (a manual, deliberately self-targeted fill) that needed its
+    own check.
     """
     if lapse_total <= 0:
         raise OrderRejected("fill amount must be positive")
+    if taker_lapse_addr is not None and taker_lapse_addr == order_row.maker_lapse_addr:
+        raise OrderRejected("a maker cannot fill their own order")
     remaining = remaining_ticks(order_row, current_height)
     if lapse_total > remaining:
         raise OrderRejected("that is more than the order has left")
@@ -819,6 +838,17 @@ def _open_orders_query(current_height, direction, exclude_maker=None):
     if exclude_maker:
         query = query.where(Order.maker_lapse_addr != exclude_maker)
     return query
+
+
+def count_open_orders(current_height, direction, exclude_maker=None):
+    """How many orders are on one side of the book, cancelled/expired/
+    this node's own excluded - the SQL-only count _open_orders_query
+    already computes for list_orders' own "N orders on this side" line,
+    exposed on its own for a caller that only wants the number (see
+    market_routes.market_book's own cross-side hint: whether the OTHER
+    side has anything worth telling a visitor about, without paying for
+    a page of rows it is not going to show)."""
+    return _open_orders_query(current_height, direction, exclude_maker).count()
 
 
 def list_orders(current_height, direction, exclude_maker=None,

@@ -225,6 +225,19 @@ class TestStartTrade:
         assert market_mod.verify_fill_request(req) is True
         assert market_mod.get_fill_request(req["request_id"]) is not None
 
+    def test_taking_your_own_order_is_refused(self, tmp_path):
+        """A maker cannot fill their own order from the same node (see
+        market.validate_fill's own taker_lapse_addr check): nothing
+        about the funds is at risk, but it is a free way to manufacture
+        a completed trade with no real counterparty involved."""
+        node = TakerNode(tmp_path)
+        order = make_maker_order(direction="sell", price=1000,
+                                 maker_lapse=node.addr)
+        with pytest.raises(market_mod.OrderRejected, match="own order"):
+            self._call(node, order, {"amount_lapse": "1"})
+        assert Trade.select().count() == 0
+        assert node.publish_fill_request_calls == []
+
     def test_fill_larger_than_the_order_is_refused(self, tmp_path):
         node = TakerNode(tmp_path)
         order = make_maker_order(lapse_total=1 * LAPSE)

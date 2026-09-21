@@ -398,9 +398,21 @@ def register(app, node, csrf_token):
         last_page = max((total + page_size - 1) // page_size, 1)
         if page_num > last_page:
             page_num = last_page
+        # This page defaults to one fixed side (sell) regardless of
+        # where the actual activity is, so an empty default view reads
+        # as "the book is empty" even when the other side has plenty on
+        # it - exactly the confusion a first-time visitor hits when the
+        # only order around happens to be a buy. Cheap (one indexed
+        # count), and only worth showing at all when this side has
+        # nothing of its own to show.
+        other_side = "buy" if side == "sell" else "sell"
+        other_total = (0 if rows else
+                      market_mod.count_open_orders(
+                          height, other_side, exclude_maker=node.addr))
         return render_template(
             "market_book.html", title="Order book", height=height,
             side=side, sort=sort, rows=rows, total=total,
+            other_side=other_side, other_total=other_total,
             page=page_num, last_page=last_page, page_size=page_size)
 
     # -- Taking an order -----------------------------------------------
@@ -721,7 +733,8 @@ def _open_trade(node, order_row, height, xlm_keyfile_path,
     except ValueError:
         raise ValueError("that is not this node's passphrase")
 
-    market_mod.validate_fill(order_row, lapse_total, height)
+    market_mod.validate_fill(order_row, lapse_total, height,
+                             taker_lapse_addr=node.addr)
 
     xlm_total = swap_mod.xlm_for_lapse(lapse_total,
                                        order_row.price_stroops_per_lapse)

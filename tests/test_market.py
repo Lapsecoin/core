@@ -738,6 +738,35 @@ class TestValidateFill:
         row = market.get_order(order["order_id"])
         market.validate_fill(row, 5 * LAPSE, 100)   # must not raise
 
+    def test_a_maker_filling_their_own_order_is_refused(self, maker):
+        """Nothing about paying yourself back risks any funds, but it is
+        a free way to manufacture a completed Trade row - the thing
+        trust.local_tally counts - without a single distinct
+        counterparty ever being involved, undermining the diversity-
+        weighting trust.history_component relies on to make standing
+        cost something (see validate_fill's own docstring)."""
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        with pytest.raises(market.OrderRejected, match="own order"):
+            market.validate_fill(row, 5 * LAPSE, 100, taker_lapse_addr=maker["addr"])
+
+    def test_taker_lapse_addr_is_optional_and_skips_the_self_check(self, maker):
+        """A plain relay checking a claim it does not itself own has no
+        taker address of its own to compare - the same division
+        verify_fill_request's own docstring draws for expected_maker_addr."""
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        market.validate_fill(row, 5 * LAPSE, 100)   # must not raise
+
+    def test_a_different_taker_is_unaffected(self, maker, taker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        market.validate_fill(row, 5 * LAPSE, 100,
+                             taker_lapse_addr=taker["addr"])   # must not raise
+
     def test_zero_or_negative_is_refused(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
@@ -1507,6 +1536,18 @@ class TestListOrders:
         page2, total2 = market.list_orders(100, "sell", offset=2, limit=2)
         assert total2 == 5
         assert [e["price"] for e in page2] == [1002, 1003]
+
+    def test_count_open_orders_matches_list_orders_own_total(self, maker):
+        """market_routes.market_book uses this on its own to tell a
+        visitor stuck on an empty side that the other side has
+        something, without paying for a page of rows it will not show
+        (see market_book.html's cross-side hint) - it has to agree with
+        the total list_orders itself reports for the same side."""
+        market.store_order(signed_order(maker, order_id="s1", direction="sell"))
+        market.store_order(signed_order(maker, order_id="s2", direction="sell"))
+        _page, total = market.list_orders(100, "sell")
+        assert market.count_open_orders(100, "sell") == total == 2
+        assert market.count_open_orders(100, "buy") == 0
 
     def test_amount_sort_is_largest_first(self, maker):
         market.store_order(signed_order(maker, order_id="small",

@@ -1261,7 +1261,8 @@ def _answer_one_locked(engine, node, my_xlm_addr, confirm_depth,
         node.publish_fill_response(resp)
 
     try:
-        market_mod.validate_fill(order_row, req.lapse_total, accepted_height)
+        market_mod.validate_fill(order_row, req.lapse_total, accepted_height,
+                                 taker_lapse_addr=req.taker_lapse_addr)
     except market_mod.OrderRejected as e:
         respond(False, reason=str(e))
         return False
@@ -1517,7 +1518,8 @@ def _send_auto_match(engine, node, my_xlm_addr, kek, order_id,
     except swap.TradeTooLarge:
         return False
     try:
-        market_mod.validate_fill(order_row, lapse_total, node.view.height)
+        market_mod.validate_fill(order_row, lapse_total, node.view.height,
+                                 taker_lapse_addr=node.addr)
     except market_mod.OrderRejected:
         return False
 

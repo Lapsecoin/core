@@ -36,6 +36,12 @@
   <p style="color:var(--ink-dim); font-style:italic">
     {% if total == 0 %}
       Nobody is {{ 'selling' if side == 'sell' else 'buying' }} right now.
+      {% if other_total %}
+        <a href="/market/book?side={{ other_side }}&sort={{ sort }}">
+        {{ other_total }} order{{ '' if other_total == 1 else 's' }} on the
+        {{ 'buying' if other_side == 'buy' else 'selling' }} side</a>, if that's
+        what you're looking for.
+      {% endif %}
     {% else %}
       No orders on this page. <a href="/market/book?side={{ side }}&sort={{ sort }}">Back to page 1</a>.
     {% endif %}

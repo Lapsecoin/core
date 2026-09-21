@@ -108,14 +108,15 @@
     <div class="card-title">Too large to do safely right now</div>
     <p style="font-size:.92rem">
       Filling all of this would mean putting more at stake in a single step
-      than this node is willing to risk with this counterparty. The most it
-      will do with them at the moment is
+      than either side's own trust of the other currently allows. The most
+      this trade will do at the moment is
       <strong>{{ fmt_lapse_dp(max_safe_lapse, 4) }}</strong>.
     </p>
     <p style="font-size:.92rem; margin-top:.4rem">
-      You can take that much now, or raise the per-step limit in
-      <a href="/settings">Settings</a> if you have your own reason to.
-      Trading with them successfully also raises it on its own.
+      You can take that much now. There is no setting to raise this by
+      hand: it is computed from both addresses' own trading history, not
+      chosen by either side, so trading with them successfully is what
+      raises it.
     </p>
   </div>
 {% endif %}
