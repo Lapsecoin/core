@@ -251,12 +251,23 @@ class SwapWorker:
         Needs no wallet and runs even while locked, since it only ever
         stores and relays what a peer sends, exactly like any other
         inbound gossip.
+
+        The very first pass runs immediately at startup (see
+        _next_backfill_attempt's own initial value), which races peer
+        discovery on a freshly started node: this node's own pool can
+        easily still be empty at that exact moment, well before it is
+        actually empty of peers. The full BACKFILL_RETRY_SECONDS cooldown
+        is only armed once a peer was actually found and asked, whether
+        or not that request came back with anything - finding no peer
+        yet is not the same "tried and got nothing" case that cooldown
+        exists to avoid hammering, and arming it anyway used to strand a
+        brand new node for a full five minutes for having lost a race
+        that resolves itself within seconds.
         """
         trade_storage.ensure_tables()
         now = time.time()
         if now < self._next_backfill_attempt:
             return
-        self._next_backfill_attempt = now + BACKFILL_RETRY_SECONDS
         if (trade_storage.Order.select().count()
                 or trade_storage.FillResponse.select()
                        .where(trade_storage.FillResponse.accepted == True)  # noqa: E712
@@ -266,6 +277,7 @@ class SwapWorker:
         peer = pool.random() if pool is not None else None
         if not peer:
             return
+        self._next_backfill_attempt = now + BACKFILL_RETRY_SECONDS
         try:
             self.node.backfill_market_from(peer)
         except Exception:

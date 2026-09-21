@@ -541,3 +541,89 @@ class TestDiscoveryWiring:
                             lambda: order.append("prune"))
         w.run_once()
         assert order == ["discover", "prune"]
+
+
+class FakePool:
+    def __init__(self, peer=None):
+        self.peer = peer
+
+    def random(self):
+        return self.peer
+
+
+class BackfillFakeNode(DiscoveryFakeNode):
+    """A node whose backfill_market_from is a spy, and whose pool can be
+    told to have a peer or not - what _maybe_backfill_market actually
+    branches on."""
+
+    def __init__(self, peer=None, **kw):
+        super().__init__(**kw)
+        self.pool = FakePool(peer)
+        self.backfill_calls = []
+
+    def backfill_market_from(self, peer_addr):
+        self.backfill_calls.append(peer_addr)
+        return (0, 0)
+
+
+class TestMaybeBackfillMarket:
+    """A freshly started node's book is empty, and the very first
+    backfill attempt runs immediately at startup - which races peer
+    discovery, since this node's own pool can easily still be empty at
+    that exact instant. The regression this guards: finding no peer YET
+    used to arm the same multi-minute cooldown as an attempt that
+    actually ran and came back empty, stranding a brand new node for
+    that whole window even after peers showed up seconds later."""
+
+    def _worker(self, node):
+        w = Worker(node)
+        w.node = node
+        return w
+
+    def test_no_peer_available_leaves_the_next_attempt_unblocked(self):
+        node = BackfillFakeNode(peer=None)
+        w = self._worker(node)
+
+        w._maybe_backfill_market()
+        assert node.backfill_calls == []
+
+        # A peer turns up moments later - this node's discovery catching
+        # up, not a cooldown this call should ever have armed.
+        node.pool.peer = "1.2.3.4:9000"
+        w._maybe_backfill_market()
+        assert node.backfill_calls == ["1.2.3.4:9000"]
+
+    def test_a_real_attempt_arms_the_cooldown(self):
+        node = BackfillFakeNode(peer="1.2.3.4:9000")
+        w = self._worker(node)
+
+        w._maybe_backfill_market()
+        assert node.backfill_calls == ["1.2.3.4:9000"]
+
+        # Same peer still available, but the cooldown from the attempt
+        # just made should hold off asking again immediately.
+        w._maybe_backfill_market()
+        assert node.backfill_calls == ["1.2.3.4:9000"]
+
+    def test_an_already_populated_book_never_attempts(self):
+        market_mod.ensure_tables()
+        trade_storage.Order.create(
+            order_id="order-1", maker_lapse_addr="maker.lapse",
+            maker_xlm_addr="GMAKER", direction="sell", lapse_total=1,
+            price_stroops_per_lapse=1000, min_fill=0, max_fill=1,
+            expiry_block=10**9, pubkey="ab" * 10, signature="cd" * 10,
+            created_at=time.time(), received_at=time.time(), verified=True)
+        node = BackfillFakeNode(peer="1.2.3.4:9000")
+        w = self._worker(node)
+
+        w._maybe_backfill_market()
+        assert node.backfill_calls == []
+
+    def test_no_pool_at_all_is_treated_like_no_peer(self):
+        """A node type that has no pool attribute at all (nothing in
+        this codebase today, but nothing here should assume otherwise)
+        must not crash, and must not block a later attempt either."""
+        node = DiscoveryFakeNode()
+        assert not hasattr(node, "pool")
+        w = self._worker(node)
+        w._maybe_backfill_market()   # must not raise
