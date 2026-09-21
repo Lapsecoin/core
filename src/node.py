@@ -1692,7 +1692,12 @@ class Node:
         # rather than a udp attribute this class does not have.
         resp = self.gossip.udp.request_market(peer_addr, timeout=timeout)
         if resp is None:
+            log.debug("[market] backfill request to %s timed out or got "
+                     "no reply", peer_addr)
             return 0, 0
+        log.debug("[market] backfill reply from %s: %d order(s), %d fill(s) "
+                 "offered", peer_addr, len(resp.get("orders", [])),
+                 len(resp.get("fills", [])))
         orders_added = 0
         for order in resp.get("orders", []):
             if not isinstance(order, dict) or market_mod.already_known(order):
@@ -1701,7 +1706,9 @@ class Node:
                 market_mod.verify_order(order, current_height=self.view.height)
                 if market_mod.store_order(order):
                     orders_added += 1
-            except market_mod.OrderRejected:
+            except market_mod.OrderRejected as e:
+                log.debug("[market] backfilled order from %s rejected: %s",
+                         peer_addr, e)
                 continue
             except Exception:
                 # Isolated per item, exactly like the gossip handlers
@@ -1726,7 +1733,9 @@ class Node:
                     try:
                         market_mod.verify_fill_request(req)
                         market_mod.store_fill_request(req)
-                    except market_mod.FillRequestRejected:
+                    except market_mod.FillRequestRejected as e:
+                        log.debug("[market] backfilled fill request from "
+                                 "%s rejected: %s", peer_addr, e)
                         continue
                 if market_mod.already_known_fill_response(fresp):
                     continue
@@ -1736,15 +1745,19 @@ class Node:
                     fresp, order_row=order_row, req_row=req_row)
                 if market_mod.store_fill_response(fresp):
                     fills_added += 1
-            except market_mod.FillResponseRejected:
+            except (market_mod.FillRequestRejected,
+                   market_mod.FillResponseRejected) as e:
+                log.debug("[market] backfilled fill from %s rejected: %s",
+                         peer_addr, e)
                 continue
             except Exception:
                 log.warning("[market] skipping an unreadable backfilled "
                            "fill from %s", peer_addr, exc_info=True)
                 continue
-        if orders_added or fills_added:
-            log.info("[market] backfilled %d order(s) and %d fill(s) from %s",
-                     orders_added, fills_added, peer_addr)
+        log.info("[market] backfill from %s: added %d/%d order(s), "
+                "%d/%d fill(s)", peer_addr, orders_added,
+                len(resp.get("orders", [])), fills_added,
+                len(resp.get("fills", [])))
         return orders_added, fills_added
 
     def _handle_inbound_tx(self, msg):

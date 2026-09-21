@@ -298,8 +298,11 @@ class SwapWorker:
         pool = getattr(self.node, "pool", None)
         peer = pool.random() if pool is not None else None
         if not peer:
+            log.debug("[swap] market backfill: book still empty but no "
+                     "peer to ask yet")
             return
         self._next_backfill_attempt = now + BACKFILL_RETRY_SECONDS
+        log.debug("[swap] market backfill: asking %s", peer)
         try:
             self.node.backfill_market_from(peer)
         except Exception:
