@@ -362,7 +362,7 @@ def delivered_ticks(order_id):
     return sum(r.lapse_amount for r in rows)
 
 
-def reserved_ticks(order_id):
+def reserved_ticks(order_id, current_height):
     """How much of an order is spoken for by an accepted fill response
     this node has no completed-trade record for.
 
@@ -382,16 +382,31 @@ def reserved_ticks(order_id):
     committed to it before the response ever went out, so there is no
     reason to also count a pending, unanswered request "just in case" -
     that used to be the only signal available and had to be treated
-    conservatively for exactly that reason. It still cannot overcount
-    an order that will genuinely be honoured: an accepted response is
-    the maker's own attested exposure, and this node's own copy of it
-    ages out (see FILL_RESPONSE_MAX_AGE_SECONDS) the same way a claim's
-    did if the trade it names is not the one this node ever settles.
+    conservatively for exactly that reason.
 
-    That last guarantee depends on the response actually having come
-    from the order's own maker, and nothing before this function checks
-    that: verify_fill_response only proves the response is genuinely
-    signed by *somebody* (see its own docstring and
+    An accepted response is kept indefinitely once stored (see
+    prune_fill_responses), so nothing here ever ages it out on its own -
+    that is deliberate (it is the durable trade record, see
+    FILL_RESPONSE_SIGNED_FIELDS), but it means a reservation this
+    function counts has to stop being counted some other way once the
+    trade it names has stalled for good, or the order's whole remaining
+    size would eventually be eaten by reservations nobody is still
+    acting on. current_height is what makes that possible:
+    swap_engine.trade_expired_by judges each candidate purely from its
+    own signed accepted_height/increment_count/confirm_depth (no chain
+    call, so this stays cheap on a hot path), and a response past that
+    bound is excluded here exactly as if it had never been accepted -
+    freeing the capacity for the order's own maker to offer someone
+    else, or for the taker it named to look elsewhere, without either
+    side needing to cancel anything. The original pair is still free to
+    finish late and settle on its own regardless (see swap_engine's
+    "Blame" section); this only ever changes whether its capacity is
+    still spoken for.
+
+    That relies on the response actually having come from the order's
+    own maker, and nothing before this function checks that:
+    verify_fill_response only proves the response is genuinely signed
+    by *somebody* (see its own docstring and
     node._handle_inbound_fill_response), because a plain relay cannot
     always tell who the right signer is and must not be made to. Anyone
     can mint a fresh, free keypair and sign an 'accepted' response
@@ -403,6 +418,7 @@ def reserved_ticks(order_id):
     is where that check has to live: only a response whose maker_pubkey
     actually resolves to this order's maker_lapse_addr counts.
     """
+    import swap_engine as swap_engine_mod
     ensure_tables()
     order_row = get_order(order_id)
     if order_row is None:
@@ -414,7 +430,8 @@ def reserved_ticks(order_id):
                        FillResponse.accepted == True))          # noqa: E712
     return sum(r.lapse_total for r in responses
               if r.session_id not in known_sessions
-              and _signed_by_maker(r.maker_pubkey, order_row.maker_lapse_addr))
+              and _signed_by_maker(r.maker_pubkey, order_row.maker_lapse_addr)
+              and not swap_engine_mod.trade_expired_by(r, current_height))
 
 
 def _signed_by_maker(pubkey_hex, maker_lapse_addr):
@@ -429,12 +446,13 @@ def _signed_by_maker(pubkey_hex, maker_lapse_addr):
     return crypto.public_key_to_address(pubkey) == maker_lapse_addr
 
 
-def remaining_ticks(order_row):
-    committed = delivered_ticks(order_row.order_id) + reserved_ticks(order_row.order_id)
+def remaining_ticks(order_row, current_height):
+    committed = (delivered_ticks(order_row.order_id)
+                + reserved_ticks(order_row.order_id, current_height))
     return max(order_row.lapse_total - committed, 0)
 
 
-def validate_fill(order_row, lapse_total):
+def validate_fill(order_row, lapse_total, current_height):
     """Check a proposed fill size against an order's own terms. Raises
     OrderRejected with a human-readable reason if it does not fit.
 
@@ -443,10 +461,17 @@ def validate_fill(order_row, lapse_total):
     the same three bounds apply to a fill regardless of which side
     proposes it, and a maker must never take a taker's word that its own
     order permits what a request states.
+
+    current_height is what lets remaining_ticks (see its own docstring
+    and reserved_ticks') stop counting a reservation that has stalled
+    past swap_engine.trade_expired_by's own margin: without it, a trade
+    that will never finish would hold an order's capacity hostage
+    forever, refusing every other taker even once it is long past any
+    reasonable doubt that it is not coming back.
     """
     if lapse_total <= 0:
         raise OrderRejected("fill amount must be positive")
-    remaining = remaining_ticks(order_row)
+    remaining = remaining_ticks(order_row, current_height)
     if lapse_total > remaining:
         raise OrderRejected("that is more than the order has left")
     if order_row.min_fill and lapse_total < order_row.min_fill:
@@ -477,7 +502,7 @@ def open_orders(current_height, exclude_maker=None):
     if exclude_maker:
         query = query.where(Order.maker_lapse_addr != exclude_maker)
     return [row for row in query
-           if remaining_ticks(row) >= max(row.min_fill, 1)]
+           if remaining_ticks(row, current_height) >= max(row.min_fill, 1)]
 
 
 def orders_by_maker(addr, current_height):
@@ -562,7 +587,7 @@ def maker_committed(maker_addr, current_height, exclude_order_id=None):
     for row in orders_by_maker(maker_addr, current_height):
         if row.order_id == exclude_order_id:
             continue
-        remaining = remaining_ticks(row)
+        remaining = remaining_ticks(row, current_height)
         if row.direction == "sell":
             lapse_committed += remaining
         else:
@@ -635,7 +660,7 @@ def book_depth(current_height, exclude_maker=None):
     """
     buys, sells = [], []
     for row in open_orders(current_height, exclude_maker):
-        entry = _order_entry(row)
+        entry = _order_entry(row, current_height)
         (buys if row.direction == "buy" else sells).append(entry)
     buys.sort(key=lambda e: e["price"], reverse=True)
     sells.sort(key=lambda e: e["price"])
@@ -672,7 +697,7 @@ BOOK_SORTS = ("price", "amount", "recent")
 AMOUNT_SORT_CANDIDATE_WINDOW = 500
 
 
-def _order_entry(row):
+def _order_entry(row, current_height):
     """One Order row as a book_depth/list_orders display entry. The one
     place remaining_ticks (a live computation, not a stored column) is
     actually paid for, so every caller here is deliberate about calling
@@ -684,7 +709,7 @@ def _order_entry(row):
         "maker": row.maker_lapse_addr,
         "price": row.price_stroops_per_lapse,
         "total": row.lapse_total,
-        "remaining": remaining_ticks(row),
+        "remaining": remaining_ticks(row, current_height),
         "min_fill": row.min_fill,
         "max_fill": row.max_fill,
         "expiry_block": row.expiry_block,
@@ -741,7 +766,7 @@ def list_orders(current_height, direction, exclude_maker=None,
     total = query.count()
 
     if sort == "amount":
-        candidates = [_order_entry(r) for r in
+        candidates = [_order_entry(r, current_height) for r in
                      query.order_by(Order.received_at.desc())
                           .limit(AMOUNT_SORT_CANDIDATE_WINDOW)]
         candidates = [e for e in candidates if e["remaining"] >= max(e["min_fill"], 1)]
@@ -755,7 +780,7 @@ def list_orders(current_height, direction, exclude_maker=None,
                                if direction == "sell" else
                                Order.price_stroops_per_lapse.desc())
 
-    page = [_order_entry(r) for r in query.offset(offset).limit(limit)]
+    page = [_order_entry(r, current_height) for r in query.offset(offset).limit(limit)]
     page = [e for e in page if e["remaining"] >= max(e["min_fill"], 1)]
     return page, total
 
@@ -1259,7 +1284,7 @@ def sign_fill_response(resp, keyfile_path, kek):
     return resp
 
 
-def verify_fill_response(resp, expected_maker_addr=None):
+def verify_fill_response(resp, expected_maker_addr=None, order_row=None):
     """Check a fill response arriving from the network. Raises
     FillResponseRejected.
 
@@ -1272,6 +1297,29 @@ def verify_fill_response(resp, expected_maker_addr=None):
     else's order and have it mistaken for that order's actual maker
     agreeing, since a signature alone only proves who signed it, not
     that they were the right one to.
+
+    order_row, when given, additionally checks that the maker's own
+    signed direction/maker_xlm_addr/xlm_total (see
+    FILL_RESPONSE_SIGNED_FIELDS) actually match the order this response
+    claims to answer. Every other check here only looks at these fields
+    in isolation - well-typed, well-formed - never against the order
+    itself, so without this a maker could sign a perfectly well-formed
+    'accepted' response whose real settlement address or price silently
+    diverge from what its own order actually offers. That costs this
+    node's own taker nothing directly (_open_taker_trade always builds
+    its real Trade from the order row it already holds, never from
+    these signed fields - see its own docstring), but it breaks the
+    guarantee an accepted (FillRequest, FillResponse) pair is otherwise
+    meant to carry for everyone else: a bystander reconstructing this
+    trade to verify a step or score someone's trust (see swap_engine.
+    verify_trade_against_chain) trusts these exact fields as the whole
+    trade's terms, and would then look for a payment - to whatever
+    address, of whatever amount, xlm_total names - that the real trade
+    was never going to make, wrongly concluding the step never
+    happened. None for the same reason expected_maker_addr can be: a
+    plain relay cannot always resolve the order it does not itself
+    have, and must not be made to; the caller passes it whenever it
+    does.
     """
     if not isinstance(resp, dict):
         raise FillResponseRejected("not an object")
@@ -1332,6 +1380,18 @@ def verify_fill_response(resp, expected_maker_addr=None):
         raise FillResponseRejected("maker_xlm_addr is not a valid Stellar address")
     if not isinstance(resp["maker_opens"], bool):
         raise FillResponseRejected("maker_opens must be a boolean")
+
+    if order_row is not None:
+        if resp["direction"] != order_row.direction:
+            raise FillResponseRejected(
+                "direction does not match the order this response answers")
+        if resp["maker_xlm_addr"] != order_row.maker_xlm_addr:
+            raise FillResponseRejected(
+                "maker_xlm_addr does not match the order this response answers")
+        if resp["xlm_total"] != swap_mod.xlm_for_lapse(
+                resp["lapse_total"], order_row.price_stroops_per_lapse):
+            raise FillResponseRejected(
+                "xlm_total does not match the order's own price")
 
     # Last, and cheaper than the signature check that follows: same
     # reasoning as market._check_admission. Keyed on the claimed

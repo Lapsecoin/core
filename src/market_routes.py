@@ -382,7 +382,7 @@ def register(app, node, csrf_token):
 
         alert_err = ""
         height = node.view.height
-        remaining = market_mod.remaining_ticks(row)
+        remaining = market_mod.remaining_ticks(row, height)
         detail = peer_trust(row.maker_lapse_addr)
         cap = swap_mod.exposure_cap_stroops(detail["score"], stranger_cap())
 
@@ -628,7 +628,7 @@ def _open_trade(node, order_row, height, xlm_keyfile_path, depth, cap,
     except ValueError:
         raise ValueError("that is not this node's passphrase")
 
-    market_mod.validate_fill(order_row, lapse_total)
+    market_mod.validate_fill(order_row, lapse_total, height)
 
     xlm_total = swap_mod.xlm_for_lapse(lapse_total,
                                        order_row.price_stroops_per_lapse)
@@ -806,7 +806,7 @@ def _my_orders(node, height):
     rows = []
     for row in market_mod.orders_by_maker(node.addr, height):
         delivered = market_mod.delivered_ticks(row.order_id)
-        reserved = market_mod.reserved_ticks(row.order_id)
+        reserved = market_mod.reserved_ticks(row.order_id, height)
         rows.append({
             "order_id": row.order_id,
             "direction": row.direction,

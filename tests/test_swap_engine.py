@@ -11,20 +11,24 @@ was killed or what was lost.
 """
 
 import json
+import math
 import os
 import sys
 import threading
 import time
+import types
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import api
 import storage as storage_mod
 import swap
 import swap_engine
 import trade_storage
 import trust
+import tx as tx_mod
 import xlm as xlm_mod
 from trade_storage import (
     Increment, Trade,
@@ -340,6 +344,62 @@ class TestLapseAdapterFindPayment:
         node = FakeLapseNode()
         adapter = swap_engine.LapseAdapter(node)
         assert adapter.find_payment("peer.lapse", "me.lapse", "tag", 1) is None
+
+
+class _FakeBuildNode(FakeLapseNode):
+    """FakeLapseNode plus what LapseAdapter.build/_suggested_fee also
+    read: an address, a pubkey, and the two nonce sources
+    _build_and_sign_tx_with_kek and the fee probe both consult."""
+
+    def __init__(self, addr="me.lapse", pk_hex="ab" * 10, nonce=0,
+                pending_nonce=0, **kw):
+        super().__init__(**kw)
+        self.addr = addr
+        self.pk_hex = pk_hex
+        self.view.state = types.SimpleNamespace(get_nonce=lambda a: nonce)
+        self.mempool.pending_nonce = lambda a: pending_nonce
+        self.build_calls = []
+
+    def _build_and_sign_tx_with_kek(self, to_outputs, fee, kek, memo=""):
+        self.build_calls.append({"outputs": to_outputs, "fee": fee, "kek": kek, "memo": memo})
+        return {"from": self.addr, "outputs": to_outputs, "nonce": 1,
+                "fee": fee, "memo": memo, "signature": "aa"}, fee
+
+
+class TestLapseAdapterSuggestedFee:
+    """LapseAdapter.build no longer fixes fee at zero: LapseCoin's fee is
+    a real, load-sensitive market (mempool.py evicts and block.assemble
+    prioritizes by fee-per-byte), so a swap step needs the same
+    congestion-aware fee the manual send UI already offers a person (see
+    api.fee_estimate), or it is exactly the transaction most likely to
+    stall under real load."""
+
+    def test_zero_when_the_mempool_has_no_backlog(self, monkeypatch):
+        monkeypatch.setattr(api, "fee_estimate", lambda node: {"next_block": 0})
+        node = _FakeBuildNode()
+        adapter = swap_engine.LapseAdapter(node)
+        assert adapter._suggested_fee("peer.lapse", 5 * LAPSE, "tag") == 0
+
+    def test_scales_with_the_suggested_fee_rate(self, monkeypatch):
+        monkeypatch.setattr(api, "fee_estimate", lambda node: {"next_block": 2.0})
+        node = _FakeBuildNode()
+        adapter = swap_engine.LapseAdapter(node)
+        fee = adapter._suggested_fee("peer.lapse", 5 * LAPSE, "tag")
+        assert fee > 0
+        # Exactly reproducible from the same probe body _suggested_fee builds.
+        probe = {"from": node.addr, "pubkey": node.pk_hex,
+                 "outputs": [{"to": "peer.lapse", "amount": 5 * LAPSE}],
+                 "nonce": 1, "fee": 0, "memo": "tag"}
+        assert fee == math.ceil(2.0 * tx_mod.tx_size(probe))
+
+    def test_build_sends_the_suggested_fee_through(self, monkeypatch):
+        monkeypatch.setattr(api, "fee_estimate", lambda node: {"next_block": 0})
+        node = _FakeBuildNode()
+        adapter = swap_engine.LapseAdapter(node)
+        monkeypatch.setattr(adapter, "_suggested_fee", lambda *a: 777)
+        adapter.build("peer.lapse", 5 * LAPSE, "tag", kek="the-kek")
+        assert node.build_calls[0]["fee"] == 777
+        assert node.build_calls[0]["kek"] == "the-kek"
 
 
 class TestSequenceAllocator:
@@ -1585,6 +1645,57 @@ class TestManualFillDecisions:
         engine, _lapse, _xlm = make_maker_engine(node)
         assert swap_engine.decide_fill_request(
             engine, node, "GMAKER", 5 * XLM, 2, "no-such-request", accept=False) is False
+
+
+class TestCheckFillResponses:
+    """The taker's own re-check of an accepted response before opening a
+    trade from it: signed by the right maker (expected_maker_addr) and,
+    separately, actually consistent with the order it claims to answer
+    (order_row) - closing the gap where a maker's signed direction/
+    maker_xlm_addr/xlm_total could otherwise diverge from its own real
+    order with nothing here ever catching it."""
+
+    def test_a_term_mismatched_response_never_opens_a_trade(self, tmp_path):
+        node = FakeDiscoveryNode(tmp_path)
+        sk, pk = crypto.generate_keypair()
+        maker_addr = crypto.public_key_to_address(pk)
+        keyfile = str(tmp_path / "maker2.key")
+        crypto.save_key(keyfile, sk, pk, "pw")
+        kek = crypto.derive_kek(keyfile, "pw")
+
+        make_order(direction="sell", maker_lapse=maker_addr, price=1000)
+        req = make_request(taker_lapse=node.addr, taker_xlm="GTAKER")
+
+        # Genuinely signed by the order's real maker, but its own
+        # direction contradicts the order's ("buy" instead of "sell"):
+        # exactly the divergence expected_maker_addr alone cannot catch,
+        # since the signature itself is entirely genuine.
+        resp = market_mod.build_fill_response(
+            request_id=req.request_id, order_id=req.order_id,
+            session_id=req.session_id, lapse_total=req.lapse_total,
+            accepted=True, maker_pubkey_hex=pk.hex(),
+            accepted_height=1000, confirm_depth=2,
+            xlm_total=swap.xlm_for_lapse(req.lapse_total, 1000),
+            direction="buy", maker_xlm_addr="GMAKER", maker_opens=True,
+            increment_count=3)
+        market_mod.sign_fill_response(resp, keyfile, kek)
+        # Stored directly, bypassing verify_fill_response, standing in
+        # for the one real path this can still arrive by: a response
+        # gossiped in before this node had learned of its order yet (see
+        # node._handle_inbound_fill_response's own order_row lookup,
+        # which simply has nothing to check against at that moment).
+        trade_storage.FillResponse.create(
+            request_id=resp["request_id"], order_id=resp["order_id"],
+            session_id=resp["session_id"], lapse_total=resp["lapse_total"],
+            accepted=resp["accepted"], increment_count=resp["increment_count"],
+            reason=resp["reason"], maker_pubkey=resp["maker_pubkey"],
+            accepted_height=resp["accepted_height"], confirm_depth=resp["confirm_depth"],
+            xlm_total=resp["xlm_total"], direction=resp["direction"],
+            maker_xlm_addr=resp["maker_xlm_addr"], maker_opens=resp["maker_opens"],
+            signature=resp["signature"], received_at=time.time())
+
+        assert swap_engine.check_fill_responses(node, confirm_depth=2) == 0
+        assert Trade.select().count() == 0
 
 
 class TestAutoMatchOrders:

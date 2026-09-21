@@ -1590,6 +1590,17 @@ class Node:
         taker itself must make before treating an acceptance as real
         (see market.verify_fill_response's expected_maker_addr and
         swap_engine's handling of a taker's own outstanding request).
+
+        The order's own terms (direction/maker_xlm_addr/xlm_total) are a
+        different matter: unlike who signed it, this relay can check
+        them itself whenever it happens to already have the order this
+        response names, order books being gossiped exactly as widely as
+        everything else here, and doing so is what stops a bad accepted
+        response - one whose signed terms diverge from its own order,
+        the durable trade record every bystander later trusts (see
+        swap_engine.verify_trade_against_chain) - from ever being
+        admitted and relayed in the first place, rather than only ever
+        being caught by the one taker who happened to be waiting on it.
         """
         item = msg["fill_response"]
         sender = msg.get("sender")
@@ -1604,8 +1615,9 @@ class Node:
         self._note_echo(item_hash, sender)
 
         if not market_mod.already_known_fill_response(item):
+            order_row = market_mod.get_order(item.get("order_id", ""))
             try:
-                market_mod.verify_fill_response(item)
+                market_mod.verify_fill_response(item, order_row=order_row)
                 market_mod.store_fill_response(item)
             except market_mod.FillResponseRejected as e:
                 log.debug("[market] rejected a fill response from %s: %s", sender, e)
@@ -1694,7 +1706,8 @@ class Node:
             if market_mod.already_known_fill_response(fresp):
                 continue
             try:
-                market_mod.verify_fill_response(fresp)
+                order_row = market_mod.get_order(fresp.get("order_id", ""))
+                market_mod.verify_fill_response(fresp, order_row=order_row)
                 if market_mod.store_fill_response(fresp):
                     fills_added += 1
             except market_mod.FillResponseRejected:

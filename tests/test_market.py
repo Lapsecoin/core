@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import crypto
 import market
 import storage as storage_mod
+import swap
+import swap_engine
 import trade_storage
 import xlm as xlm_mod
 from trade_storage import Increment, LEG_SETTLED, Order, Trade
@@ -343,7 +345,7 @@ class TestStorage:
         order = signed_order(maker)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        assert market.remaining_ticks(row) == 10 * LAPSE
+        assert market.remaining_ticks(row, 100) == 10 * LAPSE
 
 
 class TestUnfillableRemainderIsHiddenFromTakers:
@@ -358,7 +360,7 @@ class TestUnfillableRemainderIsHiddenFromTakers:
         market.store_order(order)
         row = market.get_order(order["order_id"])
         _accepted_response(maker, order["order_id"], "s" * 16, 7 * LAPSE)
-        assert market.remaining_ticks(row) == 3 * LAPSE   # nonzero, but < min_fill
+        assert market.remaining_ticks(row, 100) == 3 * LAPSE   # nonzero, but < min_fill
         assert market.open_orders(current_height=100) == []
 
     def test_a_remainder_at_or_above_min_fill_still_shows(self, maker):
@@ -366,7 +368,7 @@ class TestUnfillableRemainderIsHiddenFromTakers:
         market.store_order(order)
         row = market.get_order(order["order_id"])
         _accepted_response(maker, order["order_id"], "s" * 16, 5 * LAPSE)
-        assert market.remaining_ticks(row) == 5 * LAPSE   # exactly min_fill
+        assert market.remaining_ticks(row, 100) == 5 * LAPSE   # exactly min_fill
         assert len(market.open_orders(current_height=100)) == 1
 
     def test_no_min_fill_set_shows_any_nonzero_remainder(self, maker):
@@ -374,7 +376,7 @@ class TestUnfillableRemainderIsHiddenFromTakers:
         market.store_order(order)
         row = market.get_order(order["order_id"])
         _accepted_response(maker, order["order_id"], "s" * 16, 9 * LAPSE)
-        assert market.remaining_ticks(row) == 1 * LAPSE
+        assert market.remaining_ticks(row, 100) == 1 * LAPSE
         assert len(market.open_orders(current_height=100)) == 1
 
     def test_fully_delivered_is_excluded_same_as_before(self, maker):
@@ -384,7 +386,8 @@ class TestUnfillableRemainderIsHiddenFromTakers:
         assert market.open_orders(current_height=100) == []
 
 
-def _accepted_response(maker, order_id, session_id, lapse_total, request_id=None):
+def _accepted_response(maker, order_id, session_id, lapse_total, request_id=None,
+                       **overrides):
     """A network-observed accepted response, signed by the order's real
     maker: reserved_ticks now checks that a response's maker_pubkey
     actually resolves to the order's own maker_lapse_addr (see
@@ -393,7 +396,7 @@ def _accepted_response(maker, order_id, session_id, lapse_total, request_id=None
     placeholder hex string."""
     resp = signed_fill_response(
         maker, request_id=request_id or session_id, order_id=order_id,
-        session_id=session_id, lapse_total=lapse_total, accepted=True)
+        session_id=session_id, lapse_total=lapse_total, accepted=True, **overrides)
     trade_storage.FillResponse.create(
         request_id=resp["request_id"], order_id=resp["order_id"],
         session_id=resp["session_id"], lapse_total=resp["lapse_total"],
@@ -416,13 +419,13 @@ class TestRemainingReflectsNetworkKnownResponses:
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        assert market.remaining_ticks(row) == 10 * LAPSE
+        assert market.remaining_ticks(row, 100) == 10 * LAPSE
 
         # A response this node only ever saw over gossip: no Trade row
         # here for it, on either side, the way a genuine third party's
         # node would have none either.
         _accepted_response(maker, order["order_id"], "s" * 16, 4 * LAPSE)
-        assert market.remaining_ticks(row) == 6 * LAPSE
+        assert market.remaining_ticks(row, 100) == 6 * LAPSE
 
     def test_multiple_unrelated_responses_all_reduce_it(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
@@ -430,7 +433,7 @@ class TestRemainingReflectsNetworkKnownResponses:
         row = market.get_order(order["order_id"])
         _accepted_response(maker, order["order_id"], "s1" * 8, 3 * LAPSE)
         _accepted_response(maker, order["order_id"], "s2" * 8, 2 * LAPSE)
-        assert market.remaining_ticks(row) == 5 * LAPSE
+        assert market.remaining_ticks(row, 100) == 5 * LAPSE
 
     def test_an_unaccepted_response_does_not_count(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
@@ -441,14 +444,14 @@ class TestRemainingReflectsNetworkKnownResponses:
             lapse_total=4 * LAPSE, accepted=False, increment_count=None,
             reason="not enough remaining", maker_pubkey="ab" * 10,
             signature="cd" * 10, received_at=time.time())
-        assert market.remaining_ticks(row) == 10 * LAPSE
+        assert market.remaining_ticks(row, 100) == 10 * LAPSE
 
     def test_a_response_against_a_different_order_does_not_count(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
         _accepted_response(maker, "some-other-order", "s" * 16, 4 * LAPSE)
-        assert market.remaining_ticks(row) == 10 * LAPSE
+        assert market.remaining_ticks(row, 100) == 10 * LAPSE
 
     def test_a_locally_tracked_trades_own_response_is_not_double_counted(self, maker, taker):
         """The maker's own accurate delivered_ticks must not also have
@@ -471,7 +474,7 @@ class TestRemainingReflectsNetworkKnownResponses:
         # Nothing settled yet, so delivered_ticks is 0 for this trade,
         # but it must not ALSO be treated as an unrelated reserved
         # response once this node recognizes it as its own trade's.
-        assert market.remaining_ticks(row) == 10 * LAPSE
+        assert market.remaining_ticks(row, 100) == 10 * LAPSE
 
 
 class TestForgedResponsesDoNotReserve:
@@ -503,7 +506,7 @@ class TestForgedResponsesDoNotReserve:
         assert market.store_fill_response(forged)   # ...and admitted, same as any relay would.
 
         # ...but it must not shrink what the order still has to offer.
-        assert market.remaining_ticks(row) == 10 * LAPSE
+        assert market.remaining_ticks(row, 100) == 10 * LAPSE
         assert len(market.open_orders(current_height=100)) == 1
 
     def test_a_response_from_the_real_maker_still_reserves(self, maker, taker):
@@ -514,11 +517,65 @@ class TestForgedResponsesDoNotReserve:
         market.store_order(order)
         row = market.get_order(order["order_id"])
         _accepted_response(maker, order["order_id"], "g" * 16, 4 * LAPSE)
-        assert market.remaining_ticks(row) == 6 * LAPSE
+        assert market.remaining_ticks(row, 100) == 6 * LAPSE
 
     def test_reserved_ticks_is_zero_for_an_order_this_node_does_not_have(self):
         # Nothing to check the signer against, so nothing is trusted.
-        assert market.reserved_ticks("no-such-order") == 0
+        assert market.reserved_ticks("no-such-order", 100) == 0
+
+
+class TestExpiredReservationsFreeCapacity:
+    """A trade that has stalled well past swap_engine.trade_expired_by's
+    own margin must stop holding its order's capacity hostage: the
+    order's own maker (or any bystander) can offer that capacity to
+    someone else, exactly as if the stalled trade had never been
+    accepted, without cancelling anything or waiting on it further."""
+
+    # accepted_height=1000 (signed_fill_response's own default),
+    # confirm_depth=2 -> step_timeout_blocks=12, increment_count=3 (also
+    # defaults): worst_case_done = 1000 + 3*12 = 1036, + ABANDON_AFTER_
+    # BLOCKS (30) = 1066. Below that height the reservation still counts;
+    # at or past it, it does not.
+    EXPIRY_HEIGHT = 1000 + 3 * 12 + 30
+
+    def test_still_counted_before_the_expiry_margin(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(maker, order["order_id"], "s" * 16, 4 * LAPSE)
+        assert market.remaining_ticks(row, self.EXPIRY_HEIGHT - 1) == 6 * LAPSE
+
+    def test_freed_once_the_expiry_margin_passes(self, maker):
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(maker, order["order_id"], "s" * 16, 4 * LAPSE)
+        assert market.remaining_ticks(row, self.EXPIRY_HEIGHT) == 10 * LAPSE
+
+    def test_expired_reservation_can_be_re_offered_to_a_new_taker(self, maker):
+        """The concrete payoff: validate_fill actually admits a fresh
+        fill request for the freed capacity once the stalled one has
+        expired, where it would have refused it before."""
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(maker, order["order_id"], "s" * 16, 10 * LAPSE)
+        with pytest.raises(market.OrderRejected, match="left"):
+            market.validate_fill(row, 5 * LAPSE, self.EXPIRY_HEIGHT - 1)
+        market.validate_fill(row, 5 * LAPSE, self.EXPIRY_HEIGHT)   # must not raise
+
+    def test_a_response_with_more_time_budget_is_not_expired_early(self, maker):
+        """A trade with more steps, or a deeper confirm_depth, genuinely
+        needs more time; the same height must not expire it just because
+        a smaller trade would have been expired by then."""
+        order = signed_order(maker, lapse_total=10 * LAPSE)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        _accepted_response(maker, order["order_id"], "s" * 16, 4 * LAPSE,
+                           increment_count=20, confirm_depth=5)
+        # worst_case_done = 1000 + 20*30 = 1600, +30 = 1630 - well past
+        # this class's own EXPIRY_HEIGHT for the 3-step/depth-2 default.
+        assert market.remaining_ticks(row, self.EXPIRY_HEIGHT) == 6 * LAPSE
 
 
 class TestFillResponseAdmissionCapsPerSigner:
@@ -572,7 +629,7 @@ class TestValidateFill:
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
-        market.validate_fill(row, 5 * LAPSE)   # must not raise
+        market.validate_fill(row, 5 * LAPSE, 100)   # must not raise
 
     def test_zero_or_negative_is_refused(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
@@ -580,38 +637,38 @@ class TestValidateFill:
         row = market.get_order(order["order_id"])
         for bad in (0, -1):
             with pytest.raises(market.OrderRejected, match="positive"):
-                market.validate_fill(row, bad)
+                market.validate_fill(row, bad, 100)
 
     def test_more_than_remaining_is_refused(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
         with pytest.raises(market.OrderRejected, match="left"):
-            market.validate_fill(row, 11 * LAPSE)
+            market.validate_fill(row, 11 * LAPSE, 100)
 
     def test_below_min_fill_is_refused(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE, min_fill=5 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
         with pytest.raises(market.OrderRejected, match="min_fill|will not go"):
-            market.validate_fill(row, 1 * LAPSE)
+            market.validate_fill(row, 1 * LAPSE, 100)
 
     def test_above_max_fill_is_refused(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE, max_fill=3 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
         with pytest.raises(market.OrderRejected, match="max fill"):
-            market.validate_fill(row, 4 * LAPSE)
+            market.validate_fill(row, 4 * LAPSE, 100)
 
     def test_accounts_for_what_is_already_delivered(self, maker):
         order = signed_order(maker, lapse_total=10 * LAPSE)
         market.store_order(order)
         row = market.get_order(order["order_id"])
         # Nothing delivered yet, so the full remaining size still fits...
-        market.validate_fill(row, 10 * LAPSE)
+        market.validate_fill(row, 10 * LAPSE, 100)
         # ...but not more than the order ever had.
         with pytest.raises(market.OrderRejected):
-            market.validate_fill(row, 10 * LAPSE + 1)
+            market.validate_fill(row, 10 * LAPSE + 1, 100)
 
 
 class TestAlreadyKnown:
@@ -1072,6 +1129,74 @@ class TestFillResponses:
             market.verify_fill_response(resp)
 
 
+class TestFillResponseOrderTermsCheck:
+    """order_row, when passed to verify_fill_response, catches a maker
+    signing an accepted response whose own terms diverge from the order
+    it claims to answer - a gap every other check here misses, since
+    each field is only ever validated in isolation. Without this, a
+    bystander reconstructing this trade later (see swap_engine.
+    verify_trade_against_chain) would trust whatever the response signs
+    and look for a payment the real trade, built from the order itself,
+    was never going to make (see _open_taker_trade's own docstring)."""
+
+    def _matching_response(self, maker, order, **overrides):
+        lapse_total = overrides.pop("lapse_total", 2 * LAPSE)
+        xlm_total = swap.xlm_for_lapse(lapse_total, order["price_stroops_per_lapse"])
+        return signed_fill_response(
+            maker, order_id=order["order_id"], lapse_total=lapse_total,
+            direction=overrides.pop("direction", order["direction"]),
+            maker_xlm_addr=overrides.pop("maker_xlm_addr", order["maker_xlm_addr"]),
+            xlm_total=overrides.pop("xlm_total", xlm_total), **overrides)
+
+    def test_matching_terms_pass(self, maker):
+        order = signed_order(maker, direction="sell", price=1000)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        resp = self._matching_response(maker, order)
+        assert market.verify_fill_response(resp, order_row=row) is True
+
+    def test_mismatched_direction_refused(self, maker):
+        order = signed_order(maker, direction="sell", price=1000)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        resp = self._matching_response(maker, order)
+        resp["direction"] = "buy"
+        with pytest.raises(market.FillResponseRejected, match="direction"):
+            market.verify_fill_response(resp, order_row=row)
+
+    def test_mismatched_maker_xlm_addr_refused(self, maker, taker):
+        order = signed_order(maker, direction="sell", price=1000)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        resp = self._matching_response(maker, order, maker_xlm_addr=taker["xlm"])
+        with pytest.raises(market.FillResponseRejected, match="maker_xlm_addr"):
+            market.verify_fill_response(resp, order_row=row)
+
+    def test_mismatched_xlm_total_refused(self, maker):
+        """The concrete exploit this closes: a maker signing a real
+        accept but naming an xlm_total that does not match its own
+        order's price, so a bystander reconstructing the trade would
+        look for a payment of the wrong size."""
+        order = signed_order(maker, direction="sell", price=1000)
+        market.store_order(order)
+        row = market.get_order(order["order_id"])
+        resp = self._matching_response(maker, order)
+        resp["xlm_total"] = resp["xlm_total"] // 2
+        with pytest.raises(market.FillResponseRejected, match="xlm_total"):
+            market.verify_fill_response(resp, order_row=row)
+
+    def test_no_order_row_skips_the_check(self, maker):
+        """The same courtesy expected_maker_addr=None already extends: a
+        plain relay that does not have the order this response answers
+        cannot check its terms either, and must not be made to."""
+        order = signed_order(maker, direction="sell", price=1000)
+        # Genuinely signed with a direction that contradicts the order
+        # (not mutated after signing, so the signature itself is real)
+        # - would fail the order-terms check if order_row were given.
+        resp = self._matching_response(maker, order, direction="buy")
+        assert market.verify_fill_response(resp) is True
+
+
 class TestFillResponseStorage:
     def test_store_and_read_back(self, maker):
         resp = signed_fill_response(maker, request_id="req1" * 4)
@@ -1265,7 +1390,7 @@ class TestListOrders:
         calls = []
         real_remaining = market.remaining_ticks
         monkeypatch.setattr(market, "remaining_ticks",
-                            lambda row: calls.append(row.order_id) or real_remaining(row))
+                            lambda row, h: calls.append(row.order_id) or real_remaining(row, h))
         for sort in ("price", "recent"):
             calls.clear()
             page, total = market.list_orders(100, "sell", sort=sort, offset=1, limit=2)
@@ -1283,7 +1408,7 @@ class TestListOrders:
         calls = []
         real_remaining = market.remaining_ticks
         monkeypatch.setattr(market, "remaining_ticks",
-                            lambda row: calls.append(row.order_id) or real_remaining(row))
+                            lambda row, h: calls.append(row.order_id) or real_remaining(row, h))
         page, total = market.list_orders(100, "sell", sort="amount", limit=2)
         assert total == 10          # the count is not windowed, only the ranking is
         assert len(calls) == 3      # bounded to the (patched) window, not all 10 orders

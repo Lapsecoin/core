@@ -49,6 +49,7 @@ real defector.
 """
 
 import logging
+import math
 import threading
 import time
 
@@ -208,11 +209,59 @@ class LapseAdapter:
         """Sign a payment without sending it.
 
         Returned rather than submitted so the caller can persist it first.
+
+        fee is chosen to clear the next block under current mempool
+        conditions (see _suggested_fee), not fixed at zero: LapseCoin's
+        fee is a real market a transaction bids into (tx.py's own module
+        docstring; mempool.py evicts, and block.assemble prioritizes, by
+        fee-per-byte), so a swap step priced at zero is exactly what
+        gets evicted or deprioritized first, and could stall
+        indefinitely, under real load. Stellar's own leg needs no such
+        adjustment (see xlm.py: its fee is fixed regardless of load), so
+        this is a LapseAdapter-only concern.
+
+        Goes through node._build_and_sign_tx_with_kek rather than the
+        public build_and_sign_tx: this already holds a kek (handed down
+        from whatever unlocked the wallet to run the swap worker at
+        all), not a plaintext passphrase to re-derive one from, exactly
+        the same distinction build_and_sign_tx_internal draws for other
+        node-internal callers.
         """
-        tx_dict, _fee = self.node.build_and_sign_tx(
-            [{"to": to_addr, "amount": amount}], fee=0, kek=kek, memo=memo)
+        fee = self._suggested_fee(to_addr, amount, memo)
+        tx_dict, _fee = self.node._build_and_sign_tx_with_kek(
+            [{"to": to_addr, "amount": amount}], fee, kek, memo=memo)
         import tx as tx_mod
         return tx_dict, tx_mod.tx_hash(tx_dict), tx_dict["nonce"]
+
+    def _suggested_fee(self, to_addr, amount, memo):
+        """The same fee-per-byte picture api.fee_estimate already shows
+        a person on the manual send page, applied here automatically
+        since a swap step has nobody at a keyboard to pick one. 0 when
+        the mempool isn't full enough to need one at all (fee_estimate's
+        own "next_block" is 0 in that case), matching what a person
+        choosing "no rush" would also pay.
+
+        Sized from a probe body built with the real outputs/memo but no
+        real fee or signature: tx.tx_size (what fee_rate is computed
+        against) excludes the signature field entirely, so nothing here
+        needs to actually sign, only match the shape tx.create's own
+        signed field set has.
+        """
+        import api as api_mod
+        import tx as tx_mod
+
+        rate = api_mod.fee_estimate(self.node)["next_block"]
+        if rate <= 0:
+            return 0
+        v = self.node.view
+        nonce = max(v.state.get_nonce(self.node.addr),
+                   self.node.mempool.pending_nonce(self.node.addr)) + 1
+        probe = {"from": self.node.addr, "pubkey": self.node.pk_hex,
+                 "outputs": [{"to": to_addr, "amount": amount}],
+                 "nonce": nonce, "fee": 0}
+        if memo:
+            probe["memo"] = memo
+        return math.ceil(rate * tx_mod.tx_size(probe))
 
     def submit(self, tx_dict):
         ok, result = self.node.submit_tx_from_api(tx_dict)
@@ -447,6 +496,44 @@ def is_delinquent(trade, current_height):
             return False
         return current_height >= inc.deadline_height + ABANDON_AFTER_BLOCKS
     return False
+
+
+def trade_expired_by(resp, current_height):
+    """Whether an accepted FillResponse's reservation of an order's
+    capacity (see market.reserved_ticks) has certainly failed by now,
+    purely from the pair's own signed public fields - no chain lookup
+    needed, unlike verify_trade_against_chain.
+
+    The worst-case height every one of its steps should be done by,
+    assuming none of them ever stalled, is accepted_height plus
+    increment_count whole step budgets (see step_timeout_blocks); this
+    node's own ABANDON_AFTER_BLOCKS grace on top of that is the same
+    margin is_delinquent already gives a single stuck step, applied here
+    to the trade's very last one. Past that point a reservation that
+    still has not been superseded by a local Trade row (see
+    market.reserved_ticks' own known_sessions exclusion) is expired in
+    every meaningful sense: the capacity it was holding is free for the
+    order's own maker to offer someone else, or for the taker it named
+    to pursue elsewhere, without needing to wait on, or ever formally
+    cancel, the stalled trade itself. Nothing stops the original pair
+    from finishing late and settling on its own regardless (see the
+    module docstring's own "Blame" section) - this only ever changes
+    whether the capacity it was holding is still spoken for, not whether
+    the trade itself is still alive.
+
+    Deliberately coarser than verify_trade_against_chain: it assumes the
+    worst (every step ran the maximum time a healthy trade would take)
+    rather than reconstructing the real schedule and checking the chain,
+    because this is called from hot, frequent paths (every order's own
+    remaining capacity, on every match attempt) where a chain round trip
+    per candidate would be the wrong cost to pay. A trade that is
+    genuinely still progressing normally never reaches this bound before
+    it either completes or a real stall shows up in the slower, precise
+    check.
+    """
+    worst_case_done = (resp.accepted_height
+                       + resp.increment_count * step_timeout_blocks(resp.confirm_depth))
+    return current_height >= worst_case_done + ABANDON_AFTER_BLOCKS
 
 
 # ---------------------------------------------------------------------------
@@ -1174,7 +1261,7 @@ def _answer_one_locked(engine, node, my_xlm_addr, stranger_cap, confirm_depth,
         node.publish_fill_response(resp)
 
     try:
-        market_mod.validate_fill(order_row, req.lapse_total)
+        market_mod.validate_fill(order_row, req.lapse_total, accepted_height)
     except market_mod.OrderRejected as e:
         respond(False, reason=str(e))
         return False
@@ -1349,7 +1436,7 @@ def auto_match_orders(engine, node, my_xlm_addr, stranger_cap):
 
     sent = 0
     for mine in my_orders:
-        if market_mod.remaining_ticks(mine) < max(mine.min_fill, 1):
+        if market_mod.remaining_ticks(mine, height) < max(mine.min_fill, 1):
             continue
         counter_direction = "buy" if mine.direction == "sell" else "sell"
         candidates, _total = market_mod.list_orders(
@@ -1383,7 +1470,7 @@ def _send_auto_match(engine, node, my_xlm_addr, stranger_cap, kek, order_id,
     if order_row is None or order_row.expiry_block <= node.view.height:
         return False
 
-    remaining = market_mod.remaining_ticks(order_row)
+    remaining = market_mod.remaining_ticks(order_row, node.view.height)
     if remaining < max(order_row.min_fill, 1):
         return False
 
@@ -1422,7 +1509,7 @@ def _send_auto_match(engine, node, my_xlm_addr, stranger_cap, kek, order_id,
     except swap.TradeTooLarge:
         return False
     try:
-        market_mod.validate_fill(order_row, lapse_total)
+        market_mod.validate_fill(order_row, lapse_total, node.view.height)
     except market_mod.OrderRejected:
         return False
 
@@ -1470,10 +1557,14 @@ def check_fill_responses(node, confirm_depth):
         # expected_maker_addr is not optional here: without it, anyone
         # could sign a well-formed 'accepted' response with their own key
         # and have it mistaken for this order's actual maker agreeing
-        # (see market.verify_fill_response).
+        # (see market.verify_fill_response). order_row is passed for the
+        # same reason: without it, the maker's own signed direction/
+        # maker_xlm_addr/xlm_total are never checked against what this
+        # order actually offers.
         try:
             market_mod.verify_fill_response(
-                _response_dict(resp), expected_maker_addr=order_row.maker_lapse_addr)
+                _response_dict(resp), expected_maker_addr=order_row.maker_lapse_addr,
+                order_row=order_row)
         except market_mod.FillResponseRejected as e:
             log.warning("[swap] discarding a fill response for %s: %s",
                        req.request_id[:16], e)
