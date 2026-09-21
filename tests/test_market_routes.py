@@ -362,6 +362,27 @@ class TestPlaceOrder:
         assert Order.select().count() == 1
         assert len(node.publish_order_calls) == 1
 
+    def test_expiry_can_be_set_well_past_the_old_30_day_ui_limit(self, tmp_path):
+        """The UI used to hard-cap expiry at 720 hours (30 days) for no
+        reason tied to the protocol's own ceiling
+        (market.MAX_EXPIRY_HORIZON_BLOCKS, about 4.5 months) - just a
+        separate, much tighter number nobody could raise. A 90-day
+        order is well past 720 hours and must still be accepted."""
+        node = TakerNode(tmp_path)
+        node.view.state.balances[node.addr] = 10 * LAPSE
+        self._call(node, {"direction": "sell", "amount_lapse": "1",
+                          "price_xlm": "0.0001", "expiry_hours": str(90 * 24)})
+        assert Order.select().count() == 1
+
+    def test_expiry_still_cannot_exceed_the_protocol_ceiling(self, tmp_path):
+        node = TakerNode(tmp_path)
+        node.view.state.balances[node.addr] = 10 * LAPSE
+        with pytest.raises(ValueError, match="expiry must be"):
+            self._call(node, {"direction": "sell", "amount_lapse": "1",
+                              "price_xlm": "0.0001",
+                              "expiry_hours": str(market_routes.MAX_EXPIRY_HOURS + 1)})
+        assert Order.select().count() == 0
+
     def test_a_buy_order_needs_enough_xlm(self, tmp_path, monkeypatch):
         """Plan item 4.4: only the sell side used to check its own asset;
         a buy order committed the maker to paying out XLM it never had."""

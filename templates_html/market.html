@@ -33,61 +33,24 @@
 </div>
 
 {# ------------------------------------------------------------- the book #}
-<h2 style="margin-bottom:.3rem">Order book</h2>
-{% if not depth.sells and not depth.buys %}
-  <p style="color:var(--ink-dim); font-style:italic; margin-top:0">
-    {% if ticker %}Nothing resting right now.{% else %}Nobody has posted an order yet.{% endif %}
-  </p>
-{% else %}
-<div class="book">
-  <div class="book-side">
-    <h3 style="margin:.2rem 0">Selling</h3>
-    {% if depth.sells %}
-    <div class="table-wrap">
-    <table class="stacked compact">
-      <thead><tr><th>Price</th><th>Available</th><th></th></tr></thead>
-      <tbody>
-        {% for e in depth.sells[:5] %}
-        <tr>
-          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
-          <td data-label="Available">{{ fmt_lapse_dp(e.remaining, 2) }}{{ trust_badge(e.maker)|safe }}</td>
-          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Buy</a></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+{# The book itself lives on its own page (/market/book) rather than
+   being duplicated here: a second, top-5-only copy of the same rows
+   gave a taker no way to actually page, sort, or see a side that
+   wasn't already in the top 5, while looking like the whole book. This
+   page just says what's there and points at the real one. #}
+<div class="stats" style="margin-bottom:.5rem">
+  <div class="stat">
+    <div class="stat-label">On the book</div>
+    <div class="stat-value">
+      {% if not depth.sells and not depth.buys %}
+        {% if ticker %}Nothing resting right now{% else %}Nobody has posted an order yet{% endif %}
+      {% else %}
+        {{ depth.sells|length }} selling &middot; {{ depth.buys|length }} buying
+      {% endif %}
     </div>
-    {% else %}
-      <p class="stat-sub" style="font-style:italic">Nobody is selling.</p>
-    {% endif %}
-  </div>
-
-  <div class="book-side">
-    <h3 style="margin:.2rem 0">Buying</h3>
-    {% if depth.buys %}
-    <div class="table-wrap">
-    <table class="stacked compact">
-      <thead><tr><th>Price</th><th>Wanted</th><th></th></tr></thead>
-      <tbody>
-        {% for e in depth.buys[:5] %}
-        <tr>
-          <td data-label="Price">{{ fmt_price(e.price) }} XLM</td>
-          <td data-label="Wanted">{{ fmt_lapse_dp(e.remaining, 2) }}{{ trust_badge(e.maker)|safe }}</td>
-          <td data-label=""><a class="btn-sm" href="/market/take/{{ e.order_id }}">Sell</a></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-      <p class="stat-sub" style="font-style:italic">Nobody is buying.</p>
-    {% endif %}
+    <div class="stat-sub"><a href="/market/book?side=sell">Browse the order book &rarr;</a></div>
   </div>
 </div>
-<p class="stat-sub" style="margin:.3rem 0 0">
-  Top 5 each side. <a href="/market/book?side=sell">Full order book</a>.
-</p>
-{% endif %}
 
 {# ------------------------------------------------------------ your wallet #}
 <div class="card" style="margin-bottom:.6rem">
@@ -193,10 +156,17 @@
         <div class="stat-sub">Refuse fills below this. Blank for no minimum.</div>
       </div>
       <div class="form-row">
-        <label for="expiry_hours">Expires in</label>
-        <input id="expiry_hours" type="number" name="expiry_hours" min="1"
-               max="720" value="168">
-        <span>hours</span>
+        <label for="expiry_value">Expires in</label>
+        <input id="expiry_value" type="number" min="1" value="7"
+               inputmode="numeric" style="width:5rem" autocomplete="off">
+        <select id="expiry_unit" autocomplete="off">
+          <option value="1">hours</option>
+          <option value="24" selected>days</option>
+          <option value="168">weeks</option>
+        </select>
+        <input type="hidden" id="expiry_hours" name="expiry_hours"
+               value="168" data-max="{{ max_expiry_hours }}">
+        <div class="stat-sub">Up to {{ (max_expiry_hours / 24)|round(0, 'floor')|int }} days.</div>
       </div>
       <div class="form-row">
         <label for="auto_match_margin">Auto-match margin</label>
@@ -368,9 +338,6 @@
          padding: .3rem 1rem; font-size: .85rem; cursor: pointer; }
   .tab.is-active { color: var(--ink); font-weight: bold;
                    border-color: var(--rule); background: var(--paper-2); }
-  .book { display: flex; flex-wrap: wrap; gap: 1.2rem; }
-  .book-side { flex: 1 1 320px; min-width: 0; }
-  .stacked.compact th, .stacked.compact td { padding: .25rem .5rem; }
   .trust-badge { font-size: .72rem; margin-left: .25rem; }
   .progress { background: var(--paper-2); border: 1px solid var(--rule-lt);
               height: 10px; overflow: hidden; }
@@ -427,6 +394,30 @@
   [amount, price].forEach(function (el) { el.addEventListener("input", recalc); });
   var card = document.getElementById("order-form").closest(".card");
   if (card) card.addEventListener("side-changed", recalc);
+  recalc();
+})();
+
+(function () {
+  // Expires-in: a value plus a unit (hours/days/weeks), converted into
+  // the single expiry_hours field the form actually submits, so
+  // picking "3 months" never means computing hours by hand. Clamped to
+  // the real protocol ceiling (data-max, from market.
+  // MAX_EXPIRY_HORIZON_BLOCKS), not the much tighter, unrelated 30-day
+  // limit this used to hard-code with no way to raise it.
+  var value  = document.getElementById("expiry_value");
+  var unit   = document.getElementById("expiry_unit");
+  var hidden = document.getElementById("expiry_hours");
+  if (!value || !unit || !hidden) return;
+  var max = parseInt(hidden.dataset.max, 10) || 168;
+
+  function recalc() {
+    var v = parseFloat(value.value);
+    if (!isFinite(v) || v <= 0) return;
+    var hours = Math.round(v * parseFloat(unit.value));
+    hidden.value = Math.min(Math.max(hours, 1), max);
+  }
+
+  [value, unit].forEach(function (el) { el.addEventListener("input", recalc); });
   recalc();
 })();
 

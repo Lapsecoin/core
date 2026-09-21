@@ -130,10 +130,18 @@
       <label for="amount">Amount</label>
       <input id="amount" type="text" name="amount_lapse" inputmode="decimal"
              value="{{ default_fill }}" required autocomplete="off"
+             placeholder="{% if order.min_fill %}{{ fmt_lapse_dp(order.min_fill, 4) }}{% else %}0{% endif %} - {{ fmt_lapse_dp(max_fill_ticks, 4) }}"
              data-max="{{ max_fill_lapse }}"
              data-price="{{ price_xlm }}">
       <span>LAPSE</span>
-      <div class="stat-sub">At most {{ fmt_lapse_dp(max_fill_ticks, 4) }} here.</div>
+      <button type="button" id="take-max-btn" class="btn-sm" data-max="{{ max_fill_lapse }}">Take it all</button>
+      <div class="stat-sub">
+        {% if order.min_fill %}
+          {{ fmt_lapse_dp(order.min_fill, 4) }} to {{ fmt_lapse_dp(max_fill_ticks, 4) }} here.
+        {% else %}
+          Up to {{ fmt_lapse_dp(max_fill_ticks, 4) }} here.
+        {% endif %}
+      </div>
     </div>
 
     <div class="form-row">
@@ -196,6 +204,14 @@
 
   amount.addEventListener("input", recalc);
   recalc();
+
+  var maxBtn = document.getElementById("take-max-btn");
+  if (maxBtn) {
+    maxBtn.addEventListener("click", function () {
+      amount.value = maxBtn.dataset.max;
+      recalc();
+    });
+  }
 })();
 </script>
 

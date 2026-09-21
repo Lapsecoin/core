@@ -38,6 +38,19 @@ log = logging.getLogger("ec.market_routes")
 STROOPS_PER_XLM = 10_000_000
 LAPSE_BLOCK_SECONDS = 120
 
+# The real ceiling is market.MAX_EXPIRY_HORIZON_BLOCKS, checked again by
+# verify_order at post time against whatever height the chain has moved
+# to by then; a full day of safety margin below that (rather than the
+# same number converted exactly) is what keeps a submission that was
+# valid the instant this form was filled out from failing that later,
+# stricter check purely because some minutes passed in between. 720
+# hours (30 days) used to be enforced here on top of that, for no
+# reason tied to the protocol's own limit - just an unrelated, much
+# tighter number nobody could raise, which is what made a multi-month
+# order awkward to place at all.
+MAX_EXPIRY_HOURS = (market_mod.MAX_EXPIRY_HORIZON_BLOCKS * LAPSE_BLOCK_SECONDS
+                    // 3600) - 24
+
 
 # ---------------------------------------------------------------------------
 # Display helpers
@@ -368,6 +381,7 @@ def register(app, node, csrf_token):
             suggested_price=_suggested_price(best, ticker),
             my_orders=my_orders,
             pending_maker_requests=pending_requests,
+            max_expiry_hours=MAX_EXPIRY_HOURS,
             csrf_token=csrf_token)
 
     # -- The full order book --------------------------------------------
@@ -619,8 +633,9 @@ def _place_order(node, xlm_addr, height):
     auto_match_margin = parse_xlm(margin_raw) if margin_raw else 0
 
     hours = int(request.form.get("expiry_hours") or 168)
-    if not 1 <= hours <= 720:
-        raise ValueError("expiry must be between 1 and 720 hours")
+    if not 1 <= hours <= MAX_EXPIRY_HOURS:
+        raise ValueError(
+            f"expiry must be between 1 hour and {MAX_EXPIRY_HOURS // 24} days")
     expiry_block = height + max(int(hours * 3600 / LAPSE_BLOCK_SECONDS), 1)
 
     # Checked here rather than left for the chain, because finding out once
