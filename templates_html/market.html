@@ -32,25 +32,10 @@
   </div>
 </div>
 
-{# ------------------------------------------------------------- the book #}
-{# The book itself lives on its own page (/market/book) rather than
-   being duplicated here: a second, top-5-only copy of the same rows
-   gave a taker no way to actually page, sort, or see a side that
-   wasn't already in the top 5, while looking like the whole book. This
-   page just says what's there and points at the real one. #}
-<div class="stats" style="margin-bottom:.5rem">
-  <div class="stat">
-    <div class="stat-label">On the book</div>
-    <div class="stat-value">
-      {% if not depth.sells and not depth.buys %}
-        {% if ticker %}Nothing resting right now{% else %}Nobody has posted an order yet{% endif %}
-      {% else %}
-        {{ depth.sells|length }} selling &middot; {{ depth.buys|length }} buying
-      {% endif %}
-    </div>
-    <div class="stat-sub"><a href="/market/book?side=sell">Browse the order book &rarr;</a></div>
-  </div>
-</div>
+{# The book itself lives on its own page (/market/book), linked from
+   the nav above; the counts and depth it would repeat here are already
+   in the Available to buy / Wanted stats above, so there is nothing
+   left for a box here to say. #}
 
 {# ------------------------------------------------------------ your wallet #}
 <div class="card" style="margin-bottom:.6rem">
