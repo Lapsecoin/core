@@ -22,6 +22,10 @@ lapsecoin_key.json
 lapsecoin.log
 lapsecoin.log.*
 lapsecoin.lock
+*.dat
 
-# Uptime-reward tracked-budget state
-lapsecoin_rewards.json
+# json data
+*.json
+
+# Keys
+*.key
