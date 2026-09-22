@@ -401,13 +401,38 @@ def run_status_window(node, udp, private_port, log_file):
         row=5, column=0, columnspan=2, sticky="w", pady=(6, 0),
     )
 
+    _last_h = 0
+    _last_t = 0
+    _bps = 0.0
+
     def refresh():
+        nonlocal _last_h, _last_t, _bps
+        import time
         try:
             info = node.get_info()
-            height_var.set(f"{info['height']:,}")
+            now = time.time()
+            h = info.get("height", 0)
+            if _last_t > 0 and h > _last_h:
+                cur = (h - _last_h) / (now - _last_t)
+                _bps = cur if _bps == 0 else (_bps * 0.7 + cur * 0.3)
+            _last_h = h
+            _last_t = now
+            height_var.set(f"{h:,}")
             peers_var.set(f"{info['peer_count']:,}")
             mempool_var.set(f"{info['mempool_size']:,}")
-            sync_var.set(f"{info.get('sync_percent', 100)}%")
+            pct = info.get("sync_percent", 100)
+            target = info.get("sync_target", h)
+            if pct < 100 and _bps > 0 and target > h:
+                sec = int((target - h) / _bps)
+                if sec > 3600:
+                    eta = f" ({sec//3600}h {(sec%3600)//60}m)"
+                elif sec > 60:
+                    eta = f" ({sec//60}m {sec%60}s)"
+                else:
+                    eta = f" ({sec}s)"
+                sync_var.set(f"{pct}% {eta}")
+            else:
+                sync_var.set(f"{pct}%")
             activity_var.set(info.get("status") or "")
             error_var.set("")
         except Exception as e:

@@ -506,6 +506,7 @@ class Node:
         return {
             "height":       v.height,
             "sync_percent": sync_pct,
+            "sync_target":  max_height,
             "tip_hash":     v.tip["hash"],
             "genesis_hash": v.genesis_hash,
             "mempool_size": self.mempool.size(),
