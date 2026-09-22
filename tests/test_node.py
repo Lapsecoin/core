@@ -81,6 +81,7 @@ def node_env(tmp_path):
     pool    = MagicMock()
     pool.snapshot.return_value = []
     pool.count.return_value = 3
+    pool.max_height_observed = 0
     net_q   = queue.Queue()
     db_path = str(tmp_path / "chain.db")
 
@@ -118,6 +119,7 @@ def node_env_real_gossip(tmp_path):
     pool.get_all.return_value = ["1.2.3.4:1", "5.6.7.8:1"]
     pool.snapshot.return_value = []
     pool.count.return_value = 2
+    pool.max_height_observed = 0
     udp = MagicMock()
     gossip = Gossip(pool, udp)
     syncer = MagicMock()
