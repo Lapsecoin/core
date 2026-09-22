@@ -512,106 +512,126 @@ def main():
     gossip    = Gossip(pool, udp)
     syncer    = Syncer(pool, udp)
     discovery = Discovery(udp, pool, genesis["hash"], port, pk_hex)
-    node      = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
+    private_port = args.private_port if args.private_port else port + 2
     del passphrase   # nothing past startup needs it; the kek is what signs
 
-    def _chain_provider(from_h, to_h):
-        chain = node.view.chain
-        end   = (to_h + 1) if to_h is not None else None
-        return chain[from_h:end]
+    class NodeWrapper:
+        def __init__(self):
+            self.real_node = None
+        def get_info(self):
+            if self.real_node:
+                return self.real_node.get_info()
+            raise Exception("loading blockchain database...")
+        def stop(self):
+            if self.real_node:
+                self.real_node.stop()
 
-    def _tip_provider():
-        chain = node.view.chain
-        tip   = chain[-1]
-        return (tip.get("height", 0), tip.get("hash", ""),
-                LOCAL_VERSION, node.cs.cumulative_iterations)
+    node_wrapper = NodeWrapper()
 
-    udp.set_order_callback(on_order)
-    udp.set_fill_request_callback(on_fill_request)
-    udp.set_fill_response_callback(on_fill_response)
-    udp.set_market_provider(node._market_provider)
-    udp.set_chain_provider(_chain_provider)
-    udp.set_tip_provider(_tip_provider)
+    def background_startup():
+        node = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
+        node_wrapper.real_node = node
 
-    for peer in args.peer:
-        parts = peer.split(":")
-        if len(parts) == 2:
-            discovery.add_bootstrap_peer(f"{parts[0]}:{parts[1]}")
+        def _chain_provider(from_h, to_h):
+            chain = node.view.chain
+            end   = (to_h + 1) if to_h is not None else None
+            return chain[from_h:end]
 
-    threading.Thread(target=discovery.run, daemon=True).start()
-    threading.Thread(target=http_probe.run, args=(pool,), daemon=True).start()
-    threading.Thread(target=info_probe.run, args=(pool, udp), daemon=True).start()
-    # Best-effort only: doesn't block startup, and the node works the same
-    # whether or not this succeeds (see upnp.py).
-    upnp.try_map_port(port)
+        def _tip_provider():
+            chain = node.view.chain
+            tip   = chain[-1]
+            return (tip.get("height", 0), tip.get("hash", ""),
+                    LOCAL_VERSION, node.cs.cumulative_iterations)
 
-    update_checker = UpdateChecker(
-        local_version=LOCAL_VERSION,
-        version_url="" if args.no_update_check else args.update_check_url,
-        releases_url=args.releases_url,
-    )
-    update_checker.start()
+        udp.set_order_callback(on_order)
+        udp.set_fill_request_callback(on_fill_request)
+        udp.set_fill_response_callback(on_fill_response)
+        udp.set_market_provider(node._market_provider)
+        udp.set_chain_provider(_chain_provider)
+        udp.set_tip_provider(_tip_provider)
 
-    # Drives swap steps. Its own thread rather than part of the block
-    # cycle, because a step waits on a public API over the network and a
-    # cycle that blocks on one stops building blocks. It reconciles every
-    # unfinished trade against both chains before it sends anything, which
-    # is what makes a restart mid-trade safe, and it does nothing at all
-    # while swaps are off or the node is locked.
-    xlm_keyfile = os.path.join(
-        os.path.dirname(os.path.abspath(args.keyfile)), "xlm_trading.key")
-    if not os.path.exists(xlm_keyfile):
-        # Sealed under the same kek this process already holds from the
-        # node passphrase prompt above, exactly like market_routes.
-        # _create_wallet does by hand from the Market page - it holds
-        # nothing until funded, so there is no reason to make a first-run
-        # node sit locked (and the Trades page misreport it as such)
-        # purely for lack of a trading address nobody has any use for
-        # withholding.
-        seed, public = xlm_mod.generate_keypair()
-        xlm_mod.save_key(xlm_keyfile, seed, public, kek=kek)
-        del seed
-        log.info("[startup] created a Stellar trading address: %s", public)
+        for peer in args.peer:
+            parts = peer.split(":")
+            if len(parts) == 2:
+                discovery.add_bootstrap_peer(f"{parts[0]}:{parts[1]}")
 
-    swap_worker = SwapWorker(node, xlm_keyfile)
-    # Handed to the Trades page so a stalled trade can be told apart from a
-    # locked wallet or an unreachable Horizon instead of looking identical.
-    node.swap_worker = swap_worker
-    swap_worker.start()
+        threading.Thread(target=discovery.run, daemon=True).start()
+        threading.Thread(target=http_probe.run, args=(pool,), daemon=True).start()
+        threading.Thread(target=info_probe.run, args=(pool, udp), daemon=True).start()
+        # Best-effort only: doesn't block startup, and the node works the same
+        # whether or not this succeeds (see upnp.py).
+        upnp.try_map_port(port)
 
-    # ------------------------------------------------------------------
-    # HTTP servers: browser UI only, no peer routes
-    # ------------------------------------------------------------------
-    private_port = args.private_port if args.private_port else port + 2
-
-    app = create_app(node, pool, private_port=private_port,
-                     public_port=port, update_checker=update_checker)
-    _serve(app, args.host, port)
-    log.info("[startup] public API on http://%s:%d", args.host, port)
-
-    private_app = create_private_app(node, pool, private_port=private_port,
-                                     public_port=port,
-                                     update_checker=update_checker)
-    _serve(private_app, "127.0.0.1", private_port)
-    log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
-    log.info("[startup] genesis=%s", genesis["hash"][:12])
-
-    if pool.count() > 0:
-        syncer.check_and_sync(
-            node.cs.chain,
-            lambda chain: node.apply_better_chain(chain)[0],
+        update_checker = UpdateChecker(
+            local_version=LOCAL_VERSION,
+            version_url="" if args.no_update_check else args.update_check_url,
+            releases_url=args.releases_url,
         )
+        update_checker.start()
+
+        # Drives swap steps. Its own thread rather than part of the block
+        # cycle, because a step waits on a public API over the network and a
+        # cycle that blocks on one stops building blocks. It reconciles every
+        # unfinished trade against both chains before it sends anything, which
+        # is what makes a restart mid-trade safe, and it does nothing at all
+        # while swaps are off or the node is locked.
+        xlm_keyfile = os.path.join(
+            os.path.dirname(os.path.abspath(args.keyfile)), "xlm_trading.key")
+        if not os.path.exists(xlm_keyfile):
+            # Sealed under the same kek this process already holds from the
+            # node passphrase prompt above, exactly like market_routes.
+            # _create_wallet does by hand from the Market page - it holds
+            # nothing until funded, so there is no reason to make a first-run
+            # node sit locked (and the Trades page misreport it as such)
+            # purely for lack of a trading address nobody has any use for
+            # withholding.
+            seed, public = xlm_mod.generate_keypair()
+            xlm_mod.save_key(xlm_keyfile, seed, public, kek=kek)
+            del seed
+            log.info("[startup] created a Stellar trading address: %s", public)
+
+        swap_worker = SwapWorker(node, xlm_keyfile)
+        # Handed to the Trades page so a stalled trade can be told apart from a
+        # locked wallet or an unreachable Horizon instead of looking identical.
+        node.swap_worker = swap_worker
+        swap_worker.start()
+
+        # ------------------------------------------------------------------
+        # HTTP servers: browser UI only, no peer routes
+        # ------------------------------------------------------------------
+        app = create_app(node, pool, private_port=private_port,
+                         public_port=port, update_checker=update_checker)
+        _serve(app, args.host, port)
+        log.info("[startup] public API on http://%s:%d", args.host, port)
+
+        private_app = create_private_app(node, pool, private_port=private_port,
+                                         public_port=port,
+                                         update_checker=update_checker)
+        _serve(private_app, "127.0.0.1", private_port)
+        log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
+        log.info("[startup] genesis=%s", genesis["hash"][:12])
+
+        if pool.count() > 0:
+            syncer.check_and_sync(
+                node.cs.chain,
+                lambda chain: node.apply_better_chain(chain)[0],
+            )
+
+        if use_gui:
+            threading.Thread(target=node.start, kwargs={"kek": kek}, daemon=True).start()
+        else:
+            try:
+                node.start(kek=kek)
+            except KeyboardInterrupt:
+                log.info("[shutdown] stopped")
+                node.stop()
+                udp.stop()
 
     if use_gui:
-        threading.Thread(target=node.start, kwargs={"kek": kek}, daemon=True).start()
-        gui.run_status_window(node, udp, private_port, LOG_FILE)
+        threading.Thread(target=background_startup, daemon=True).start()
+        gui.run_status_window(node_wrapper, udp, private_port, LOG_FILE)
     else:
-        try:
-            node.start(kek=kek)
-        except KeyboardInterrupt:
-            log.info("[shutdown] stopped")
-            node.stop()
-            udp.stop()
+        background_startup()
 
 
 def _prompt_new_passphrase(first=None):
