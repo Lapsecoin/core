@@ -498,7 +498,11 @@ class Node:
 
     def get_info(self):
         v = self.view
-        sync_pct = calculate_sync_percent(v.height, self.pool.max_height_observed)
+        max_height = self.pool.max_height_observed
+        if max_height == 0:
+            age_seconds = max(0.0, time.time() - v.chain[0]["timestamp"])
+            max_height = int(age_seconds / 120)
+        sync_pct = calculate_sync_percent(v.height, max_height)
         return {
             "height":       v.height,
             "sync_percent": sync_pct,
