@@ -107,6 +107,7 @@ _all_hiddenimports = [
     "pystray._gtk", "gi", "gi.repository.Gtk", "gi.repository.AppIndicator3",
     "pystray._win32",
     "pystray._darwin",
+    "PIL._tkinter_finder",
 ]
 
 a = Analysis(
