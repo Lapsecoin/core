@@ -120,7 +120,7 @@
   }
 
   const statusEl = document.getElementById("live-status");
-  let lastH = 0, lastT = 0, bps = 0;
+  let syncStartH = -1, syncStartT = 0, bps = 0;
 
   async function refresh() {
     try {
@@ -133,12 +133,16 @@
       document.getElementById("live-mempool").textContent = info.mempool_size;
       document.getElementById("live-peers").textContent = info.peer_count;
       const now = Date.now() / 1000;
-      if (lastT > 0 && info.height > lastH) {
-        const cur = (info.height - lastH) / (now - lastT);
-        bps = bps === 0 ? cur : (bps * 0.7 + cur * 0.3);
+      if (info.sync_target > info.height) {
+        if (syncStartH === -1 || info.height < syncStartH) {
+          syncStartH = info.height;
+          syncStartT = now;
+        } else if (info.height > syncStartH && now > syncStartT) {
+          bps = (info.height - syncStartH) / (now - syncStartT);
+        }
+      } else {
+        syncStartH = -1;
       }
-      lastH = info.height;
-      lastT = now;
       let syncStr = Math.round(info.sync_percent || 100) + "%";
       if (info.sync_percent < 100 && bps > 0 && info.sync_target > info.height) {
         const sec = Math.round((info.sync_target - info.height) / bps);

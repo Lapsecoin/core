@@ -1350,6 +1350,13 @@ class Node:
             # before rather than leaving a finished check on screen.
             self.status_line = resume_status
 
+        if adopted:
+            # Safe continuation: this peer just provided a cryptographically 
+            # valid chain extension. Queue them instantly for the next cycle 
+            # to fetch the next batch without waiting 120 seconds.
+            self._sync_hint = peer
+            self._sync_hint_height = self.cs.height + 1
+
         if hinted and not adopted:
             # The hint was a block we could not validate. We don't have
             # its parents, so acting on it is a bet, and this peer just

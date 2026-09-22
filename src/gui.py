@@ -401,22 +401,26 @@ def run_status_window(node, udp, private_port, log_file):
         row=5, column=0, columnspan=2, sticky="w", pady=(6, 0),
     )
 
-    _last_h = 0
-    _last_t = 0
+    _sync_start_h = -1
+    _sync_start_t = 0
     _bps = 0.0
 
     def refresh():
-        nonlocal _last_h, _last_t, _bps
+        nonlocal _sync_start_h, _sync_start_t, _bps
         import time
         try:
             info = node.get_info()
             now = time.time()
             h = info.get("height", 0)
-            if _last_t > 0 and h > _last_h:
-                cur = (h - _last_h) / (now - _last_t)
-                _bps = cur if _bps == 0 else (_bps * 0.7 + cur * 0.3)
-            _last_h = h
-            _last_t = now
+            target = info.get("sync_target", h)
+            if target > h:
+                if _sync_start_h == -1 or h < _sync_start_h:
+                    _sync_start_h = h
+                    _sync_start_t = now
+                elif h > _sync_start_h and now > _sync_start_t:
+                    _bps = (h - _sync_start_h) / (now - _sync_start_t)
+            else:
+                _sync_start_h = -1
             height_var.set(f"{h:,}")
             peers_var.set(f"{info['peer_count']:,}")
             mempool_var.set(f"{info['mempool_size']:,}")
