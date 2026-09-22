@@ -49,6 +49,19 @@ def _resource_dir():
 
 
 _ICON_PNG = os.path.join(_resource_dir(), "lapsecoin.png")
+_ICON_SVG = os.path.join(_resource_dir(), "lapsecoin.svg")
+
+def _ensure_png_exists():
+    if os.path.exists(_ICON_PNG):
+        return
+    if not os.path.exists(_ICON_SVG):
+        return
+    try:
+        import cairosvg
+        cairosvg.svg2png(url=_ICON_SVG, write_to=_ICON_PNG, output_width=512, output_height=512)
+        log.info("[gui] generated missing lapsecoin.png from svg")
+    except Exception as e:
+        log.debug("[gui] runtime png generation skipped: %s", e)
 
 
 def _apply_icon(root):
@@ -64,6 +77,7 @@ def _apply_icon(root):
     properly bundled. Failure here should never take down the GUI itself,
     worst case the window just keeps whatever default icon the OS/tkinter
     picks."""
+    _ensure_png_exists()
     try:
         from PIL import Image, ImageTk
 
@@ -271,6 +285,7 @@ def _make_tray_icon(node, on_open, on_quit):
         )
         return None
 
+    _ensure_png_exists()
     try:
         from PIL import Image
 
