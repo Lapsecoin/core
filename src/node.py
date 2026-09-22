@@ -171,6 +171,15 @@ def _validate_tail(tail, prefix):
     return True, None, cs
 
 
+def calculate_sync_percent(local_height, max_height):
+    if max_height <= local_height:
+        return 100
+    blocks_behind = max_height - local_height
+    if blocks_behind <= 3:
+        return 100
+    return max(0, min(99, int(100 * local_height / max_height)))
+
+
 # ---------------------------------------------------------------------------
 # NodeView: read-only snapshot for Flask threads
 # ---------------------------------------------------------------------------
@@ -489,8 +498,10 @@ class Node:
 
     def get_info(self):
         v = self.view
+        sync_pct = calculate_sync_percent(v.height, self.pool.max_height_observed)
         return {
             "height":       v.height,
+            "sync_percent": sync_pct,
             "tip_hash":     v.tip["hash"],
             "genesis_hash": v.genesis_hash,
             "mempool_size": self.mempool.size(),

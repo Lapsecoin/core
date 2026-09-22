@@ -19,6 +19,10 @@
         <div class="stat-label">Pending</div>
         <div class="stat-value" id="live-mempool">{{ info.mempool_size }}</div>
       </div>
+      <div>
+        <div class="stat-label">Sync</div>
+        <div class="stat-value" id="live-sync">{{ info.sync_percent | default(100) }}%</div>
+      </div>
     </div>
     {% if info.block_time_ratio is not none %}
     <div class="stat-sub" style="color:{{ 'var(--red)' if info.block_time_ratio > 1 else 'var(--green)' }}" id="live-block-time-diff">{{ "%.1f" | format(info.block_time_ratio) }}x current median</div>
@@ -127,6 +131,7 @@
       document.getElementById("live-height-link").href = "/explorer/block/" + info.height;
       document.getElementById("live-mempool").textContent = info.mempool_size;
       document.getElementById("live-peers").textContent = info.peer_count;
+      document.getElementById("live-sync").textContent = Math.round(info.sync_percent || 100) + "%";
       document.getElementById("live-circulating").textContent = fmtLapseWhole(info.total_minted);
       document.getElementById("live-circulating-pct").textContent =
         (info.total_minted / SUPPLY_CAP * 100).toFixed(4) + "% of 21M cap";

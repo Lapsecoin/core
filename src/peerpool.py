@@ -64,6 +64,7 @@ class PeerPool:
         self._peers     = {}          # addr -> last_seen (wall clock)
         self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
         self._info      = {}          # addr -> {"height": int|None, "version": str}
+        self.max_height_observed = 0
         # Held peers per /24 or /64, kept in step with _peers so the
         # diversity cap is a lookup rather than a scan. See add().
         self._subnets   = {}          # subnet key -> count
@@ -131,6 +132,8 @@ class PeerPool:
             rec = self._info.setdefault(addr, {})
             rec["height"]  = height
             rec["version"] = version or ""
+            if height is not None and height > self.max_height_observed:
+                self.max_height_observed = height
 
     def set_http_reachable(self, addr, ok, checked_at=None):
         """Record the outcome of an out-of-band HTTP reachability probe
