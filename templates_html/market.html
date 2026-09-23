@@ -214,12 +214,13 @@
       <td data-label="Their standing">
         {% if r.trust.abandoned_count %}
           <span style="color:var(--loss); font-weight:bold">Took a payment, did not reciprocate</span>
-        {% elif r.trust.score > 0 %}
-          <span style="color:var(--gain)">
-            {{ r.trust.completed_count }} completed trade{{ '' if r.trust.completed_count == 1 else 's' }}
-          </span>
         {% else %}
-          <span style="color:var(--ink-dim)">No history with this node</span>
+          <span style="color:{{ 'var(--gain)' if r.trust.score > 0 else 'var(--ink-dim)' }}">
+            {{ fmt_score(r.trust.score) }}
+            {%- if r.trust.completed_count %}
+              ({{ r.trust.completed_count }} completed trade{{ '' if r.trust.completed_count == 1 else 's' }})
+            {%- endif %}
+          </span>
         {% endif %}
       </td>
       <td data-label="Why it's waiting">

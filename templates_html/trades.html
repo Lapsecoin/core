@@ -208,10 +208,8 @@
           <span style="color:var(--loss); font-weight:bold">
             {{ my_standing.abandoned_count }} currently unresolved "missed" claim{{ '' if my_standing.abandoned_count == 1 else 's' }}
           </span>
-        {% elif my_standing.score > 0 %}
-          <span style="color:var(--gain); font-weight:bold">{{ "%.1f"|format(my_standing.score) }}</span>
         {% else %}
-          <span style="color:var(--ink-dim)">Nothing verifiable yet</span>
+          <span style="color:{{ 'var(--gain)' if my_standing.score > 0 else 'var(--ink-dim)' }}; font-weight:bold">{{ fmt_score(my_standing.score) }}</span>
         {% endif %}
       </td>
     </tr>
@@ -234,10 +232,8 @@
       <td data-label="Standing">
         {% if p.abandoned_count %}
           <span style="color:var(--loss); font-weight:bold">None</span>
-        {% elif p.score > 0 %}
-          <span style="color:var(--gain); font-weight:bold">{{ "%.1f"|format(p.score) }}</span>
         {% else %}
-          <span style="color:var(--ink-dim)">n/a</span>
+          <span style="color:{{ 'var(--gain)' if p.score > 0 else 'var(--ink-dim)' }}; font-weight:bold">{{ fmt_score(p.score) }}</span>
         {% endif %}
       </td>
       <td data-label="Completed">

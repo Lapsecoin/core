@@ -26,28 +26,9 @@
     <tr>
       <td>Track record</td>
       <td>
-        {% if trust.score > 0 %}
-          <span style="color:var(--gain)">
-            {{ "%.1f"|format(trust.score) }}
-            {%- if trust.completed_count %}
-              ({{ trust.completed_count }} completed trade{{ '' if trust.completed_count == 1 else 's' }})
-            {%- endif %}
-          </span>
-          <div class="stat-sub">
-            {% if trust.completed_count %}
-              Their address has been on the chain a while and holds a balance,
-              which is what makes that record worth something: a fresh address
-              with no funds counts for nothing here however long its history
-              claims to be.
-            {% else %}
-              No completed trades yet, but their address's age and balance
-              already give it some standing on their own - what it would
-              forfeit by walking away, not a track record.
-            {% endif %}
-          </div>
-        {% elif trust.abandoned_count %}
+        {% if trust.abandoned_count %}
           <span style="color:var(--loss); font-weight:bold">
-            Took a payment and has not reciprocated
+            {{ fmt_score(trust.score) }} - took a payment and has not reciprocated
           </span>
           <div class="stat-sub">
             As of the last check, a payment they owed on a past trade still
@@ -58,10 +39,33 @@
             the steps will be as small as this node allows.
           </div>
         {% else %}
-          <span style="color:var(--ink-dim)">No history with this node</span>
+          <span style="color:{{ 'var(--gain)' if trust.score > 0 else 'var(--ink-dim)' }}">
+            {{ fmt_score(trust.score) }}
+            {%- if trust.completed_count %}
+              ({{ trust.completed_count }} completed trade{{ '' if trust.completed_count == 1 else 's' }})
+            {%- endif %}
+          </span>
           <div class="stat-sub">
-            Normal for a new market. It only means the trade is delivered in
-            smaller pieces.
+            {% if trust.completed_count %}
+              Their address has been on the chain a while and holds a balance,
+              which is what makes that record worth something: a fresh address
+              with no funds counts for nothing here however long its history
+              claims to be.
+            {% elif trust.score > 0 %}
+              No completed trades yet, but their address's age and balance
+              already give it some standing on their own - what it would
+              forfeit by walking away, not a track record.
+            {% else %}
+              No history with this node, and their address's age and/or
+              balance do not yet clear the floor this score is built from
+              (see the Trades page for how yours compares). Normal for a
+              new market; it only means the trade is delivered in smaller
+              pieces.
+            {% endif %}
+          </div>
+          <div class="stat-sub" style="margin-top:.2rem">
+            For comparison, your own standing is currently
+            <strong>{{ fmt_score(my_standing.score) }}</strong>.
           </div>
         {% endif %}
         {% if trust.network_completed_count or trust.network_abandoned_count %}

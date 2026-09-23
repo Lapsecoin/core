@@ -70,6 +70,20 @@ def fmt_price(stroops_per_lapse):
     return fmt_xlm(stroops_per_lapse)
 
 
+# Display only: trust.score's real range is small (a fresh-but-funded
+# address tops out at STANDING_WEIGHT == 0.3 with zero completed trades,
+# see trust.py), which reads as noise at one decimal place ("0.2") even
+# though real, distinguishable standing sits behind it. Scaling by 100 for
+# display turns that into "20", legible at a glance, without touching the
+# actual score anything downstream (exposure_cap_stroops, opening_mover)
+# uses - those still compare the real, unscaled value.
+SCORE_DISPLAY_SCALE = 100
+
+
+def fmt_score(score):
+    return f"{score * SCORE_DISPLAY_SCALE:.0f}"
+
+
 def short_addr(addr, words=3):
     """First few words of a twelve-word address.
 
@@ -284,8 +298,8 @@ def register(app, node, csrf_token):
                 else "Declined.")
 
     app.jinja_env.globals.update(
-        fmt_xlm=fmt_xlm, fmt_price=fmt_price, short_addr=short_addr,
-        leg_label=leg_label, trust_badge=trust_badge)
+        fmt_xlm=fmt_xlm, fmt_price=fmt_price, fmt_score=fmt_score,
+        short_addr=short_addr, leg_label=leg_label, trust_badge=trust_badge)
 
     # -- Market --------------------------------------------------------
 
@@ -459,6 +473,11 @@ def register(app, node, csrf_token):
             my_trust_of_maker, maker_trust_of_me = trust_mod.mutual_scores(
                 node, row.maker_lapse_addr)
             cap = swap_mod.mutual_exposure_cap_stroops(my_trust_of_maker, maker_trust_of_me)
+            # For the "compare to your own standing" line: the same figure
+            # the Trades page's "Your own standing" card shows, computed
+            # identically so the two never read as two different numbers
+            # for the same thing.
+            my_standing = peer_trust(node.addr)
             maker_xlm_unfunded = _maker_xlm_unfunded(row, _account_exists)
             maker_lapse_overcommitted = _maker_lapse_overcommitted(row, node, height)
         except Exception:
@@ -501,6 +520,7 @@ def register(app, node, csrf_token):
         return render_template(
             "market_take.html", title="Trade",
             order=row, remaining=remaining, trust=detail,
+            my_standing=my_standing,
             taking_side=taking_side,
             max_fill_ticks=max_fill_ticks,
             max_fill_lapse=max_fill_ticks / TICKS_PER_LAPSE,
