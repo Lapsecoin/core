@@ -7,21 +7,26 @@
      led with left the other two to be guessed. #}
   <div class="stat stat-trio">
     <div class="stat-group">
+      {# The live poll below (refresh(), called immediately on load) fills
+         these in within its first round trip; until then a spinner shows
+         rather than the server-rendered figure, so a fresh node at a
+         genuine height 0 with 0 peers doesn't read as broken on the very
+         first paint. #}
       <a id="live-height-link" href="/explorer/block/{{ info.height }}">
         <div class="stat-label">Height</div>
-        <div class="stat-value" id="live-height">{{ info.height }}</div>
+        <div class="stat-value" id="live-height"><span class="stat-spinner"></span></div>
       </a>
       <a href="/peers">
         <div class="stat-label">Peers</div>
-        <div class="stat-value" id="live-peers">{{ info.peer_count }}</div>
+        <div class="stat-value" id="live-peers"><span class="stat-spinner"></span></div>
       </a>
       <div>
         <div class="stat-label">Pending</div>
-        <div class="stat-value" id="live-mempool">{{ info.mempool_size }}</div>
+        <div class="stat-value" id="live-mempool"><span class="stat-spinner"></span></div>
       </div>
       <div>
         <div class="stat-label">Sync</div>
-        <div class="stat-value" id="live-sync">{{ info.sync_percent | default(100) }}%</div>
+        <div class="stat-value" id="live-sync"><span class="stat-spinner"></span></div>
       </div>
     </div>
     {% if info.block_time_ratio is not none %}

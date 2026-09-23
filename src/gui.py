@@ -373,9 +373,9 @@ def run_status_window(node, udp, private_port, log_file):
     status_frame = ttk.Frame(outer, style="Dark.TFrame")
     status_frame.pack(fill="x", pady=(0, 12))
 
-    height_var = tk.StringVar(value="—")
-    peers_var = tk.StringVar(value="—")
-    mempool_var = tk.StringVar(value="—")
+    height_var = tk.StringVar(value="…")
+    peers_var = tk.StringVar(value="…")
+    mempool_var = tk.StringVar(value="…")
     sync_var = tk.StringVar(value="100%")
     activity_var = tk.StringVar(value="starting…")
     error_var = tk.StringVar(value="")

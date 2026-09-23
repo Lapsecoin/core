@@ -167,6 +167,21 @@
      line instead, which stays readable. */
   .stat-group .stat-value { font-size: 1.05rem; overflow-wrap: normal; white-space: nowrap; }
 
+  /* A stat whose first real value hasn't arrived yet (page just loaded,
+     the live poll below hasn't answered once): a fresh node briefly at
+     height 0 with 0 peers reads as broken, not as "starting up", so the
+     first paint shows this instead of a number. Replaced outright by
+     the poll's own textContent/innerHTML write on its first response,
+     genuine or not: a peer count that really is 0 shows 0 once that's
+     confirmed, this only covers the gap before anything is confirmed. */
+  .stat-spinner {
+    display: inline-block; width: .85em; height: .85em;
+    border: 2px solid var(--rule-lt); border-top-color: var(--ink-dim);
+    border-radius: 50%; animation: stat-spin .7s linear infinite;
+    vertical-align: -.1em;
+  }
+  @keyframes stat-spin { to { transform: rotate(360deg); } }
+
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -1.15rem; padding: 0 1.15rem; }
   table { width: 100%; min-width: 460px; border-collapse: collapse; font-size: .92rem; }
   th {
