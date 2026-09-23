@@ -21,15 +21,19 @@ FETCH_CHUNK = 50    # starting blocks per GETSYNC request, then adaptive
 # applies. 50 is a modest starting point for real sync protocols; the
 # window below is what actually sizes the request as the sync runs.
 #
-# It only starts here: _fetch_and_apply adjusts it per sync (AIMD, the
-# same shape TCP uses for its congestion window). A page that lands clean
-# on the first try grows the next one; a page that needed a retry means
+# It only starts here, and only for a peer this node has never synced
+# from before: _fetch_and_apply adjusts it per page (AIMD, the same shape
+# TCP uses for its congestion window) and Syncer._peer_chunk carries the
+# result forward across calls, keyed per peer. A page that lands clean on
+# the first try grows the next one; a page that needed a retry means
 # something on this path is already struggling (loss, peer load, or a
 # response too big to reassemble, all look the same from here: no
 # answer), so the next one shrinks instead of throwing a second, larger
-# request at the same problem. This is scoped to a single sync call and
-# thrown away afterwards, not saved per-peer, because the path is what
-# changes between runs, not the peer's identity.
+# request at the same problem. It has to survive past one call: node.py
+# only ever asks for a few pages at a time (SYNC_PAGES_PER_PASS), so a
+# window that reset to this starting value every call would win back the
+# same first growth step and lose it again every pass, forever, and
+# never actually reach whatever a good connection could carry.
 MIN_FETCH_CHUNK = 10
 # The server (_serve_sync in peer_udp.py) already clamps every response to
 # MAX_SYNC_BLOCKS blocks regardless of what's asked for, so growing past
@@ -109,6 +113,17 @@ class Syncer:
     def __init__(self, pool, udp):
         self.pool = pool
         self.udp  = udp
+        # Per-peer AIMD window, surviving across check_and_sync calls. It
+        # used to start over at FETCH_CHUNK every call, which looked fine
+        # in isolation but was never actually given room to compound: a
+        # real catch-up is many short calls (node.py caps each one at
+        # SYNC_PAGES_PER_PASS pages, so as not to block the block-building
+        # loop that calls it), not one long one, so the window kept
+        # winning back the same first growth step and losing it again
+        # every ~10 seconds, forever, regardless of how good the
+        # connection was. A real peer's path characteristics don't reset
+        # between one pass and the next, so neither should this.
+        self._peer_chunk = {}
 
     def check_and_sync(self, local_chain, apply_fn, peer=None, info_timeout=8.0,
                        local_work=None, max_pages=None, budget=None,
@@ -239,7 +254,7 @@ class Syncer:
         tail_so_far = []
         pages = 0
         h = fork_from
-        chunk = FETCH_CHUNK
+        chunk = self._peer_chunk.get(peer, FETCH_CHUNK)
         while h <= remote_height:
             if _expired(deadline):
                 log.debug("[sync] out of budget after %d pages  peer=%s", pages, peer)
@@ -255,6 +270,14 @@ class Syncer:
             elapsed = time.monotonic() - t0
             if resp is None:
                 log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
+                # A harder failure than needed_retry (every attempt in
+                # _request_sync_with_retry came back empty, not just the
+                # first one), so it gets at least as hard a backoff,
+                # written back before returning. Otherwise the next pass,
+                # a fresh call a few seconds later, would retry this same
+                # peer at the same too-large size and fail the same way
+                # again, possibly indefinitely.
+                self._peer_chunk[peer] = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_BACKOFF))
                 break
             page = resp.get("chain") if isinstance(resp, dict) else None
             if not isinstance(page, list) or not page:
@@ -280,6 +303,19 @@ class Syncer:
                     pass  # fast enough to keep, not fast enough to push further
                 else:
                     chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_SOFT_BACKOFF))
+
+            # Written back after every page, not just at the end: a pass
+            # that stops early (max_pages, budget) still keeps whatever
+            # the window learned this round, for the next pass to pick up
+            # from rather than throw away. See __init__ for why this
+            # can't just live in a local variable any more.
+            self._peer_chunk[peer] = chunk
+            if len(self._peer_chunk) > 1000:
+                # Defensive only: real peer counts stay in the hundreds at
+                # most (MAX_PEERS), so this is a bound against something
+                # having gone wrong upstream, not a cache with a real
+                # eviction policy worth building.
+                self._peer_chunk.clear()
 
             # Advance by what actually came back, not by what was asked
             # for. _serve_sync silently truncates to MAX_SYNC_BLOCKS
