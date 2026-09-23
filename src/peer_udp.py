@@ -81,6 +81,7 @@ from concurrent.futures import ThreadPoolExecutor
 import msgpack
 
 from params import BLOCK_SIZE_LIMIT
+from version import LOCAL_VERSION
 
 log = logging.getLogger("ec.udp")
 
@@ -155,9 +156,12 @@ BLOCK_COMPRESS_LEVEL = 1
 # handshake is what lets a format be replaced instead of accumulated,
 # because the check lives in one place rather than once per message type.
 #
-# Bump both when the wire changes incompatibly, and delete the old format
-# in the same commit. A peer below the floor is not partially supported;
-# it is not peered with, and it needs to update.
+# Bump MIN_PROTOCOL_VERSION when the wire changes incompatibly, and
+# delete the old format in the same commit. A peer below the floor is not
+# partially supported; it is not peered with, and it needs to update.
+# This is the one deliberately, manually controlled number in this pair,
+# and every check against it is >= MIN_PROTOCOL_VERSION, never equality,
+# so nothing here depends on what PROTOCOL_VERSION itself happens to be.
 #
 # NOT for a validation rule that only tightens what this node itself
 # accepts (tx.py's field whitelist and output-count cap, the case that
@@ -173,8 +177,26 @@ BLOCK_COMPRESS_LEVEL = 1
 # a validation tightening's fork risk is no longer speculative; it
 # should be its own deliberate, announced step then, not folded silently
 # into an unrelated feature commit the way this one was.
-PROTOCOL_VERSION     = 2
 MIN_PROTOCOL_VERSION = 2
+
+# What this node reports in the "proto" field, unlike the floor above,
+# tracks VERSION's own minor number instead of being a second
+# hand-maintained constant: two numbers meant to move together, updated
+# by hand in two different places, is exactly how they drift apart
+# unnoticed. Purely informational, not a gate, precisely because nothing
+# ever compares it for equality (see above), so advertising a new value
+# on every ordinary release is exactly as safe as it looks. Floored at
+# MIN_PROTOCOL_VERSION rather than trusting the file outright: a missing
+# or malformed VERSION must never make this node advertise a version
+# below its own floor, which would fail this node's own handshake
+# against every peer enforcing that floor, itself included.
+def _protocol_version_from(version_string, floor):
+    try:
+        return max(int(version_string.split(".")[1]), floor)
+    except (IndexError, ValueError):
+        return floor
+
+PROTOCOL_VERSION = _protocol_version_from(LOCAL_VERSION, MIN_PROTOCOL_VERSION)
 
 MAX_CHUNK_SIZE   = 1400   # bytes, safe below MTU
 RECV_TIMEOUT     = 2.0    # seconds select/recvfrom timeout

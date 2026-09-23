@@ -215,9 +215,9 @@ class Syncer:
 
     def _fetch_and_apply(self, peer, local_chain, fork_from, remote_height, apply_fn,
                          max_pages=None, deadline=None, progress=None):
-        """Fetch in FETCH_CHUNK-block pages, applying each page as it
-        arrives instead of buffering the whole tail and applying it once at
-        the end.
+        """Fetch in adaptively-sized pages (see FETCH_CHUNK and the AIMD
+        window below), applying each page as it arrives instead of
+        buffering the whole tail and applying it once at the end.
 
         Two reasons: a node many blocks behind would otherwise sit with an
         unchanged height for the entire fetch, however long that takes,
