@@ -10,7 +10,9 @@ See ChainState.is_better_than().
 import logging
 import time
 
-from peer_udp import MAX_SYNC_BLOCKS
+import math
+
+from peer_udp import MAX_SYNC_BLOCKS, MAX_CHUNK_TOTAL, CHUNK_SEND_PACING
 
 log = logging.getLogger("ec.syncer")
 
@@ -41,8 +43,56 @@ MIN_FETCH_CHUNK = 10
 # as any other failed attempt, and the backoff below reacts to that the
 # same way it reacts to loss.
 MAX_FETCH_CHUNK = MAX_SYNC_BLOCKS
-FETCH_CHUNK_GROWTH = 1.3   # multiplicative increase after a clean page
+FETCH_CHUNK_GROWTH = 1.3   # multiplicative increase after a clean, fast page
 FETCH_CHUNK_BACKOFF = 0.5  # multiplicative decrease after a retried page
+FETCH_CHUNK_SOFT_BACKOFF = 0.8  # decrease after a clean page that ran slow
+
+# SYNC_FETCH_TIMEOUT: per-page request timeout, in seconds.
+#
+# needed_retry (a request that got no answer at all inside this timeout)
+# is a hard signal: something failed outright, so the response above is a
+# hard halving. But by the time that happens the window already overshot
+# whatever the path could actually carry, found out by failing, and paid
+# a full timeout to learn it. A page that came back cleanly is not
+# necessarily far from that same edge: one that used most of its timeout
+# budget to arrive succeeded this time only because nothing else went
+# wrong, not because there is headroom left.
+#
+# So elapsed time on a clean page is read the same way TCP Vegas/BBR read
+# rising RTT: as an early warning, checked before a request ever fails
+# rather than only after. Below FETCH_LATENCY_GROW_BELOW of the timeout,
+# there is room to spare and the window grows as before. Between that and
+# FETCH_LATENCY_HOLD_BELOW, it holds steady, neither pushing its luck nor
+# giving back ground it hasn't been shown to need to. At or past
+# FETCH_LATENCY_HOLD_BELOW, it eases back on purpose, before a timeout
+# forces the same outcome the hard way. This is what keeps the window
+# from sawing all the way up to a failure and back on every cycle: it
+# feels the path slowing down (bigger blocks, a loaded peer, a
+# congested link) and responds while still succeeding, rather than only
+# ever discovering the ceiling by falling through it.
+#
+# The timeout itself has to be checked against what a page can actually
+# contain, not picked on its own: a request can legitimately come back
+# holding a page up to SYNC_PAGE_BYTE_BUDGET (peer_udp.py), and
+# CHUNK_SEND_PACING there is a real, deliberately chosen number (a
+# datagram gap picked to avoid drops on NAT/internet paths, not derived
+# from anything else), which makes MAX_CHUNK_TOTAL * CHUNK_SEND_PACING
+# the floor on how long a peer's own send loop takes to emit a
+# full-budget page, before its bytes have even crossed the network. A
+# timeout shorter than that floor would fail every maximal page on
+# every peer, regardless of link speed or load, which is not congestion
+# being detected, just this number being wrong. FETCH_TIMEOUT_MARGIN
+# doubles that floor: room for one CHUNK_ACK_TIMEOUT-scale retransmit
+# round plus real internet RTT and queueing on top of the sender's own
+# pacing, not a second guess stacked on top of a worst case the way
+# SYNC_PAGE_BYTE_BUDGET's old halving was (see peer_udp.py); the
+# CHUNK_SEND_PACING floor here assumes zero network delay of its own,
+# so doubling it is covering time this number has not accounted for at
+# all yet, not re-covering ground already assumed away.
+FETCH_TIMEOUT_MARGIN = 2
+SYNC_FETCH_TIMEOUT = math.ceil(MAX_CHUNK_TOTAL * CHUNK_SEND_PACING * FETCH_TIMEOUT_MARGIN)
+FETCH_LATENCY_GROW_BELOW = 0.4
+FETCH_LATENCY_HOLD_BELOW = 0.75
 
 # Extra attempts before treating an outright timeout/decode-failure (resp is
 # None) as authoritative. The UDP transport has no chunk-level retransmission
@@ -217,7 +267,10 @@ class Syncer:
                 break
             pages += 1
             to_h = min(h + chunk - 1, remote_height)
-            resp, needed_retry = self._request_sync_with_retry(peer, from_h=h, to_h=to_h, timeout=30)
+            t0 = time.monotonic()
+            resp, needed_retry = self._request_sync_with_retry(
+                peer, from_h=h, to_h=to_h, timeout=SYNC_FETCH_TIMEOUT)
+            elapsed = time.monotonic() - t0
             if resp is None:
                 log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
                 break
@@ -238,7 +291,13 @@ class Syncer:
             if needed_retry:
                 chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_BACKOFF))
             else:
-                chunk = min(MAX_FETCH_CHUNK, max(chunk + 1, int(chunk * FETCH_CHUNK_GROWTH)))
+                latency_frac = elapsed / SYNC_FETCH_TIMEOUT
+                if latency_frac < FETCH_LATENCY_GROW_BELOW:
+                    chunk = min(MAX_FETCH_CHUNK, max(chunk + 1, int(chunk * FETCH_CHUNK_GROWTH)))
+                elif latency_frac < FETCH_LATENCY_HOLD_BELOW:
+                    pass  # fast enough to keep, not fast enough to push further
+                else:
+                    chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_SOFT_BACKOFF))
 
             # Advance by what actually came back, not by what was asked
             # for. _serve_sync silently truncates to MAX_SYNC_BLOCKS

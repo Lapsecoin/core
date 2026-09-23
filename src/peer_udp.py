@@ -204,7 +204,21 @@ PUNCH_BURST_SPACING = 0.05
 # a peer's source address in a GETSYNC and requests the whole chain would
 # otherwise turn one small datagram into a multi-MB reply blasted at the
 # victim. This bounds how many blocks one request can pull.
-MAX_SYNC_BLOCKS   = 500
+#
+# The real ceiling on reply size is SYNC_PAGE_BYTE_BUDGET below, which
+# _serve_sync enforces directly against what a page actually contains, so
+# this number no longer has to be sized for the worst case (blocks near
+# BLOCK_SIZE_LIMIT, where even a handful would already blow the wire
+# budget) to be safe. It only has to be sized so a request spanning it
+# doesn't make _get_chain_fn read an absurd range before the byte trim
+# gets a chance to run, and so a forged request can't turn one datagram
+# into an unreasonable amount of database work even when every block in
+# range happens to be small. 5000 is generous for that: ordinary blocks
+# are far smaller than the consensus limit (see the byte-budget trim's
+# own reasoning), so a typical sync batches far more per round trip than
+# the old 500 allowed, and the byte trim still catches it if that
+# assumption is ever wrong for a given range.
+MAX_SYNC_BLOCKS   = 5000
 
 # Same reflection concern as MAX_SYNC_BLOCKS, for a market backfill: caps
 # how many orders and accepted fills one GET_MARKET can pull in a single
@@ -238,6 +252,34 @@ MESSAGE_ENVELOPE_BYTES = 4096
 # that did not shrink at all.
 MAX_MESSAGE_BYTES = BLOCK_SIZE_LIMIT + MESSAGE_ENVELOPE_BYTES
 MAX_CHUNK_TOTAL   = -(-MAX_MESSAGE_BYTES // MAX_CHUNK_SIZE)
+
+# MAX_MESSAGE_BYTES was derived for a single block at the consensus limit,
+# not for a multi-block sync page: a GETSYNC response is exactly the same
+# wire format (see _send_chunked), so it is bound by the same ceiling, but
+# nothing before this related that ceiling to how many blocks _serve_sync
+# was willing to put in one page. MAX_SYNC_BLOCKS alone cannot make that
+# safe: it bounds count, not bytes, so a page of blocks anywhere near
+# BLOCK_SIZE_LIMIT each would already blow the ceiling at a handful of
+# blocks, long before MAX_SYNC_BLOCKS was reached, exactly the "receiver
+# drops it, no log, builder never finds out" failure the paragraph above
+# describes, just moved from a single block to a page of them.
+#
+# So _serve_sync trims the page to this many raw (pre-compression) bytes
+# rather than trusting a block count to be safe on its own. Bounded at the
+# full MAX_MESSAGE_BYTES, not some fraction of it: that number is already
+# the "assume compression doesn't help at all" worst case (see the
+# paragraph above), so trimming raw bytes against it already guarantees
+# what actually goes on the wire (compressed, so never larger than raw)
+# fits. Any further margin taken here on top would be spending that same
+# worst-case assumption twice over for no real payoff, only a smaller
+# page than the ceiling actually allows. MESSAGE_ENVELOPE_BYTES, folded
+# into MAX_MESSAGE_BYTES, covers what this sum does not itself count: the
+# small fixed overhead of the genesis hash and the wrapping dict around
+# the block list. Raw bytes are checked per block, not compressed,
+# because compressing incrementally to check would cost more than the
+# page itself; raw size is always >= compressed size, so trimming against
+# it is the conservative side of that gap, not an extra one.
+SYNC_PAGE_BYTE_BUDGET = MAX_MESSAGE_BYTES
 
 # Ceiling on decompressing an inbound payload, see _inflate. Two bounds,
 # because one number cannot do this job. The ratio stops a small payload
@@ -279,6 +321,19 @@ RATE_LIMIT_BURST    = 100
 # exhausted, never hanging.
 CHUNK_ACK_TIMEOUT    = 1.5   # seconds to wait for acks before a retransmit round
 CHUNK_ACK_MAX_ROUNDS = 4
+
+# Gap between consecutive datagrams of the same chunked send (see
+# _send_chunked), the one number in this file actually chosen for real
+# network behavior rather than derived from another constant already in
+# the codebase: sending a burst of same-size UDP datagrams back to back is
+# a known way to get some of them dropped by a NAT device or a path's own
+# queueing, well before any consensus-sized ceiling is reached. This is
+# also, as a side effect, a hard throttle on how fast this node will ever
+# emit a chunked message: MAX_CHUNK_SIZE / CHUNK_SEND_PACING is ~280KB/s
+# out of this send loop, regardless of how fast the peer's real link is,
+# so it is the floor other numbers derived from message size (see
+# SYNC_FETCH_TIMEOUT in syncer.py) have to be checked against.
+CHUNK_SEND_PACING = 0.005
 
 # Return-routability confirmation for sync requests, see
 # UDPTransport._may_serve_sync. A confirmed address is remembered for a
@@ -412,6 +467,32 @@ def _encode(data: dict) -> bytes:
 
 def _decode(raw: bytes) -> dict:
     return msgpack.unpackb(raw, raw=False)
+
+
+def _trim_to_byte_budget(chain, budget):
+    """Drop the tail of `chain` once its raw encoded size would pass
+    `budget`. See SYNC_PAGE_BYTE_BUDGET for why _serve_sync needs this on
+    top of MAX_SYNC_BLOCKS: block count alone says nothing about whether a
+    page actually fits the wire.
+
+    Always keeps at least one block when the range is non-empty, even if
+    that block alone is over budget. A page has to make progress; the
+    caller (a from_h that only advances by what came back, see
+    Syncer._fetch_and_apply) already treats "one oversized block, sent
+    alone" as forward progress same as any other page, and refusing to
+    send anything here would instead stall a sync at that height forever.
+    """
+    if not chain:
+        return chain
+    out = [chain[0]]
+    total = len(_encode(chain[0]))
+    for block in chain[1:]:
+        size = len(_encode(block))
+        if total + size > budget:
+            break
+        out.append(block)
+        total += size
+    return out
 
 
 def probe_lan_ports(genesis_hash: str, wait: float = 1.5,
@@ -1522,9 +1603,10 @@ class UDPTransport:
         capped_to = from_h + MAX_SYNC_BLOCKS - 1
         to_h = capped_to if not isinstance(to_h, int) else min(to_h, capped_to)
         chain  = self._get_chain_fn(from_h, to_h) if self._get_chain_fn else []
+        chain  = _trim_to_byte_budget(chain, SYNC_PAGE_BYTE_BUDGET)
         # Compressed for the same reason blocks are, and it pays far more
-        # here: a page of 500 blocks shares so much structure that it goes
-        # to about 8% of its size, 260 chunks down to 21, which is over a
+        # here: a page of many blocks shares so much structure that it
+        # compresses far better than any one of them alone, which is over a
         # second of pacing removed from every page a catching-up node
         # fetches. This is the largest message the protocol has.
         payload = zlib.compress(
@@ -1661,7 +1743,7 @@ class UDPTransport:
                 log.debug("[udp] send_chunked error to %s: %s", target, e)
                 break
             if total > 1:
-                time.sleep(0.005)  # pacing to avoid drops on NAT/internet paths
+                time.sleep(CHUNK_SEND_PACING)
 
         if total > 1:
             try:
@@ -1703,7 +1785,7 @@ class UDPTransport:
                     self._sock.sendto(pkt, target)
                 except Exception as e:
                     log.debug("[udp] retransmit error to %s: %s", target, e)
-                time.sleep(0.005)
+                time.sleep(CHUNK_SEND_PACING)
         with self._chunk_lock:
             self._pending_chunked_sends.pop(key, None)
 
