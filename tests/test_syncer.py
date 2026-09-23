@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from syncer import Syncer, FETCH_CHUNK
+from syncer import Syncer, FETCH_CHUNK, MIN_FETCH_CHUNK
 from tests.fixtures import genesis, make_block
 
 
@@ -31,6 +31,21 @@ def chain_of(n):
     for h in range(1, n):
         chain.append(make_block(h, chain[-1]["hash"], []))
     return chain
+
+
+def tail_from(start_height, n):
+    """n blocks at heights start_height..start_height+n-1, chained to each
+    other. For exercising _fetch_and_apply's own mechanics (page-matches-
+    request validation, pagination, backoff), not consensus linkage to any
+    particular local chain, which apply_fn is mocked past anyway in these
+    tests."""
+    blocks = []
+    prev_hash = "0" * 64
+    for h in range(start_height, start_height + n):
+        blk = make_block(h, prev_hash, [])
+        blocks.append(blk)
+        prev_hash = blk["hash"]
+    return blocks
 
 
 def wrap_chain(blocks):
@@ -79,7 +94,7 @@ class TestCheckAndSync:
         on height would decline to look at the chain that beats us."""
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.get_info.return_value = {"height": 2, "tip_hash": "", "work": 999}
-        udp.request_sync.return_value = wrap_chain(chain_of(3)[1:])
+        udp.request_sync.return_value = wrap_chain(tail_from(0, 2))
         apply_fn = MagicMock(return_value=False)
         with patch.object(syncer, "_find_fork_point", return_value=0):
             syncer.check_and_sync(chain_of(5), apply_fn=apply_fn, local_work=100)
@@ -90,7 +105,7 @@ class TestCheckAndSync:
         falls through to a real comparison rather than being skipped."""
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.get_info.return_value = {"height": 9, "tip_hash": ""}
-        udp.request_sync.return_value = wrap_chain(chain_of(3)[1:])
+        udp.request_sync.return_value = wrap_chain(tail_from(0, 2))
         apply_fn = MagicMock(return_value=False)
         with patch.object(syncer, "_find_fork_point", return_value=0):
             syncer.check_and_sync(chain_of(5), apply_fn=apply_fn, local_work=100)
@@ -99,7 +114,7 @@ class TestCheckAndSync:
     def test_peer_ahead_is_fetched(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.get_info.return_value = {"height": 9, "tip_hash": "", "work": 999}
-        udp.request_sync.return_value = wrap_chain(chain_of(3)[1:])
+        udp.request_sync.return_value = wrap_chain(tail_from(0, 2))
         apply_fn = MagicMock(return_value=False)
         with patch.object(syncer, "_find_fork_point", return_value=0):
             syncer.check_and_sync(chain_of(5), apply_fn=apply_fn, local_work=1)
@@ -146,8 +161,8 @@ class TestCheckAndSync:
         # jumping straight from local height to final height in one step.
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         local = chain_of(2)
-        page1 = chain_of(FETCH_CHUNK + 1)[1:]  # heights 1..FETCH_CHUNK
-        page2 = chain_of(3)[1:]                # heights FETCH_CHUNK+1..FETCH_CHUNK+2
+        page1 = tail_from(1, FETCH_CHUNK)      # heights 1..FETCH_CHUNK
+        page2 = tail_from(FETCH_CHUNK + 1, 2)  # heights FETCH_CHUNK+1..FETCH_CHUNK+2
         responses = iter([wrap_chain(page1), wrap_chain(page2)])
         udp.get_info.return_value = {"height": FETCH_CHUNK + 2, "tip_hash": ""}
         udp.request_sync.side_effect = lambda *a, **kw: next(responses)
@@ -163,8 +178,8 @@ class TestCheckAndSync:
         # away progress that already landed.
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         local = chain_of(2)
-        page1 = chain_of(FETCH_CHUNK + 1)[1:]
-        page2 = chain_of(3)[1:]
+        page1 = tail_from(1, FETCH_CHUNK)
+        page2 = tail_from(FETCH_CHUNK + 1, 2)
         responses = iter([wrap_chain(page1), wrap_chain(page2)])
         udp.get_info.return_value = {"height": FETCH_CHUNK + 2, "tip_hash": ""}
         udp.request_sync.side_effect = lambda *a, **kw: next(responses)
@@ -173,6 +188,107 @@ class TestCheckAndSync:
             result = syncer.check_and_sync(local, apply_fn=apply_fn)
         assert apply_fn.call_count == 2
         assert result is True
+
+
+# ---------------------------------------------------------------------------
+# 1b. The adaptive window: persistence, backoff, and request validation.
+# Added after a real production bug (the window resetting to FETCH_CHUNK
+# on every call instead of surviving across the short passes a real sync
+# is actually made of) shipped with no test catching it. See syncer.py's
+# own Syncer.__init__ comment for the full story.
+# ---------------------------------------------------------------------------
+
+class TestAdaptiveWindow:
+    def test_window_persists_across_separate_calls(self):
+        # The actual bug: node.py calls check_and_sync repeatedly with a
+        # small max_pages, not once for a whole catch-up. A window that
+        # forgot everything between calls never got room to grow past its
+        # very first step, on any connection, however good. Two separate
+        # check_and_sync calls, each capped to one page, must still let
+        # the second call see whatever the first one learned.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        peer = "1.2.3.4:9000"
+        local = chain_of(2)
+
+        def make_response(from_h, to_h, timeout, deadline=None):
+            return wrap_chain(tail_from(from_h, min(to_h - from_h + 1, FETCH_CHUNK * 5)))
+
+        udp.request_sync.side_effect = lambda peer, from_h, to_h, timeout: make_response(from_h, to_h, timeout)
+        udp.get_info.return_value = {"height": 100_000, "tip_hash": ""}
+        apply_fn = MagicMock(return_value=True)
+
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            syncer.check_and_sync(local, apply_fn=apply_fn, peer=peer, max_pages=1)
+        first_chunk = syncer._peer_chunk[peer]
+        assert first_chunk > FETCH_CHUNK, (
+            "a clean, fast page should have grown the window past its starting size")
+
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            syncer.check_and_sync(local, apply_fn=apply_fn, peer=peer, max_pages=1)
+        second_chunk = syncer._peer_chunk[peer]
+        assert second_chunk > first_chunk, (
+            "a second call must build on the first call's window, not reset to FETCH_CHUNK")
+
+    def test_outright_failure_drops_straight_to_minimum(self):
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        peer = "1.2.3.4:9000"
+        syncer._peer_chunk[peer] = 10_000  # simulate an already-large, learned window
+        udp.get_info.return_value = {"height": 50, "tip_hash": ""}
+        udp.request_sync.return_value = None  # every attempt fails outright
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            result = syncer.check_and_sync(chain_of(2), apply_fn=MagicMock(), peer=peer)
+        assert result is False
+        assert syncer._peer_chunk[peer] == MIN_FETCH_CHUNK
+
+    def test_page_starting_at_wrong_height_is_rejected(self):
+        # A peer (buggy or hostile) answering with blocks that don't start
+        # where they were asked to must not be folded into full_chain and
+        # handed to apply_fn as if it might be legitimate.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        wrong_page = tail_from(99, 3)  # asked for height 1, this starts at 99
+        udp.get_info.return_value = {"height": 5, "tip_hash": ""}
+        udp.request_sync.return_value = wrap_chain(wrong_page)
+        apply_fn = MagicMock(return_value=True)
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            result = syncer.check_and_sync(chain_of(2), apply_fn=apply_fn)
+        apply_fn.assert_not_called()
+        assert result is False
+
+    def test_page_longer_than_requested_range_is_rejected(self):
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        # Asked for height 1 only (local height 1, remote height 2), but
+        # the peer sends back more blocks than that range could hold.
+        oversized_page = tail_from(1, 10)
+        udp.get_info.return_value = {"height": 2, "tip_hash": ""}
+        udp.request_sync.return_value = wrap_chain(oversized_page)
+        apply_fn = MagicMock(return_value=True)
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            result = syncer.check_and_sync(chain_of(2), apply_fn=apply_fn)
+        apply_fn.assert_not_called()
+        assert result is False
+
+    def test_deadline_bounds_total_retry_time(self):
+        # _request_sync_with_retry used to always wait up to `timeout` per
+        # attempt regardless of the caller's own deadline, so a large
+        # SYNC_FETCH_TIMEOUT could make budget (meant to bound how long an
+        # unresponsive peer can hold the caller) meaningless. A slow-but-
+        # eventually-timing-out peer here must not be allowed to hold the
+        # call anywhere near budget * SYNC_REQUEST_RETRIES.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        udp.get_info.return_value = {"height": 100, "tip_hash": "", "work": 10**9}
+
+        def slow_request(*a, **kw):
+            time.sleep(0.05)
+            return None
+
+        udp.request_sync.side_effect = slow_request
+        started = time.monotonic()
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            syncer.check_and_sync(chain_of(2), apply_fn=MagicMock(return_value=False),
+                                  local_work=1, budget=0.2)
+        elapsed = time.monotonic() - started
+        assert elapsed < 1.0, (
+            f"took {elapsed:.2f}s against a 0.2s budget; deadline is not bounding retries")
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +385,7 @@ class TestPassBudget:
     def test_no_budget_behaves_as_before(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.get_info.return_value = {"height": 9, "tip_hash": "", "work": 999}
-        udp.request_sync.return_value = wrap_chain(chain_of(3)[1:])
+        udp.request_sync.return_value = wrap_chain(tail_from(0, 2))
         apply_fn = MagicMock(return_value=False)
         with patch.object(syncer, "_find_fork_point", return_value=0):
             syncer.check_and_sync(chain_of(5), apply_fn=apply_fn, local_work=1)

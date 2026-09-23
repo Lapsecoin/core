@@ -67,18 +67,52 @@ FETCH_CHUNK_SOFT_BACKOFF = 0.8  # decrease after a clean page that ran slow
 #
 # So elapsed time on a clean page is read the same way TCP Vegas/BBR read
 # rising RTT: as an early warning, checked before a request ever fails
-# rather than only after. Below FETCH_LATENCY_GROW_BELOW of the timeout,
-# there is room to spare and the window grows as before. Between that and
-# FETCH_LATENCY_HOLD_BELOW, it holds steady, neither pushing its luck nor
-# giving back ground it hasn't been shown to need to. At or past
-# FETCH_LATENCY_HOLD_BELOW, it eases back on purpose, before a timeout
+# rather than only after.
+#
+# Against each peer's own recent baseline (Syncer._peer_latency), not
+# against a fraction of SYNC_FETCH_TIMEOUT: that timeout is necessarily
+# sized for the worst case (a full SYNC_PAGE_BYTE_BUDGET page, see
+# peer_udp.py), tens of seconds, while a real page is usually a small
+# fraction of that. Fractions of the timeout were checked against that
+# real gap and found to almost never fire outside an actual failure: at
+# FETCH_LATENCY_GROW_BELOW=0.4 of a 120s timeout, anything under 48
+# seconds grew the window regardless of how it compared to what this
+# same peer had been delivering, so the early warning was, in practice,
+# just the hard failure path wearing a proactive name. A peer's own
+# baseline is the number this was always supposed to be read against.
+#
+# FETCH_LATENCY_GROW_BELOW/HOLD_BELOW are now ratios to that baseline: at
+# comfortably close to it, the window grows as before. Meaningfully
+# above it but still not close to an outright failure, it holds steady,
+# neither pushing its luck nor giving back ground it hasn't been shown
+# to need to. Well above it, it eases back on purpose, before a timeout
 # forces the same outcome the hard way. This is what keeps the window
 # from sawing all the way up to a failure and back on every cycle: it
-# feels the path slowing down (bigger blocks, a loaded peer, a
-# congested link) and responds while still succeeding, rather than only
-# ever discovering the ceiling by falling through it.
-FETCH_LATENCY_GROW_BELOW = 0.4
-FETCH_LATENCY_HOLD_BELOW = 0.75
+# feels this specific path slowing down (bigger blocks, a loaded peer, a
+# congested link) relative to what it normally does, and responds while
+# still succeeding, rather than only ever discovering the ceiling by
+# falling through it. A peer with no baseline yet (its first page ever)
+# falls back to a fraction of SYNC_FETCH_TIMEOUT, the only reasonable
+# thing to compare against before there is a "normal" for this path.
+FETCH_LATENCY_GROW_BELOW = 1.5
+FETCH_LATENCY_HOLD_BELOW = 3.0
+FETCH_LATENCY_BOOTSTRAP_GROW_BELOW = 0.4
+FETCH_LATENCY_BOOTSTRAP_HOLD_BELOW = 0.75
+# EMA weight for folding a fresh sample into the baseline. Low, on
+# purpose: the baseline is what "normal for this path" means, and a
+# single unusually fast or slow page (one already-tiny page, one that
+# raced a burst of other traffic) shouldn't redefine that on its own.
+# Real, sustained change (blocks genuinely got bigger, the path is
+# genuinely more congested now) still shows up, just over several
+# samples rather than one.
+FETCH_LATENCY_EMA_WEIGHT = 0.2
+# Floor under the baseline itself, not just under chunk size: a peer on
+# an exceptionally fast path (same host, loopback-class latency in
+# tests) could otherwise settle on a baseline near zero, where even
+# ordinary jitter is a large ratio of it and the classification above
+# gets noisy for no real reason. 20ms is comfortably above realistic
+# same-host round trips and comfortably below any real network's.
+FETCH_LATENCY_BASELINE_FLOOR = 0.02
 
 # Extra attempts before treating an outright timeout/decode-failure (resp is
 # None) as authoritative. The UDP transport has no chunk-level retransmission
@@ -124,6 +158,14 @@ class Syncer:
         # connection was. A real peer's path characteristics don't reset
         # between one pass and the next, so neither should this.
         self._peer_chunk = {}
+        # Per-peer EMA baseline round-trip time for a clean page, seconds.
+        # See FETCH_LATENCY_GROW_BELOW for why this exists: without it the
+        # only real reference point was SYNC_FETCH_TIMEOUT, sized for a
+        # worst-case page and too large to tell an ordinary page from a
+        # genuinely slowing one. Persisted alongside _peer_chunk for the
+        # same reason (survives across the short passes a real sync is
+        # actually made of), and cleared together with it.
+        self._peer_latency = {}
 
     def check_and_sync(self, local_chain, apply_fn, peer=None, info_timeout=8.0,
                        local_work=None, max_pages=None, budget=None,
@@ -255,6 +297,14 @@ class Syncer:
         pages = 0
         h = fork_from
         chunk = self._peer_chunk.get(peer, FETCH_CHUNK)
+        # Sliced once, not on every page: fork_from never changes inside
+        # this loop, so re-slicing local_chain[:fork_from] each time was
+        # paying for the same prefix copy again and again. Immaterial for
+        # a short catch-up, real for the one caller with no max_pages at
+        # all (main.py's startup sync), where a long historical chain
+        # means a large, unchanging prefix re-copied on every one of
+        # however many pages a full bootstrap takes.
+        prefix = local_chain[:fork_from]
         while h <= remote_height:
             if _expired(deadline):
                 log.debug("[sync] out of budget after %d pages  peer=%s", pages, peer)
@@ -266,26 +316,45 @@ class Syncer:
             to_h = min(h + chunk - 1, remote_height)
             t0 = time.monotonic()
             resp, needed_retry = self._request_sync_with_retry(
-                peer, from_h=h, to_h=to_h, timeout=SYNC_FETCH_TIMEOUT)
+                peer, from_h=h, to_h=to_h, timeout=SYNC_FETCH_TIMEOUT, deadline=deadline)
             elapsed = time.monotonic() - t0
             if resp is None:
                 log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
                 # A harder failure than needed_retry (every attempt in
                 # _request_sync_with_retry came back empty, not just the
-                # first one), so it gets at least as hard a backoff,
-                # written back before returning. Otherwise the next pass,
-                # a fresh call a few seconds later, would retry this same
-                # peer at the same too-large size and fail the same way
-                # again, possibly indefinitely.
-                self._peer_chunk[peer] = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_BACKOFF))
+                # first one, and each at up to SYNC_FETCH_TIMEOUT), so it
+                # gets a harder response: straight to MIN_FETCH_CHUNK
+                # rather than the same halving needed_retry gets below.
+                # Written back before returning, not left in the local
+                # variable: otherwise the next pass, a fresh call a few
+                # seconds later, would retry this same peer at the same
+                # too-large size and fail the same way again, possibly
+                # indefinitely.
+                self._peer_chunk[peer] = MIN_FETCH_CHUNK
                 break
             page = resp.get("chain") if isinstance(resp, dict) else None
             if not isinstance(page, list) or not page:
                 log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
                 break
+            # Checked before this page is trusted enough to even build
+            # full_chain from, not left entirely to apply_fn to catch
+            # downstream: a peer sending back a page that doesn't start
+            # where it was asked to, or that runs past to_h, would
+            # otherwise still get concatenated and validated as if it
+            # might be legitimate, and h += len(page) below would trust
+            # its length regardless of whether validation happened to
+            # catch the mismatch some other way. apply_fn still does the
+            # real work (hash-chain, VDF, signatures); this only refuses
+            # to hand it something already known not to match what was
+            # requested.
+            if page[0].get("height") != h or len(page) > to_h - h + 1:
+                log.warning("[sync] page doesn't match request  peer=%s  "
+                           "from_h=%d  to_h=%d  got_height=%s  got_len=%d",
+                           peer, h, to_h, page[0].get("height"), len(page))
+                break
 
             tail_so_far += page
-            full_chain = local_chain[:fork_from] + tail_so_far
+            full_chain = prefix + tail_so_far
             if not apply_fn(full_chain):
                 log.warning("[sync] page rejected  peer=%s  from_h=%d", peer, h)
                 break
@@ -296,13 +365,36 @@ class Syncer:
             if needed_retry:
                 chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_BACKOFF))
             else:
-                latency_frac = elapsed / SYNC_FETCH_TIMEOUT
-                if latency_frac < FETCH_LATENCY_GROW_BELOW:
-                    chunk = min(MAX_FETCH_CHUNK, max(chunk + 1, int(chunk * FETCH_CHUNK_GROWTH)))
-                elif latency_frac < FETCH_LATENCY_HOLD_BELOW:
-                    pass  # fast enough to keep, not fast enough to push further
+                baseline = self._peer_latency.get(peer)
+                if baseline is None:
+                    # First clean page ever from this peer: nothing to
+                    # compare against yet, so fall back to a fraction of
+                    # the worst-case timeout, the only reference point
+                    # that exists before there's a "normal" for this path.
+                    latency_frac = elapsed / SYNC_FETCH_TIMEOUT
+                    if latency_frac < FETCH_LATENCY_BOOTSTRAP_GROW_BELOW:
+                        chunk = min(MAX_FETCH_CHUNK, max(chunk + 1, int(chunk * FETCH_CHUNK_GROWTH)))
+                    elif latency_frac < FETCH_LATENCY_BOOTSTRAP_HOLD_BELOW:
+                        pass
+                    else:
+                        chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_SOFT_BACKOFF))
                 else:
-                    chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_SOFT_BACKOFF))
+                    latency_ratio = elapsed / baseline
+                    if latency_ratio < FETCH_LATENCY_GROW_BELOW:
+                        chunk = min(MAX_FETCH_CHUNK, max(chunk + 1, int(chunk * FETCH_CHUNK_GROWTH)))
+                    elif latency_ratio < FETCH_LATENCY_HOLD_BELOW:
+                        pass  # close enough to normal to keep, not fast enough to push further
+                    else:
+                        chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_SOFT_BACKOFF))
+
+                # Folded into the baseline after classifying against it,
+                # not before: every clean sample updates what "normal"
+                # means for next time, bootstrap sample included (that's
+                # what turns a None baseline into a real one).
+                self._peer_latency[peer] = max(
+                    FETCH_LATENCY_BASELINE_FLOOR,
+                    elapsed if baseline is None
+                    else (1 - FETCH_LATENCY_EMA_WEIGHT) * baseline + FETCH_LATENCY_EMA_WEIGHT * elapsed)
 
             # Written back after every page, not just at the end: a pass
             # that stops early (max_pages, budget) still keeps whatever
@@ -314,8 +406,10 @@ class Syncer:
                 # Defensive only: real peer counts stay in the hundreds at
                 # most (MAX_PEERS), so this is a bound against something
                 # having gone wrong upstream, not a cache with a real
-                # eviction policy worth building.
+                # eviction policy worth building. Both dicts are keyed the
+                # same way and grow together, so they're capped together.
                 self._peer_chunk.clear()
+                self._peer_latency.clear()
 
             # Advance by what actually came back, not by what was asked
             # for. _serve_sync silently truncates to MAX_SYNC_BLOCKS
@@ -330,9 +424,21 @@ class Syncer:
             h += len(page)
         return applied_any
 
-    def _request_sync_with_retry(self, peer, from_h, to_h, timeout):
+    def _request_sync_with_retry(self, peer, from_h, to_h, timeout, deadline=None):
         """request_sync, retrying a bare timeout/decode-failure a few times
         before giving up. See SYNC_REQUEST_RETRIES for why.
+
+        `timeout` on its own bounds one attempt, not this call: up to
+        SYNC_REQUEST_RETRIES+1 attempts at that timeout, unbounded, is
+        exactly how a caller's own `deadline` (check_and_sync's `budget`,
+        there specifically to cap how long an unresponsive or malicious
+        peer can hold the caller, since _expired(deadline) is otherwise
+        only checked between pages, never inside one) stopped meaning
+        anything once SYNC_FETCH_TIMEOUT grew large enough for a single
+        retried attempt to blow through it on its own. Each attempt's
+        timeout is clamped to whatever's actually left of `deadline`, and
+        a deadline with nothing left to spend stops before ever calling
+        udp.request_sync, rather than making one more attempt anyway.
 
         Returns (resp, needed_retry): needed_retry is True whenever the
         first attempt didn't land, which _fetch_and_apply reads as a sign
@@ -340,7 +446,13 @@ class Syncer:
         independently of whether a later attempt still succeeded.
         """
         for attempt in range(SYNC_REQUEST_RETRIES + 1):
-            resp = self.udp.request_sync(peer, from_h=from_h, to_h=to_h, timeout=timeout)
+            attempt_timeout = timeout
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None, True
+                attempt_timeout = min(timeout, remaining)
+            resp = self.udp.request_sync(peer, from_h=from_h, to_h=to_h, timeout=attempt_timeout)
             if resp is not None:
                 return resp, attempt > 0
         return None, True
@@ -400,7 +512,7 @@ class Syncer:
             local_hash = local_chain[mid]["hash"]
 
             resp, _needed_retry = self._request_sync_with_retry(
-                peer, from_h=mid, to_h=mid, timeout=FORK_PROBE_TIMEOUT)
+                peer, from_h=mid, to_h=mid, timeout=FORK_PROBE_TIMEOUT, deadline=deadline)
             if resp is None:
                 log.debug("[sync] peer stopped answering mid fork search  peer=%s", peer)
                 raise _Unanswered()

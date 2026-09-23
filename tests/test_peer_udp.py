@@ -595,6 +595,39 @@ def test_our_own_ping_advertises_the_protocol():
     assert not peer_udp._protocol_ok({"proto": "nonsense"})
 
 
+class TestProtocolVersionDerivation:
+    """PROTOCOL_VERSION tracks VERSION's major*1000+minor rather than
+    being hand-maintained. An earlier version of this derivation used the
+    minor number alone, which was not monotonic across a major bump
+    (1.0.0 derived lower than 0.7.x's 7, backwards). These pin the actual
+    scheme and its fallback so a regression to that shape breaks a test,
+    not just a future release."""
+
+    def test_matches_current_version(self):
+        assert peer_udp._protocol_version_from("0.7.4", 2) == 7
+
+    def test_monotonic_across_minor_bump(self):
+        assert peer_udp._protocol_version_from("0.8.0", 2) > \
+               peer_udp._protocol_version_from("0.7.9", 2)
+
+    def test_monotonic_across_major_bump(self):
+        # The specific case the minor-only scheme got backwards.
+        assert peer_udp._protocol_version_from("1.0.0", 2) > \
+               peer_udp._protocol_version_from("0.9.9", 2)
+
+    def test_malformed_version_falls_back_to_floor(self):
+        assert peer_udp._protocol_version_from("garbage", 2) == 2
+        assert peer_udp._protocol_version_from("0.0.0", 2) == 2
+        assert peer_udp._protocol_version_from("", 2) == 2
+
+    def test_never_derives_below_the_floor(self):
+        # A real release could in principle have a minor number under an
+        # already-raised floor; this must never advertise less than the
+        # floor, which would fail this node's own handshake against any
+        # peer enforcing it, itself included.
+        assert peer_udp._protocol_version_from("0.1.0", 5) == 5
+
+
 def test_a_decompression_bomb_is_refused():
     """Compression breaks the link between what a sender spends and what we
     allocate, so the inflated form is held to the same ceiling an
@@ -726,6 +759,49 @@ class TestTransportCarriesAFullBlock:
         assert out == payload
 
 
+class TestSyncPageByteBudget:
+    """_trim_to_byte_budget sums raw, pre-compression bytes, but what has
+    to actually fit is the compressed wire payload plus its envelope. A
+    trim that targeted the acceptance ceiling exactly, with no margin,
+    could produce a page that reassembles into one more chunk than
+    MAX_CHUNK_TOTAL allows and gets silently dropped, deterministically,
+    for that exact page, every retry, until the window happened to shrink
+    past the failure on its own."""
+
+    def test_trim_target_leaves_real_margin_below_the_ceiling(self):
+        assert peer_udp.SYNC_TRIM_TARGET_BYTES < peer_udp.SYNC_PAGE_BYTE_BUDGET
+        margin = peer_udp.SYNC_PAGE_BYTE_BUDGET - peer_udp.SYNC_TRIM_TARGET_BYTES
+        assert margin == peer_udp.MESSAGE_ENVELOPE_BYTES
+
+    def test_page_trimmed_to_target_still_reassembles(self):
+        # Worst case for the margin: incompressible blocks (zlib gets no
+        # help, and can even expand slightly via its stored-block
+        # fallback), trimmed right up to SYNC_TRIM_TARGET_BYTES, then
+        # wrapped and compressed exactly as _serve_sync does it.
+        import zlib
+
+        block_bytes = 4096
+        n = peer_udp.SYNC_TRIM_TARGET_BYTES // block_bytes + 2
+        chain = [{"height": i, "data": os.urandom(block_bytes)} for i in range(n)]
+        trimmed = peer_udp._trim_to_byte_budget(chain, peer_udp.SYNC_TRIM_TARGET_BYTES)
+        raw_total = sum(len(peer_udp._encode(b)) for b in trimmed)
+        assert raw_total <= peer_udp.SYNC_TRIM_TARGET_BYTES
+
+        payload = zlib.compress(
+            peer_udp._encode({"genesis": "ab" * 32, "chain": trimmed}),
+            peer_udp.BLOCK_COMPRESS_LEVEL)
+        chunks = peer_udp._split(payload)
+        assert len(chunks) <= peer_udp.MAX_CHUNK_TOTAL, (
+            f"page trimmed to the target needs {len(chunks)} chunks, "
+            f"over the {peer_udp.MAX_CHUNK_TOTAL}-chunk ceiling it's supposed to fit")
+
+        r = peer_udp._Reassembler()
+        out = None
+        for idx, c in enumerate(chunks):
+            out = r.feed(("1.2.3.4", 9), 1, idx, len(chunks), c)
+        assert out == payload, "a page built right at the trim target must still reassemble"
+
+
 class TestReassemblyMemoryCap:
     def test_total_held_bytes_are_bounded(self):
         # A much larger per-message ceiling needs a bound on how many
@@ -802,6 +878,65 @@ class TestSyncRequestsNeedAReachableSource:
         t._start_confirmation("9.9.9.9:9000", lambda: None)
         t._start_confirmation("9.9.9.9:9000", lambda: None)
         assert t._waiters.submit.call_count == 1
+
+
+class TestSyncServeConcurrencyBound:
+    """_serve_sync/_serve_market used to run inline on the shared 16-worker
+    _executor, the same dispatch pool PING/PONG and everything else reads
+    off. Since building and pacing out a sync reply can take tens of
+    seconds, a handful of GETSYNC requests well within one source's own
+    rate limit could occupy every worker at once, the exact hole this
+    file already closed once for gossip fan-out and ack waiters but never
+    applied here. _queue_sync_serve moves that work to its own small,
+    bounded pool instead."""
+
+    def _transport(self, pool):
+        return peer_udp.UDPTransport(port=0, genesis_hash="ab" * 32,
+                                     on_block=lambda *a: None, on_tx=lambda *a: None,
+                                     on_peers=lambda *a: None, pool=pool)
+
+    def test_queued_serve_actually_runs_and_releases_its_slot(self):
+        t = self._transport(MagicMock())
+        called = threading.Event()
+
+        def serve_fn(msg_id, data, sender):
+            called.set()
+
+        t._queue_sync_serve(serve_fn, 1, {}, ("1.2.3.4", 9000))
+        assert called.wait(timeout=2), "queued serve never ran"
+        # Slot must come back: acquiring up to the pool's own limit right
+        # after must succeed, which it can't if the one just used was
+        # never released.
+        acquired = [t._sync_serve_slots.acquire(blocking=False) for _ in range(64)]
+        assert all(acquired), "a slot was not released after its serve completed"
+        for _ in acquired:
+            t._sync_serve_slots.release()
+        t.stop()
+
+    def test_pool_exhaustion_drops_rather_than_blocks(self):
+        t = self._transport(MagicMock())
+        release_gate = threading.Event()
+        started = threading.Event()
+
+        def blocking_serve(msg_id, data, sender):
+            started.set()
+            release_gate.wait(timeout=5)
+
+        # Fill every slot with a serve that won't return until released.
+        for i in range(64):
+            t._queue_sync_serve(blocking_serve, i, {}, ("1.2.3.4", 9000))
+        assert started.wait(timeout=2)
+
+        # The pool is now fully occupied; one more must be dropped, not
+        # queued unbounded (that was exactly the risk this bound exists
+        # to remove) and not block the caller waiting for a slot.
+        extra_ran = threading.Event()
+        t._queue_sync_serve(lambda *a: extra_ran.set(), 999, {}, ("9.9.9.9", 1))
+        assert not extra_ran.wait(timeout=0.5), (
+            "a request past the pool's capacity should be dropped, not eventually served")
+
+        release_gate.set()
+        t.stop()
 
 
 class TestStrangerStillBootstraps:

@@ -179,20 +179,32 @@ BLOCK_COMPRESS_LEVEL = 1
 # into an unrelated feature commit the way this one was.
 MIN_PROTOCOL_VERSION = 2
 
-# What this node reports in the "proto" field, unlike the floor above,
-# tracks VERSION's own minor number instead of being a second
-# hand-maintained constant: two numbers meant to move together, updated
-# by hand in two different places, is exactly how they drift apart
-# unnoticed. Purely informational, not a gate, precisely because nothing
-# ever compares it for equality (see above), so advertising a new value
-# on every ordinary release is exactly as safe as it looks. Floored at
-# MIN_PROTOCOL_VERSION rather than trusting the file outright: a missing
-# or malformed VERSION must never make this node advertise a version
-# below its own floor, which would fail this node's own handshake
-# against every peer enforcing that floor, itself included.
+# What this node reports in the "proto" field, derived from VERSION's
+# major and minor numbers rather than hand-maintained as a second
+# constant. Not from the minor number alone (an earlier version of this
+# derivation did that, and broke on a major-version rollover: VERSION's
+# minor resets to 0 at a major bump, so a 1.0.0 node would have derived
+# lower than a 0.7.x node's 7). major*1000 + minor stays monotonic across
+# both: 0.7.x -> 7, 0.8.x -> 8, 1.0.x -> 1000, 1.5.x -> 1005, so ordering
+# by this number always agrees with ordering the release itself, whatever
+# major and minor happen to be.
+#
+# This tracking is safe, not just convenient, because of how this project
+# actually cuts releases: the version-number policy (README) already
+# requires a minor (or major) bump for any wire-format change, and a
+# patch-only bump for anything that isn't one. So a real MIN_PROTOCOL_VERSION
+# bump always arrives together with a minor or major VERSION bump, never
+# a patch release alone, and this derived number moves in lockstep with
+# exactly the releases that would ever need to move the floor, no faster
+# and no slower. A floor bump excludes older releases by raising
+# MIN_PROTOCOL_VERSION to the new derived value once that release ships
+# (0.8.0 excludes 0.7.x by raising the floor past 7), the same deliberate,
+# manual step as always: this derivation removes the second hand-maintained
+# number, not the deliberateness of bumping the floor itself.
 def _protocol_version_from(version_string, floor):
     try:
-        return max(int(version_string.split(".")[1]), floor)
+        major, minor = version_string.split(".")[:2]
+        return max(int(major) * 1000 + int(minor), floor)
     except (IndexError, ValueError):
         return floor
 
@@ -317,22 +329,59 @@ REASSEMBLY_MAX_BYTES = 64 * 1024 * 1024
 #     one of them from being the one that matters.
 #   - CHUNK_TOTAL_WIRE_LIMIT itself, since no page can be split into more
 #     pieces than the header format can count regardless of memory.
-# No extra safety margin stacked on top of either: both are already real
-# ceilings, not estimates, so shrinking further would only be giving back
-# batching for no corresponding risk avoided.
+# This is the acceptance ceiling (what MAX_CHUNK_TOTAL/MAX_INFLATE_BYTES
+# below are sized to cover), not what _serve_sync actually targets when
+# building a page: see SYNC_TRIM_TARGET_BYTES for why those have to be
+# different numbers, not the same one used twice.
 #
 # Backward compatible with a peer on 0.7.3 or earlier without any version
-# check, by construction rather than by coordination: _serve_sync never
-# sends more than a request's own to_h asks for, and a 0.7.3 client's own
-# fetch loop only ever requests its fixed old page size (50 blocks) in one
-# GETSYNC, regardless of how far behind it is, catching up over more
-# round trips instead of bigger ones. Fifty blocks lands nowhere near
-# either bound above in ordinary use, so raising this only ever changes
-# how much a peer that actually asks for more (this codebase's own
-# adaptive client) can receive per round trip; it can't make a reply to a
-# small, old-style request any bigger than it already was.
+# check, by construction rather than by coordination: chain is sliced to
+# the requester's own to_h before the byte trim ever runs, and the trim
+# only ever removes blocks from what's already there, never adds any, so
+# a reply can never hold more bytes than the blocks actually in the
+# requested range weigh, regardless of how large this budget is. A 0.7.3
+# client's own fetch loop only ever requests its fixed old page size (50
+# blocks) in one GETSYNC, regardless of how far behind it is, catching up
+# over more round trips instead of bigger ones, so raising this only ever
+# changes how much a peer that actually asks for more (this codebase's
+# own adaptive client) can receive per round trip; it can't make a reply
+# to a small, old-style request any bigger than it already was.
+#
+# What this does not protect against, in either direction, old code or
+# new: a request whose range happens to contain individually large real
+# blocks (nothing here stops one from approaching BLOCK_SIZE_LIMIT) can
+# still produce a reply an old client's own smaller reassembly ceiling
+# can't accept. That risk is not new here, the block-count-only cap this
+# replaced had no byte-level protection at all, so it was already fully
+# exposed to the same case; this file's own byte trim is a net new
+# protection against this node's own larger ceiling, not a claim that
+# every possible page an old peer might request is safe for it to
+# receive, which was never true and isn't a regression to still not be.
 SYNC_PAGE_BYTE_BUDGET = min(REASSEMBLY_MAX_BYTES // 4,
                             CHUNK_TOTAL_WIRE_LIMIT * MAX_CHUNK_SIZE)
+
+# What _trim_to_byte_budget is actually handed, sitting strictly under
+# SYNC_PAGE_BYTE_BUDGET rather than equal to it. Trimming sums raw,
+# pre-compression bytes, but two things stand between that sum and what
+# actually has to fit: the wrapping dict this sum doesn't itself count
+# (the genesis hash, the "chain" key, msgpack's own array/map framing),
+# and zlib itself, which is not guaranteed to only shrink: on
+# incompressible input it falls back to stored deflate blocks, each
+# carrying a small fixed header, so a payload can come back from
+# compression very slightly *larger* than it went in. A trim that
+# targets the acceptance ceiling exactly has no room for either, so a
+# page landing right at the ceiling could come back needing one more
+# wire chunk than MAX_CHUNK_TOTAL allows, silently unreceivable, and
+# because that failure is deterministic for that page (not loss, not
+# load), retrying it back-to-back would just fail the same way until
+# the window happened to shrink past it on its own, a slow way to
+# rediscover a gap this margin closes outright. Reuses
+# MESSAGE_ENVELOPE_BYTES rather than inventing a second overhead
+# constant: it already covers a small, fixed per-message overhead
+# generously (4096 bytes against a real cost of well under 1KB even at
+# SYNC_PAGE_BYTE_BUDGET's full size), and this is the same kind of gap,
+# just on a page instead of a single block.
+SYNC_TRIM_TARGET_BYTES = SYNC_PAGE_BYTE_BUDGET - MESSAGE_ENVELOPE_BYTES
 
 # Chunk counts for the two real payload sizes above, each named so
 # anything that cares about one specifically (FORK_PROBE_TIMEOUT below
@@ -351,6 +400,19 @@ SYNC_CHUNK_TOTAL   = -(-SYNC_PAGE_BYTE_BUDGET // MAX_CHUNK_SIZE)
 MAX_CHUNK_TOTAL = max(BLOCK_CHUNK_TOTAL, SYNC_CHUNK_TOTAL)
 assert MAX_CHUNK_TOTAL <= CHUNK_TOTAL_WIRE_LIMIT, \
     "a raised ceiling above exceeds what the wire format can index"
+
+# _trim_to_byte_budget always keeps at least one block, even one over
+# budget on its own (see its own docstring for why: a page has to make
+# progress, and refusing to send anything would stall a sync at that
+# height forever instead). That's only an acceptable trade because a
+# single block, worst case, still fits SYNC_TRIM_TARGET_BYTES: this
+# assert is what makes that true by construction rather than by the two
+# constants happening to land in the right order today. If BLOCK_SIZE_LIMIT
+# is ever raised past this budget, "sent alone anyway" stops being a
+# recoverable fallback and starts being the same stall it exists to
+# avoid, just moved to whichever height has the oversized block.
+assert MAX_MESSAGE_BYTES <= SYNC_TRIM_TARGET_BYTES, \
+    "a single block at the consensus limit no longer fits one sync page"
 
 # Ceiling on decompressing an inbound payload, see _inflate. Two bounds,
 # because one number cannot do this job. The ratio stops a small payload
@@ -389,10 +451,11 @@ CHUNK_ACK_MAX_ROUNDS = 4
 # network behavior rather than derived from another constant already in
 # the codebase: sending a burst of same-size UDP datagrams back to back is
 # a known way to get some of them dropped by a NAT device or a path's own
-# queueing (confirmed against published measurements, not just this
-# file's own say-so: pacing between consecutive datagrams to avoid
-# burst-induced loss is standard practice in other chunked UDP protocols,
-# e.g. github.com/dmzoneill/Seedarr/issues/389,
+# queueing. Not independently benchmarked against this project's own
+# traffic; pacing between consecutive datagrams to reduce burst-induced
+# loss is documented practice in other chunked UDP protocols, which is
+# corroborating precedent, not proof of the right number for this one
+# (e.g. github.com/dmzoneill/Seedarr/issues/389,
 # github.com/ietf-wg-masque/draft-ietf-masque-connect-udp/issues/10).
 # This is also, as a side effect, a hard throttle on how fast this node
 # will ever emit a chunked message: MAX_CHUNK_SIZE / CHUNK_SEND_PACING is
@@ -712,10 +775,12 @@ def _inflate(payload: bytes):
     # small payload from expanding without limit, which is the actual bomb:
     # an attacker has to spend proportionally to what we allocate. The
     # absolute cap stops a large one, since MAX_CHUNK_TOTAL already lets
-    # 2.8MB on the wire and a ratio alone would license hundreds of MB from
-    # it. Real traffic is nowhere near either: a block expands about 1.8x
-    # and the best case measured, a page of near-identical empty blocks,
-    # about 12x.
+    # MAX_INFLATE_BYTES worth of payload on the wire (currently sized to
+    # SYNC_PAGE_BYTE_BUDGET, the larger of the two real payloads this
+    # transport carries, see its own derivation) and a ratio alone would
+    # license many times that from it. Real traffic is nowhere near
+    # either: a block expands about 1.8x and the best case measured, a
+    # page of near-identical empty blocks, about 12x.
     limit = min(len(payload) * MAX_INFLATE_RATIO, MAX_INFLATE_BYTES)
     try:
         obj = zlib.decompressobj()
@@ -953,6 +1018,23 @@ class UDPTransport:
         # so there can be many more of them than there are cores.
         self._waiters   = ThreadPoolExecutor(max_workers=ACK_WAITER_THREADS,
                                              thread_name_prefix="udp-wait")
+        # Same reasoning again, for serving a GETSYNC or GET_MARKET reply:
+        # _serve_sync/_serve_market build a page up to SYNC_PAGE_BYTE_BUDGET
+        # and hand it to _send_chunked, which paces its send over tens of
+        # seconds at the wire's ceiling. Running that on _executor was the
+        # exact hole the two comments above already closed for gossip
+        # fan-out and ack waiters: a handful of GETSYNC requests, well
+        # within RATE_LIMIT_BURST for a single source, would otherwise
+        # have occupied every dispatch worker for about a minute each,
+        # during which the node reads its socket but processes nothing
+        # arriving on it, not even an unrelated peer's PING. Bounded and
+        # separate, so a flood of large syncs degrades sync service to
+        # slow, not the whole node to unresponsive.
+        SYNC_SERVE_CONCURRENCY = 4
+        SYNC_SERVE_PENDING_MAX = 64
+        self._sync_serve = ThreadPoolExecutor(max_workers=SYNC_SERVE_CONCURRENCY,
+                                              thread_name_prefix="udp-sync")
+        self._sync_serve_slots = threading.BoundedSemaphore(SYNC_SERVE_PENDING_MAX)
         # Addresses that have proven they can receive at the address they
         # claim, and the confirmations currently in flight. See
         # _may_serve_sync.
@@ -1030,6 +1112,7 @@ class UDPTransport:
         self._executor.shutdown(wait=False)
         self._fanout.shutdown(wait=False)
         self._waiters.shutdown(wait=False)
+        self._sync_serve.shutdown(wait=False)
 
     # ------------------------------------------------------------------
     # Public send operations
@@ -1688,15 +1771,39 @@ class UDPTransport:
         sender_addr = f"{sender[0]}:{sender[1]}"
         self._pool.touch(sender_addr)
         if self._may_serve_sync(sender_addr):
-            self._serve_sync(msg_id, data, sender)
+            self._queue_sync_serve(self._serve_sync, msg_id, data, sender)
         else:
             # Confirm, then answer this same request rather than making the
             # requester wait out its timeout and ask again. The retry is
             # still the backstop if the confirmation fails; this just means
             # a new node's first sync costs a round trip instead of a
             # timeout.
-            self._start_confirmation(sender_addr,
-                                     lambda: self._serve_sync(msg_id, data, sender))
+            self._start_confirmation(
+                sender_addr,
+                lambda: self._queue_sync_serve(self._serve_sync, msg_id, data, sender))
+
+    def _queue_sync_serve(self, serve_fn, msg_id: int, data: dict, sender: tuple):
+        """Hand a GETSYNC/GET_MARKET reply to _sync_serve rather than
+        building and pacing it out on whichever _executor worker read the
+        request, and drop it rather than queue unbounded when the pool's
+        already full; see _sync_serve/_sync_serve_slots for why. A drop
+        here is not a lost request: the requester's own retry (see
+        Syncer._request_sync_with_retry) covers it, same as any other
+        datagram this transport declines to answer under load.
+        """
+        if not self._sync_serve_slots.acquire(blocking=False):
+            log.warning("[udp] sync serve queue full, dropping request from %s", sender)
+            return
+        try:
+            self._sync_serve.submit(self._run_and_release_sync_slot, serve_fn, msg_id, data, sender)
+        except RuntimeError:
+            self._sync_serve_slots.release()   # pool already shut down
+
+    def _run_and_release_sync_slot(self, serve_fn, msg_id: int, data: dict, sender: tuple):
+        try:
+            serve_fn(msg_id, data, sender)
+        finally:
+            self._sync_serve_slots.release()
 
     def _serve_sync(self, msg_id: int, data: dict, sender: tuple):
         from_h = data.get("from_h", 0)
@@ -1706,7 +1813,7 @@ class UDPTransport:
         capped_to = from_h + MAX_SYNC_BLOCKS - 1
         to_h = capped_to if not isinstance(to_h, int) else min(to_h, capped_to)
         chain  = self._get_chain_fn(from_h, to_h) if self._get_chain_fn else []
-        chain  = _trim_to_byte_budget(chain, SYNC_PAGE_BYTE_BUDGET)
+        chain  = _trim_to_byte_budget(chain, SYNC_TRIM_TARGET_BYTES)
         # Compressed for the same reason blocks are, and it pays far more
         # here: a page of many blocks shares so much structure that it
         # compresses far better than any one of them alone, which is over a
@@ -1726,10 +1833,11 @@ class UDPTransport:
         sender_addr = f"{sender[0]}:{sender[1]}"
         self._pool.touch(sender_addr)
         if self._may_serve_sync(sender_addr):
-            self._serve_market(msg_id, data, sender)
+            self._queue_sync_serve(self._serve_market, msg_id, data, sender)
         else:
-            self._start_confirmation(sender_addr,
-                                     lambda: self._serve_market(msg_id, data, sender))
+            self._start_confirmation(
+                sender_addr,
+                lambda: self._queue_sync_serve(self._serve_market, msg_id, data, sender))
 
     def _serve_market(self, msg_id: int, data: dict, sender: tuple):
         kinds = data.get("kinds", ["order", "fill"])
