@@ -28,6 +28,13 @@ chmod +x lapsecoin         lapsecoin.exe
 
 You'll be prompted for a signing passphrase, then the wallet is at `http://localhost:8335` and the block explorer at `http://localhost:8333`.
 
+For headless environments (Docker/systemd/CI, no GUI), set the passphrase non-interactively and pass `--no-gui`:
+
+```bash
+export LAPSECOIN_PASSPHRASE="your passphrase"
+./lapsecoin --no-gui
+```
+
 <details>
 <summary>How consensus works</summary>
 
@@ -111,7 +118,8 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LAPSECOIN_DRAW_WINDOW_SECONDS` | `10` | How long a height keeps accepting a better same-height block. Anything finishing inside it is treated as a tie and decided on proof rather than speed, so this is also how much of a speed advantage it takes to win a height outright. Work on the next height continues throughout, so this is not a pause |
+| `LAPSECOIN_SWAP_CONFIRM_DEPTH` | `2` | How many blocks must bury a LapseCoin payment before a swap treats it as settled |
+| `LAPSECOIN_SWAP_AUTO_ACCEPT_MIN_TRUST` | `0` | Minimum counterparty trust score for a fill request to auto-accept |
 
 **Upgrading from 0.6.2 or earlier with the privacy setting on?** That version created a second key file, `lapsecoin_key.json.privacy`, and advertised its address for peers to pay. Nodes no longer advertise an address at all, so nothing creates or uses that file any more, but yours still exists and may hold what peers already sent it. **Keep it, and back it up.** It is an ordinary key file with its own salt, so the same passphrase opens it on its own whenever you want those funds.
 </details>
@@ -135,21 +143,12 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 | `--releases-url` | *(project)* | Where the update notice points people |
 </details>
 
-<details>
-<summary>Requirements</summary>
-
-- Python 3.11+
-- chiavdf (VDF computation and verification)
-- liboqs-python (FALCON-512 signatures)
-- See `requirements.txt` for the full list
-</details>
-
 ## Exchanges
 
 No LAPSE exchange listings yet.
 
 In the meantime, [Discord](https://discord.gg/FP2d8JmK6r) hosts direct trades: 1 LAPSE for 25 SATOX. SATOX (Satoxcoin) is listed on the exchanges linked from the [satoxcoin repo](https://github.com/satoverse/satoxcoin).
-Market page allows p2p exchanges LAPSE <-> XLM.
+Market page allows p2p exchanges LAPSE to XLM.
 Default rate is 1 XLM for 1000 LAPSE.
 ---
 
