@@ -307,6 +307,28 @@ class TestFindForkPoint:
         fp = syncer._find_fork_point("1.2.3.4:9000", local)
         assert fp == 3
 
+    def test_shared_tip_resolves_in_a_single_round_trip(self):
+        # The common case (node behind but not actually forked, peer's
+        # chain simply continues past our tip) used to still cost a full
+        # binary search over the recent window to confirm the boundary a
+        # single probe at the tip already answers. This pins the actual
+        # round-trip count, not just the correct answer, since a
+        # regression back to "always binary search" would still return
+        # the right fp while quietly re-introducing the extra round trips.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(30)  # bigger than FORK_SEARCH_WINDOW, so a real
+                              # binary search here would need several probes
+
+        def fake_sync(peer, from_h, to_h, timeout):
+            return wrap_chain([local[from_h]])
+
+        udp.request_sync.side_effect = fake_sync
+        fp = syncer._find_fork_point("1.2.3.4:9000", local)
+        assert fp == len(local)
+        assert udp.request_sync.call_count == 1, (
+            f"expected one probe (the tip) for a fully-shared chain, "
+            f"got {udp.request_sync.call_count}")
+
     def test_diverged_at_block_1(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         local = chain_of(3)

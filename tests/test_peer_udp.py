@@ -939,6 +939,116 @@ class TestSyncServeConcurrencyBound:
         t.stop()
 
 
+class TestLiveForkSearch:
+    """Syncer._find_fork_point over two real UDPTransport instances on
+    real sockets, not mocked responses. The unit tests in test_syncer.py
+    pin the tip-first fast path's logic and round-trip count against a
+    fake that returns whatever a test tells it to; this is what actually
+    answers whether it holds up against a real peer answering over a
+    real (if local) network round trip, including the height arithmetic
+    (tip = len(local_chain) - 1) that a mock can't accidentally get
+    wrong the way a live index-out-of-range or off-by-one would surface
+    here as a real failure, not a silently-passing mock."""
+
+    def _server(self, port, chain):
+        from peerpool import PeerPool
+        pool = PeerPool()
+        t = peer_udp.UDPTransport(port=port, genesis_hash="cd" * 32,
+                                  on_block=lambda *a: None, on_tx=lambda *a: None,
+                                  on_peers=lambda *a: None, pool=pool)
+        t.set_chain_provider(
+            lambda f, to, c=chain: c[f:(to if to is not None else len(c) - 1) + 1])
+        t.start()
+        return t, pool
+
+    def _client(self, port):
+        from peerpool import PeerPool
+        pool = PeerPool()
+        t = peer_udp.UDPTransport(port=port, genesis_hash="cd" * 32,
+                                  on_block=lambda *a: None, on_tx=lambda *a: None,
+                                  on_peers=lambda *a: None, pool=pool)
+        t.start()
+        return t, pool
+
+    @staticmethod
+    def _chain(n, diverge_at=None):
+        """n blocks, heights 0..n-1. Past diverge_at (if given), hashes
+        are from a disjoint namespace, a real divergence rather than a
+        coincidental collision with whatever the server's own chain has
+        at those heights."""
+        out = []
+        for h in range(n):
+            prefix = "ee" if diverge_at is not None and h >= diverge_at else "00"
+            out.append({"height": h, "hash": f"{prefix}{h:062x}"})
+        return out
+
+    def test_client_behind_with_no_real_fork_resolves_in_one_probe(self):
+        # The common case this fast path exists for: client is simply
+        # behind, not forked, so the real fork point is its own tip + 1.
+        server_chain = self._chain(40)
+        server, _ = self._server(19501, server_chain)
+        client, _ = self._client(19502)
+        time.sleep(0.4)
+        try:
+            from syncer import Syncer
+            client_chain = server_chain[:10]  # identical first 10 blocks, client just behind
+            syncer = Syncer(pool=MagicMock(), udp=client)
+            fp = syncer._find_fork_point(f"127.0.0.1:{server.port}", client_chain)
+            assert fp == 10, f"expected the client's own tip + 1 (10), got {fp}"
+        finally:
+            server.stop(); client.stop()
+
+    def test_real_divergence_is_still_found_past_the_fast_path(self):
+        # The tip probe must fail here (client's tip genuinely doesn't
+        # match), falling through to the real binary search, which has
+        # to land on the actual divergence point over real round trips.
+        server_chain = self._chain(40)
+        server, _ = self._server(19503, server_chain)
+        client, _ = self._client(19504)
+        time.sleep(0.4)
+        try:
+            from syncer import Syncer
+            client_chain = self._chain(15, diverge_at=5)
+            client_chain[:5] = server_chain[:5]  # heights 0-4 genuinely shared
+            syncer = Syncer(pool=MagicMock(), udp=client)
+            fp = syncer._find_fork_point(f"127.0.0.1:{server.port}", client_chain)
+            assert fp == 5, f"expected the real divergence height (5), got {fp}"
+        finally:
+            server.stop(); client.stop()
+
+    def test_client_already_at_the_real_tip(self):
+        # Boundary: client's chain already matches the server's exactly,
+        # including the tip. There is no "below the tip" here at all;
+        # the tip probe alone has to be the whole search.
+        server_chain = self._chain(6)
+        server, _ = self._server(19505, server_chain)
+        client, _ = self._client(19506)
+        time.sleep(0.4)
+        try:
+            from syncer import Syncer
+            syncer = Syncer(pool=MagicMock(), udp=client)
+            fp = syncer._find_fork_point(f"127.0.0.1:{server.port}", list(server_chain))
+            assert fp == len(server_chain)
+        finally:
+            server.stop(); client.stop()
+
+    def test_client_is_only_genesis(self):
+        # tip = len(local_chain) - 1 at its smallest legal value (0): a
+        # brand-new node with nothing but genesis syncing against a real
+        # peer, the actual startup case this code exists to serve.
+        server_chain = self._chain(20)
+        server, _ = self._server(19507, server_chain)
+        client, _ = self._client(19508)
+        time.sleep(0.4)
+        try:
+            from syncer import Syncer
+            syncer = Syncer(pool=MagicMock(), udp=client)
+            fp = syncer._find_fork_point(f"127.0.0.1:{server.port}", server_chain[:1])
+            assert fp == 1
+        finally:
+            server.stop(); client.stop()
+
+
 class TestStrangerStillBootstraps:
     """Two live transports: the gate above must not cost a node that has
     never spoken to us its first sync. It is served on the original

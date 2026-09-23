@@ -461,15 +461,41 @@ class Syncer:
         """Binary search for the common ancestor, returning the first height
         that differs (so the caller fetches from there).
 
-        Searched over a recent window first, widening to the whole chain
-        only when the window's own base already diverges. Forks here are
-        shallow by construction, a lost race resolves within a block or
-        two, so searching from genesis every time charged O(log chain)
-        round trips, growing with chain length forever, to rediscover a
-        fork a few blocks back. Widening keeps the deep case correct; it
-        just stops being the price of the common one.
+        A single probe at our own tip first, before any binary search at
+        all: the ordinary case for a node that's simply behind, not
+        actually forked, is that the peer's chain agrees with ours all
+        the way to our own tip and only continues past it, which makes
+        the real fork point our tip + 1. Binary search still finds that
+        correctly, but only after confirming it as the boundary of a
+        search range, costing ~log2(FORK_SEARCH_WINDOW) round trips to
+        answer a question one direct probe already answers outright. The
+        tip is the one height a binary search never tries first (it
+        starts at the midpoint of its range), so nothing below was
+        already covering this case.
+
+        Only once that probe shows real divergence (the tip itself
+        doesn't match, or came back empty) does an actual search start:
+        a recent window first, widening to the whole chain only when the
+        window's own base already diverges. Forks here are shallow by
+        construction, a lost race resolves within a block or two, so
+        searching from genesis every time charged O(log chain) round
+        trips, growing with chain length forever, to rediscover a fork a
+        few blocks back. Widening keeps the deep case correct; it just
+        stops being the price of the common one.
         """
-        window_lo = max(0, len(local_chain) - 1 - FORK_SEARCH_WINDOW)
+        tip = len(local_chain) - 1
+        resp, _needed_retry = self._request_sync_with_retry(
+            peer, from_h=tip, to_h=tip, timeout=FORK_PROBE_TIMEOUT, deadline=deadline)
+        if resp is None:
+            log.debug("[sync] peer stopped answering the tip probe  peer=%s", peer)
+            return None
+        page = resp.get("chain") if isinstance(resp, dict) else None
+        if isinstance(page, list) and page and page[0].get("hash") == local_chain[tip]["hash"]:
+            return tip + 1
+        if _expired(deadline):
+            return None
+
+        window_lo = max(0, tip - FORK_SEARCH_WINDOW)
         try:
             if window_lo > 0:
                 match = self._highest_common(peer, local_chain, window_lo, deadline)
