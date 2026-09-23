@@ -10,9 +10,7 @@ See ChainState.is_better_than().
 import logging
 import time
 
-import math
-
-from peer_udp import MAX_SYNC_BLOCKS, MAX_CHUNK_TOTAL, CHUNK_SEND_PACING
+from peer_udp import MAX_SYNC_BLOCKS, SYNC_FETCH_TIMEOUT, FORK_PROBE_TIMEOUT
 
 log = logging.getLogger("ec.syncer")
 
@@ -47,10 +45,15 @@ FETCH_CHUNK_GROWTH = 1.3   # multiplicative increase after a clean, fast page
 FETCH_CHUNK_BACKOFF = 0.5  # multiplicative decrease after a retried page
 FETCH_CHUNK_SOFT_BACKOFF = 0.8  # decrease after a clean page that ran slow
 
-# SYNC_FETCH_TIMEOUT: per-page request timeout, in seconds.
+# SYNC_FETCH_TIMEOUT (imported): per-page request timeout, derived in
+# peer_udp.py from real numbers (see its own comment there) rather than
+# picked here, since every ingredient it's built from (the transport's
+# real send pacing, the sync page's real byte budget) lives in that file
+# already; re-deriving it here would just be a second copy to keep in
+# sync with the first.
 #
 # needed_retry (a request that got no answer at all inside this timeout)
-# is a hard signal: something failed outright, so the response above is a
+# is a hard signal: something failed outright, so the response below is a
 # hard halving. But by the time that happens the window already overshot
 # whatever the path could actually carry, found out by failing, and paid
 # a full timeout to learn it. A page that came back cleanly is not
@@ -70,27 +73,6 @@ FETCH_CHUNK_SOFT_BACKOFF = 0.8  # decrease after a clean page that ran slow
 # feels the path slowing down (bigger blocks, a loaded peer, a
 # congested link) and responds while still succeeding, rather than only
 # ever discovering the ceiling by falling through it.
-#
-# The timeout itself has to be checked against what a page can actually
-# contain, not picked on its own: a request can legitimately come back
-# holding a page up to SYNC_PAGE_BYTE_BUDGET (peer_udp.py), and
-# CHUNK_SEND_PACING there is a real, deliberately chosen number (a
-# datagram gap picked to avoid drops on NAT/internet paths, not derived
-# from anything else), which makes MAX_CHUNK_TOTAL * CHUNK_SEND_PACING
-# the floor on how long a peer's own send loop takes to emit a
-# full-budget page, before its bytes have even crossed the network. A
-# timeout shorter than that floor would fail every maximal page on
-# every peer, regardless of link speed or load, which is not congestion
-# being detected, just this number being wrong. FETCH_TIMEOUT_MARGIN
-# doubles that floor: room for one CHUNK_ACK_TIMEOUT-scale retransmit
-# round plus real internet RTT and queueing on top of the sender's own
-# pacing, not a second guess stacked on top of a worst case the way
-# SYNC_PAGE_BYTE_BUDGET's old halving was (see peer_udp.py); the
-# CHUNK_SEND_PACING floor here assumes zero network delay of its own,
-# so doubling it is covering time this number has not accounted for at
-# all yet, not re-covering ground already assumed away.
-FETCH_TIMEOUT_MARGIN = 2
-SYNC_FETCH_TIMEOUT = math.ceil(MAX_CHUNK_TOTAL * CHUNK_SEND_PACING * FETCH_TIMEOUT_MARGIN)
 FETCH_LATENCY_GROW_BELOW = 0.4
 FETCH_LATENCY_HOLD_BELOW = 0.75
 
@@ -381,7 +363,8 @@ class Syncer:
             mid = (lo + hi) // 2
             local_hash = local_chain[mid]["hash"]
 
-            resp, _needed_retry = self._request_sync_with_retry(peer, from_h=mid, to_h=mid, timeout=10)
+            resp, _needed_retry = self._request_sync_with_retry(
+                peer, from_h=mid, to_h=mid, timeout=FORK_PROBE_TIMEOUT)
             if resp is None:
                 log.debug("[sync] peer stopped answering mid fork search  peer=%s", peer)
                 raise _Unanswered()

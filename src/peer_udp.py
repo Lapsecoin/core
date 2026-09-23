@@ -68,6 +68,7 @@ Module-level:
 
 import ipaddress
 import logging
+import math
 import secrets
 import select
 import socket
@@ -177,7 +178,7 @@ MIN_PROTOCOL_VERSION = 2
 
 MAX_CHUNK_SIZE   = 1400   # bytes, safe below MTU
 RECV_TIMEOUT     = 2.0    # seconds select/recvfrom timeout
-SYNC_TIMEOUT     = 30.0   # seconds to wait for a full sync response
+MARKET_TIMEOUT   = 30.0   # seconds to wait for a market backfill response
 PING_TIMEOUT     = 8.0    # seconds to wait for PONG
 
 # LAN discovery: a small fixed port every node also listens on, separate
@@ -209,16 +210,25 @@ PUNCH_BURST_SPACING = 0.05
 # _serve_sync enforces directly against what a page actually contains, so
 # this number no longer has to be sized for the worst case (blocks near
 # BLOCK_SIZE_LIMIT, where even a handful would already blow the wire
-# budget) to be safe. It only has to be sized so a request spanning it
-# doesn't make _get_chain_fn read an absurd range before the byte trim
-# gets a chance to run, and so a forged request can't turn one datagram
-# into an unreasonable amount of database work even when every block in
-# range happens to be small. 5000 is generous for that: ordinary blocks
-# are far smaller than the consensus limit (see the byte-budget trim's
-# own reasoning), so a typical sync batches far more per round trip than
-# the old 500 allowed, and the byte trim still catches it if that
-# assumption is ever wrong for a given range.
-MAX_SYNC_BLOCKS   = 5000
+# budget) to be safe. Its only remaining job is bounding the cost of one
+# request before the byte trim gets a chance to run: the chain provider
+# (see main.py's _chain_provider) is an in-memory list slice, not a
+# database read, and per-block msgpack encoding inside the trim loop
+# measured at ~1.2us/block (200k encodes of a minimal block in ~0.25s),
+# so this was never protecting against expensive work, only bounding how
+# much of it one request can ask for. Request frequency is separately
+# capped by the per-source-IP token bucket (RATE_LIMIT_PER_SEC) before a
+# datagram ever reaches this handler at all.
+#
+# Sized so the byte budget, not this count, is what actually binds for
+# ordinary blocks: a maximally minimal block (bare header fields, no
+# transactions) measures around 833 bytes, so the trim loop already stops
+# on its own around SYNC_PAGE_BYTE_BUDGET // 833 blocks for anything that
+# small. This is set comfortably above that so genuinely tiny blocks
+# still batch as far as the byte budget actually allows, rather than
+# being cut off early by a count that was sized for a different (and, as
+# above, mistaken) worry.
+MAX_SYNC_BLOCKS = 25_000
 
 # Same reflection concern as MAX_SYNC_BLOCKS, for a market backfill: caps
 # how many orders and accepted fills one GET_MARKET can pull in a single
@@ -234,75 +244,105 @@ MAX_MARKET_FILLS = 5000
 # clear it or a block exactly at the consensus limit misses by a few bytes.
 MESSAGE_ENVELOPE_BYTES = 4096
 
-# The largest message this transport undertakes to carry, derived from the
-# consensus block limit rather than picked independently of it.
-#
-# These two numbers used to be chosen on their own, and they landed under
-# BLOCK_SIZE_LIMIT: at 2000 chunks the wire carried 2.8MB, real blocks
-# compress about 1.79x (FALCON signatures are random and do not compress),
-# so anything past roughly 5MB could be built and validated by everyone
-# and received by nobody. The receiver dropped it with no log line and the
-# builder had no way to find out, so half the block limit was unusable and
-# silently so. Deriving them here is what stops the two drifting apart
-# again: raise BLOCK_SIZE_LIMIT and the transport follows.
-#
-# Sized for the worst case rather than the typical one. Compression is not
-# guaranteed to help (a block full of signatures barely compresses, and a
-# hostile sender can make sure of it), so the chunk count assumes a payload
-# that did not shrink at all.
+# The size of one full block on the wire, worst case: BLOCK_SIZE_LIMIT is a
+# consensus choice (not this transport's to second-guess), and the chunk
+# math below assumes a payload that got no benefit from compression at
+# all, since compression is not guaranteed (a block full of FALCON
+# signatures barely compresses, and a hostile sender can make sure of it).
+# This used to also be treated as the ceiling for a GETSYNC reply, back
+# when the biggest thing this transport ever carried was one block; it
+# still governs single-block gossip (MT_BLOCK) sizing and the matching
+# decompression ceiling below, but see SYNC_PAGE_BYTE_BUDGET for why a
+# multi-block sync page is no longer tied to this number.
 MAX_MESSAGE_BYTES = BLOCK_SIZE_LIMIT + MESSAGE_ENVELOPE_BYTES
-MAX_CHUNK_TOTAL   = -(-MAX_MESSAGE_BYTES // MAX_CHUNK_SIZE)
 
-# MAX_MESSAGE_BYTES was derived for a single block at the consensus limit,
-# not for a multi-block sync page: a GETSYNC response is exactly the same
-# wire format (see _send_chunked), so it is bound by the same ceiling, but
-# nothing before this related that ceiling to how many blocks _serve_sync
-# was willing to put in one page. MAX_SYNC_BLOCKS alone cannot make that
-# safe: it bounds count, not bytes, so a page of blocks anywhere near
-# BLOCK_SIZE_LIMIT each would already blow the ceiling at a handful of
-# blocks, long before MAX_SYNC_BLOCKS was reached, exactly the "receiver
-# drops it, no log, builder never finds out" failure the paragraph above
-# describes, just moved from a single block to a page of them.
+# The wire format's own hard ceiling, not a policy choice: chunk_total is
+# packed as a signed 16-bit field (HDR_FMT below, "h"), so no message,
+# regardless of what any other constant here says, can ever be split into
+# more than this many pieces without changing that format. Every other
+# ceiling in this file is checked against it, not the other way around.
+CHUNK_TOTAL_WIRE_LIMIT = 2 ** 15 - 1   # 32767
+
+# Total bytes held across every in-flight reassembly, all senders together.
+# Real headroom, not a formula: this is memory this node is willing to
+# spend on partially-received messages at any one time, on hardware a node
+# operator is assumed to have (see the sync-page budget below for how it's
+# split). Nothing has ever capped how many partial messages are held at
+# once, so without this, a peer table could pin unbounded memory by
+# starting a message each and never finishing it. A refused chunk is not a
+# refused message: the sender's own ACK loop resends, and by then the
+# stale buffers have aged out.
+REASSEMBLY_MAX_BYTES = 64 * 1024 * 1024
+
+# How many raw (pre-compression) bytes _serve_sync will put in one GETSYNC
+# reply, independent of MAX_MESSAGE_BYTES: a sync page bundles many blocks,
+# not one, so tying it to a single block's worst case was never actually
+# about what a page needs, only what it happened to inherit by reusing the
+# same ceiling. MAX_SYNC_BLOCKS alone cannot make a page safe either: it
+# bounds count, not bytes, so a page of blocks anywhere near
+# BLOCK_SIZE_LIMIT each would already blow past any reasonable ceiling at
+# a handful of blocks, long before MAX_SYNC_BLOCKS was reached, exactly
+# the "receiver drops it, no log, builder never finds out" failure a
+# single block's own sizing already had to solve for, just moved to a
+# page of them.
 #
-# So _serve_sync trims the page to this many raw (pre-compression) bytes
-# rather than trusting a block count to be safe on its own. Bounded at the
-# full MAX_MESSAGE_BYTES, not some fraction of it: that number is already
-# the "assume compression doesn't help at all" worst case (see the
-# paragraph above), so trimming raw bytes against it already guarantees
-# what actually goes on the wire (compressed, so never larger than raw)
-# fits. Any further margin taken here on top would be spending that same
-# worst-case assumption twice over for no real payoff, only a smaller
-# page than the ceiling actually allows. MESSAGE_ENVELOPE_BYTES, folded
-# into MAX_MESSAGE_BYTES, covers what this sum does not itself count: the
-# small fixed overhead of the genesis hash and the wrapping dict around
-# the block list. Raw bytes are checked per block, not compressed,
-# because compressing incrementally to check would cost more than the
-# page itself; raw size is always >= compressed size, so trimming against
-# it is the conservative side of that gap, not an extra one.
-SYNC_PAGE_BYTE_BUDGET = MAX_MESSAGE_BYTES
+# Bounded by two real things, whichever is smaller:
+#   - A quarter of REASSEMBLY_MAX_BYTES, so one huge sync reply can't pin
+#     the whole node-wide reassembly budget and starve concurrent block
+#     gossip, market backfills, or sync replies to other peers sharing it.
+#     A quarter, not all of it or half: several of those can plausibly be
+#     in flight from different peers at once, and this is what keeps any
+#     one of them from being the one that matters.
+#   - CHUNK_TOTAL_WIRE_LIMIT itself, since no page can be split into more
+#     pieces than the header format can count regardless of memory.
+# No extra safety margin stacked on top of either: both are already real
+# ceilings, not estimates, so shrinking further would only be giving back
+# batching for no corresponding risk avoided.
+#
+# Backward compatible with a peer on 0.7.3 or earlier without any version
+# check, by construction rather than by coordination: _serve_sync never
+# sends more than a request's own to_h asks for, and a 0.7.3 client's own
+# fetch loop only ever requests its fixed old page size (50 blocks) in one
+# GETSYNC, regardless of how far behind it is, catching up over more
+# round trips instead of bigger ones. Fifty blocks lands nowhere near
+# either bound above in ordinary use, so raising this only ever changes
+# how much a peer that actually asks for more (this codebase's own
+# adaptive client) can receive per round trip; it can't make a reply to a
+# small, old-style request any bigger than it already was.
+SYNC_PAGE_BYTE_BUDGET = min(REASSEMBLY_MAX_BYTES // 4,
+                            CHUNK_TOTAL_WIRE_LIMIT * MAX_CHUNK_SIZE)
+
+# Chunk counts for the two real payload sizes above, each named so
+# anything that cares about one specifically (FORK_PROBE_TIMEOUT below
+# wants the single-block figure, not a sync page's) doesn't have to
+# recompute it or, worse, reach for whichever of the two MAX_CHUNK_TOTAL
+# happens to equal today.
+BLOCK_CHUNK_TOTAL = -(-MAX_MESSAGE_BYTES // MAX_CHUNK_SIZE)
+SYNC_CHUNK_TOTAL   = -(-SYNC_PAGE_BYTE_BUDGET // MAX_CHUNK_SIZE)
+
+# The reassembler's actual per-message acceptance ceiling has to cover
+# whichever of the two real payloads above is larger, since it's one
+# shared mechanism for every message type (block gossip, sync, market).
+# Raising what this node is willing to *accept* is always backward safe:
+# it can only ever accept a superset of what it accepted before, never
+# reject something a peer on an older version could already send.
+MAX_CHUNK_TOTAL = max(BLOCK_CHUNK_TOTAL, SYNC_CHUNK_TOTAL)
+assert MAX_CHUNK_TOTAL <= CHUNK_TOTAL_WIRE_LIMIT, \
+    "a raised ceiling above exceeds what the wire format can index"
 
 # Ceiling on decompressing an inbound payload, see _inflate. Two bounds,
 # because one number cannot do this job. The ratio stops a small payload
 # from expanding without limit, which is the actual bomb: an attacker has
 # to spend proportionally to what we allocate. The absolute cap stops a
 # large one, since a ratio alone would license hundreds of MB from a
-# message the wire already permits. Real traffic is nowhere near either: a
-# block expands about 1.8x and the best case measured, a page of
-# near-identical empty blocks, about 12x.
+# message the wire already permits. Sized to the larger of the two real
+# payloads above (a sync page, currently) for the same reason
+# MAX_CHUNK_TOTAL is: whichever message type is actually the biggest one
+# this transport carries is the one this has to cover. Real traffic is
+# nowhere near either bound: a block expands about 1.8x and the best case
+# measured, a page of near-identical empty blocks, about 12x.
 MAX_INFLATE_RATIO = 200                 # vs ~1.8x for a block, ~12x for a page
-MAX_INFLATE_BYTES = MAX_MESSAGE_BYTES
-
-# Total bytes held across every in-flight reassembly, all senders together.
-#
-# The per-message ceiling above is now large enough that it cannot be the
-# only bound: nothing has ever capped how many partial messages are held
-# at once, so at MAX_CHUNK_TOTAL a peer table could pin gigabytes by
-# starting a message each and never finishing it. That was survivable only
-# because a single message was capped at 2.8MB. Bounded here instead, so
-# raising the per-message ceiling costs memory that is still bounded in
-# total. A refused chunk is not a refused message: the sender's own ACK
-# loop resends, and by then the stale buffers have aged out.
-REASSEMBLY_MAX_BYTES = 64 * 1024 * 1024
+MAX_INFLATE_BYTES = max(MAX_MESSAGE_BYTES, SYNC_PAGE_BYTE_BUDGET)
 
 # Per-source-IP token bucket: caps how many datagrams/sec one address can
 # push into the worker pool, so a flood (PING or otherwise) from one sender
@@ -327,13 +367,54 @@ CHUNK_ACK_MAX_ROUNDS = 4
 # network behavior rather than derived from another constant already in
 # the codebase: sending a burst of same-size UDP datagrams back to back is
 # a known way to get some of them dropped by a NAT device or a path's own
-# queueing, well before any consensus-sized ceiling is reached. This is
-# also, as a side effect, a hard throttle on how fast this node will ever
-# emit a chunked message: MAX_CHUNK_SIZE / CHUNK_SEND_PACING is ~280KB/s
-# out of this send loop, regardless of how fast the peer's real link is,
-# so it is the floor other numbers derived from message size (see
-# SYNC_FETCH_TIMEOUT in syncer.py) have to be checked against.
+# queueing (confirmed against published measurements, not just this
+# file's own say-so: pacing between consecutive datagrams to avoid
+# burst-induced loss is standard practice in other chunked UDP protocols,
+# e.g. github.com/dmzoneill/Seedarr/issues/389,
+# github.com/ietf-wg-masque/draft-ietf-masque-connect-udp/issues/10).
+# This is also, as a side effect, a hard throttle on how fast this node
+# will ever emit a chunked message: MAX_CHUNK_SIZE / CHUNK_SEND_PACING is
+# ~280KB/s out of this send loop, regardless of how fast the peer's real
+# link is, so it is the floor SYNC_FETCH_TIMEOUT below is checked against.
 CHUNK_SEND_PACING = 0.005
+
+# How long a GETSYNC requester waits for one page before giving up on that
+# attempt (Syncer._request_sync_with_retry retries a few times before
+# treating the peer as unresponsive).
+#
+# Derived, not picked: SYNC_CHUNK_TOTAL * CHUNK_SEND_PACING is the real,
+# deterministic floor on how long a peer's own send loop takes to emit a
+# full-budget page, using the one number above that's actually chosen
+# against real network behavior rather than internal consistency. Built
+# from SYNC_CHUNK_TOTAL specifically, not MAX_CHUNK_TOTAL: they happen to
+# be equal today (the sync page is the larger of the two payloads), but a
+# GETSYNC reply's size is governed by SYNC_PAGE_BYTE_BUDGET regardless of
+# what BLOCK_SIZE_LIMIT does later, so this stays correct even if that
+# stops being true. A timeout shorter than this floor would fail every
+# maximal page on every peer, on any connection, which is not congestion
+# being detected, just this number being wrong (an earlier version of
+# this code set it to a flat 30s, well under that floor).
+# FETCH_TIMEOUT_MARGIN doubles it: room for one CHUNK_ACK_TIMEOUT-scale
+# retransmit round plus real internet RTT and queueing on top of the
+# sender's own pacing, which the pacing floor assumes zero of. Checked
+# against measured WAN packet loss (~0.1-2%, e.g. fasterdata.es.net and
+# PingER historical data): at SYNC_CHUNK_TOTAL chunks that's on the order
+# of tens of lost chunks, retransmitted at the same pacing in well under
+# a second, comfortably inside this margin.
+FETCH_TIMEOUT_MARGIN = 2
+SYNC_FETCH_TIMEOUT = math.ceil(SYNC_CHUNK_TOTAL * CHUNK_SEND_PACING * FETCH_TIMEOUT_MARGIN)
+
+# Same derivation, for the single-block probe the fork-point binary search
+# makes (Syncer._highest_common: from_h == to_h, one block per request).
+# This used to be a flat 10s, which is exactly the mistake SYNC_FETCH_TIMEOUT
+# above had at 30s, just for a smaller payload: a single block can still
+# legitimately reach BLOCK_SIZE_LIMIT, and BLOCK_CHUNK_TOTAL * CHUNK_SEND_PACING
+# alone is already several times that, before any network delay. Built from
+# BLOCK_CHUNK_TOTAL rather than MAX_CHUNK_TOTAL on purpose: a fork probe
+# only ever asks for one block, so sizing its timeout off the (larger)
+# sync-page ceiling would wait far longer than that request could ever
+# legitimately need to fail.
+FORK_PROBE_TIMEOUT = math.ceil(BLOCK_CHUNK_TOTAL * CHUNK_SEND_PACING * FETCH_TIMEOUT_MARGIN)
 
 # Return-routability confirmation for sync requests, see
 # UDPTransport._may_serve_sync. A confirmed address is remembered for a
@@ -1070,7 +1151,7 @@ class UDPTransport:
                        self._addr_tuple(addr))
 
     def request_sync(self, addr: str, from_h: int,
-                     to_h: int = None, timeout: float = SYNC_TIMEOUT):
+                     to_h: int = None, timeout: float = SYNC_FETCH_TIMEOUT):
         """Ask addr for chain[from_h:to_h]. Returns list of blocks or None."""
         msg_id = self._new_msg_id()
         pending = _PendingSync()
@@ -1090,7 +1171,7 @@ class UDPTransport:
         return None
 
     def request_market(self, addr: str, kinds=("order", "fill"),
-                       timeout: float = SYNC_TIMEOUT):
+                       timeout: float = MARKET_TIMEOUT):
         """Ask addr for its current order book and/or known accepted fills.
         Returns {"orders": [...], "fills": [...]} or None on timeout.
 
