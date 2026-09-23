@@ -119,6 +119,36 @@ SYNC_PAGES_PER_PASS = 2
 # peer has gone quiet but hasn't been struck yet.
 SYNC_INFO_TIMEOUT_SECONDS = 2.0
 
+# How long one check_and_sync pass may run before it has to hand control
+# back to the block-building loop that calls it, whatever state it's in.
+#
+# This used to reuse _echo_deadline_seconds() (2-10s, whatever this
+# node's own measured gossip-echo round trips currently look like), on
+# the reasoning that a sync pass holding the loop past that point costs
+# the same as a stalled gossip echo would: anyone who stemmed an item to
+# this node in the meantime gives up and re-floods, so time spent past
+# that deadline is time spent being a hole in propagation rather than a
+# correctness problem. That reasoning about the cost was fine; reusing
+# the echo deadline's actual value for it was not. It measures a single
+# lightweight confirmation round trip, and check_and_sync's own work is
+# not that: Syncer._find_fork_point makes several sequential real round
+# trips (a binary search, not one probe) before a single page is even
+# requested, and syncer.py's own retry logic now correctly refuses to
+# run past whatever's left of this budget (see Syncer._request_sync_with_retry),
+# where it used to silently ignore it. Once that stopped being silent, a
+# 2-10s budget failed most real fork searches outright under any real
+# network latency, not just adversarial ones, exactly the kind of
+# regression that looks like sync itself got slower.
+#
+# Sized instead for what the work here actually needs: room for several
+# real (not worst-case-sized) round trips plus at least one real page
+# fetch under ordinary conditions, while staying a small fraction of a
+# block-building cycle (which this node's own VDF rate already measures
+# in the tens of seconds to minutes, see Node._run_cycle), so a slow
+# sync pass still costs this node comparatively little of its own
+# gossip responsiveness even at this larger number.
+SYNC_BUDGET_SECONDS = 20.0
+
 # Echo deadline before a node has measured any of its own round trips (see
 # Node._echo_deadline_seconds). Only ever used on a node that has just
 # started and originated something before seeing anything come back, and
@@ -1339,11 +1369,13 @@ class Node:
             info_timeout=SYNC_INFO_TIMEOUT_SECONDS,
             local_work=self.cs.cumulative_iterations,
             max_pages=SYNC_PAGES_PER_PASS,
-            # Don't stay blocked longer than the network's own patience
-            # with us: past our measured echo deadline, anyone who stemmed
-            # an item to us has already given up and re-sent it, so time
-            # spent beyond that is time spent being a hole in propagation.
-            budget=self._echo_deadline_seconds(),
+            # Don't stay blocked longer than this: past it, anyone who
+            # stemmed an item to us in the meantime has likely given up
+            # and re-sent it, so time spent beyond it is time spent being
+            # a hole in propagation rather than a correctness problem.
+            # See SYNC_BUDGET_SECONDS for why this isn't the (much
+            # smaller, unrelated) gossip-echo deadline.
+            budget=SYNC_BUDGET_SECONDS,
         )
         if not adopted:
             # Nothing came of it, so put back whatever the node was saying
