@@ -10,34 +10,35 @@ See ChainState.is_better_than().
 import logging
 import time
 
+from peer_udp import MAX_SYNC_BLOCKS
+
 log = logging.getLogger("ec.syncer")
 
 FETCH_CHUNK = 50    # starting blocks per GETSYNC request, then adaptive
 # peer_udp.py now has real chunk-level ACK/retransmit for multi-chunk UDP
 # messages, so a single dropped datagram no longer silently fails an entire
 # page, the old rationale for keeping this very small (5) no longer
-# applies. 50 is chosen the way real sync protocols size a batch: well
-# below the hard caps (MAX_SYNC_BLOCKS=500 blocks per request, and
-# MAX_CHUNK_TOTAL=2000 chunks / ~2.8MB per reassembled message in
-# peer_udp.py), not matched to them, a block would need to average
-# ~56KB for 50 of them to approach that reassembly ceiling even under
-# heavy real transaction load (FALCON-512 signatures run large, but not
-# that large). Fewer round trips than before for a long initial sync,
-# with real recovery underneath if a chunk is still lost along the way.
+# applies. 50 is a modest starting point for real sync protocols; the
+# window below is what actually sizes the request as the sync runs.
 #
 # It only starts here: _fetch_and_apply adjusts it per sync (AIMD, the
 # same shape TCP uses for its congestion window). A page that lands clean
 # on the first try grows the next one; a page that needed a retry means
-# something on this path is already struggling, so the next one shrinks
-# instead of throwing a second, larger request at the same problem. This
-# is scoped to a single sync call and thrown away afterwards, not saved
-# per-peer, because the path (loss, the peer's own load, block size)
-# rather than the peer's identity is what changes between runs.
+# something on this path is already struggling (loss, peer load, or a
+# response too big to reassemble, all look the same from here: no
+# answer), so the next one shrinks instead of throwing a second, larger
+# request at the same problem. This is scoped to a single sync call and
+# thrown away afterwards, not saved per-peer, because the path is what
+# changes between runs, not the peer's identity.
 MIN_FETCH_CHUNK = 10
-MAX_FETCH_CHUNK = 300   # stays well under MAX_SYNC_BLOCKS=500, some margin
-                        # left for oversized real blocks before the
-                        # reassembly ceiling in peer_udp.py becomes a risk
-FETCH_CHUNK_GROWTH = 1.3   # additive-ish increase after a clean page
+# The server (_serve_sync in peer_udp.py) already clamps every response to
+# MAX_SYNC_BLOCKS blocks regardless of what's asked for, so growing past
+# it buys nothing, only a page short of what was requested. No separate
+# margin is carved out below that for large blocks: a response too big to
+# reassemble comes back as no answer, same as any other failed attempt,
+# and the backoff below reacts to that the same way it reacts to loss.
+MAX_FETCH_CHUNK = MAX_SYNC_BLOCKS
+FETCH_CHUNK_GROWTH = 1.3   # multiplicative increase after a clean page
 FETCH_CHUNK_BACKOFF = 0.5  # multiplicative decrease after a retried page
 
 # Extra attempts before treating an outright timeout/decode-failure (resp is
