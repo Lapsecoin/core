@@ -33,10 +33,13 @@ FETCH_CHUNK = 50    # starting blocks per GETSYNC request, then adaptive
 MIN_FETCH_CHUNK = 10
 # The server (_serve_sync in peer_udp.py) already clamps every response to
 # MAX_SYNC_BLOCKS blocks regardless of what's asked for, so growing past
-# it buys nothing, only a page short of what was requested. No separate
-# margin is carved out below that for large blocks: a response too big to
-# reassemble comes back as no answer, same as any other failed attempt,
-# and the backoff below reacts to that the same way it reacts to loss.
+# it buys nothing but a bigger, unnecessary request field: the page comes
+# back capped either way, and _fetch_and_apply advances by however many
+# blocks actually arrive rather than by how many were asked for, so this
+# is purely an efficiency ceiling, not a correctness one. A response too
+# big to reassemble (oversized real blocks) comes back as no answer, same
+# as any other failed attempt, and the backoff below reacts to that the
+# same way it reacts to loss.
 MAX_FETCH_CHUNK = MAX_SYNC_BLOCKS
 FETCH_CHUNK_GROWTH = 1.3   # multiplicative increase after a clean page
 FETCH_CHUNK_BACKOFF = 0.5  # multiplicative decrease after a retried page
@@ -213,7 +216,6 @@ class Syncer:
                 log.debug("[sync] pausing after %d pages, resuming next pass", pages)
                 break
             pages += 1
-            requested = chunk
             to_h = min(h + chunk - 1, remote_height)
             resp, needed_retry = self._request_sync_with_retry(peer, from_h=h, to_h=to_h, timeout=30)
             if resp is None:
@@ -238,9 +240,17 @@ class Syncer:
             else:
                 chunk = min(MAX_FETCH_CHUNK, max(chunk + 1, int(chunk * FETCH_CHUNK_GROWTH)))
 
-            if len(page) < requested:
-                break
-            h += requested
+            # Advance by what actually came back, not by what was asked
+            # for. _serve_sync silently truncates to MAX_SYNC_BLOCKS
+            # regardless of to_h, so a page shorter than requested is not
+            # on its own proof the peer's chain ends here, only proof of
+            # how much landed this round; the loop condition above is what
+            # decides completion. Trusting `requested` here would have
+            # made growing past the server's own cap a correctness bug,
+            # not just a wasted ask: the first server-truncated page would
+            # have looked like the end of the chain and stopped the sync
+            # early, silently leaving the node behind.
+            h += len(page)
         return applied_any
 
     def _request_sync_with_retry(self, peer, from_h, to_h, timeout):
