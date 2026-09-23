@@ -12,7 +12,7 @@ import time
 
 log = logging.getLogger("ec.syncer")
 
-FETCH_CHUNK = 50    # blocks per GETSYNC request
+FETCH_CHUNK = 50    # starting blocks per GETSYNC request, then adaptive
 # peer_udp.py now has real chunk-level ACK/retransmit for multi-chunk UDP
 # messages, so a single dropped datagram no longer silently fails an entire
 # page, the old rationale for keeping this very small (5) no longer
@@ -24,6 +24,21 @@ FETCH_CHUNK = 50    # blocks per GETSYNC request
 # heavy real transaction load (FALCON-512 signatures run large, but not
 # that large). Fewer round trips than before for a long initial sync,
 # with real recovery underneath if a chunk is still lost along the way.
+#
+# It only starts here: _fetch_and_apply adjusts it per sync (AIMD, the
+# same shape TCP uses for its congestion window). A page that lands clean
+# on the first try grows the next one; a page that needed a retry means
+# something on this path is already struggling, so the next one shrinks
+# instead of throwing a second, larger request at the same problem. This
+# is scoped to a single sync call and thrown away afterwards, not saved
+# per-peer, because the path (loss, the peer's own load, block size)
+# rather than the peer's identity is what changes between runs.
+MIN_FETCH_CHUNK = 10
+MAX_FETCH_CHUNK = 300   # stays well under MAX_SYNC_BLOCKS=500, some margin
+                        # left for oversized real blocks before the
+                        # reassembly ceiling in peer_udp.py becomes a risk
+FETCH_CHUNK_GROWTH = 1.3   # additive-ish increase after a clean page
+FETCH_CHUNK_BACKOFF = 0.5  # multiplicative decrease after a retried page
 
 # Extra attempts before treating an outright timeout/decode-failure (resp is
 # None) as authoritative. The UDP transport has no chunk-level retransmission
@@ -188,6 +203,7 @@ class Syncer:
         tail_so_far = []
         pages = 0
         h = fork_from
+        chunk = FETCH_CHUNK
         while h <= remote_height:
             if _expired(deadline):
                 log.debug("[sync] out of budget after %d pages  peer=%s", pages, peer)
@@ -196,8 +212,9 @@ class Syncer:
                 log.debug("[sync] pausing after %d pages, resuming next pass", pages)
                 break
             pages += 1
-            to_h = min(h + FETCH_CHUNK - 1, remote_height)
-            resp = self._request_sync_with_retry(peer, from_h=h, to_h=to_h, timeout=30)
+            requested = chunk
+            to_h = min(h + chunk - 1, remote_height)
+            resp, needed_retry = self._request_sync_with_retry(peer, from_h=h, to_h=to_h, timeout=30)
             if resp is None:
                 log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
                 break
@@ -215,19 +232,30 @@ class Syncer:
             if progress:
                 progress(fork_from + len(tail_so_far) - 1, remote_height)
 
-            if len(page) < FETCH_CHUNK:
+            if needed_retry:
+                chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_BACKOFF))
+            else:
+                chunk = min(MAX_FETCH_CHUNK, max(chunk + 1, int(chunk * FETCH_CHUNK_GROWTH)))
+
+            if len(page) < requested:
                 break
-            h += FETCH_CHUNK
+            h += requested
         return applied_any
 
     def _request_sync_with_retry(self, peer, from_h, to_h, timeout):
         """request_sync, retrying a bare timeout/decode-failure a few times
-        before giving up. See SYNC_REQUEST_RETRIES for why."""
-        for _attempt in range(SYNC_REQUEST_RETRIES + 1):
+        before giving up. See SYNC_REQUEST_RETRIES for why.
+
+        Returns (resp, needed_retry): needed_retry is True whenever the
+        first attempt didn't land, which _fetch_and_apply reads as a sign
+        of trouble on this path and reacts to by shrinking the next page,
+        independently of whether a later attempt still succeeded.
+        """
+        for attempt in range(SYNC_REQUEST_RETRIES + 1):
             resp = self.udp.request_sync(peer, from_h=from_h, to_h=to_h, timeout=timeout)
             if resp is not None:
-                return resp
-        return None
+                return resp, attempt > 0
+        return None, True
 
     def _find_fork_point(self, peer, local_chain, deadline=None):
         """Binary search for the common ancestor, returning the first height
@@ -283,7 +311,7 @@ class Syncer:
             mid = (lo + hi) // 2
             local_hash = local_chain[mid]["hash"]
 
-            resp = self._request_sync_with_retry(peer, from_h=mid, to_h=mid, timeout=10)
+            resp, _needed_retry = self._request_sync_with_retry(peer, from_h=mid, to_h=mid, timeout=10)
             if resp is None:
                 log.debug("[sync] peer stopped answering mid fork search  peer=%s", peer)
                 raise _Unanswered()
