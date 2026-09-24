@@ -1,5 +1,5 @@
-# Generated icons (produced by make icons from lapsecoin.svg)
-lapsecoin.png
+# Generated icons (produced by make icons, or on-demand by the server, from lapsecoin.svg)
+*.png
 favicon.ico
 
 # Build artifacts

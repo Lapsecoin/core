@@ -757,6 +757,19 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return send_file(os.path.join(_base_dir(), "lapsecoin.svg"),
                          mimetype="image/svg+xml", max_age=3600)
 
+    @app.route("/lapsecoin.png", endpoint=pfx+"icon_png")
+    def icon_png():
+        # Cached on disk next to lapsecoin.svg after the first request; later
+        # requests just serve that file instead of re-rasterizing every time.
+        icon_path = os.path.join(_base_dir(), "lapsecoin-200.png")
+        if not os.path.exists(icon_path):
+            try:
+                _generate_icon_png(icon_path)
+            except Exception as e:
+                log.warning("[api] could not generate lapsecoin-200.png: %s", e)
+                return jsonify(error="icon generation unavailable"), 503
+        return send_file(icon_path, mimetype="image/png", max_age=3600)
+
     # ---- UI pages --------------------------------------------------------
 
     @app.route("/", endpoint=pfx+"dashboard")
@@ -1183,6 +1196,20 @@ def _base_dir():
     if getattr(sys, "frozen", False):
         return sys._MEIPASS
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+
+def _generate_icon_png(icon_path):
+    """Rasterize lapsecoin.svg to a transparent 200x200 PNG at icon_path.
+
+    Runs at most once per fresh checkout/container: the /lapsecoin.png route
+    only calls this when the file isn't already on disk, and the result is
+    gitignored so it's never committed.
+    """
+    import cairosvg
+    svg_path = os.path.join(_base_dir(), "lapsecoin.svg")
+    cairosvg.svg2png(url=svg_path, write_to=icon_path,
+                      output_width=200, output_height=200)
+    log.info("[api] generated missing lapsecoin-200.png from svg")
 
 
 # Public app factory  (port 8333)
