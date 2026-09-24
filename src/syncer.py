@@ -49,6 +49,20 @@ FETCH_CHUNK_GROWTH = 1.3   # multiplicative increase after a clean, fast page
 FETCH_CHUNK_BACKOFF = 0.5  # multiplicative decrease after a retried page
 FETCH_CHUNK_SOFT_BACKOFF = 0.8  # decrease after a clean page that ran slow
 
+# Ceiling on how much validated-but-not-yet-decided tail (Syncer._peer_progress)
+# a single peer may keep us holding in memory across calls while we wait to
+# find out whether their claimed chain ever becomes better than ours. Without
+# this, a peer whose real chain keeps growing (honestly or not -- either way
+# every block in it still has to be a genuine, cryptographically proven
+# extension to get this far) could keep us accumulating an ever-larger
+# unapplied tail indefinitely. Set well above any gap this codebase expects to
+# hit in ordinary operation (FORK_SEARCH_WINDOW-scale reorgs, or a node offline
+# for a while) so it never fires in practice; a peer that manages to exceed it
+# anyway just falls back to the pre-resume behavior (re-fetch from fork_from
+# next time) instead of growing further, trading a known inefficiency for a
+# bounded memory cost.
+MAX_PENDING_TAIL_BLOCKS = 200_000
+
 # SYNC_FETCH_TIMEOUT (imported): per-page request timeout, derived in
 # peer_udp.py from real numbers (see its own comment there) rather than
 # picked here, since every ingredient it's built from (the transport's
@@ -166,6 +180,41 @@ class Syncer:
         # same reason (survives across the short passes a real sync is
         # actually made of), and cleared together with it.
         self._peer_latency = {}
+        # Whether the most recent check_and_sync call reached a real
+        # verdict on the peer it asked (adopted their chain, hit a genuinely
+        # invalid/unresponsive/malformed answer, or fully compared a claimed
+        # chain and found it not better) versus merely pausing mid-fetch
+        # (max_pages/budget) with everything seen so far still valid. Callers
+        # that penalize a peer for "asked and got nothing" (node.py strikes a
+        # hint that led nowhere) need this distinction: a peer with a
+        # genuinely longer chain that simply doesn't fit in one pass must not
+        # be punished the same as one that lied or went silent, or an honest
+        # peer could be banned before its own chain ever finishes arriving.
+        # See _fetch_and_apply and _sync_page_outcome (node.py) for the full
+        # story. Defaults to True (conclusive): every early-return path in
+        # check_and_sync below is already a definitive answer; only a
+        # paused, in-progress fetch ever sets this False.
+        self.last_attempt_conclusive = True
+        # Per-peer resumable fetch: a validated-but-not-yet-decided tail
+        # ("not better *yet*", see _fetch_and_apply) that a pass ran out of
+        # max_pages/budget before resolving. Without this, every subsequent
+        # call re-fetched the exact same blocks from fork_from, over and
+        # over, and threw them away again at the same pause point, making
+        # real progress depend entirely on the page size (_peer_chunk)
+        # eventually growing past the *entire* remaining gap in one page --
+        # which never happens for a gap larger than max_pages times however
+        # big a page can get. Persisting the tail itself means every call
+        # adds new blocks on top of what the last one already fetched,
+        # converging in a bounded number of calls for a gap of any size,
+        # not just ones small enough for the size-guessing game to win.
+        #
+        # Keyed by peer, value is {"fork_from", "anchor_hash", "tail", "h"}.
+        # anchor_hash pins the shared-history block this tail was built on
+        # top of (local_chain[fork_from-1]'s hash, or None at genesis) so a
+        # local reorg or a different fork point found on a later probe can
+        # never cause a stale tail to be resumed onto the wrong prefix: see
+        # _fetch_and_apply's use of it.
+        self._peer_progress = {}
 
     def check_and_sync(self, local_chain, apply_fn, peer=None, info_timeout=8.0,
                        local_work=None, max_pages=None, budget=None,
@@ -204,6 +253,7 @@ class Syncer:
         claiming a high tip costs an attacker nothing. Whatever is left
         undone is picked up next pass, from whoever answers.
         """
+        self.last_attempt_conclusive = True
         if peer is None:
             peer = self.pool.random()
         if not peer:
@@ -267,8 +317,11 @@ class Syncer:
         log.info("[sync] fetching blocks %d to %d from %s",
                  fork_from, remote_height, peer)
 
-        return self._fetch_and_apply(peer, local_chain, fork_from, remote_height,
-                                     apply_fn, max_pages, deadline, progress)
+        applied_any, conclusive = self._fetch_and_apply(
+            peer, local_chain, fork_from, remote_height,
+            apply_fn, max_pages, deadline, progress)
+        self.last_attempt_conclusive = conclusive
+        return applied_any
 
     def _fetch_and_apply(self, peer, local_chain, fork_from, remote_height, apply_fn,
                          max_pages=None, deadline=None, progress=None):
@@ -290,12 +343,48 @@ class Syncer:
         the already-in-memory ChainState instead of replaying the whole
         chain from genesis on every page.
 
-        Returns True if at least one page was applied.
+        apply_fn returns one of three things, not just a bool, and the
+        difference matters: True (this page's chain is valid and now
+        carries more proven work than we have -- applied), False (the chain
+        is invalid outright -- wrong genesis, a block that fails validation,
+        a replay error -- and fetching more of it is pointless, so this
+        stops the loop immediately), or None (valid so far, but doesn't yet
+        carry more proven work than we have). None must not be treated like
+        False: an honest peer with a genuinely longer chain can still fail
+        that comparison on an early, partial fetch of it, purely because
+        proven work is counted only from what has actually arrived, and
+        that peer's real lead does not always fit in one page. Stopping
+        there used to make an honestly-longer chain permanently
+        unreachable: every retry re-fetched the same early slice, compared
+        it against the same fully-caught-up local chain, lost the same way,
+        and gave up the same way, forever. None instead keeps the loop
+        going -- fetch the next page of the *same* claimed chain and try
+        the comparison again with more of it in hand -- right up to
+        remote_height, the one point where "still not better" is actually
+        a final answer rather than an artifact of not having looked far
+        enough yet.
+
+        Returns (applied_any, conclusive). applied_any is True if at least
+        one page was applied. conclusive is False only when the loop
+        stopped by pausing (max_pages/budget) while every page seen so far
+        was still valid (None or True) -- i.e. nothing here says the peer
+        did anything wrong, there just wasn't time/allowance to see enough
+        of their chain to decide. It is True for every other ending
+        (applied, hit remote_height and still not better, or stopped on an
+        actually bad/unresponsive/malformed page): all of those are real
+        verdicts on the peer's answer, which is what a caller (node.py's
+        strike-on-a-bad-hint logic) needs to tell apart from "ask again
+        later, nothing wrong so far".
+
+        A pause (conclusive=False) does not throw away what was fetched: see
+        Syncer._peer_progress. The next call for the same peer resumes from
+        where this one paused instead of re-fetching fork_from all over
+        again, so real progress is bounded by (gap / pages per call), not by
+        hoping a single page eventually grows to cover the whole gap.
         """
         applied_any = False
-        tail_so_far = []
+        conclusive = True
         pages = 0
-        h = fork_from
         chunk = self._peer_chunk.get(peer, FETCH_CHUNK)
         # Sliced once, not on every page: fork_from never changes inside
         # this loop, so re-slicing local_chain[:fork_from] each time was
@@ -305,12 +394,34 @@ class Syncer:
         # means a large, unchanging prefix re-copied on every one of
         # however many pages a full bootstrap takes.
         prefix = local_chain[:fork_from]
+
+        # Resume a still-pending tail left by an earlier, paused call for
+        # this same peer, provided it was built on exactly the shared
+        # history we still have: same fork point, and the block right
+        # before it hasn't changed underneath us (a local reorg since then
+        # would make the cached tail's prefix stale). Anything else --
+        # different peer, different fork point, local history moved -- and
+        # this starts clean, same as before resuming existed; resuming is
+        # an efficiency gain only, never something correctness depends on.
+        anchor_hash = local_chain[fork_from - 1]["hash"] if fork_from > 0 else None
+        cached = self._peer_progress.get(peer)
+        if (cached is not None
+                and cached["fork_from"] == fork_from
+                and cached["anchor_hash"] == anchor_hash):
+            tail_so_far = cached["tail"]
+            h = cached["h"]
+        else:
+            tail_so_far = []
+            h = fork_from
+
         while h <= remote_height:
             if _expired(deadline):
                 log.debug("[sync] out of budget after %d pages  peer=%s", pages, peer)
+                conclusive = False
                 break
             if max_pages is not None and pages >= max_pages:
                 log.debug("[sync] pausing after %d pages, resuming next pass", pages)
+                conclusive = False
                 break
             pages += 1
             to_h = min(h + chunk - 1, remote_height)
@@ -331,10 +442,12 @@ class Syncer:
                 # too-large size and fail the same way again, possibly
                 # indefinitely.
                 self._peer_chunk[peer] = MIN_FETCH_CHUNK
+                self._peer_progress.pop(peer, None)
                 break
             page = resp.get("chain") if isinstance(resp, dict) else None
             if not isinstance(page, list) or not page:
                 log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
+                self._peer_progress.pop(peer, None)
                 break
             # Checked before this page is trusted enough to even build
             # full_chain from, not left entirely to apply_fn to catch
@@ -351,17 +464,43 @@ class Syncer:
                 log.warning("[sync] page doesn't match request  peer=%s  "
                            "from_h=%d  to_h=%d  got_height=%s  got_len=%d",
                            peer, h, to_h, page[0].get("height"), len(page))
+                self._peer_progress.pop(peer, None)
                 break
 
             tail_so_far += page
             full_chain = prefix + tail_so_far
-            if not apply_fn(full_chain):
+            result = apply_fn(full_chain)
+            if result is False:
+                # A real verdict, not a "not yet": the chain itself is bad,
+                # so there is nothing to gain from fetching more of it.
                 log.warning("[sync] page rejected  peer=%s  from_h=%d", peer, h)
+                self._peer_progress.pop(peer, None)
                 break
-            applied_any = True
-            if progress:
-                progress(fork_from + len(tail_so_far) - 1, remote_height)
+            if result:
+                applied_any = True
+                if progress:
+                    progress(fork_from + len(tail_so_far) - 1, remote_height)
+                # Applied means committed: self.cs has already moved onto
+                # this tail (apply_fn's real commit happened inside it), so
+                # a *stale* copy of it has nothing left to resume from -- the
+                # next call computes a fresh fork_from against the new tip.
+                self._peer_progress.pop(peer, None)
+            else:
+                # None: validated fine, just not enough proven work yet.
+                # Not a failure of this page or this peer, only of how much
+                # of their chain has landed so far -- keep fetching further
+                # pages of the same claimed chain rather than giving up on
+                # it. See this method's docstring for why this can't be
+                # collapsed into the False case.
+                log.debug("[sync] page not yet better, continuing  peer=%s  "
+                         "up_to=%d", peer, fork_from + len(tail_so_far) - 1)
 
+            # The window-sizing step below reacts to transport/timing health
+            # (did the page land, how fast), which is independent of
+            # whether it happened to already be enough to win the fork
+            # choice comparison -- so it runs the same whether result was
+            # True or None, same as before this method could tell the two
+            # apart.
             if needed_retry:
                 chunk = max(MIN_FETCH_CHUNK, int(chunk * FETCH_CHUNK_BACKOFF))
             else:
@@ -422,7 +561,34 @@ class Syncer:
             # have looked like the end of the chain and stopped the sync
             # early, silently leaving the node behind.
             h += len(page)
-        return applied_any
+
+        if not conclusive and not applied_any and tail_so_far:
+            # Paused mid-fetch with nothing applied yet: keep what validated
+            # so far so the next call for this peer resumes from h instead
+            # of re-fetching fork_from..h all over again. Capped so a peer
+            # whose claimed chain keeps growing without ever resolving can't
+            # make us hold an unbounded amount of unapplied history; past
+            # the cap this just falls back to the old re-fetch-from-scratch
+            # behavior for that peer instead of growing further.
+            if len(tail_so_far) <= MAX_PENDING_TAIL_BLOCKS:
+                self._peer_progress[peer] = {
+                    "fork_from": fork_from,
+                    "anchor_hash": anchor_hash,
+                    "tail": tail_so_far,
+                    "h": h,
+                }
+            else:
+                self._peer_progress.pop(peer, None)
+            if len(self._peer_progress) > 1000:
+                # Same defensive bound as _peer_chunk/_peer_latency above:
+                # real peer counts stay in the hundreds (MAX_PEERS), so this
+                # guards against something upstream having gone wrong, not a
+                # cache with a real eviction policy worth building.
+                self._peer_progress.clear()
+        else:
+            self._peer_progress.pop(peer, None)
+
+        return applied_any, conclusive
 
     def _request_sync_with_retry(self, peer, from_h, to_h, timeout, deadline=None):
         """request_sync, retrying a bare timeout/decode-failure a few times

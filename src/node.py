@@ -1363,7 +1363,7 @@ class Node:
         self.status_line = f"checking {peer} for a better chain"
         adopted = self.syncer.check_and_sync(
             self.cs.chain,
-            lambda chain: self.apply_better_chain(chain)[0],
+            self._sync_page_outcome,
             peer=peer,
             progress=self._note_sync_progress,
             info_timeout=SYNC_INFO_TIMEOUT_SECONDS,
@@ -1389,13 +1389,23 @@ class Node:
             self._sync_hint = peer
             self._sync_hint_height = self.cs.height + 1
 
-        if hinted and not adopted:
-            # The hint was a block we could not validate. We don't have
-            # its parents, so acting on it is a bet, and this peer just
-            # lost it. Without a cost here, one crafted datagram buys an
-            # attacker a sync attempt, repeatable for as long as they care
-            # to send them. A strike is the existing price for a peer that
-            # wastes our time, and enough of them evict it (PeerPool).
+        if hinted and not adopted and self.syncer.last_attempt_conclusive:
+            # The hint was a block we could not validate, or a claimed
+            # chain that, once fully compared, still wasn't better. We
+            # don't have its parents on the first count, so acting on it is
+            # a bet, and this peer just lost it. Without a cost here, one
+            # crafted datagram buys an attacker a sync attempt, repeatable
+            # for as long as they care to send them. A strike is the
+            # existing price for a peer that wastes our time, and enough of
+            # them evict it (PeerPool).
+            #
+            # Excludes the case where the pass simply paused (max_pages or
+            # budget) partway through fetching an honest peer's genuinely
+            # longer chain: every page seen so far validated fine, there is
+            # just not enough of it landed yet to beat us, which needs more
+            # passes to resolve, not a strike. See
+            # Syncer.last_attempt_conclusive and _sync_page_outcome's None
+            # case for why that isn't the same event as a real failure.
             log.debug("[sync] hint from %s led nowhere", peer)
             self.pool.strike(peer)
         return adopted
@@ -1930,6 +1940,14 @@ class Node:
         base_state, base_iterations = cached
         return ChainState(remote_chain[:fork_point], base_state.snapshot(), base_iterations)
 
+    # Sentinel for the one rejection reason that isn't a verdict on the data
+    # itself: the tail validated fine, it just doesn't (yet) carry more
+    # proven work than we do. Shared between _evaluate_remote_chain (which
+    # raises it) and _sync_page_outcome (which has to tell it apart from a
+    # real invalid/malicious chain), so the two can't drift out of sync by
+    # one of them changing its wording.
+    _NOT_BETTER = "remote chain not better"
+
     def _evaluate_remote_chain(self, remote_chain):
         """Pure evaluation of a candidate remote chain. No committed state
         is mutated (the _recent_states cache is only ever read here).
@@ -2001,9 +2019,42 @@ class Node:
         if not remote_cs.is_better_than(self.cs):
             log.debug("[sync] remote chain not better  remote_h=%d  local_h=%d",
                       remote_cs.height, self.cs.height)
-            return False, "remote chain not better", fork_point, tail, None
+            return False, self._NOT_BETTER, fork_point, tail, None
 
         return True, None, fork_point, tail, remote_cs
+
+    def _sync_page_outcome(self, chain):
+        """Classify one candidate chain for the syncer's fetch loop.
+
+        Returns True (adopted: cryptographically valid and now carries more
+        proven work than we do, already committed), False (hard reject: the
+        chain itself is bad -- wrong genesis, a block that doesn't validate,
+        a replay error -- and the syncer must stop fetching this peer's
+        chain immediately), or None (the tail validated fine as far as it
+        goes, but doesn't carry more proven work than we do *yet*).
+
+        The None case exists because a real, honest peer with a genuinely
+        longer/heavier chain can still lose this comparison on an early,
+        partial fetch of it: cumulative proven work only counts what has
+        actually arrived so far, and a peer far enough ahead does not fit
+        in one page. That is not evidence of anything wrong with the data,
+        only that we haven't seen enough of it yet, so it must not be
+        treated the same as an actually-invalid chain: the syncer keeps
+        fetching further pages of the same claimed chain instead of giving
+        up on it, and node._sync_if_triggered does not penalize the peer
+        for it either (see its use of Syncer.last_attempt_conclusive).
+        Every additional block still has to be a genuine, cryptographically
+        proven extension to get this far, so there is no cheaper way for a
+        peer to keep triggering None than to actually possess that much
+        real proven work, the same cost the rest of fork choice already
+        assumes an attacker must pay.
+        """
+        ok, err = self.apply_better_chain(chain)
+        if ok:
+            return True
+        if err == self._NOT_BETTER:
+            return None
+        return False
 
     def _readd_valid_txs(self, txs, exclude_hashes, state):
         """Re-add unconfirmed txs to the mempool, each validated against

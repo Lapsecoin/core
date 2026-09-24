@@ -189,6 +189,148 @@ class TestCheckAndSync:
         assert apply_fn.call_count == 2
         assert result is True
 
+    def test_not_yet_better_page_keeps_fetching_next_page(self):
+        # The real production bug: a peer with a genuinely longer chain
+        # whose lead doesn't fit in one page must not be given up on after
+        # the first page. apply_fn returning None (valid so far, just not
+        # enough proven work yet) must not stop the loop the way False
+        # does -- it should fetch the next page of the same claimed chain
+        # and try again with more of it in hand.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(2)
+        page1 = tail_from(1, FETCH_CHUNK)
+        page2 = tail_from(FETCH_CHUNK + 1, 2)
+        responses = iter([wrap_chain(page1), wrap_chain(page2)])
+        udp.get_info.return_value = {"height": FETCH_CHUNK + 2, "tip_hash": ""}
+        udp.request_sync.side_effect = lambda *a, **kw: next(responses)
+        apply_fn = MagicMock(side_effect=[None, True])
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            result = syncer.check_and_sync(local, apply_fn=apply_fn)
+        assert apply_fn.call_count == 2, (
+            "a page that isn't yet better must not stop the fetch")
+        assert result is True
+        assert syncer.last_attempt_conclusive is True
+        assert "1.2.3.4:9000" not in syncer._peer_progress, (
+            "once applied there is nothing left to resume from a stale prefix")
+
+    def test_conclusively_not_better_after_seeing_the_whole_claimed_chain(self):
+        # Once the fetch has reached remote_height and it's still not
+        # better, that is a real, final verdict (not "ask again later"),
+        # so the attempt is conclusive even though nothing was adopted.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(2)
+        page = tail_from(1, 2)  # covers heights 1..2 == remote_height
+        udp.get_info.return_value = {"height": 2, "tip_hash": ""}
+        udp.request_sync.return_value = wrap_chain(page)
+        apply_fn = MagicMock(return_value=None)
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            result = syncer.check_and_sync(local, apply_fn=apply_fn)
+        assert result is False
+        assert syncer.last_attempt_conclusive is True
+
+    def test_pausing_mid_fetch_on_valid_data_is_inconclusive(self):
+        # max_pages cutting a pass short while every page seen so far was
+        # still valid (None) must be reported as inconclusive: nothing here
+        # says the peer did anything wrong, there just wasn't room in this
+        # pass to see enough of their chain. Callers (node.py) use this to
+        # avoid punishing an honest peer whose real lead needs more than
+        # one pass to arrive.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(2)
+        page1 = tail_from(1, FETCH_CHUNK)
+        udp.get_info.return_value = {"height": FETCH_CHUNK + 50, "tip_hash": ""}
+        udp.request_sync.return_value = wrap_chain(page1)
+        apply_fn = MagicMock(return_value=None)
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            result = syncer.check_and_sync(local, apply_fn=apply_fn, max_pages=1)
+        assert result is False
+        assert syncer.last_attempt_conclusive is False
+
+    def test_hard_reject_after_a_pause_is_still_conclusive(self):
+        # last_attempt_conclusive defaults True at the start of every call:
+        # a fresh attempt that hits a real invalid page must not somehow
+        # inherit "inconclusive" from a previous, unrelated pass.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        syncer.last_attempt_conclusive = False  # simulate a prior paused pass
+        local = chain_of(2)
+        udp.get_info.return_value = {"height": 5, "tip_hash": ""}
+        udp.request_sync.return_value = wrap_chain(tail_from(1, 2))
+        apply_fn = MagicMock(return_value=False)
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            result = syncer.check_and_sync(local, apply_fn=apply_fn)
+        assert result is False
+        assert syncer.last_attempt_conclusive is True
+
+    def test_paused_pass_resumes_instead_of_refetching_from_scratch(self):
+        # The actual bug in the first version of this fix: pausing after
+        # max_pages persisted only the page *size* across calls, not the
+        # fetched tail itself, so every call re-fetched fork_from..h all
+        # over again and threw it away at the same pause point. Real
+        # progress must not depend on the page size eventually growing to
+        # cover the *entire* gap in one page -- each call has to build on
+        # what the last one already fetched, however big the gap is.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(2)  # fork_from will be 1
+        remote_height = FETCH_CHUNK * 3
+        udp.get_info.return_value = {"height": remote_height, "tip_hash": ""}
+
+        seen_from_h = []
+
+        def fake_request_sync(peer, from_h, to_h, timeout):
+            seen_from_h.append(from_h)
+            n = min(to_h - from_h + 1, FETCH_CHUNK)
+            return wrap_chain(tail_from(from_h, n))
+
+        udp.request_sync.side_effect = fake_request_sync
+        apply_fn = MagicMock(return_value=None)  # never resolves; only checking fetch progress
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            for _ in range(3):
+                syncer.check_and_sync(local, apply_fn=apply_fn, max_pages=1)
+
+        assert seen_from_h == [1, 1 + FETCH_CHUNK, 1 + 2 * FETCH_CHUNK], (
+            f"expected each call to fetch new blocks, not re-fetch: got {seen_from_h}")
+
+    def test_resume_is_dropped_when_local_history_moves_underneath(self):
+        # A local reorg (or any change to the block the tail was anchored
+        # on) must not let a stale tail, built on a prefix that no longer
+        # exists, be resumed onto a different one. Safety net: resuming is
+        # an efficiency gain only, so on any doubt it must fall back to
+        # re-fetching, never guess.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local_a = chain_of(2)
+        udp.get_info.return_value = {"height": FETCH_CHUNK * 2, "tip_hash": ""}
+        seen_from_h = []
+
+        def fake_request_sync(peer, from_h, to_h, timeout):
+            seen_from_h.append(from_h)
+            return wrap_chain(tail_from(from_h, min(to_h - from_h + 1, FETCH_CHUNK)))
+
+        udp.request_sync.side_effect = fake_request_sync
+        apply_fn = MagicMock(return_value=None)
+        with patch.object(syncer, "_find_fork_point", return_value=1):
+            syncer.check_and_sync(local_a, apply_fn=apply_fn, max_pages=1)
+
+            local_b = [dict(local_a[0], hash="f" * 64)] + local_a[1:]
+            syncer.check_and_sync(local_b, apply_fn=apply_fn, max_pages=1)
+
+        assert seen_from_h == [1, 1], (
+            "a changed anchor must restart from fork_from, not resume a stale tail")
+
+    def test_pending_tail_beyond_cap_is_dropped(self):
+        # Bounds how much unapplied history a single peer can make us hold
+        # across calls while its claimed chain keeps growing without ever
+        # resolving -- a memory ceiling, not a behavior a normal sync should
+        # ever actually hit.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(2)
+        udp.get_info.return_value = {"height": 100, "tip_hash": ""}
+        udp.request_sync.return_value = wrap_chain(tail_from(1, 10))
+        apply_fn = MagicMock(return_value=None)
+        with patch.object(syncer, "_find_fork_point", return_value=1), \
+             patch("syncer.MAX_PENDING_TAIL_BLOCKS", 5):
+            syncer.check_and_sync(local, apply_fn=apply_fn, max_pages=1)
+        assert "1.2.3.4:9000" not in syncer._peer_progress
+
 
 # ---------------------------------------------------------------------------
 # 1b. The adaptive window: persistence, backoff, and request validation.

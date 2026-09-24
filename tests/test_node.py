@@ -1484,6 +1484,20 @@ class TestLyingPeers:
         node._sync_if_triggered()
         pool.strike.assert_not_called()
 
+    def test_a_hint_still_climbing_does_not_strike(self, node_env):
+        """A peer with a genuinely longer chain that simply doesn't fit in
+        one pass must not be punished the same as a peer that lied: while
+        the fetch is still working through their claimed chain (every page
+        seen so far valid, just not enough of it landed yet), the pass
+        pauses and reports not-adopted, but that is not evidence the peer
+        did anything wrong. See Syncer.last_attempt_conclusive."""
+        node, *_, syncer, pool, net_q = node_env
+        syncer.check_and_sync.return_value = False
+        syncer.last_attempt_conclusive = False
+        node._sync_hint = "1.2.3.4:1"
+        node._sync_if_triggered()
+        pool.strike.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 21. Background probe: blocks arriving is not proof we're on the best chain

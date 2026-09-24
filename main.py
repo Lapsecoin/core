@@ -614,7 +614,7 @@ def main():
         if pool.count() > 0:
             syncer.check_and_sync(
                 node.cs.chain,
-                lambda chain: node.apply_better_chain(chain)[0],
+                node._sync_page_outcome,
             )
 
         if use_gui:
