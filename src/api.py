@@ -759,16 +759,30 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/lapsecoin.png", endpoint=pfx+"icon_png")
     def icon_png():
+        return _serve_icon(200, 200, "png")
+
+    @app.route("/lapsecoin-<int:width>x<int:height>.<string:ext>",
+               endpoint=pfx+"icon_png_sized")
+    def icon_png_sized(width, height, ext):
+        return _serve_icon(width, height, ext)
+
+    def _serve_icon(width, height, ext):
+        ext = ext.lower()
+        mimetype = _ICON_MIMETYPES.get(ext)
+        if mimetype is None:
+            return jsonify(error="unsupported format"), 404
+        if not (1 <= width <= _ICON_MAX_DIM and 1 <= height <= _ICON_MAX_DIM):
+            return jsonify(error="size out of range"), 404
         # Cached on disk next to lapsecoin.svg after the first request; later
         # requests just serve that file instead of re-rasterizing every time.
-        icon_path = os.path.join(_base_dir(), "lapsecoin-200.png")
+        icon_path = os.path.join(_base_dir(), f"lapsecoin-{width}x{height}.{ext}")
         if not os.path.exists(icon_path):
             try:
-                _generate_icon_png(icon_path)
+                _generate_icon(icon_path, width, height, ext)
             except Exception as e:
-                log.warning("[api] could not generate lapsecoin-200.png: %s", e)
+                log.warning("[api] could not generate %s: %s", icon_path, e)
                 return jsonify(error="icon generation unavailable"), 503
-        return send_file(icon_path, mimetype="image/png", max_age=3600)
+        return send_file(icon_path, mimetype=mimetype, max_age=3600)
 
     # ---- UI pages --------------------------------------------------------
 
@@ -1198,18 +1212,41 @@ def _base_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 
-def _generate_icon_png(icon_path):
-    """Rasterize lapsecoin.svg to a transparent 200x200 PNG at icon_path.
+# Formats servable by /lapsecoin-WxH.ext, all reachable from cairosvg's PNG
+# output via Pillow (already a hard dependency) so no new packages are needed.
+_ICON_MIMETYPES = {
+    "png": "image/png", "webp": "image/webp", "bmp": "image/bmp",
+    "ico": "image/x-icon", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+}
+_ICON_MAX_DIM = 2048  # generous upper bound; keeps the route from being an easy way to burn CPU/disk
 
-    Runs at most once per fresh checkout/container: the /lapsecoin.png route
-    only calls this when the file isn't already on disk, and the result is
+
+def _generate_icon(icon_path, width, height, ext):
+    """Rasterize lapsecoin.svg to a transparent WxH image at icon_path.
+
+    Runs at most once per size/format per fresh checkout/container: callers
+    only invoke this when the file isn't already on disk, and the result is
     gitignored so it's never committed.
     """
     import cairosvg
+    from io import BytesIO
+    from PIL import Image
+
     svg_path = os.path.join(_base_dir(), "lapsecoin.svg")
-    cairosvg.svg2png(url=svg_path, write_to=icon_path,
-                      output_width=200, output_height=200)
-    log.info("[api] generated missing lapsecoin-200.png from svg")
+    png_bytes = cairosvg.svg2png(url=svg_path, output_width=width, output_height=height)
+    if ext == "png":
+        with open(icon_path, "wb") as f:
+            f.write(png_bytes)
+    else:
+        img = Image.open(BytesIO(png_bytes)).convert("RGBA")
+        if ext in ("jpg", "jpeg", "bmp"):
+            # These formats have no alpha channel; flatten onto white rather
+            # than leaving transparency to be interpreted arbitrarily.
+            flattened = Image.new("RGB", img.size, (255, 255, 255))
+            flattened.paste(img, mask=img.getchannel("A"))
+            img = flattened
+        img.save(icon_path, format="ICO" if ext == "ico" else ext.upper())
+    log.info("[api] generated missing %s from svg", os.path.basename(icon_path))
 
 
 # Public app factory  (port 8333)
