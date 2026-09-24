@@ -49,19 +49,29 @@ FETCH_CHUNK_GROWTH = 1.3   # multiplicative increase after a clean, fast page
 FETCH_CHUNK_BACKOFF = 0.5  # multiplicative decrease after a retried page
 FETCH_CHUNK_SOFT_BACKOFF = 0.8  # decrease after a clean page that ran slow
 
-# Ceiling on how much validated-but-not-yet-decided tail (Syncer._peer_progress)
-# a single peer may keep us holding in memory across calls while we wait to
-# find out whether their claimed chain ever becomes better than ours. Without
-# this, a peer whose real chain keeps growing (honestly or not -- either way
-# every block in it still has to be a genuine, cryptographically proven
-# extension to get this far) could keep us accumulating an ever-larger
-# unapplied tail indefinitely. Set well above any gap this codebase expects to
-# hit in ordinary operation (FORK_SEARCH_WINDOW-scale reorgs, or a node offline
-# for a while) so it never fires in practice; a peer that manages to exceed it
-# anyway just falls back to the pre-resume behavior (re-fetch from fork_from
-# next time) instead of growing further, trading a known inefficiency for a
-# bounded memory cost.
-MAX_PENDING_TAIL_BLOCKS = 200_000
+# Ceilings on how much validated-but-not-yet-decided tail (Syncer._peer_progress)
+# we keep in memory across calls while waiting to find out whether a peer's
+# claimed chain ever becomes better than ours. Two separate bounds, because a
+# per-peer cap alone is not enough: MAX_PEERS (params.py) lets a node hold up
+# to 125 concurrent peer connections, and every one of them can independently
+# earn its own pending tail (a peer can serve the exact same publicly-known
+# chain data as another peer -- copying already-mined blocks costs nothing
+# like producing them does, even though _sync_page_outcome's per-block VDF
+# check is real). A per-peer-only cap sized for one honest peer's worth of
+# catch-up would, multiplied across a full set of connections, add up to an
+# amount of buffered chain data no single peer could ever have justified on
+# its own.
+#
+# MAX_PENDING_TAIL_BLOCKS bounds one peer's contribution; MAX_TOTAL_PENDING_TAIL_BLOCKS
+# bounds the sum across every peer combined, which is the number that actually
+# determines memory use. Both are set comfortably above any gap expected in
+# ordinary operation (a node offline for a while, or a FORK_SEARCH_WINDOW-scale
+# reorg) so neither fires in practice; past either, a peer's tail is simply not
+# kept, falling back to the pre-resume behavior (re-fetch from fork_from next
+# time) for that peer -- a known inefficiency, never a correctness issue, and
+# never an unbounded one.
+MAX_PENDING_TAIL_BLOCKS = 20_000
+MAX_TOTAL_PENDING_TAIL_BLOCKS = 50_000
 
 # SYNC_FETCH_TIMEOUT (imported): per-page request timeout, derived in
 # peer_udp.py from real numbers (see its own comment there) rather than
@@ -565,12 +575,18 @@ class Syncer:
         if not conclusive and not applied_any and tail_so_far:
             # Paused mid-fetch with nothing applied yet: keep what validated
             # so far so the next call for this peer resumes from h instead
-            # of re-fetching fork_from..h all over again. Capped so a peer
-            # whose claimed chain keeps growing without ever resolving can't
-            # make us hold an unbounded amount of unapplied history; past
-            # the cap this just falls back to the old re-fetch-from-scratch
-            # behavior for that peer instead of growing further.
-            if len(tail_so_far) <= MAX_PENDING_TAIL_BLOCKS:
+            # of re-fetching fork_from..h all over again. Bounded two ways:
+            # per peer (MAX_PENDING_TAIL_BLOCKS) and, because up to MAX_PEERS
+            # connections can each independently earn their own pending
+            # tail, in aggregate across every peer combined
+            # (MAX_TOTAL_PENDING_TAIL_BLOCKS) -- see those constants for why
+            # a per-peer cap alone isn't enough. Past either bound this just
+            # falls back to the old re-fetch-from-scratch behavior for this
+            # peer instead of growing further.
+            others_total = sum(len(v["tail"]) for k, v in self._peer_progress.items()
+                               if k != peer)
+            if (len(tail_so_far) <= MAX_PENDING_TAIL_BLOCKS
+                    and others_total + len(tail_so_far) <= MAX_TOTAL_PENDING_TAIL_BLOCKS):
                 self._peer_progress[peer] = {
                     "fork_from": fork_from,
                     "anchor_hash": anchor_hash,

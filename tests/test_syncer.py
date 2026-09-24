@@ -331,6 +331,40 @@ class TestCheckAndSync:
             syncer.check_and_sync(local, apply_fn=apply_fn, max_pages=1)
         assert "1.2.3.4:9000" not in syncer._peer_progress
 
+    def test_pending_tail_bounded_in_aggregate_across_peers(self):
+        # A per-peer cap alone is not enough: up to MAX_PEERS connections can
+        # each independently earn their own pending tail, and every one of
+        # them can cheaply replay the exact same already-existing chain data
+        # (copying mined blocks costs nothing like mining them did). Without
+        # an aggregate bound, N peers each holding a per-peer-legal tail adds
+        # up to N times the memory a single peer's contribution alone would
+        # justify. A second peer's tail must not be kept once it would push
+        # the combined total across every peer over the aggregate ceiling,
+        # even though its own tail is well within the per-peer cap.
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000", "5.6.7.8:9000"])
+        local = chain_of(2)
+
+        with patch("syncer.MAX_PENDING_TAIL_BLOCKS", 100), \
+             patch("syncer.MAX_TOTAL_PENDING_TAIL_BLOCKS", 12):
+            udp.get_info.return_value = {"height": 100, "tip_hash": ""}
+            udp.request_sync.return_value = wrap_chain(tail_from(1, 10))
+            apply_fn = MagicMock(return_value=None)
+            with patch.object(syncer, "_find_fork_point", return_value=1):
+                syncer.check_and_sync(local, apply_fn=apply_fn,
+                                      peer="1.2.3.4:9000", max_pages=1)
+                assert "1.2.3.4:9000" in syncer._peer_progress, (
+                    "first peer's tail (10 blocks) is within both caps")
+
+                udp.request_sync.return_value = wrap_chain(tail_from(1, 5))
+                syncer.check_and_sync(local, apply_fn=apply_fn,
+                                      peer="5.6.7.8:9000", max_pages=1)
+
+        assert "5.6.7.8:9000" not in syncer._peer_progress, (
+            "10 (first peer, within its own cap) + 5 (second peer, also "
+            "within its own cap) = 15 exceeds the aggregate cap of 12, so "
+            "the second peer's tail must not be kept even though neither "
+            "peer alone hit the per-peer cap")
+
 
 # ---------------------------------------------------------------------------
 # 1b. The adaptive window: persistence, backoff, and request validation.
