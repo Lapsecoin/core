@@ -1,5 +1,13 @@
-# Generated icons (produced by make icons, or on-demand by the server, from lapsecoin.svg)
-*.png
+# Generated icons (produced by make icons, or on-demand by the server, from
+# lapsecoin.svg): the plain lapsecoin.png plus any lapsecoin-WxH.ext variant
+# the /lapsecoin-WxHxext route generates.
+lapsecoin.png
+lapsecoin-*.png
+lapsecoin-*.webp
+lapsecoin-*.bmp
+lapsecoin-*.ico
+lapsecoin-*.jpg
+lapsecoin-*.jpeg
 favicon.ico
 
 # Build artifacts
