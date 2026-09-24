@@ -24,6 +24,10 @@ COPY requirements.txt .
 # chiavdf's build pulls in libtorrent via apt above; pip install picks up the
 # system libtorrent module since apt provides python3-libtorrent, not a wheel.
 RUN pip install --no-cache-dir -r requirements.txt
+# cairosvg is intentionally not in requirements.txt (it broke source installs
+# on machines without libcairo/a compiler); install it explicitly here since
+# the image already has libcairo2, so the /lapsecoin.png icon routes work.
+RUN pip install --no-cache-dir cairosvg>=2.7
 
 COPY . .
 ENV PYTHONPATH=/app/src
