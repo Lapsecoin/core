@@ -109,7 +109,6 @@ log = logging.getLogger("ec.api")
 # Nodes keep full history, so both the block list and an address's
 # transaction history are paginated rather than truncated to "recent N".
 BLOCKS_PER_PAGE  = 8
-PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
 DASHBOARD_TXS_PER_PAGE = 6
 BOARD_PER_PAGE = 20
@@ -129,12 +128,16 @@ CLAIMED_GRAPH_LIMIT = 60
 # board and a real memo can't be mistaken for one either.
 BOARD_MEMO_TAG = "[board] "
 
-# Burned per post. 1 would already satisfy tx.py's "amount must be
-# positive" floor, but 2 is deliberate: it keeps a post from ever reading
-# as a no-op edge case (an output of the smallest possible unit) and
-# keeps the burn visibly nonzero at a glance rather than the bare minimum
-# the protocol would technically still accept.
-BOARD_POST_AMOUNT = 2
+# Burned per post, always, regardless of congestion.
+BOARD_POST_AMOUNT = 1
+
+# Floor on the fee half of a post, enforced server-side (not just a
+# default the form suggests): fee is free to fall to 0 on an ordinary
+# send since the protocol allows it, but a board post's total should
+# never be able to drop to the bare 1-tick burn with nothing paid to
+# clear it. 1 is the floor for an empty mempool; real congestion can
+# call for more, same as any other transaction's fee.
+BOARD_POST_MIN_FEE = 1
 
 
 
@@ -1053,19 +1056,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/network", endpoint=pfx+"network")
     def network():
-        all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
-        total_pages = max(-(-len(all_rows) // PEERS_PER_PAGE), 1)
-        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
-        start = (page - 1) * PEERS_PER_PAGE
-        end   = start + PEERS_PER_PAGE
-        self_height = node.view.chain[-1].get("height", 0)
-        return render_template("network.html", title="Network", rows=all_rows[start:end],
-                               peer_count=len(all_rows),
-                               page=page, total_pages=total_pages,
-                               page_window=_pagination_window(page, total_pages),
-                               has_prev=page > 1, has_next=end < len(all_rows),
-                               self_height=self_height,
-                               self_version=LOCAL_VERSION, self_addr=_self_external_addr())
+        # The graph is the whole page now; peer_count is all it needs
+        # from here, the rest (self info, per-peer detail) comes live
+        # from /api/peers.
+        return render_template("network.html", title="Network",
+                               peer_count=pool.count())
 
     @app.route("/peers", endpoint=pfx+"peers_redirect")
     def peers_redirect():
@@ -1076,7 +1071,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/board", endpoint=pfx+"board")
     def board():
         extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
-                     message_value="", fee_value="")
+                     message_value="", fee_value=str(BOARD_POST_MIN_FEE))
         if csrf_token:   # private app only: composing needs a fee suggestion
             extra["fees"] = fee_estimate(node)
         page = request.args.get("page", 1, type=int) or 1
@@ -1165,18 +1160,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/api/peers", endpoint=pfx+"api_peers")
     def api_peers():
         all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
-        total_pages = max(-(-len(all_rows) // PEERS_PER_PAGE), 1)
-        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
-        start = (page - 1) * PEERS_PER_PAGE
-        end   = start + PEERS_PER_PAGE
         return jsonify({
             "self": _self_info(),
             "peer_count": len(all_rows),
-            "peers": _peer_dicts(all_rows[start:end]),
-            # The topology graph shows the whole known set, not just this
-            # page: MAX_PEERS (params.py) bounds it at 125, small enough to
-            # send in one response and small enough for a force layout to
-            # lay out smoothly.
+            # The whole known set: MAX_PEERS (params.py) bounds it at 125,
+            # small enough to send in one response and lay out smoothly.
             "graph_peers": _peer_dicts(all_rows),
             # What this node's held peers have themselves claimed about
             # their own peers, most recent list per introducer, including
@@ -1400,6 +1388,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
                                  BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
+                                 BOARD_POST_MIN_FEE=BOARD_POST_MIN_FEE,
                                  MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     # Deliberately not touching the werkzeug logger. main.py already sets it
@@ -1453,6 +1442,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
                                  BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
+                                 BOARD_POST_MIN_FEE=BOARD_POST_MIN_FEE,
                                  MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     _close_db_after_request(app)
@@ -1611,7 +1601,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     def board_post():
         page = request.args.get("page", 1, type=int) or 1
         message    = request.form.get("message", "").strip()
-        fee_raw    = request.form.get("fee", "0").strip()
+        fee_raw    = request.form.get("fee", str(BOARD_POST_MIN_FEE)).strip()
         passphrase = request.form.get("passphrase", "").strip()
         extra = dict(csrf_token=csrf_token, fees=fee_estimate(node),
                      compose_err="", compose_ok="",
@@ -1624,11 +1614,12 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
             return fail("Session expired; reload the page and try again.")
         try:
-            fee = int(fee_raw or "0")
-            if fee < 0:
+            fee = int(fee_raw or str(BOARD_POST_MIN_FEE))
+            if fee < BOARD_POST_MIN_FEE:
                 raise ValueError
         except ValueError:
-            return fail("Fee must be a non-negative integer.")
+            return fail(f"Fee must be at least {BOARD_POST_MIN_FEE} "
+                        f"({BOARD_POST_AMOUNT} burned + {BOARD_POST_MIN_FEE} fee minimum).")
         if not message:
             return fail("Write something to post.")
         memo = BOARD_MEMO_TAG + message

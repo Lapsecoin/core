@@ -2,8 +2,8 @@
 {% block content %}
 <h2>Board</h2>
 <p class="stat-sub" style="margin:-.2rem 0 .6rem">
-  Public and permanent: every post is a real transaction, plaintext, visible to anyone reading the chain,
-  burning {{ BOARD_POST_AMOUNT }} ticks to the <a href="/address?addr={{ BURN_ADDRESS }}">burn address</a> to post.
+  Public, permanent, on-chain. Posting burns {{ BOARD_POST_AMOUNT }} tick
+  (<a href="/address?addr={{ BURN_ADDRESS }}">burn address</a>) plus a fee, {{ BOARD_POST_MIN_FEE }} minimum.
 </p>
 
 <div class="card">
@@ -22,7 +22,8 @@
       <div class="board-compose-row board-compose-sub">
         <input type="password" name="passphrase" placeholder="Passphrase" autocomplete="off" style="flex:1 1 160px">
         <label>Fee
-          <input type="number" name="fee" id="board-fee" min="0" value="{{ fee_value or 0 }}" style="width:5rem">
+          <input type="number" name="fee" id="board-fee" min="{{ BOARD_POST_MIN_FEE }}"
+                 value="{{ fee_value or BOARD_POST_MIN_FEE }}" style="width:5rem">
         </label>
         {% if fees and fees.pending %}
         <span class="stat-sub" style="margin:0" title="Ticks per byte a transaction needs right now to clear the next block.">
@@ -125,19 +126,23 @@
   // disabled rather than silently truncated once over, so what's typed
   // is always exactly what gets sent.
   const msgInput = document.getElementById("board-message");
-  if (msgInput) {
+  const feeInput = document.getElementById("board-fee");
+  if (msgInput && feeInput) {
     const maxBytes = {{ MAX_MEMO_BYTES - tag_len }};
+    const minFee = {{ BOARD_POST_MIN_FEE }};
     const counter = document.getElementById("board-msg-counter");
     const sendBtn = document.getElementById("board-send");
     function refreshCounter() {
       const bytes = new TextEncoder().encode(msgInput.value).length;
       const empty = msgInput.value.trim() === "";
       const over = bytes > maxBytes;
+      const feeLow = (parseInt(feeInput.value, 10) || 0) < minFee;
       counter.textContent = bytes + " / " + maxBytes;
       counter.style.color = over ? "var(--red, #c0392b)" : "var(--muted)";
-      if (sendBtn) sendBtn.disabled = empty || over;
+      if (sendBtn) sendBtn.disabled = empty || over || feeLow;
     }
     msgInput.addEventListener("input", refreshCounter);
+    feeInput.addEventListener("input", refreshCounter);
     refreshCounter();
   }
 

@@ -50,60 +50,6 @@
   </div>
 </div>
 
-<div class="card">
-  <div class="table-wrap">
-  <table class="stacked-wide">
-    <colgroup>
-      <col style="width:26%"><col style="width:11%">
-      <col style="width:13%"><col style="width:18%"><col style="width:14%"><col style="width:18%">
-    </colgroup>
-    <thead><tr><th>Address</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th><th>Via</th></tr></thead>
-    <tbody id="peers-tbody">
-      <tr style="font-weight:600">
-        <td data-label="Address" class="hash-short" style="color:var(--live)">{{ self_addr or "self" }}</td>
-        <td data-label="Height">{{ self_height }}</td>
-        <td data-label="Version">{{ self_version }}</td>
-        <td data-label="Last seen">just now</td>
-        <td data-label="Status" style="color:var(--green)">active</td>
-        <td data-label="Via">—</td>
-      </tr>
-    {% if rows %}
-      {% for addr, last_seen, active, height, version, http_reachable, introduced_by in rows %}
-      <tr>
-        {% if http_reachable %}
-        <td data-label="Address" class="hash-short"><a class="peer-link" href="http://{{ addr }}" target="_blank" rel="noopener"
-            title="This peer's web UI answered an HTTP check within the last 10 minutes">{{ addr }}</a></td>
-        {% else %}
-        <td data-label="Address" class="hash-short">{{ addr }}</td>
-        {% endif %}
-        <td data-label="Height">{{ height if height is not none else "?" }}</td>
-        <td data-label="Version" style="color:{{ 'var(--muted)' if not version }}">{{ version if version else "unknown" }}</td>
-        <td data-label="Last seen" data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
-        <td data-label="Status" style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
-        <td data-label="Via" class="hash-short" style="color:var(--muted)" title="{{ introduced_by if introduced_by else 'DHT, swarm lookup, or added directly' }}">
-          {{ (introduced_by[:15] + "…" if introduced_by|length > 15 else introduced_by) if introduced_by else "direct" }}
-        </td>
-      </tr>
-      {% endfor %}
-    {% else %}
-      <tr><td colspan="6" style="color:var(--muted);text-align:center">No peers yet</td></tr>
-    {% endif %}
-    </tbody>
-  </table>
-  </div>
-</div>
-{% if total_pages > 1 %}
-<nav class="pager" aria-label="Pagination">
-  {% if has_prev %}<a href="/network?page={{ page - 1 }}">Prev</a>{% endif %}
-  {% for p in page_window %}
-    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
-    {% elif p == page %}<span class="pager-current">{{ p }}</span>
-    {% else %}<a href="/network?page={{ p }}">{{ p }}</a>
-    {% endif %}
-  {% endfor %}
-  {% if has_next %}<a href="/network?page={{ page + 1 }}">Next</a>{% endif %}
-</nav>
-{% endif %}
 <style>
   .topology {
     height: 340px; margin: .6rem 0 .5rem;
@@ -135,87 +81,9 @@
 <script src="/vendor/force-graph.min.js"></script>
 <script>
 (function () {
-  const PAGE = {{ page }};
-  function fmtTs(ts) {
-    if (!ts) return "n/a";
-    const diff = Math.floor(Date.now() / 1000 - ts);
-    if (diff < 5) return "just now";
-    if (diff < 60) return diff + "s ago";
-    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
-    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
-    if (diff < 2592000) return Math.floor(diff / 86400) + "d ago";
-    return new Date(ts * 1000).toLocaleDateString();
-  }
-
-  function cell(label, text, opts) {
-    opts = opts || {};
-    const td = document.createElement("td");
-    td.textContent = text;
-    td.dataset.label = label;
-    if (opts.cls) td.className = opts.cls;
-    if (opts.color) td.style.color = opts.color;
-    if (opts.title) td.title = opts.title;
-    return td;
-  }
-
-  function addressCell(p) {
-    const td = document.createElement("td");
-    td.dataset.label = "Address";
-    td.className = "hash-short";
-    if (p.http_reachable === true) {
-      const a = document.createElement("a");
-      a.className = "peer-link";
-      a.href = "http://" + p.address;
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.title = "This peer's web UI answered an HTTP check within the last 10 minutes";
-      a.textContent = p.address;
-      td.appendChild(a);
-    } else {
-      td.textContent = p.address;
-    }
-    return td;
-  }
-
-  function buildRow(p) {
-    const tr = document.createElement("tr");
-    tr.appendChild(addressCell(p));
-    tr.appendChild(cell("Height", p.height === null || p.height === undefined ? "?" : p.height));
-    tr.appendChild(cell("Version", p.version || "unknown", {color: p.version ? null : "var(--muted)"}));
-    tr.appendChild(cell("Last seen", fmtTs(p.last_seen), {
-      title: p.last_seen ? new Date(p.last_seen * 1000).toLocaleString() : null,
-    }));
-    tr.appendChild(cell("Status", p.active ? "active" : "cooldown", {color: p.active ? "var(--green)" : "var(--muted)"}));
-    tr.appendChild(cell("Via", p.introduced_by
-      ? (p.introduced_by.length > 15 ? p.introduced_by.slice(0, 15) + "…" : p.introduced_by)
-      : "direct", {
-      cls: "hash-short", color: "var(--muted)",
-      title: p.introduced_by || "DHT, swarm lookup, or added directly",
-    }));
-    return tr;
-  }
-
-  function buildSelfRow(self) {
-    const tr = document.createElement("tr");
-    tr.style.fontWeight = "600";
-    tr.appendChild(cell("Address", self.addr || "self", {cls: "hash-short", color: "var(--live)"}));
-    tr.appendChild(cell("Height", self.height));
-    tr.appendChild(cell("Version", self.version));
-    tr.appendChild(cell("Last seen", "just now"));
-    tr.appendChild(cell("Status", "active", {color: "var(--green)"}));
-    tr.appendChild(cell("Via", "—"));
-    return tr;
-  }
-
-  // active here is exactly the same signal the table's "active"/"cooldown"
-  // column already shows: PeerPool only puts a peer in cooldown after a
-  // real strike (bad or missing response), never on a guessed timeout, so
-  // "trusted" really means "this node currently trusts it", not a
-  // freshness estimate invented on top. A peer PeerPool has actually
-  // dropped (STALE_SECONDS of silence) simply isn't in graph_peers on the
-  // next poll, the same way it drops off the table, rather than being
-  // shown here as some third "probably gone" state nothing confirmed.
-  // Colors tuned for the dark panel background, not the page's own palette.
+  // active mirrors PeerPool's own state: only false after a real strike,
+  // never a guessed timeout. A peer PeerPool actually drops just isn't
+  // in graph_peers on the next poll.
   function nodeColor(p) {
     if (!p.held) return "#7a8290";   // claimed only, unconfirmed by this node
     return p.active ? "#3ecf8e" : "#7a7466";
@@ -455,25 +323,9 @@
 
   async function refresh() {
     try {
-      const res = await fetch("/api/peers?page=" + PAGE, {cache: "no-store"});
+      const res = await fetch("/api/peers", {cache: "no-store"});
       if (!res.ok) throw new Error("bad status " + res.status);
       const data = await res.json();
-
-      const tbody = document.getElementById("peers-tbody");
-      tbody.innerHTML = "";
-      tbody.appendChild(buildSelfRow(data.self));
-
-      if (data.peers.length) {
-        data.peers.forEach(p => tbody.appendChild(buildRow(p)));
-      } else {
-        const tr = document.createElement("tr");
-        const td = cell("", "No peers yet", {color: "var(--muted)"});
-        td.colSpan = 6;
-        delete td.dataset.label;
-        td.style.textAlign = "center";
-        tr.appendChild(td);
-        tbody.appendChild(tr);
-      }
 
       renderTopology(data.self, data.graph_peers, data.claims || {});
 

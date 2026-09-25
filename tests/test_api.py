@@ -338,11 +338,13 @@ class TestOddsPage:
 
 
 class TestPeersPage:
-    """Smoke test the /network route end to end: real PeerPool.snapshot()
-    shape, self-row wiring, and the height/version columns all render
-    without a template/route mismatch. There is deliberately no wallet
-    column: a payout address is not something a peer tells us, and not
-    something this node publishes (see Node._handle_inbound_alive)."""
+    """/network is a shell now, all peer data comes live from /api/peers
+    and is rendered client-side (the graph), so the route tests split
+    the same way: the page itself just needs to render and redirect
+    correctly, and the JSON is where the real data-shape and privacy
+    assertions belong. There is deliberately no wallet field anywhere: a
+    payout address is not something a peer tells us, and not something
+    this node publishes (see Node._handle_inbound_alive)."""
 
     def _client(self):
         node, cs = fresh()
@@ -357,23 +359,24 @@ class TestPeersPage:
     def test_peers_page_renders(self):
         resp = self._client().get("/network")
         assert resp.status_code == 200
+        assert 'id="topology"' in resp.get_data(as_text=True)
 
     def test_old_peers_url_redirects(self):
         resp = self._client().get("/peers")
         assert resp.status_code == 301
         assert resp.headers["Location"].endswith("/network")
 
-    def test_peers_page_shows_self_and_peer_data(self):
-        html = self._client().get("/network").get_data(as_text=True)
-        assert ">self<" in html  # falls back to "self" when own external addr is unknown
-        assert "1.2.3.4:9000" in html
-        assert "5.6.7.8:9000" in html
-        assert "unknown" in html  # peer with no cached version yet
-        assert "?" in html        # peer with no cached height yet
-        assert "9.9.9.9:9000" in html
-        assert "0.2.0" in html  # peer's confirmed version
-        assert "Wallet" not in html, \
-            "the peers page must not publish a payout address per IP"
+    def test_api_peers_reports_self_and_peer_data(self):
+        data = self._client().get("/api/peers").get_json()
+        by_addr = {p["address"]: p for p in data["graph_peers"]}
+        assert set(by_addr) == {"1.2.3.4:9000", "5.6.7.8:9000", "9.9.9.9:9000"}
+        assert by_addr["1.2.3.4:9000"]["height"] == 5
+        assert by_addr["1.2.3.4:9000"]["version"] == "0.2.0"
+        assert by_addr["5.6.7.8:9000"]["height"] is None
+        assert by_addr["5.6.7.8:9000"]["version"] == ""
+        assert "wallet" not in data["self"]
+        for p in data["graph_peers"]:
+            assert "wallet" not in p
 
 
 class TestUpdateNav:
@@ -530,7 +533,7 @@ class TestPeerListPublishesNoAddresses:
 
     def test_no_peer_row_carries_a_payout_address(self):
         data = self._client().get("/api/peers").get_json()
-        for peer in data["peers"]:
+        for peer in data["graph_peers"]:
             assert "wallet" not in peer
         assert "wallet" not in data["self"]
 
