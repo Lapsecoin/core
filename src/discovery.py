@@ -40,6 +40,7 @@ External public interface (called from main.py):
 
 import json
 import logging
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -74,6 +75,17 @@ STATUS_LOG_INTERVAL = 60
 
 PUNCH_ATTEMPTS       = 3     # how many relays to try when direct ping fails
 PUNCH_WAIT           = 2.5   # seconds to wait after punch before re-pinging
+
+# Peer lists used to be exchanged exactly once per pair, at the moment
+# _ping_and_admit first admits them, and never again: a peer discovered
+# after that handshake never reached anyone already connected before it
+# showed up, so what any two nodes knew about each other went stale the
+# moment they'd been connected a while. Re-sending our current list on a
+# timer, to a handful of peers we already hold rather than all of them,
+# keeps that information moving without turning every round into an
+# all-to-all broadcast.
+PEX_REGOSSIP_INTERVAL = 300   # seconds between re-sharing our peer list
+PEX_FANOUT            = 5     # how many already-known peers get it each round
 
 
 class Discovery:
@@ -209,6 +221,7 @@ class Discovery:
         last_save     = now
         last_lan      = now - LAN_BROADCAST_INTERVAL
         last_status   = now - STATUS_LOG_INTERVAL
+        last_regossip = now - PEX_REGOSSIP_INTERVAL
 
         if ses is not None:
             self._dht.get_all(ses, my_slot)
@@ -256,6 +269,10 @@ class Discovery:
                 self.udp.broadcast_discover()
                 log.debug("[peer] LAN broadcast sent")
                 last_lan = now
+
+            if now - last_regossip >= PEX_REGOSSIP_INTERVAL:
+                self._regossip_peers()
+                last_regossip = now
 
             if now - last_status >= STATUS_LOG_INTERVAL:
                 with self._lock:
@@ -339,6 +356,19 @@ class Discovery:
             return True
         log.debug("[peer] unreachable (no punch)  addr=%s", addr)
         return False
+
+    def _regossip_peers(self):
+        """Re-send our current peer list to a random handful of peers we
+        already hold. The only other sender of PEERS is _ping_and_admit,
+        and that fires once, at admission; without this, anything learned
+        after two nodes connected never reached either of them."""
+        held = self.pool.get_all()
+        if not held:
+            return
+        targets = random.sample(held, min(PEX_FANOUT, len(held)))
+        peers = held[:50]
+        for addr in targets:
+            self.udp.send_peers(addr, peers)
 
     def _ping_and_admit(self, addr: str, learned_from: str | None = None) -> bool:
         """UDP PING addr. If PONG arrives, exchange peers and admit. Returns True on success."""
