@@ -1131,6 +1131,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
             # send in one response and small enough for a force layout to
             # lay out smoothly.
             "graph_peers": _peer_dicts(all_rows),
+            # What this node's held peers have themselves claimed about
+            # their own peers, most recent list per introducer, including
+            # addresses this node never admitted (couldn't reach, or
+            # hasn't tried). Lets the graph draw a relationship it has
+            # real evidence for even where it isn't itself one end of it.
+            "claims": pool.claims(),
         })
 
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")

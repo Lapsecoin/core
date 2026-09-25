@@ -479,6 +479,12 @@ def main():
         # or misbehaving admitted peer still can't hand us more than that.
         if not pool.is_known(sender_addr):
             return
+        # Recorded as a claim regardless of whether we can reach every
+        # address in it, wholesale-replacing whatever sender_addr claimed
+        # last time: this is what lets the network page show a
+        # relationship this node has real evidence of even toward an
+        # address it never itself connected to (see PeerPool.record_claim).
+        pool.record_claim(sender_addr, peer_list)
         for p in peer_list[:PEERS_PER_MESSAGE_LIMIT]:
             if isinstance(p, str) and ":" in p:
                 discovery.enqueue_candidate(p, learned_from=sender_addr)

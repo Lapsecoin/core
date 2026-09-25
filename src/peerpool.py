@@ -11,7 +11,7 @@ import secrets
 import threading
 import time
 
-from params import MAX_PEERS
+from params import MAX_PEERS, PEERS_PER_MESSAGE_LIMIT
 
 log = logging.getLogger("ec.peerpool")
 
@@ -69,6 +69,14 @@ class PeerPool:
         # provenance, kept only for display (see snapshot()); nothing here
         # decides admission or trust on the strength of who vouched for it.
         self._learned_from = {}
+        # introducer addr -> the most recent full list it claimed, even
+        # for addresses this node never admitted itself (couldn't reach,
+        # or hasn't tried yet). Wholesale-replaced on each PEERS message
+        # from that introducer, never appended to, so a peer this node
+        # dropped stops being shown as "claimed" the moment the
+        # introducer's next list omits it, the same way the table stops
+        # listing a peer this node itself lost. See record_claim().
+        self._claimed = {}
         self.max_height_observed = 0
         # Held peers per /24 or /64, kept in step with _peers so the
         # diversity cap is a lookup rather than a scan. See add().
@@ -81,6 +89,7 @@ class PeerPool:
             return
         self._info.pop(addr, None)
         self._learned_from.pop(addr, None)
+        self._claimed.pop(addr, None)
         subnet = _subnet_key(addr)
         if subnet is not None:
             remaining = self._subnets.get(subnet, 0) - 1
@@ -90,6 +99,24 @@ class PeerPool:
                 self._subnets.pop(subnet, None)
 
     # ---- Core operations ----
+
+    def _evict_worst_cooldown_locked(self, now_mono) -> bool:
+        """Forget the currently-held peer serving the longest cooldown, if
+        any peer is in cooldown at all. Callers hold the lock. Returns
+        whether one was found and evicted."""
+        worst_addr, worst_strikes = None, -1
+        for a, rec in self._fails.items():
+            if a not in self._peers or now_mono >= rec.get("cooldown_until", 0.0):
+                continue
+            strikes = rec.get("strikes", 0)
+            if strikes > worst_strikes:
+                worst_addr, worst_strikes = a, strikes
+        if worst_addr is None:
+            return False
+        self._forget(worst_addr)
+        log.info("[peer] evicted %s (cooldown, %d strikes) to make room",
+                 worst_addr, worst_strikes)
+        return True
 
     def add(self, addr, allow_private=False, learned_from=None):
         """Add a peer. Returns True if it was new.
@@ -112,7 +139,18 @@ class PeerPool:
                 self._peers[addr] = time.time()
                 return False
             if len(self._peers) >= self._max_peers:
-                return False
+                # Full doesn't mean no room: a held peer currently serving
+                # a cooldown (one or two strikes, not yet banned) is dead
+                # weight occupying a slot while doing nothing useful for
+                # it. Reclaim the worst such slot, most strikes first,
+                # rather than turning away a candidate that's at least
+                # reachable enough to have gotten this far. A pool that's
+                # genuinely full of healthy peers still refuses: this
+                # never evicts a peer that isn't already known-bad, so it
+                # can't be used to churn out good peers by presenting
+                # more candidates than there's room for.
+                if not self._evict_worst_cooldown_locked(now_mono):
+                    return False
             if now_mono < self._fails.get(addr, {}).get("cooldown_until", 0.0):
                 return False
             # Counted, not recomputed. This used to parse every held peer's
@@ -129,6 +167,24 @@ class PeerPool:
                 self._learned_from[addr] = learned_from
         log.debug("[peer] added  addr=%s", addr)
         return True
+
+    def record_claim(self, introducer, addrs):
+        """Record the most recent full peer list introducer sent, for
+        display even where addrs weren't all admitted (unreachable, or
+        not yet tried). Only for an introducer this node currently holds:
+        the caller (main.py's on_peers) already gates on that before
+        calling here, this re-checks it rather than trust the caller, the
+        same defense-in-depth as the length cap on the list itself."""
+        addrs = [a for a in addrs if isinstance(a, str) and ":" in a][:PEERS_PER_MESSAGE_LIMIT]
+        with self._lock:
+            if introducer not in self._peers:
+                return
+            self._claimed[introducer] = addrs
+
+    def claims(self):
+        """{introducer: [claimed addr, ...]}, a shallow copy for display."""
+        with self._lock:
+            return {k: list(v) for k, v in self._claimed.items()}
 
     def update_info(self, addr, height=None, version=""):
         """Cache a peer's last-known height and version, learned directly

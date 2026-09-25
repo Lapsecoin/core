@@ -305,13 +305,14 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active, height, version, http_reachable = rows[0]
+        addr, last_seen, active, height, version, http_reachable, introduced_by = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
         assert height is None
         assert version == ""
         assert http_reachable is None
+        assert introduced_by is None
 
     def test_snapshot_reports_cooldown_peer_as_inactive(self):
         p = make_pool()

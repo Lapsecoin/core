@@ -19,14 +19,21 @@
     <a class="btn-sm" href="/api/peers/download" download="lapsecoin_peers.json">Download JSON</a>
   </div>
   <div id="topology" class="topology"></div>
-  <div class="stat-sub" style="margin-top:.3rem">
-    This node's own view, all {{ peer_count }} known peers, not a shared network state: the same way
+  <div class="topo-legend">
+    <span class="topo-legend-item"><span class="topo-swatch" style="background:#b35a0c"></span>you</span>
+    <span class="topo-legend-item"><span class="topo-swatch" style="background:#2f7a4f"></span>held, trusted</span>
+    <span class="topo-legend-item"><span class="topo-swatch" style="background:#b9b29b"></span>held, cooldown</span>
+    <span class="topo-legend-item"><span class="topo-swatch topo-swatch-hollow"></span>claimed, not held</span>
+    <span class="topo-legend-item"><span class="topo-swatch-line" style="background:rgba(185,178,155,.6)"></span>in this node's pool</span>
+    <span class="topo-legend-item"><span class="topo-swatch-line" style="background:rgba(47,79,108,.75)"></span>claimed by a peer</span>
+  </div>
+  <div class="stat-sub" style="margin-top:.2rem">
+    This node's own view, not a shared network state: the same way
     <a href="https://bitnodes.io/nodes/network-map/" target="_blank" rel="noopener">Bitnodes</a> shows a
-    crawler's own view rather than trying to get every node to agree on one. Every peer links to "you"
-    (it's in this node's own pool); a thicker blue edge between two peers means one's PEERS message is how
-    this node actually learned of the other, real provenance from the wire, not a guess. Green means this
-    node currently trusts the peer (no recent strike put it in cooldown); a peer this node has actually lost
-    contact with for good just disappears from here, the same as it does from the table below.
+    crawler's own view rather than trying to get every node to agree on one. "Claimed, not held" is real
+    data (a peer's own PEERS message), just not firsthand: this node never reached that address itself.
+    A claim always reflects the most recent list that peer sent, so an address it stops mentioning stops
+    being shown as its peer. A peer actually lost for good just disappears, same as the table below.
   </div>
 </div>
 
@@ -89,6 +96,19 @@
     height: 260px; margin: .6rem 0 .3rem;
     border: 1px solid var(--rule-lt); background: var(--paper-2);
   }
+  .topo-legend {
+    display: flex; flex-wrap: wrap; gap: .3rem 1rem;
+    font-size: .74rem; color: var(--muted); align-items: center;
+  }
+  .topo-legend-item { display: inline-flex; align-items: center; gap: .35rem; }
+  .topo-swatch {
+    width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
+    display: inline-block;
+  }
+  .topo-swatch-hollow {
+    background: rgba(185,178,155,.35); border: 1px solid var(--rule-lt);
+  }
+  .topo-swatch-line { width: 16px; height: 3px; flex: 0 0 auto; display: inline-block; }
 </style>
 <script src="/vendor/force-graph.min.js"></script>
 <script>
@@ -172,6 +192,7 @@
   // next poll, the same way it drops off the table, rather than being
   // shown here as some third "probably gone" state nothing confirmed.
   function nodeColor(p) {
+    if (!p.held) return "rgba(185,178,155,.35)";   // claimed only, unconfirmed by this node
     return p.active ? "#2f7a4f" : "#b9b29b";
   }
 
@@ -184,7 +205,7 @@
       .height(el.clientHeight)
       .nodeId("id")
       .nodeLabel(n => n.title)
-      .nodeVal(n => n.self ? 10 : 5)
+      .nodeVal(n => n.self ? 10 : (n.held === false ? 3 : 5))
       .nodeColor(n => n.self ? "#b35a0c" : nodeColor(n))
       .linkColor(l => l.introduced ? "rgba(47,79,108,.75)" : "rgba(185,178,155,.5)")
       .linkWidth(l => l.introduced ? 1.6 : 1)
@@ -196,7 +217,7 @@
     });
   }
 
-  function renderTopology(self, peers) {
+  function renderTopology(self, peers, claims) {
     if (!graph) initTopology();
     const known = new Set(peers.map(p => p.address));
     const nodes = [{
@@ -206,22 +227,38 @@
     const links = [];
     peers.forEach(p => {
       nodes.push({
-        id: p.address, active: p.active,
+        id: p.address, active: p.active, held: true,
         title: p.address + (p.height != null ? " · height " + p.height : "")
                + (p.active ? "" : " · cooldown")
                + (p.introduced_by ? " · introduced by " + p.introduced_by : ""),
         href: p.http_reachable ? "http://" + p.address : null,
       });
       // Always linked to self: this node admitted it into its own pool
-      // regardless of who first mentioned it. A second edge to its actual
-      // introducer is drawn only when that introducer is itself a peer
-      // we currently hold, real provenance we can place on the graph,
-      // not a guess about a node we don't otherwise know anything about.
+      // regardless of who first mentioned it.
       links.push({ source: "self", target: p.address });
-      if (p.introduced_by && p.introduced_by !== self.addr && known.has(p.introduced_by)) {
-        links.push({ source: p.introduced_by, target: p.address, introduced: true });
-      }
     });
+
+    // claims: {introducer: [addr, ...]}, each introducer's own most recent
+    // PEERS message, from peers this node currently holds (see
+    // PeerPool.record_claim). Drawn for every claimed address, not only
+    // ones this node also admitted itself: a peer this node never managed
+    // to reach is still real data an introducer gave it, and dropping it
+    // would hide exactly the "who knows whom" picture a single node's own
+    // admitted set can't show by itself. An address seen only this way
+    // gets its own node, visually distinct (hollow, no pulse, no click
+    // target) since this node has no first-hand confirmation of it.
+    const unheldSeen = new Set();
+    for (const introducer in claims) {
+      if (!known.has(introducer)) continue;   // stale claim from an evicted peer
+      claims[introducer].forEach(addr => {
+        if (addr === self.addr) return;
+        if (!known.has(addr) && !unheldSeen.has(addr)) {
+          unheldSeen.add(addr);
+          nodes.push({ id: addr, held: false, title: addr + " · claimed by " + introducer + ", not held by this node" });
+        }
+        links.push({ source: introducer, target: addr, introduced: true });
+      });
+    }
     graph.graphData({ nodes, links });
   }
 
@@ -249,7 +286,7 @@
         tbody.appendChild(tr);
       }
 
-      renderTopology(data.self, data.graph_peers);
+      renderTopology(data.self, data.graph_peers, data.claims || {});
 
       document.getElementById("peers-count").textContent =
         data.peer_count + " known peer" + (data.peer_count !== 1 ? "s" : "");

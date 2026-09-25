@@ -171,7 +171,8 @@ class TestDashboardTxPaging:
         def get_info(self):
             return {"height": len(self.view.chain) - 1, "tip_hash": "ab" * 32,
                     "mempool_size": 0, "address": self.addr, "peer_count": 0,
-                    "total_minted": 0, "can_mint": 0, "block_reward": 0,
+                    "total_minted": 0, "burned": 0, "circulating": 0,
+                    "can_mint": 0, "block_reward": 0,
                     "block_time_ratio": None, "network_age_seconds": 90061,
                     "status": "ok"}
 
