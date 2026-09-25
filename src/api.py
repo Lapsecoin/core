@@ -1094,8 +1094,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return [
             {"address": addr, "last_seen": int(last_seen), "active": active,
              "height": height, "version": version,
-             "http_reachable": http_reachable, "introduced_by": introduced_by}
-            for addr, last_seen, active, height, version, http_reachable, introduced_by in rows
+             "http_reachable": http_reachable, "introduced_by": introduced_by,
+             # Transport detail only: addr above is always the peer's real,
+             # gossiped address, whether or not this is set. A client that
+             # ignores this field still sees exactly the peer it would have
+             # seen before relaying existed, never a relay's own socket.
+             "relayed_via": relayed_via}
+            for addr, last_seen, active, height, version, http_reachable,
+                introduced_by, relayed_via in rows
         ]
 
     def _self_info():

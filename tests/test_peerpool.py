@@ -305,7 +305,8 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active, height, version, http_reachable, introduced_by = rows[0]
+        (addr, last_seen, active, height, version, http_reachable,
+         introduced_by, relayed_via) = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
@@ -313,6 +314,7 @@ class TestSnapshot:
         assert version == ""
         assert http_reachable is None
         assert introduced_by is None
+        assert relayed_via is None
 
     def test_snapshot_reports_cooldown_peer_as_inactive(self):
         p = make_pool()
@@ -382,6 +384,46 @@ class TestSnapshot:
         p.remove(peer)
         p.add(peer)
         assert p.snapshot()[0][5] is None
+
+
+class TestRelayTransport:
+    def test_defaults_to_none(self):
+        p = make_pool()
+        p.add("1.2.3.4:9000")
+        assert p.relay_transport("1.2.3.4:9000") is None
+        assert p.snapshot()[0][7] is None
+
+    def test_set_and_read(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.set_relay_transport(peer, "relay://198.51.100.1:22067/?id=X")
+        assert p.relay_transport(peer) == "relay://198.51.100.1:22067/?id=X"
+        assert p.snapshot()[0][7] == "relay://198.51.100.1:22067/?id=X"
+        # addr itself must never change because of the transport
+        assert p.snapshot()[0][0] == peer
+
+    def test_cleared_back_to_direct(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.set_relay_transport(peer, "relay://198.51.100.1:22067/?id=X")
+        p.set_relay_transport(peer, None)
+        assert p.relay_transport(peer) is None
+
+    def test_noop_for_unknown_peer(self):
+        p = make_pool()
+        p.set_relay_transport("1.2.3.4:9000", "relay://198.51.100.1:22067/?id=X")
+        assert p.relay_transport("1.2.3.4:9000") is None
+
+    def test_cleared_on_remove(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.set_relay_transport(peer, "relay://198.51.100.1:22067/?id=X")
+        p.remove(peer)
+        p.add(peer)
+        assert p.relay_transport(peer) is None
 
 
 class TestNoteRelayedBuilder:

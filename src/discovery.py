@@ -47,6 +47,7 @@ from concurrent.futures import ThreadPoolExecutor
 from discovery_dht import DHTDiscovery, PUT_REFRESH_INTERVAL
 from params import PEERS_PER_MESSAGE_LIMIT
 from peerpool import is_routable_peer_addr
+from relay_pool import RelayCascade
 
 log = logging.getLogger("ec.discovery")
 
@@ -87,6 +88,11 @@ PUNCH_WAIT           = 2.5   # seconds to wait after punch before re-pinging
 PEX_REGOSSIP_INTERVAL = 300   # seconds between re-sharing our peer list
 PEX_FANOUT            = 5     # how many already-known peers get it each round
 
+# Not yet acted on: this only logs when the condition below fires, so the
+# detection can be verified against real traffic before anything (a relay
+# client) is built on top of it. Flip once that exists.
+SAME_NAT_RELAY_FALLBACK = False
+
 
 class Discovery:
 
@@ -110,6 +116,11 @@ class Discovery:
         self._dht   = DHTDiscovery(self.enqueue_candidate, genesis_hash,
                                    port, node_pubkey_hex)
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="disc")
+        # Which public relay, if any, to try next for a given pair stuck
+        # behind the same NAT (see SAME_NAT_RELAY_FALLBACK and
+        # _behind_same_nat). One cascade for the whole node: it's keyed
+        # per-pair internally, so unrelated pairs' failover never interacts.
+        self._relay_cascade = RelayCascade()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -142,6 +153,36 @@ class Discovery:
             return True
         host = addr.rsplit(":", 1)[0]
         return host in self.udp._local_ips
+
+    def _behind_same_nat(self, addr: str) -> bool:
+        """True if addr's IP matches our own confirmed external IP, i.e.
+        whoever we're PONG-observed as coming from and addr's owner are
+        seen from the outside as the same public address.
+
+        This is the only signal available for "addr is probably on our own
+        LAN" that doesn't depend on LAN broadcast actually arriving: if AP
+        isolation is blocking broadcast between us (the actual failure mode
+        this exists for), we never received an announce from addr in the
+        first place, so there is nothing local to check. But two nodes
+        behind the same NAT device are, by definition, seen by the rest of
+        the internet as one address, and that's learned for free from the
+        ordinary PONG exchange addr itself would already have gone through
+        during ping_and_admit, no extra probing needed.
+
+        Not perfect: on carrier-grade NAT, unrelated households can share a
+        public IP, so this can be true for two nodes that were never on the
+        same physical network. That's not a false positive worth guarding
+        against here though, direct connection and hairpin genuinely can't
+        work between them either way if they share a public IP, so treating
+        it as "try the same fallback" is still the right call, just not
+        literally "same room."
+        """
+        our_ext = self.udp.our_external_addr
+        if not our_ext or ":" not in addr:
+            return False
+        our_ip = our_ext.rsplit(":", 1)[0]
+        their_ip = addr.rsplit(":", 1)[0]
+        return bool(our_ip) and our_ip == their_ip
 
     def add_bootstrap_peer(self, addr):
         """Admit a --peer CLI address. Tries UDP ping; if it fails attempts
@@ -362,6 +403,33 @@ class Discovery:
             time.sleep(PUNCH_WAIT)
             if self._ping_and_admit(addr, learned_from):
                 return True
+
+            # Everything that depends on reaching addr through our own NAT
+            # has now failed. If addr is behind that same NAT, this is the
+            # AP-isolation-plus-no-hairpin deadlock: LAN broadcast never
+            # reached either side (or we'd have admitted addr already, long
+            # before this point) and the router won't loop our own public
+            # IP back to us. Log-only for now, see SAME_NAT_RELAY_FALLBACK
+            # and _behind_same_nat's docstring; a public relay session
+            # (e.g. the Syncthing relay pool) is the intended next step
+            # once this is confirmed firing on the right addresses.
+            if self._behind_same_nat(addr):
+                our_ext = self.udp.our_external_addr
+                # Picked even when the flag is off, so the selection logic
+                # itself (deterministic ranking + per-pair failover, see
+                # relay_pool.RelayCascade) runs and logs against real
+                # traffic before anything dials out on the strength of it.
+                candidate = (self._relay_cascade.next_candidate(
+                                 self.genesis_hash, our_ext, addr)
+                             if our_ext else None)
+                log.info("[peer] %s appears to share our public IP and is "
+                         "still unreachable after every direct/punch path; "
+                         "likely blocked by client isolation on a shared "
+                         "network. relay candidate: %s (session dial not "
+                         "yet implemented)", addr, candidate)
+                if SAME_NAT_RELAY_FALLBACK and candidate is not None:
+                    pass  # placeholder for the relay-session attempt
+
             log.debug("[peer] unreachable (no punch)  addr=%s", addr)
             return False
         finally:
@@ -405,7 +473,14 @@ class Discovery:
         observed = self.udp.ping(addr)
         if observed is None:
             return False
-        # PONG received; node is reachable
+        # PONG received; node is reachable directly. If a relay cascade was
+        # advancing for this pair (see _behind_same_nat), direct contact
+        # recovering makes that state stale, so any future relay fallback
+        # for the same pair starts back at the top-ranked candidate rather
+        # than continuing on from wherever an old outage left it.
+        our_ext = self.udp.our_external_addr
+        if our_ext:
+            self._relay_cascade.reset(self.genesis_hash, our_ext, addr)
         if self.pool.add(addr, learned_from=learned_from):
             log.info("[peers] connected to %s, %d peer(s) in total",
                  addr, self.pool.count())
