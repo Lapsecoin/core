@@ -222,6 +222,25 @@
   let graph = null, hoverNode = null;
   const connected = new Map();   // node id -> Set of directly linked node ids, rebuilt per render
 
+  // A peer appearing or dropping off used to just pop in or vanish
+  // between one poll and the next, no transition at all, exactly the
+  // "robotically applied" look worth avoiding. nodeMeta/linkMeta are
+  // persistent across renders (renderTopology mutates them in place
+  // rather than building fresh arrays each time), each entry carrying
+  // when it first appeared and, once it's no longer in the real data,
+  // when it started disappearing; fadeAlpha turns that into a 0..1 value
+  // any frame can read, growing in on arrival and shrinking out on
+  // departure instead of cutting straight from 0 to 1 or 1 to 0.
+  const FADE_MS = 550;
+  const nodeMeta = new Map();   // id -> node object (persistent identity)
+  const linkMeta = new Map();   // "src=>tgt" -> link object (persistent identity)
+
+  function fadeAlpha(obj) {
+    const now = performance.now();
+    if (obj._vanishAt) return Math.max(0, 1 - (now - obj._vanishAt) / FADE_MS);
+    return Math.min(1, (now - obj._firstSeenAt) / FADE_MS);
+  }
+
   // Bigger with more connections, the same idea Obsidian's graph view
   // uses (a note more other notes reference draws bigger): degree is
   // real structure in the data, not a decoration, so letting it set size
@@ -233,11 +252,13 @@
   }
 
   function drawNode(n, ctx) {
-    const r = nodeRadius(n);
+    const fade = fadeAlpha(n);
+    if (fade <= 0) return;
+    const r = nodeRadius(n) * (0.4 + 0.6 * fade);   // grows in, shrinks out, not just fades
     const color = n.self ? "#e0912f" : nodeColor(n);
     const dimmed = hoverNode && hoverNode !== n.id && !connected.get(hoverNode)?.has(n.id);
     const glowing = !dimmed && (n.self || (n.held && n.active));
-    ctx.globalAlpha = dimmed ? .25 : 1;
+    ctx.globalAlpha = (dimmed ? .25 : 1) * fade;
     if (glowing) {
       ctx.shadowColor = color;
       ctx.shadowBlur = n.self ? 16 : 9;
@@ -266,6 +287,7 @@
       .nodeCanvasObject(drawNode)
       .onNodeHover(n => { hoverNode = n ? n.id : null; })
       .nodePointerAreaPaint((n, color, ctx) => {
+        if (fadeAlpha(n) <= 0) return;
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(n.x, n.y, nodeRadius(n) + 2, 0, 2 * Math.PI);
@@ -274,17 +296,22 @@
       .linkColor(l => {
         const srcId = l.source.id || l.source, tgtId = l.target.id || l.target;
         const dim = hoverNode && srcId !== hoverNode && tgtId !== hoverNode;
-        if (l.introduced) return dim ? "rgba(122,167,230,.12)" : "rgba(122,167,230,.55)";
-        return dim ? "rgba(255,255,255,.05)" : "rgba(255,255,255,.18)";
+        const fade = fadeAlpha(l) * (dim ? .25 : 1);
+        return l.introduced ? `rgba(122,167,230,${.55 * fade})` : `rgba(255,255,255,${.18 * fade})`;
       })
       .linkWidth(l => l.introduced ? 1.4 : 1)
       // Particles are what carry the "this is live" feeling once the
       // layout itself has settled and stopped moving: a steady trickle
       // along every edge, denser on the edges backed by an actual claim.
-      .linkDirectionalParticles(l => l.introduced ? 3 : 1)
+      // Fading them out with the link (rather than an instant cutoff)
+      // keeps a departing edge from just switching off mid-flow.
+      .linkDirectionalParticles(l => fadeAlpha(l) > 0 ? (l.introduced ? 3 : 1) : 0)
       .linkDirectionalParticleWidth(1.6)
       .linkDirectionalParticleSpeed(0.004)
-      .linkDirectionalParticleColor(l => l.introduced ? "rgba(122,167,230,.9)" : "rgba(255,255,255,.5)")
+      .linkDirectionalParticleColor(l => {
+        const a = fadeAlpha(l);
+        return l.introduced ? `rgba(122,167,230,${.9 * a})` : `rgba(255,255,255,${.5 * a})`;
+      })
       .cooldownTime(Infinity)
       .d3VelocityDecay(0.35)
       .enableNodeDrag(true)
@@ -294,25 +321,63 @@
     });
   }
 
+  function upsertNode(id, fields) {
+    let n = nodeMeta.get(id);
+    if (!n) {
+      n = { id, _firstSeenAt: performance.now(), _vanishAt: null };
+      nodeMeta.set(id, n);
+    } else {
+      n._vanishAt = null;   // reappeared mid-fade-out: stop disappearing
+    }
+    Object.assign(n, fields);
+    return n;
+  }
+
+  function upsertLink(source, target, fields) {
+    const key = source + "=>" + target;
+    let l = linkMeta.get(key);
+    if (!l) {
+      l = { source, target, _firstSeenAt: performance.now(), _vanishAt: null };
+      linkMeta.set(key, l);
+    } else {
+      l._vanishAt = null;
+    }
+    Object.assign(l, fields);
+    return l;
+  }
+
+  // Anything not touched by this render's upsert calls is no longer part
+  // of the real data: start (or continue) fading it out rather than
+  // deleting it outright, and only actually drop it once fadeAlpha hits 0.
+  function sweep(meta, wantKeys) {
+    for (const [key, obj] of meta) {
+      if (wantKeys.has(key)) continue;
+      if (!obj._vanishAt) obj._vanishAt = performance.now();
+      else if (fadeAlpha(obj) <= 0) meta.delete(key);
+    }
+  }
+
   function renderTopology(self, peers, claims) {
     if (!graph) initTopology();
     const known = new Set(peers.map(p => p.address));
-    const nodes = [{
-      id: "self", self: true,
-      title: (self.addr || "self") + " (you)",
-    }];
-    const links = [];
+    const wantNodes = new Set(["self"]);
+    const wantLinks = new Set();
+
+    upsertNode("self", { self: true, title: (self.addr || "self") + " (you)" });
+
     peers.forEach(p => {
-      nodes.push({
-        id: p.address, active: p.active, held: true,
+      upsertNode(p.address, {
+        active: p.active, held: true,
         title: p.address + (p.height != null ? " · height " + p.height : "")
                + (p.active ? "" : " · cooldown")
                + (p.introduced_by ? " · introduced by " + p.introduced_by : ""),
         href: p.http_reachable ? "http://" + p.address : null,
       });
+      wantNodes.add(p.address);
       // Always linked to self: this node admitted it into its own pool
       // regardless of who first mentioned it.
-      links.push({ source: "self", target: p.address });
+      upsertLink("self", p.address, {});
+      wantLinks.add("self=>" + p.address);
     });
 
     // claims: {introducer: [addr, ...]}, each introducer's own most recent
@@ -329,23 +394,29 @@
       if (!known.has(introducer)) continue;   // stale claim from an evicted peer
       claims[introducer].forEach(addr => {
         if (addr === self.addr) return;
-        if (!known.has(addr) && !unheldSeen.has(addr)) {
+        if (!known.has(addr)) {
           unheldSeen.add(addr);
-          nodes.push({ id: addr, held: false, title: addr + " · claimed by " + introducer + ", not held by this node" });
+          upsertNode(addr, { held: false, title: addr + " · claimed by " + introducer + ", not held by this node" });
+          wantNodes.add(addr);
         }
-        links.push({ source: introducer, target: addr, introduced: true });
+        upsertLink(introducer, addr, { introduced: true });
+        wantLinks.add(introducer + "=>" + addr);
       });
     }
 
+    sweep(nodeMeta, wantNodes);
+    sweep(linkMeta, wantLinks);
+
     connected.clear();
-    links.forEach(l => {
-      if (!connected.has(l.source)) connected.set(l.source, new Set());
-      if (!connected.has(l.target)) connected.set(l.target, new Set());
-      connected.get(l.source).add(l.target);
-      connected.get(l.target).add(l.source);
+    wantLinks.forEach(key => {
+      const [src, tgt] = key.split("=>");
+      if (!connected.has(src)) connected.set(src, new Set());
+      if (!connected.has(tgt)) connected.set(tgt, new Set());
+      connected.get(src).add(tgt);
+      connected.get(tgt).add(src);
     });
 
-    graph.graphData({ nodes, links });
+    graph.graphData({ nodes: [...nodeMeta.values()], links: [...linkMeta.values()] });
 
     const trusted  = peers.filter(p => p.active).length;
     const cooldown = peers.length - trusted;
@@ -391,6 +462,22 @@
 
   refresh();
   setInterval(refresh, 8000);
+
+  // Independent of the 8s data poll: a node/link mid-fade-out needs
+  // pruning the moment it actually finishes (FADE_MS, well under a
+  // second), not whenever the next poll happens to land, or it lingers
+  // invisible yet still influencing the physics simulation.
+  setInterval(() => {
+    if (!graph) return;
+    let pruned = false;
+    for (const [id, n] of nodeMeta) {
+      if (n._vanishAt && fadeAlpha(n) <= 0) { nodeMeta.delete(id); pruned = true; }
+    }
+    for (const [key, l] of linkMeta) {
+      if (l._vanishAt && fadeAlpha(l) <= 0) { linkMeta.delete(key); pruned = true; }
+    }
+    if (pruned) graph.graphData({ nodes: [...nodeMeta.values()], links: [...linkMeta.values()] });
+  }, 200);
 
   const addForm = document.getElementById("add-peer-form");
   if (addForm) {
