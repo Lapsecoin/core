@@ -107,7 +107,13 @@
 <style>
   .topology {
     height: 340px; margin: .6rem 0 .5rem;
-    border: 1px solid var(--rule-lt); background: var(--paper-2);
+    border: 1px solid var(--rule-lt);
+    /* Dark on purpose, deliberately breaking from the page's paper theme
+       for this one panel: a light background can't carry a glow, and the
+       glow is most of what makes a graph like this read as alive rather
+       than a diagram, the same reason every praised version of this
+       (Obsidian's graph view chief among them) runs dark. */
+    background: #14181c;
   }
   .topo-legend {
     display: flex; flex-wrap: wrap; gap: .3rem 1.1rem;
@@ -202,35 +208,39 @@
   // active here is exactly the same signal the table's "active"/"cooldown"
   // column already shows: PeerPool only puts a peer in cooldown after a
   // real strike (bad or missing response), never on a guessed timeout, so
-  // green really does mean "this node currently trusts it", not a
+  // "trusted" really means "this node currently trusts it", not a
   // freshness estimate invented on top. A peer PeerPool has actually
   // dropped (STALE_SECONDS of silence) simply isn't in graph_peers on the
   // next poll, the same way it drops off the table, rather than being
   // shown here as some third "probably gone" state nothing confirmed.
+  // Colors tuned for the dark panel background, not the page's own palette.
   function nodeColor(p) {
-    if (!p.held) return "rgba(185,178,155,.35)";   // claimed only, unconfirmed by this node
-    return p.active ? "#2f7a4f" : "#b9b29b";
+    if (!p.held) return "#7a8290";   // claimed only, unconfirmed by this node
+    return p.active ? "#3ecf8e" : "#7a7466";
   }
 
-  let graph = null;
+  let graph = null, hoverNode = null;
+  const connected = new Map();   // node id -> Set of directly linked node ids, rebuilt per render
 
+  // Bigger with more connections, the same idea Obsidian's graph view
+  // uses (a note more other notes reference draws bigger): degree is
+  // real structure in the data, not a decoration, so letting it set size
+  // means the graph's shape actually carries information at a glance.
   function nodeRadius(n) {
-    return n.self ? 9 : (n.held === false ? 3 : 6);
+    const base = n.self ? 8 : (n.held === false ? 3 : 5);
+    const degree = connected.get(n.id) ? connected.get(n.id).size : 0;
+    return base + Math.min(6, Math.sqrt(degree) * 1.6);
   }
 
-  // Custom canvas draw instead of the library default: a soft glow behind
-  // anything live (self, or a peer this node currently trusts) is what
-  // makes a force graph read as "watch this" rather than "static diagram",
-  // the same look most well-regarded force-graph demos lean on. A claimed
-  // but unheld node stays a plain outlined dot, deliberately less alive,
-  // since this node has no first-hand confirmation of it.
   function drawNode(n, ctx) {
     const r = nodeRadius(n);
-    const color = n.self ? "#b35a0c" : nodeColor(n);
-    const glowing = n.self || (n.held && n.active);
+    const color = n.self ? "#e0912f" : nodeColor(n);
+    const dimmed = hoverNode && hoverNode !== n.id && !connected.get(hoverNode)?.has(n.id);
+    const glowing = !dimmed && (n.self || (n.held && n.active));
+    ctx.globalAlpha = dimmed ? .25 : 1;
     if (glowing) {
       ctx.shadowColor = color;
-      ctx.shadowBlur = n.self ? 14 : 8;
+      ctx.shadowBlur = n.self ? 16 : 9;
     }
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
@@ -239,9 +249,10 @@
     ctx.shadowBlur = 0;
     if (n.held === false) {
       ctx.lineWidth = 1;
-      ctx.strokeStyle = "#b9b29b";
+      ctx.strokeStyle = "#7a8290";
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
   }
 
   function initTopology() {
@@ -249,16 +260,23 @@
     graph = ForceGraph()(el)
       .width(el.clientWidth)
       .height(el.clientHeight)
+      .backgroundColor("#14181c")
       .nodeId("id")
       .nodeLabel(n => n.title)
       .nodeCanvasObject(drawNode)
+      .onNodeHover(n => { hoverNode = n ? n.id : null; })
       .nodePointerAreaPaint((n, color, ctx) => {
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(n.x, n.y, nodeRadius(n) + 2, 0, 2 * Math.PI);
         ctx.fill();
       })
-      .linkColor(l => l.introduced ? "rgba(47,79,108,.55)" : "rgba(185,178,155,.4)")
+      .linkColor(l => {
+        const srcId = l.source.id || l.source, tgtId = l.target.id || l.target;
+        const dim = hoverNode && srcId !== hoverNode && tgtId !== hoverNode;
+        if (l.introduced) return dim ? "rgba(122,167,230,.12)" : "rgba(122,167,230,.55)";
+        return dim ? "rgba(255,255,255,.05)" : "rgba(255,255,255,.18)";
+      })
       .linkWidth(l => l.introduced ? 1.4 : 1)
       // Particles are what carry the "this is live" feeling once the
       // layout itself has settled and stopped moving: a steady trickle
@@ -266,7 +284,7 @@
       .linkDirectionalParticles(l => l.introduced ? 3 : 1)
       .linkDirectionalParticleWidth(1.6)
       .linkDirectionalParticleSpeed(0.004)
-      .linkDirectionalParticleColor(l => l.introduced ? "rgba(47,79,108,.85)" : "rgba(185,178,155,.85)")
+      .linkDirectionalParticleColor(l => l.introduced ? "rgba(122,167,230,.9)" : "rgba(255,255,255,.5)")
       .cooldownTime(Infinity)
       .d3VelocityDecay(0.35)
       .enableNodeDrag(true)
@@ -318,6 +336,15 @@
         links.push({ source: introducer, target: addr, introduced: true });
       });
     }
+
+    connected.clear();
+    links.forEach(l => {
+      if (!connected.has(l.source)) connected.set(l.source, new Set());
+      if (!connected.has(l.target)) connected.set(l.target, new Set());
+      connected.get(l.source).add(l.target);
+      connected.get(l.target).add(l.source);
+    });
+
     graph.graphData({ nodes, links });
 
     const trusted  = peers.filter(p => p.active).length;
