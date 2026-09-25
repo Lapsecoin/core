@@ -819,7 +819,9 @@ class Node:
                      cs.height + 1)
             return
 
-        candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr, iterations)
+        board_floor = tx_mod.board_fee_floor(cs.state.total_board_posts)
+        candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr,
+                                        iterations, board_fee_floor=board_floor)
         candidate["vdf_output"]    = vdf_out
         candidate["vdf_proof"]     = vdf_proof
         candidate["vdf_iterations"] = iterations

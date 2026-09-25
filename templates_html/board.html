@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Board</h2>
-<p class="stat-sub" style="margin:-.2rem 0 .6rem">
+<p class="stat-sub" style="margin:.2rem 0 .6rem">
   Public, permanent, on-chain. Posting burns {{ BOARD_POST_AMOUNT }} tick
-  (<a href="/address?addr={{ BURN_ADDRESS }}">burn address</a>) plus a fee, {{ BOARD_POST_MIN_FEE }} minimum.
+  (<a href="/address?addr={{ BURN_ADDRESS }}">burn address</a>) plus a fee, {{ board_fee_floor }} minimum
+  and rising as the board fills up.
 </p>
 
 <div class="card">
@@ -21,17 +21,9 @@
       </div>
       <div class="board-compose-row board-compose-sub">
         <input type="password" name="passphrase" placeholder="Passphrase" autocomplete="off" style="flex:1 1 160px">
-        <label>Fee
-          <input type="number" name="fee" id="board-fee" min="{{ BOARD_POST_MIN_FEE }}"
-                 value="{{ fee_value or BOARD_POST_MIN_FEE }}" style="width:5rem">
-        </label>
-        {% if fees and fees.pending %}
-        <span class="stat-sub" style="margin:0" title="Ticks per byte a transaction needs right now to clear the next block.">
-          ~{{ "%.3f"|format(fees.next_block) }} ticks/byte to clear next block
+        <span class="stat-sub" style="margin:0" title="Fee is set automatically to whatever clears the next block, never more: {{ board_fee_floor }} ticks minimum, plus the {{ BOARD_POST_AMOUNT }}-tick burn.">
+          fee: whatever clears next block ({{ board_fee_floor }}+ ticks)
         </span>
-        {% else %}
-        <span class="stat-sub" style="margin:0">mempool empty, any fee clears immediately</span>
-        {% endif %}
         <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
       </div>
     </form>
@@ -126,23 +118,19 @@
   // disabled rather than silently truncated once over, so what's typed
   // is always exactly what gets sent.
   const msgInput = document.getElementById("board-message");
-  const feeInput = document.getElementById("board-fee");
-  if (msgInput && feeInput) {
+  if (msgInput) {
     const maxBytes = {{ MAX_MEMO_BYTES - tag_len }};
-    const minFee = {{ BOARD_POST_MIN_FEE }};
     const counter = document.getElementById("board-msg-counter");
     const sendBtn = document.getElementById("board-send");
     function refreshCounter() {
       const bytes = new TextEncoder().encode(msgInput.value).length;
       const empty = msgInput.value.trim() === "";
       const over = bytes > maxBytes;
-      const feeLow = (parseInt(feeInput.value, 10) || 0) < minFee;
       counter.textContent = bytes + " / " + maxBytes;
       counter.style.color = over ? "var(--red, #c0392b)" : "var(--muted)";
-      if (sendBtn) sendBtn.disabled = empty || over || feeLow;
+      if (sendBtn) sendBtn.disabled = empty || over;
     }
     msgInput.addEventListener("input", refreshCounter);
-    feeInput.addEventListener("input", refreshCounter);
     refreshCounter();
   }
 

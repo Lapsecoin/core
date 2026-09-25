@@ -236,10 +236,10 @@ class LapseAdapter:
     def _suggested_fee(self, to_addr, amount, memo):
         """The same fee-per-byte picture api.fee_estimate already shows
         a person on the manual send page, applied here automatically
-        since a swap step has nobody at a keyboard to pick one. 0 when
-        the mempool isn't full enough to need one at all (fee_estimate's
-        own "next_block" is 0 in that case), matching what a person
-        choosing "no rush" would also pay.
+        since a swap step has nobody at a keyboard to pick one. Never
+        below params.MIN_RELAY_FEE_RATE, the same relay-policy floor
+        fee_estimate's own "next_block" never reads below, so this can't
+        under-price a swap tx below what a real node would even relay.
 
         Sized from a probe body built with the real outputs/memo but no
         real fee or signature: tx.tx_size (what fee_rate is computed

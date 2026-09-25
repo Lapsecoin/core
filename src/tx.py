@@ -14,6 +14,7 @@ from cachetools import LRUCache
 
 import crypto
 from crypto import canonical_json
+from params import TICKS_PER_LAPSE
 
 # Signature verifications already performed, so a transaction verified on
 # its way into the mempool is not verified again for every block that
@@ -118,6 +119,52 @@ _ALLOWED_FIELDS  = set(_REQUIRED_FIELDS) | _OPTIONAL_FIELDS
 # docstring for why this isn't encrypted.
 MAX_MEMO_BYTES = 200
 
+# The board is an ordinary transaction whose memo happens to start with
+# this tag. Prepended by the server, never typed by hand, so a memo can't
+# accidentally land on the board and a real memo can't be mistaken for
+# one. Consensus cares about this tag only to enforce the fee floor below;
+# it does not otherwise treat a board post as a different kind of
+# transaction.
+BOARD_MEMO_TAG = "[board] "
+
+# Burned per post, always, regardless of congestion or the floor below.
+BOARD_POST_AMOUNT = 1
+
+# Board fee floor: a staircase minimum, not an exact required value, so a
+# transaction built against a stale (lower) floor just fails with "fee too
+# low" and gets resubmitted, the same as any other underpriced send; it
+# never invalidates a batch of otherwise-fine pending transactions at
+# once, only ones that were genuinely priced below the new floor.
+#
+# Deliberately sized against a lifetime of *posts*, not blocks or block
+# reward: the goal is for the board to become clearly, unmistakably
+# inactive once it has carried a lot of chatter, not to track emission
+# decay (which answers a different question: what a block builder earns,
+# not what posting costs). BOARD_LIFETIME_POSTS is the target post count
+# at which the floor reaches BOARD_MAX_FEE, split evenly across
+# BOARD_FEE_STEPS staircase steps.
+BOARD_BASE_FEE       = 1                # floor for the very first post
+BOARD_MAX_FEE        = TICKS_PER_LAPSE  # 1 LAPSE: unmistakably not casual
+BOARD_LIFETIME_POSTS = 1_000_000        # posts to reach BOARD_MAX_FEE
+BOARD_FEE_STEPS      = 200
+BOARD_STEP_SIZE      = BOARD_LIFETIME_POSTS // BOARD_FEE_STEPS
+BOARD_STEP_INCREMENT = (BOARD_MAX_FEE - BOARD_BASE_FEE) // BOARD_FEE_STEPS
+
+
+def is_board_post(tx_dict):
+    return tx_dict.get("memo", "").startswith(BOARD_MEMO_TAG)
+
+
+def board_fee_floor(total_board_posts):
+    """Minimum fee a board post must pay, given how many have landed so far.
+
+    A staircase, not a continuous per-message increase: total_board_posts
+    only moves when a block confirms, so the floor a wallet sees is stable
+    for the whole time it takes to build and broadcast a post.
+    """
+    step = min(total_board_posts // BOARD_STEP_SIZE, BOARD_FEE_STEPS)
+    return min(BOARD_BASE_FEE + BOARD_STEP_INCREMENT * step, BOARD_MAX_FEE)
+
 # Outputs are the one required field whose *count* was still unbounded
 # even with the whitelist above: each entry only needs a valid address and
 # a positive amount, so a wall of 1-tick outputs costs almost nothing in
@@ -206,16 +253,40 @@ def _check_balance(tx_dict, state):
     return True, None
 
 
-def validate(tx_dict, state):
+def _check_board_fee(tx_dict, state, floor_override):
+    if not is_board_post(tx_dict):
+        return True, None
+    floor = floor_override if floor_override is not None else board_fee_floor(state.total_board_posts)
+    if tx_dict["fee"] < floor:
+        return False, f"board post fee below current floor: have {tx_dict['fee']}, need {floor}"
+    return True, None
+
+
+def validate(tx_dict, state, board_fee_floor_override=None):
     """Validate a transaction. Returns (True, None) or (False, error_string).
 
-    state: object with .get_balance(addr), .get_nonce(addr)
+    state: object with .get_balance(addr), .get_nonce(addr), .total_board_posts
+
+    board_fee_floor_override: the floor to check a board post's fee
+    against, frozen ahead of time rather than read live off
+    state.total_board_posts. Required when validating more than one
+    transaction of the same block in sequence (see block._apply_transactions):
+    state.total_board_posts moves as each transaction in the block is
+    applied, and the floor is only meant to move once a block confirms, not
+    partway through validating one. Reading it live here would let a block
+    carrying enough board posts to cross a step boundary invalidate its own
+    later transactions, and therefore itself, the moment it landed, exactly
+    the mass-rejection failure mode the whole staircase design exists to
+    avoid. A caller validating a single transaction in isolation (mempool
+    admission) leaves this out and gets the live floor, which is correct
+    there: an individual submission just needs today's real number.
     """
     for check, args in (
         (_check_fields_and_outputs, (tx_dict,)),
         (_check_signature,          (tx_dict,)),
         (_check_nonce,              (tx_dict, state)),
         (_check_balance,            (tx_dict, state)),
+        (_check_board_fee,          (tx_dict, state, board_fee_floor_override)),
     ):
         ok, err = check(*args)
         if not ok:

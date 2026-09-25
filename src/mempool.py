@@ -3,16 +3,17 @@
 import time
 
 import tx as tx_mod
+from params import BLOCK_SIZE_LIMIT
 
 MEMPOOL_TTL_SECONDS = 30 * 60
 
 # Hard cap on total pending tx bytes (fee-basis size, signature excluded,
 # same measure block.assemble() prioritizes by). ~10x BLOCK_SIZE_LIMIT: room
-# for several blocks' worth of backlog without letting the mempool grow
+# for ten blocks' worth of backlog without letting the mempool grow
 # unbounded under spam. Once full, a new tx is admitted only by outbidding
 # and evicting enough of the lowest fee-per-byte txs currently held to fit,
 # same eviction policy as Bitcoin Core's mempool.
-MEMPOOL_MAX_BYTES = 100_000_000
+MEMPOOL_MAX_BYTES = 10 * BLOCK_SIZE_LIMIT
 
 
 class _Overlay:
@@ -50,6 +51,12 @@ class _Overlay:
     def get_nonce(self, addr):
         v = self._nonces.get(addr)
         return self._base.get_nonce(addr) if v is None else v
+
+    @property
+    def total_board_posts(self):
+        # Only moves when a block confirms, never inside the mempool, so
+        # this always reads straight through to the underlying state.
+        return self._base.total_board_posts
 
     def credit(self, addr, amount):
         if amount <= 0:

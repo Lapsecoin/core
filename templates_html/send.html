@@ -23,15 +23,11 @@
   <div class="stat" style="flex-basis:220px">
     <div class="stat-label">Fee market</div>
     {% if fees.pending == 0 %}
-    <div class="stat-sub" style="margin-top:0">Mempool empty; any fee, including 0, clears immediately.</div>
+    <div class="stat-sub" style="margin-top:0">Mempool empty; ~{{ "%.3f"|format(fees.next_block) }} ticks/byte (relay floor) clears immediately.</div>
     {% else %}
     <div class="stat-sub" style="margin-top:0">
       {{ fees.pending }} pending &middot;
-      {% if fees.next_block > 0 %}
       <strong style="color:var(--accent)">~{{ "%.3f"|format(fees.next_block) }} ticks/byte to clear next block</strong>
-      {% else %}
-      any non-negative fee should clear next block
-      {% endif %}
     </div>
     {% endif %}
   </div>
@@ -59,12 +55,8 @@
       </div>
     </div>
     <div class="form-group" style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
-      <div style="flex:1 1 120px">
-        <label for="fee" title="See the fee market above; higher fee per byte gets picked up sooner.">Fee, in ticks</label>
-        <input type="number" id="fee" name="fee" value="0" min="0" style="width:100%">
-      </div>
       <div style="flex:1 1 220px">
-        <label for="passphrase">Your signing passphrase</label>
+        <label for="passphrase" title="Fee is set automatically to whatever clears the next block, never more (see fee market above).">Your signing passphrase</label>
         <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
       </div>
       <button type="submit" style="flex:0 0 auto">Sign &amp; Send</button>

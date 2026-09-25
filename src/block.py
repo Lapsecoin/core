@@ -530,11 +530,22 @@ def _apply_transactions(blk, state):
     canonical ordering requirement, a block can list its transactions in
     whatever order the builder chose, as long as each one is valid against
     the state as of applying the ones before it.
+
+    The board fee floor is the one exception: it is computed once, from
+    state.total_board_posts as it stood before this block's own
+    transactions, and held fixed for every transaction in the block (see
+    tx.validate's board_fee_floor_override). state.total_board_posts still
+    moves as board posts are applied below, that's what lets the next
+    block's floor be higher, but re-deriving the floor from it tx-by-tx
+    inside this same loop would mean a block packing enough board posts to
+    cross a step boundary invalidates its own later transactions, and so
+    itself, the instant it landed.
     """
+    board_floor = tx_mod.board_fee_floor(state.total_board_posts)
     for t in blk["transactions"]:
         if not isinstance(t, dict):
             return False, "transaction entry is not a dict"
-        ok, err = tx_mod.validate(t, state)
+        ok, err = tx_mod.validate(t, state, board_fee_floor_override=board_floor)
         if not ok:
             return False, f"invalid tx: {err}"
         state.apply_tx(t)
@@ -565,7 +576,7 @@ def validate(blk, state, chain):
     return True, None
 
 
-def assemble(tip, txs, builder_addr, iterations):
+def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0):
     """Assemble a candidate block from a mempool snapshot.
 
     Pure function: does not touch node state. Groups candidate transactions
@@ -587,7 +598,19 @@ def assemble(tip, txs, builder_addr, iterations):
                 get_vdf_iterations(chain). Taken directly rather than
                 a chain argument so callers that already computed it
                 (to run the VDF itself) don't pay for it twice.
+    board_fee_floor: the same frozen floor _apply_transactions will check
+                this block's board posts against (see tx.validate's
+                board_fee_floor_override). A board post already below it
+                is dropped here, before packing, rather than included and
+                left to fail block.validate() later: that failure would
+                invalidate the whole assembled block, wasting the VDF
+                proof built for it, not just that one transaction.
     """
+    if board_fee_floor:
+        txs = [t for t in txs
+               if not (isinstance(t, dict) and tx_mod.is_board_post(t)
+                       and t.get("fee", 0) < board_fee_floor)]
+
     next_height = tip["height"] + 1
 
     # Never earlier than the floor validation enforces. The clock is the

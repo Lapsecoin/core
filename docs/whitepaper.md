@@ -40,13 +40,17 @@ A transaction is a plain, visible dict: a sender address, a public key, a list o
 
 Nonces are sequential per sender, starting from zero: a transaction's nonce must be exactly one more than the sender's last confirmed nonce. This is the standard replay-protection scheme, the same one Bitcoin-style account models use.
 
-Fees are chosen by the sender, not fixed by the protocol. A transaction is valid as long as the sender's balance covers every output plus the fee. Builders are free to prioritize whichever pending transactions pay the most per byte, the same market-based mechanism Bitcoin uses to clear its mempool under load.
+Fees are chosen by the sender, not fixed by the protocol, with one exception noted in §4. A transaction is valid as long as the sender's balance covers every output plus the fee. Builders are free to prioritize whichever pending transactions pay the most per byte, the same market-based mechanism Bitcoin uses to clear its mempool under load.
+
+A block is capped at 2 MB. Bitcoin's own cap is sized for a ten-minute block; this chain's is a fifth of that, so the two carry the same bytes of chain growth per second, not a smaller one.
 
 Blocks apply their listed transactions in order, checking each one against the state as it stands after the transactions before it in the same block. There is no required canonical ordering across transactions; a block's builder can list them however it likes, as long as each one is individually valid at the point it is applied.
 
 ## 4. Fees and block rewards
 
 The builder receives the full block reward for every block, unconditionally, plus every transaction fee in that block. There is no split, and no separate party to pay out to.
+
+One kind of transaction carries a protocol-enforced minimum on top of the usual sender-bid fee: a post to the public on-chain board, tagged by its memo, must clear a floor that rises in steps as more posts confirm, network-wide, over the board's lifetime, so it cannot be spammed indefinitely at a flat cost. The floor rises slowly enough, relative to how many posts a single block can carry, that it cannot invalidate a block's-worth of already-broadcast posts at once.
 
 ## 5. Supply
 

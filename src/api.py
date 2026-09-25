@@ -85,7 +85,9 @@ Exchange / third-party integration:
 
 import collections
 import logging
+import math
 import os
+import re
 import secrets
 import sys
 import threading
@@ -101,7 +103,7 @@ import state as state_mod
 import settings as settings_mod
 import storage as storage_mod
 import tx as tx_mod
-from params import TICKS_PER_LAPSE, SUPPLY_CAP
+from params import TICKS_PER_LAPSE, SUPPLY_CAP, MIN_RELAY_FEE_RATE
 from version import LOCAL_VERSION
 
 log = logging.getLogger("ec.api")
@@ -120,24 +122,11 @@ BOARD_PER_PAGE = 20
 # and an unreadable graph. See _capped_claims.
 CLAIMED_GRAPH_LIMIT = 60
 
-# The board is just an ordinary transaction whose memo happens to start
-# with this tag: nothing at the protocol level marks a tx as a board post,
-# so a tag byte prefix (visible if you look at the raw tx elsewhere, e.g.
-# the explorer) is what finding one later relies on. Prepended by the
-# server, never typed by hand, so a memo can't accidentally land on the
-# board and a real memo can't be mistaken for one either.
-BOARD_MEMO_TAG = "[board] "
-
-# Burned per post, always, regardless of congestion.
-BOARD_POST_AMOUNT = 1
-
-# Floor on the fee half of a post, enforced server-side (not just a
-# default the form suggests): fee is free to fall to 0 on an ordinary
-# send since the protocol allows it, but a board post's total should
-# never be able to drop to the bare 1-tick burn with nothing paid to
-# clear it. 1 is the floor for an empty mempool; real congestion can
-# call for more, same as any other transaction's fee.
-BOARD_POST_MIN_FEE = 1
+# Board tagging, burn amount and the fee-floor staircase are all consensus
+# rules now (see tx.py: is_board_post, board_fee_floor and friends), not
+# server-side UI defaults, so this module just aliases them.
+BOARD_MEMO_TAG    = tx_mod.BOARD_MEMO_TAG
+BOARD_POST_AMOUNT = tx_mod.BOARD_POST_AMOUNT
 
 
 
@@ -449,12 +438,15 @@ def fee_estimate(node):
     transaction included.
 
     Returns {"pending": int, "min": float, "median": float, "max": float,
-    "next_block": float}. next_block is 0 when the mempool doesn't fill a
-    block at all, any non-negative fee would be included right now.
+    "next_block": float}. next_block never reads below params.MIN_RELAY_FEE_RATE:
+    that floor is enforced by the mempool regardless of congestion (see
+    mempool.Mempool.add), so an uncongested network never actually suggests 0,
+    the same reason no real network's fees are literally 0 when idle.
     """
     pending = node.mempool.all_txs()
     if not pending:
-        return {"pending": 0, "min": 0, "median": 0, "max": 0, "next_block": 0}
+        return {"pending": 0, "min": 0, "median": 0, "max": 0,
+                "next_block": MIN_RELAY_FEE_RATE}
 
     rates = sorted(tx_mod.fee_rate(t) for t in pending)
     n = len(rates)
@@ -462,12 +454,18 @@ def fee_estimate(node):
 
     v = node.view
     iterations = block_mod.get_vdf_iterations(v.chain)
-    candidate = block_mod.assemble(v.tip, pending, v.tip.get("builder") or "", iterations)
+    board_floor = tx_mod.board_fee_floor(v.state.total_board_posts)
+    candidate = block_mod.assemble(v.tip, pending, v.tip.get("builder") or "",
+                                   iterations, board_fee_floor=board_floor)
     included = candidate["transactions"]
     # Full block: the going rate is the lowest fee-per-byte that still made
-    # it in. Otherwise everything pending fits, so nothing is required to
-    # clear the next block.
-    next_block = min((tx_mod.fee_rate(t) for t in included), default=0) if len(included) < n else 0
+    # it in, whatever that is, congestion sets its own price. Otherwise
+    # everything pending fits, so the relay floor is what's actually
+    # required to clear the next block, not 0.
+    if len(included) < n:
+        next_block = min(tx_mod.fee_rate(t) for t in included)
+    else:
+        next_block = MIN_RELAY_FEE_RATE
 
     return {"pending": n, "min": rates[0], "median": median, "max": rates[-1],
             "next_block": next_block}
@@ -676,11 +674,50 @@ def _default_send_outputs(node):
     return ""
 
 
-def _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=""):
+_INSUFFICIENT_RE = re.compile(r"insufficient balance: have (\d+), need (\d+)")
+
+
+def _reword_insufficient_balance(msg):
+    """"insufficient balance: have 400000000, need 400001000" (ticks, the
+    only unit consensus speaks) read back as "have 4 LAPSE 0 ticks, need
+    4 LAPSE 1,000 ticks" so a person doesn't have to do the division
+    themselves to see they're short."""
+    m = _INSUFFICIENT_RE.search(msg)
+    if not m:
+        return msg
+    have, need = (int(g) for g in m.groups())
+    return (f"insufficient balance: have {fmt_balance(have)}, "
+            f"need {fmt_balance(need)}")
+
+
+def _auto_fee(node, outputs, memo="", floor=0):
+    """The fee this send will actually pay: whatever fee-per-byte clears
+    the next block right now (see fee_estimate), and no more. There is no
+    manual fee field for the same reason a real exchange doesn't ask you
+    to guess one: overpaying buys nothing, underpaying just delays the
+    transaction, and the node already knows the going rate live.
+
+    floor is a protocol-enforced minimum on top of that (board posts;
+    see tx.board_fee_floor), applied after the congestion-based fee so
+    it can only raise it, never lower it below what tx.validate requires.
+    """
+    nonce = max(node.view.state.get_nonce(node.addr),
+                node.mempool.pending_nonce(node.addr)) + 1
+    draft = {"from": node.addr, "pubkey": node.pk_hex, "outputs": outputs,
+             "nonce": nonce, "fee": 0}
+    if memo:
+        draft["memo"] = memo
+    size = tx_mod.tx_size(draft)
+    rate = fee_estimate(node)["next_block"]
+    return max(floor, math.ceil(rate * size))
+
+
+def _submit_and_alert(node, outputs, passphrase, ctx, memo="", floor=0):
     if not passphrase:
         ctx["alert_err"] = "Passphrase required."
         return
     try:
+        fee = _auto_fee(node, outputs, memo=memo, floor=floor)
         t, _fee = node.build_and_sign_tx(outputs, fee=fee, passphrase=passphrase or None,
                                           memo=memo)
         ok, result = node.submit_tx_from_api(t)
@@ -688,7 +725,7 @@ def _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=""):
             ctx["alert_ok_tx"]   = result
             ctx["alert_ok_verb"] = "Submitted."
         else:
-            ctx["alert_err"] = f"Error: {result}"
+            ctx["alert_err"] = f"Error: {_reword_insufficient_balance(result)}"
     except Exception as e:
         log.warning("[api] tx build/submit failed  err=%s", e)
         ctx["alert_err"] = f"Error: {e}"
@@ -1070,8 +1107,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/board", endpoint=pfx+"board")
     def board():
+        floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
         extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
-                     message_value="", fee_value=str(BOARD_POST_MIN_FEE))
+                     message_value="", board_fee_floor=floor)
         if csrf_token:   # private app only: composing needs a fee suggestion
             extra["fees"] = fee_estimate(node)
         page = request.args.get("page", 1, type=int) or 1
@@ -1388,7 +1426,6 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
                                  BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
-                                 BOARD_POST_MIN_FEE=BOARD_POST_MIN_FEE,
                                  MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     # Deliberately not touching the werkzeug logger. main.py already sets it
@@ -1442,7 +1479,6 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
                                  BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
-                                 BOARD_POST_MIN_FEE=BOARD_POST_MIN_FEE,
                                  MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     _close_db_after_request(app)
@@ -1568,7 +1604,6 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                                 _xlm_view(xlm_keyfile_path)
             else:
                 outputs_raw = request.form.get("outputs", "").strip()
-                fee_raw     = request.form.get("fee", "0").strip()
                 memo        = request.form.get("memo", "").strip()
                 csv_file    = request.files.get("csv_file")
                 if csv_file and csv_file.filename:
@@ -1576,13 +1611,6 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                 ctx["outputs_value"] = outputs_raw
                 ctx["memo_value"] = memo
                 outputs, errors = _parse_csv_outputs(outputs_raw)
-                try:
-                    fee = int(fee_raw or "0")
-                    if fee < 0:
-                        raise ValueError
-                except ValueError:
-                    errors.append("Fee must be a non-negative integer.")
-                    fee = 0
                 if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
                     errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
                 if errors:
@@ -1590,7 +1618,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                 elif not outputs:
                     ctx["alert_err"] = "No valid outputs."
                 else:
-                    _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=memo)
+                    _submit_and_alert(node, outputs, passphrase, ctx, memo=memo)
                     if ctx["alert_ok_tx"]:
                         ctx["alert_ok_verb"] = "Sent."
                         ctx["outputs_value"] = ""
@@ -1600,12 +1628,17 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     @app.route("/board", methods=["POST"], endpoint="board_post")
     def board_post():
         page = request.args.get("page", 1, type=int) or 1
+        # The floor is read fresh on every submit: it only moves when a
+        # block confirms (see tx.board_fee_floor), so this is always the
+        # same value tx.validate() will check the resulting tx against,
+        # modulo a block landing in between, which is exactly the rare
+        # "resubmit at the new floor" case that staircase is designed for.
+        floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
         message    = request.form.get("message", "").strip()
-        fee_raw    = request.form.get("fee", str(BOARD_POST_MIN_FEE)).strip()
         passphrase = request.form.get("passphrase", "").strip()
         extra = dict(csrf_token=csrf_token, fees=fee_estimate(node),
-                     compose_err="", compose_ok="",
-                     message_value=message, fee_value=fee_raw)
+                     compose_err="", compose_ok="", board_fee_floor=floor,
+                     message_value=message)
 
         def fail(msg):
             extra["compose_err"] = msg
@@ -1613,13 +1646,6 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
         if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
             return fail("Session expired; reload the page and try again.")
-        try:
-            fee = int(fee_raw or str(BOARD_POST_MIN_FEE))
-            if fee < BOARD_POST_MIN_FEE:
-                raise ValueError
-        except ValueError:
-            return fail(f"Fee must be at least {BOARD_POST_MIN_FEE} "
-                        f"({BOARD_POST_AMOUNT} burned + {BOARD_POST_MIN_FEE} fee minimum).")
         if not message:
             return fail("Write something to post.")
         memo = BOARD_MEMO_TAG + message
@@ -1629,7 +1655,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
         outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
         alert_ctx = {}
-        _submit_and_alert(node, outputs, fee, passphrase, alert_ctx, memo=memo)
+        _submit_and_alert(node, outputs, passphrase, alert_ctx, memo=memo, floor=floor)
         if alert_ctx.get("alert_err"):
             return fail(alert_ctx["alert_err"])
 

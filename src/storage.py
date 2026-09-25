@@ -311,6 +311,8 @@ class Storage:
         if rows:
             State.insert_many(rows).execute()
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
+        Emission.insert(key="total_board_posts",
+                         value=state.total_board_posts).on_conflict_replace().execute()
         state.mark_persisted()
 
     def _save_state_delta_inner(self, state):
@@ -332,6 +334,8 @@ class Storage:
         if not touched:
             Emission.insert(key="total_minted",
                             value=state.total_minted).on_conflict_replace().execute()
+            Emission.insert(key="total_board_posts",
+                            value=state.total_board_posts).on_conflict_replace().execute()
             return
 
         rows, gone = [], []
@@ -347,6 +351,8 @@ class Storage:
         if rows:
             State.insert_many(rows).on_conflict_replace().execute()
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
+        Emission.insert(key="total_board_posts",
+                         value=state.total_board_posts).on_conflict_replace().execute()
         state.mark_persisted()
 
     def save_state(self, state):
@@ -358,7 +364,7 @@ class Storage:
         balances = {r.addr: r.balance for r in rows}
         nonces   = {r.addr: r.nonce   for r in rows}
         em       = {r.key: r.value for r in Emission.select()}
-        return balances, nonces, em.get("total_minted", 0)
+        return balances, nonces, em.get("total_minted", 0), em.get("total_board_posts", 0)
 
     def state_exists(self):
         return State.select().exists()

@@ -1,5 +1,6 @@
 """Balance ledger, nonce tracking, and emission accounting. No disk I/O."""
 
+import tx as tx_mod
 from params import EMISSION_DECAY_NUMERATOR, EMISSION_DECAY_DENOMINATOR, SUPPLY_CAP
 
 
@@ -26,6 +27,7 @@ class State:
         self._balances    = {}  # addr -> int (ticks), never 0, see debit()
         self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
         self.total_minted = 0   # ticks minted via block rewards since genesis
+        self.total_board_posts = 0  # confirmed board posts since genesis
         # Addresses whose balance or nonce has moved since the last time
         # this state was written to disk. See dirty_addresses().
         self._dirty       = set()
@@ -119,6 +121,8 @@ class State:
         for out in tx_dict["outputs"]:
             self.credit(out["to"], out["amount"])
         self.set_nonce(sender, tx_dict["nonce"])
+        if tx_mod.is_board_post(tx_dict):
+            self.total_board_posts += 1
 
     # ------------------------------------------------------------------
     # Emission
@@ -151,7 +155,7 @@ class State:
 
     @classmethod
     def from_snapshot(cls, balances: dict, nonces: dict,
-                      total_minted: int) -> "State":
+                      total_minted: int, total_board_posts: int = 0) -> "State":
         """Restore a State from persisted data. Replaces direct field assignment.
 
         Zero balances are dropped on the way in, because the table on disk
@@ -166,6 +170,7 @@ class State:
         s._balances    = {addr: bal for addr, bal in balances.items() if bal}
         s._nonces      = nonces
         s.total_minted = total_minted
+        s.total_board_posts = total_board_posts
         return s
 
     # ------------------------------------------------------------------
@@ -185,6 +190,7 @@ class State:
         s._balances    = self._balances.copy()
         s._nonces      = self._nonces.copy()
         s.total_minted = self.total_minted
+        s.total_board_posts = self.total_board_posts
         s._dirty       = set(self._dirty)
         return s
 

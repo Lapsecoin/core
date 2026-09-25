@@ -31,12 +31,25 @@ EMISSION_DECAY_NUMERATOR   = 1386294265029292275522718605160789
 # assumed; it is here to name the target that calibration aims at.
 BLOCK_CYCLE_SECONDS = 120
 
-# 10 MB hard cap, raised only by network upgrade. The UDP transport sizes
-# its own chunking and decompression ceilings from this (see
+# 2 MB hard cap, raised only by network upgrade. Bitcoin's 10 MB (as of
+# its own recent bump) is sized for a 600s block; this chain targets
+# BLOCK_CYCLE_SECONDS = 120, a fifth of that, so 2 MB here carries the same
+# bytes-per-second of chain growth, not a smaller one. The UDP transport
+# sizes its own chunking and decompression ceilings from this (see
 # peer_udp.MAX_MESSAGE_BYTES) so the two cannot drift apart: they did, and
 # the half of this limit the wire could not carry was unusable and
 # silently so.
-BLOCK_SIZE_LIMIT = 10_000_000
+BLOCK_SIZE_LIMIT = 2_000_000
+
+# Minimum fee-per-byte a node relays or mines, independent of mempool
+# congestion. Mirrors Bitcoin's minrelaytxfee: a deliberate anti-spam
+# policy floor, not a consensus rule and not market pricing, which is why
+# real, uncongested networks never actually show a 0 fee even with spare
+# block space. Kept nominal in ticks (see TICKS_PER_LAPSE): the point is
+# that relaying costs something, not that it costs anything noticeable.
+# A future node-software upgrade can move this the way Bitcoin Core does,
+# as the ticks-per-LAPSE value shifts.
+MIN_RELAY_FEE_RATE = 1
 
 MAX_PEERS = 125
 

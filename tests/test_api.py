@@ -16,6 +16,7 @@ import peerpool as peerpool_mod
 import settings as settings_mod
 from chainstate import ChainState
 from node import NodeView
+import params
 from params import TICKS_PER_LAPSE
 from tests.fixtures import address, make_tx, seed_balance
 
@@ -57,10 +58,11 @@ def fresh():
 
 
 class TestFeeEstimate:
-    def test_empty_mempool_returns_all_zero(self):
+    def test_empty_mempool_still_suggests_the_relay_floor(self):
         node, _ = fresh()
         fees = api.fee_estimate(node)
-        assert fees == {"pending": 0, "min": 0, "median": 0, "max": 0, "next_block": 0}
+        assert fees == {"pending": 0, "min": 0, "median": 0, "max": 0,
+                        "next_block": params.MIN_RELAY_FEE_RATE}
 
     def test_reports_pending_count_and_rates(self):
         node, cs = fresh()
@@ -72,14 +74,14 @@ class TestFeeEstimate:
         assert fees["min"] == fees["max"] == fees["median"]
         assert fees["min"] > 0
 
-    def test_next_block_zero_when_mempool_below_capacity(self):
-        """A mempool that easily fits in one block needs no minimum fee to
-        clear the next block."""
+    def test_next_block_is_just_the_relay_floor_when_mempool_below_capacity(self):
+        """A mempool that easily fits in one block needs nothing beyond the
+        relay-policy floor to clear the next block."""
         node, cs = fresh()
         t1 = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, fee=0)
         node.mempool.add(t1)
         fees = api.fee_estimate(node)
-        assert fees["next_block"] == 0
+        assert fees["next_block"] == params.MIN_RELAY_FEE_RATE
 
     def test_next_block_reflects_the_real_cutoff_when_block_is_full(self):
         """When the mempool overflows one block, next_block must match
