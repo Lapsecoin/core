@@ -2,8 +2,8 @@
 {% block content %}
 <p class="stat-sub" style="margin:.2rem 0 .6rem">
   Public, permanent, on-chain. Posting burns {{ BOARD_POST_AMOUNT }} tick
-  (<a href="/address?addr={{ BURN_ADDRESS }}">burn address</a>) plus a fee, {{ board_fee_floor }} minimum
-  and rising as the board fills up.
+  (<a href="/address?addr={{ BURN_ADDRESS }}">burn address</a>), plus a separate network fee,
+  {{ board_fee_floor }} minimum and rising as the board fills up or with congestion.
 </p>
 
 <div class="card">
