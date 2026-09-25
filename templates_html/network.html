@@ -304,6 +304,7 @@
     if (!graph) initTopology();
     structureChanged = false;
     const known = new Set(peers.map(p => p.address));
+    const attemptingSet = new Set(attempting);
     const wantNodes = new Set(["self"]);
     const wantLinks = new Set();
 
@@ -311,7 +312,12 @@
 
     peers.forEach(p => {
       upsertNode(p.address, {
-        active: p.active, held: true,
+        // attempting explicitly cleared, not left out: Object.assign only
+        // overwrites keys present here, so a node that was a connecting
+        // candidate on an earlier poll and has since been admitted would
+        // otherwise keep reading attempting:true forever, still pulsing
+        // amber long after it settled into a real, held peer.
+        active: p.active, held: true, attempting: false,
         title: p.address + (p.height != null ? " · height " + p.height : "")
                + (p.active ? "" : " · cooldown")
                + (p.introduced_by ? " · introduced by " + p.introduced_by : ""),
@@ -355,7 +361,13 @@
         if (addr === self.addr) return;
         if (!known.has(addr)) {
           unheldSeen.add(addr);
-          upsertNode(addr, { held: false, title: addr + " · claimed by " + introducer + ", not held by this node" });
+          // Same staleness guard as the held-peer branch above: only
+          // clear attempting for an address this same poll's attempting
+          // list doesn't also name, or this would immediately undo the
+          // attempting:true the block above just set for it.
+          const fields = { held: false, title: addr + " · claimed by " + introducer + ", not held by this node" };
+          if (!attemptingSet.has(addr)) fields.attempting = false;
+          upsertNode(addr, fields);
           wantNodes.add(addr);
         }
         upsertLink(introducer, addr, { introduced: true });
