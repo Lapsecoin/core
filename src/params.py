@@ -40,6 +40,13 @@ BLOCK_SIZE_LIMIT = 10_000_000
 
 MAX_PEERS = 125
 
+# How many addresses a single PEERS message ever carries, sending or
+# receiving. One constant, not a "50" on the send side and a separately
+# maintained one on the receive side: the receive-side cap exists
+# specifically so a misbehaving sender can't just ignore its own copy of
+# this number and hand us more (see main.py's on_peers).
+PEERS_PER_MESSAGE_LIMIT = 50
+
 ADDRESS_WORD_COUNT = 12
 WORD_BITS          = 11
 

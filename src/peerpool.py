@@ -228,6 +228,18 @@ class PeerPool:
         with self._lock:
             return list(self._peers.keys())
 
+    def is_known(self, addr):
+        """True if addr is a currently held peer (on cooldown or not).
+
+        Membership, not trust in what it says: a peer already survived
+        ping/pong admission and the subnet diversity cap to get here, so
+        it's a much smaller set to abuse than "anyone on the internet who
+        knows the genesis hash" (see on_peers in main.py, the only caller
+        that matters: it uses this to decide whether to believe a PEERS
+        message at all)."""
+        with self._lock:
+            return addr in self._peers
+
     def snapshot(self):
         """Return [(addr, last_seen, active, height, version,
         http_reachable, introduced_by)] for display. active is False while

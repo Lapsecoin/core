@@ -46,6 +46,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from discovery_dht import DHTDiscovery, PUT_REFRESH_INTERVAL
+from params import PEERS_PER_MESSAGE_LIMIT
 from peerpool import is_routable_peer_addr
 
 log = logging.getLogger("ec.discovery")
@@ -366,7 +367,7 @@ class Discovery:
         if not held:
             return
         targets = random.sample(held, min(PEX_FANOUT, len(held)))
-        peers = held[:50]
+        peers = held[:PEERS_PER_MESSAGE_LIMIT]
         for addr in targets:
             self.udp.send_peers(addr, peers)
 
@@ -380,7 +381,7 @@ class Discovery:
             log.info("[peers] connected to %s, %d peer(s) in total",
                  addr, self.pool.count())
             # Exchange peer lists
-            self.udp.send_peers(addr, self.pool.get_all()[:50])
+            self.udp.send_peers(addr, self.pool.get_all()[:PEERS_PER_MESSAGE_LIMIT])
         return True
 
     def _punch_and_admit(self, relay: str, target: str, learned_from: str | None = None) -> bool:

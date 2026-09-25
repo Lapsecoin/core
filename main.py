@@ -29,7 +29,7 @@ from api import create_app, create_private_app
 from discovery import Discovery
 from gossip import Gossip
 from node import Node
-from params import DB_PATH
+from params import DB_PATH, PEERS_PER_MESSAGE_LIMIT
 from peer_udp import LAN_DISCOVERY_PORT, PORT_BIND_RETRIES, UDPTransport, probe_lan_ports
 from peerpool import PeerPool
 from swap_worker import SwapWorker
@@ -465,7 +465,21 @@ def main():
                 "sender": sender_addr, "stemming": stemming}, "fill response")
 
     def on_peers(peer_list, sender_addr):
-        for p in peer_list:
+        # MT_PEERS reaches here from anyone who can put a UDP packet on
+        # the wire with our (public, not secret) genesis hash attached,
+        # admitted peer or not: the genesis check upstream in peer_udp.py
+        # gates the protocol version, not who's allowed to speak. Without
+        # this, one packet from an address we've never pinged could queue
+        # an arbitrary number of ping/punch attempts against addresses it
+        # chose, at our expense and toward whoever it named. Requiring the
+        # sender to already be in our own pool means it already passed
+        # ping/pong admission and the subnet diversity cap (PeerPool.add)
+        # to get there, a far smaller set to abuse than "anyone". The
+        # length cap matches what send_peers ever sends, so a compromised
+        # or misbehaving admitted peer still can't hand us more than that.
+        if not pool.is_known(sender_addr):
+            return
+        for p in peer_list[:PEERS_PER_MESSAGE_LIMIT]:
             if isinstance(p, str) and ":" in p:
                 discovery.enqueue_candidate(p, learned_from=sender_addr)
         pool.touch(sender_addr)
