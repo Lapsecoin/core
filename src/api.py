@@ -1124,6 +1124,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "self": _self_info(),
             "peer_count": len(all_rows),
             "peers": _peer_dicts(all_rows[start:end]),
+            # The topology graph shows the whole known set, not just this
+            # page: MAX_PEERS (params.py) bounds it at 125, small enough to
+            # send in one response and small enough for a force layout to
+            # lay out smoothly.
+            "graph_peers": _peer_dicts(all_rows),
         })
 
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")
@@ -1335,7 +1340,8 @@ def create_app(node, pool, private_port=8335, public_port=8333,
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
                                  fmt_duration=fmt_duration,
                                  fmt_lapse_dp=fmt_lapse_dp,
-                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE)
+                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE,
+                                 BURN_ADDRESS=crypto_mod.burn_address())
     app.logger.setLevel(logging.WARNING)
     # Deliberately not touching the werkzeug logger. main.py already sets it
     # to ERROR, and this line used to put it back to INFO, which is a
@@ -1385,7 +1391,8 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
                                  fmt_duration=fmt_duration,
                                  fmt_lapse_dp=fmt_lapse_dp,
-                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE)
+                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE,
+                                 BURN_ADDRESS=crypto_mod.burn_address())
     app.logger.setLevel(logging.WARNING)
     _close_db_after_request(app)
 

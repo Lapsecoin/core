@@ -45,8 +45,8 @@
      and told nobody anything. #}
   <div class="stat">
     <div class="stat-label">Circulating</div>
-    <div class="stat-value" style="font-size:1rem" id="live-circulating">{{ fmt_lapse(info.total_minted) }}</div>
-    <div class="stat-sub" id="live-circulating-pct">{{ "%.4f"|format(info.total_minted / supply_cap * 100) }}% of 21M cap</div>
+    <div class="stat-value" style="font-size:1rem" id="live-circulating">{{ fmt_lapse(info.circulating) }}</div>
+    <div class="stat-sub" id="live-circulating-pct">{{ "%.4f"|format(info.total_minted / supply_cap * 100) }}% of 21M cap minted{% if info.burned %}, {{ fmt_lapse(info.burned) }} burned{% endif %}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Net emission</div>
@@ -158,9 +158,10 @@
         syncStr += ` <span style="font-size:0.85em;color:var(--muted)">(${eta})</span>`;
       }
       document.getElementById("live-sync").innerHTML = syncStr;
-      document.getElementById("live-circulating").textContent = fmtLapseWhole(info.total_minted);
+      document.getElementById("live-circulating").textContent = fmtLapseWhole(info.circulating);
       document.getElementById("live-circulating-pct").textContent =
-        (info.total_minted / SUPPLY_CAP * 100).toFixed(4) + "% of 21M cap";
+        (info.total_minted / SUPPLY_CAP * 100).toFixed(4) + "% of 21M cap minted"
+        + (info.burned ? ", " + fmtLapseWhole(info.burned) + " burned" : "");
       document.getElementById("live-reward").textContent = "+" + fmtLapse(info.block_reward);
       const diffEl = document.getElementById("live-block-time-diff");
       if (info.block_time_ratio === null) {

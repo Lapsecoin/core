@@ -3,7 +3,7 @@
 <h2>Board</h2>
 <p class="stat-sub" style="margin:-.2rem 0 .6rem">
   Public and permanent: every post is a real transaction, plaintext, visible to anyone reading the chain,
-  burning 1 tick to post.
+  burning 1 tick to the <a href="/address?addr={{ BURN_ADDRESS }}">burn address</a> to post.
   {% if is_private %}<a href="/send">Post something</a>.{% endif %}
 </p>
 
@@ -19,7 +19,9 @@
             <a href="/address?addr={{ t.from }}" class="hash-short board-addr">{{ t.from }}</a>
           </div>
           <div class="board-text">{{ t.memo[tag_len:] }}</div>
-          <div class="board-ts" data-ts="{{ ts | int if ts else 0 }}" title="block {{ height }}">&nbsp;</div>
+          <div class="board-ts">
+            <a href="/explorer/tx/{{ hsh }}" data-ts="{{ ts | int if ts else 0 }}" title="block {{ height }}, verify on the explorer">&nbsp;</a>
+          </div>
         </div>
       </div>
       {% endfor %}
@@ -75,7 +77,7 @@
     return new Date(ts * 1000).toLocaleDateString();
   }
 
-  document.querySelectorAll(".board-ts[data-ts]").forEach(el => {
+  document.querySelectorAll(".board-ts a[data-ts]").forEach(el => {
     const ts = parseInt(el.dataset.ts, 10);
     if (ts) el.textContent = fmtTs(ts);
   });

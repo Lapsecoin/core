@@ -543,6 +543,13 @@ class Node:
             "address":      self.addr,
             "peer_count":   self.pool.count(),
             "total_minted": v.state.total_minted,
+            # total_minted only ever grows (it tracks emission against the
+            # cap, see compute_can_mint) and burning moves ticks into an
+            # ordinary balance, the burn address's, so it doesn't fall out
+            # of total_minted on its own. Circulating is what's actually
+            # spendable by someone: minted minus whatever's been burned.
+            "burned":       v.state.get_balance(crypto.burn_address()),
+            "circulating":  v.state.total_minted - v.state.get_balance(crypto.burn_address()),
             "can_mint":     v.state.compute_can_mint(),
             "block_reward": v.state.compute_block_reward(),
             "block_time_ratio": self.own_block_time_ratio(),

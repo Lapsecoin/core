@@ -11,6 +11,13 @@
     <button type="submit">Look up</button>
   </form>
 </div>
+{% if addr == BURN_ADDRESS %}
+<div class="card" style="border-color:var(--accent)">
+  &#128293; This is the burn address: a fixed, valid address nobody holds the key to
+  (see <code>crypto.burn_address()</code>). Anything sent here, including every
+  <a href="/board">board</a> post's fee, is gone for good.
+</div>
+{% endif %}
 {% if holder_count %}
 <div class="card wealth">
   <div class="card-title">Wealth distribution ({{ holder_count }} holder{{ 's' if holder_count != 1 }})</div>

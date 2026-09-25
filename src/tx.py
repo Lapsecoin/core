@@ -147,6 +147,8 @@ def _check_fields_and_outputs(tx_dict):
             return False, "output amounts must be positive integers"
         if not crypto.is_valid_address(out["to"]):
             return False, f"invalid address format: {out['to']!r}"
+        if out["to"] == tx_dict.get("from"):
+            return False, "cannot send to your own address"
     fee = tx_dict["fee"]
     if not isinstance(fee, int) or fee < 0:
         return False, "fee must be a non-negative integer"

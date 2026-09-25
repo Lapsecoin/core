@@ -20,9 +20,11 @@
   </div>
   <div id="topology" class="topology"></div>
   <div class="stat-sub" style="margin-top:.3rem">
-    This node's own view of its peers, not a shared network state: a dot fades as its peer goes quiet,
+    This node's own view of its peers, all {{ peer_count }} of them, not a shared network state:
     the same way <a href="https://bitnodes.io/nodes/network-map/" target="_blank" rel="noopener">Bitnodes</a>
-    shows a crawler's own view rather than trying to get every node to agree on one.
+    shows a crawler's own view rather than trying to get every node to agree on one. Green means this node
+    currently trusts the peer (no recent strike put it in cooldown); a peer this node has actually lost
+    contact with for good just disappears from here, the same as it does from the table below.
   </div>
 </div>
 
@@ -156,17 +158,16 @@
     return words.length > 2 ? words.slice(0, 2).join(".") + "…" : addr;
   }
 
-  // Liveness is shown as a continuous fade, not just the table's two
-  // states: a peer heard from seconds ago is bright, one from minutes
-  // ago is dim, matching how quiet it's actually been rather than
-  // snapping between "active" and "cooldown" the moment a cutoff is
-  // crossed. Floors at .2 rather than 0 so an old peer never vanishes,
-  // only fades, the same choice the table's "cooldown" row makes by
-  // still listing it.
-  function livenessAlpha(lastSeen) {
-    if (!lastSeen) return .3;
-    const ageMin = (Date.now() / 1000 - lastSeen) / 60;
-    return Math.max(.2, 1 - ageMin / 15);
+  // active here is exactly the same signal the table's "active"/"cooldown"
+  // column already shows: PeerPool only puts a peer in cooldown after a
+  // real strike (bad or missing response), never on a guessed timeout, so
+  // green really does mean "this node currently trusts it", not a
+  // freshness estimate invented on top. A peer PeerPool has actually
+  // dropped (STALE_SECONDS of silence) simply isn't in graph_peers on the
+  // next poll, the same way it drops off the table, rather than being
+  // shown here as some third "probably gone" state nothing confirmed.
+  function nodeColor(p) {
+    return p.active ? "#2f7a4f" : "#b9b29b";
   }
 
   let graph = null;
@@ -179,9 +180,7 @@
       .nodeId("id")
       .nodeLabel(n => n.title)
       .nodeVal(n => n.self ? 10 : 5)
-      .nodeColor(n => n.self
-        ? "#b35a0c"
-        : `rgba(47,79,108,${n.alpha})`)
+      .nodeColor(n => n.self ? "#b35a0c" : nodeColor(n))
       .linkColor(() => "rgba(185,178,155,.6)")
       .linkWidth(1)
       .cooldownTicks(60)
@@ -202,8 +201,9 @@
     peers.forEach((p, i) => {
       const id = "peer" + i;
       nodes.push({
-        id, title: p.address + (p.height != null ? " · height " + p.height : ""),
-        alpha: livenessAlpha(p.last_seen),
+        id, active: p.active,
+        title: p.address + (p.height != null ? " · height " + p.height : "")
+               + (p.active ? "" : " · cooldown"),
         href: p.http_reachable ? "http://" + p.address : null,
       });
       links.push({ source: "self", target: id });
@@ -235,7 +235,7 @@
         tbody.appendChild(tr);
       }
 
-      renderTopology(data.self, data.peers);
+      renderTopology(data.self, data.graph_peers);
 
       document.getElementById("peers-count").textContent =
         data.peer_count + " known peer" + (data.peer_count !== 1 ? "s" : "");
