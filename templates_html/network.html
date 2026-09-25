@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Peers</h2>
+<h2>Network</h2>
 {% if is_private %}
 <div class="card">
   <div class="card-title">Add a peer manually</div>
@@ -12,11 +12,21 @@
   <div id="add-peer-msg" style="font-size:.85rem;margin-top:.4rem"></div>
 </div>
 {% endif %}
+
 <div class="card">
   <div class="card-title" style="display:flex;justify-content:space-between;align-items:baseline;gap:.75rem">
     <span id="peers-count">{{ peer_count }} known peer{{ "s" if peer_count != 1 }}</span>
     <a class="btn-sm" href="/api/peers/download" download="lapsecoin_peers.json">Download JSON</a>
   </div>
+  <div id="topology" class="topology" aria-hidden="true">
+    <div class="topo-self" id="topo-self" title="{{ self_addr or 'self' }}">
+      <span class="topo-dot"></span><span class="topo-label">you</span>
+    </div>
+    <div id="topo-peers"></div>
+  </div>
+</div>
+
+<div class="card">
   <div class="table-wrap">
   <table class="stacked-wide">
     <colgroup>
@@ -56,24 +66,59 @@
 </div>
 {% if total_pages > 1 %}
 <nav class="pager" aria-label="Pagination">
-  {% if has_prev %}<a href="/peers?page={{ page - 1 }}">Prev</a>{% endif %}
+  {% if has_prev %}<a href="/network?page={{ page - 1 }}">Prev</a>{% endif %}
   {% for p in page_window %}
     {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
     {% elif p == page %}<span class="pager-current">{{ p }}</span>
-    {% else %}<a href="/peers?page={{ p }}">{{ p }}</a>
+    {% else %}<a href="/network?page={{ p }}">{{ p }}</a>
     {% endif %}
   {% endfor %}
-  {% if has_next %}<a href="/peers?page={{ page + 1 }}">Next</a>{% endif %}
+  {% if has_next %}<a href="/network?page={{ page + 1 }}">Next</a>{% endif %}
 </nav>
 {% endif %}
+<style>
+  /* A hub-and-spoke view of this node's own peer set: it's the only
+     topology a node can honestly show (who it talks to, not who talks
+     to whom), so it's drawn as one, not dressed up as a full mesh. */
+  .topology {
+    position: relative; height: 220px; margin: .6rem 0 .3rem;
+    border: 1px solid var(--rule-lt); background: var(--paper-2);
+    overflow: hidden;
+  }
+  .topo-self, .topo-peer {
+    position: absolute; top: 50%; left: 50%;
+    display: flex; flex-direction: column; align-items: center; gap: .2rem;
+    transform: translate(-50%, -50%);
+  }
+  .topo-dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--live); box-shadow: 0 0 0 4px rgba(47,79,108,.15);
+  }
+  .topo-self .topo-dot { width: 16px; height: 16px; background: var(--accent); box-shadow: 0 0 0 5px rgba(179,90,12,.18); }
+  .topo-peer.active .topo-dot { background: var(--green); box-shadow: 0 0 0 4px rgba(0,0,0,.06); }
+  .topo-peer:not(.active) .topo-dot { background: var(--rule-lt); }
+  .topo-label {
+    font-size: .68rem; color: var(--muted); font-family: var(--mono);
+    white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .topo-spoke {
+    position: absolute; top: 50%; left: 50%; height: 1px;
+    background: var(--rule-lt); transform-origin: 0 0; z-index: 0;
+  }
+  .topo-self, .topo-peer { z-index: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    .topo-peer.active .topo-dot { animation: topo-pulse 2.4s ease-in-out infinite; }
+  }
+  @keyframes topo-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(0,0,0,.06); }
+    50% { box-shadow: 0 0 0 8px rgba(0,0,0,.03); }
+  }
+</style>
 <script>
 (function () {
   const PAGE = {{ page }};
   function fmtTs(ts) {
     if (!ts) return "n/a";
-    // last_seen can arrive as a float (time.time() on the server); floor
-    // the whole difference, not just the later division results, or a
-    // sub-minute "Xs ago" ends up as a long unrounded decimal string.
     const diff = Math.floor(Date.now() / 1000 - ts);
     if (diff < 5) return "just now";
     if (diff < 60) return diff + "s ago";
@@ -90,7 +135,6 @@
     td.dataset.label = label;
     if (opts.cls) td.className = opts.cls;
     if (opts.color) td.style.color = opts.color;
-    if (opts.italic) td.style.fontStyle = "italic";
     if (opts.title) td.title = opts.title;
     return td;
   }
@@ -117,7 +161,6 @@
   function buildRow(p) {
     const tr = document.createElement("tr");
     tr.appendChild(addressCell(p));
-
     tr.appendChild(cell("Height", p.height === null || p.height === undefined ? "?" : p.height));
     tr.appendChild(cell("Version", p.version || "unknown", {color: p.version ? null : "var(--muted)"}));
     tr.appendChild(cell("Last seen", fmtTs(p.last_seen), {
@@ -136,6 +179,41 @@
     tr.appendChild(cell("Last seen", "just now"));
     tr.appendChild(cell("Status", "active", {color: "var(--green)"}));
     return tr;
+  }
+
+  function shortAddr(addr) {
+    if (!addr) return "peer";
+    const words = addr.split(".");
+    return words.length > 2 ? words.slice(0, 2).join(".") + "…" : addr;
+  }
+
+  function renderTopology(peers) {
+    const wrap = document.getElementById("topo-peers");
+    const box = document.getElementById("topology");
+    // Remove old spokes/peer nodes, keep the self node.
+    wrap.innerHTML = "";
+    const radius = Math.min(box.clientWidth, box.clientHeight) / 2 - 38;
+    const n = peers.length || 1;
+    peers.forEach((p, i) => {
+      const angle = (2 * Math.PI * i) / n - Math.PI / 2;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+
+      const spoke = document.createElement("div");
+      spoke.className = "topo-spoke";
+      const len = Math.hypot(x, y);
+      spoke.style.width = len + "px";
+      spoke.style.transform = `rotate(${Math.atan2(y, x)}rad)`;
+      wrap.appendChild(spoke);
+
+      const node = document.createElement("div");
+      node.className = "topo-peer" + (p.active ? " active" : "");
+      node.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+      node.title = p.address + (p.height != null ? " · height " + p.height : "");
+      node.innerHTML = '<span class="topo-dot"></span><span class="topo-label"></span>';
+      node.querySelector(".topo-label").textContent = shortAddr(p.address);
+      wrap.appendChild(node);
+    });
   }
 
   const statusEl = document.getElementById("live-status");
@@ -161,6 +239,8 @@
         tr.appendChild(td);
         tbody.appendChild(tr);
       }
+
+      renderTopology(data.peers);
 
       document.getElementById("peers-count").textContent =
         data.peer_count + " known peer" + (data.peer_count !== 1 ? "s" : "");

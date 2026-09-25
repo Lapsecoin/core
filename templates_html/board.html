@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Board</h2>
+<p class="stat-sub" style="margin:-.2rem 0 .6rem">
+  Public and permanent: every post is a real transaction, plaintext, visible to anyone reading the chain.
+  {% if is_private %}<a href="/send">Post something</a>.{% endif %}
+</p>
+
+<div class="card">
+  <div class="card-title">{{ post_count }} post{{ "s" if post_count != 1 }}</div>
+  <div class="board" id="board-feed">
+    {% if rows %}
+      {% for height, ts, hsh, t in rows %}
+      {% set mine = t.from == own_addr %}
+      <div class="board-row {{ 'mine' if mine }}">
+        <div class="board-bubble">
+          <div class="board-meta">
+            <a href="/address?addr={{ t.from }}" class="hash-short board-addr">{{ t.from }}</a>
+          </div>
+          <div class="board-text">{{ t.memo[tag_len:] }}</div>
+          <div class="board-ts" data-ts="{{ ts | int if ts else 0 }}" title="block {{ height }}">&nbsp;</div>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p style="color:var(--muted);text-align:center">Nothing posted yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if total_pages > 1 %}
+<nav class="pager" aria-label="Pagination">
+  {% if has_prev %}<a href="/board?page={{ page - 1 }}">Prev</a>{% endif %}
+  {% for p in page_window %}
+    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+    {% elif p == page %}<span class="pager-current">{{ p }}</span>
+    {% else %}<a href="/board?page={{ p }}">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+  {% if has_next %}<a href="/board?page={{ page + 1 }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+
+<style>
+  .board { display: flex; flex-direction: column; gap: .5rem; padding-top: .2rem; }
+  .board-row { display: flex; }
+  .board-row.mine { justify-content: flex-end; }
+  .board-bubble {
+    max-width: min(32rem, 80%);
+    border: 1px solid var(--rule-lt); background: var(--paper-2);
+    padding: .45rem .7rem; border-radius: .6rem .6rem .6rem 0;
+  }
+  .board-row.mine .board-bubble {
+    background: rgba(179,90,12,.08); border-color: var(--accent);
+    border-radius: .6rem .6rem 0 .6rem;
+  }
+  .board-meta { font-size: .72rem; margin-bottom: .15rem; }
+  .board-addr { font-family: var(--mono); }
+  .board-text { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+  .board-ts { font-size: .68rem; color: var(--muted); text-align: right; margin-top: .2rem; }
+</style>
+<script>
+(function () {
+  const PAGE = {{ page }};
+
+  function fmtTs(ts) {
+    if (!ts) return "";
+    const diff = Math.floor(Date.now() / 1000 - ts);
+    if (diff < 5) return "just now";
+    if (diff < 60) return diff + "s ago";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+    if (diff < 2592000) return Math.floor(diff / 86400) + "d ago";
+    return new Date(ts * 1000).toLocaleDateString();
+  }
+
+  document.querySelectorAll(".board-ts[data-ts]").forEach(el => {
+    const ts = parseInt(el.dataset.ts, 10);
+    if (ts) el.textContent = fmtTs(ts);
+  });
+
+  // Only page 1 polls for new posts landing; older pages are history,
+  // not a live view, so they stay exactly what was rendered.
+  if (PAGE !== 1) return;
+
+  let knownFirstHash = null;
+  const first = document.querySelector(".board-row");
+  const statusEl = document.getElementById("live-status");
+
+  async function poll() {
+    try {
+      const res = await fetch("/api/board?page=1", {cache: "no-store"});
+      if (!res.ok) throw new Error("bad status " + res.status);
+      const data = await res.json();
+      const latest = data.posts[0] && data.posts[0].hash;
+      if (knownFirstHash === null) {
+        knownFirstHash = latest || "";
+      } else if (latest && latest !== knownFirstHash) {
+        statusEl.textContent = "new posts – reload to see them";
+      }
+    } catch (e) {
+      // Quiet failure: this is a courtesy nudge, not a required feature.
+    }
+  }
+
+  poll();
+  setInterval(poll, 15000);
+})();
+</script>
+{% endblock %}

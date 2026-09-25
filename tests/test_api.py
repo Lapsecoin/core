@@ -337,7 +337,7 @@ class TestOddsPage:
 
 
 class TestPeersPage:
-    """Smoke test the /peers route end to end: real PeerPool.snapshot()
+    """Smoke test the /network route end to end: real PeerPool.snapshot()
     shape, self-row wiring, and the height/version columns all render
     without a template/route mismatch. There is deliberately no wallet
     column: a payout address is not something a peer tells us, and not
@@ -354,11 +354,16 @@ class TestPeersPage:
         return app.test_client()
 
     def test_peers_page_renders(self):
-        resp = self._client().get("/peers")
+        resp = self._client().get("/network")
         assert resp.status_code == 200
 
+    def test_old_peers_url_redirects(self):
+        resp = self._client().get("/peers")
+        assert resp.status_code == 301
+        assert resp.headers["Location"].endswith("/network")
+
     def test_peers_page_shows_self_and_peer_data(self):
-        html = self._client().get("/peers").get_data(as_text=True)
+        html = self._client().get("/network").get_data(as_text=True)
         assert ">self<" in html  # falls back to "self" when own external addr is unknown
         assert "1.2.3.4:9000" in html
         assert "5.6.7.8:9000" in html
@@ -383,7 +388,7 @@ class TestUpdateNav:
         checker.severity = severity
         checker.latest_version = "9.9.9"
         app = api.create_app(node, pool, update_checker=checker)
-        return app.test_client().get("/peers").get_data(as_text=True)
+        return app.test_client().get("/network").get_data(as_text=True)
 
     def test_no_link_when_no_update(self):
         # Checks for the update link's own rendered element, not a loose

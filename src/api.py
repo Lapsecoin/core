@@ -14,7 +14,8 @@ Public app  (default port 8333, externally reachable):
     GET  /address?addr=<addr>         address balance and history
     GET  /address/distribution/<n>    addresses in wealth-distribution bucket n
     GET  /whitepaper                  protocol whitepaper
-    GET  /peers                       connected peer list
+    GET  /network                     connected peer list
+    GET  /board                       public board (tagged-memo transactions)
     GET  /send                        403 (local interface only)
 
   JSON API (Content-Type: application/json):
@@ -89,7 +90,7 @@ import sys
 import threading
 
 import markdown
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -110,6 +111,15 @@ BLOCKS_PER_PAGE  = 8
 PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
 DASHBOARD_TXS_PER_PAGE = 6
+BOARD_PER_PAGE = 20
+
+# The board is just an ordinary transaction whose memo happens to start
+# with this tag: nothing at the protocol level marks a tx as a board post,
+# so a tag byte prefix (visible if you look at the raw tx elsewhere, e.g.
+# the explorer) is what finding one later relies on. Prepended by the
+# server, never typed by hand, so a memo can't accidentally land on the
+# board and a real memo can't be mistaken for one either.
+BOARD_MEMO_TAG = "[board] "
 
 
 
@@ -251,6 +261,25 @@ def _recent_committed_txs(chain, limit, offset=0):
             rows.append((blk["height"], tx_mod.tx_hash(t), t, _tx_amount(t)))
             if len(rows) >= limit:
                 return rows
+    return rows
+
+
+def _board_posts(chain):
+    """Every board post on chain, tip first.
+
+    A board post is an ordinary tx whose memo starts with BOARD_MEMO_TAG,
+    so finding them means reading every transaction's memo, the same full
+    scan address_lookup already does for a balance's history. Small
+    enough a chain for that to be fine; if it stops being one, this is
+    where to add an index.
+    """
+    rows = []
+    for blk in reversed(chain):
+        for t in reversed(blk.get("transactions", [])):
+            memo = t.get("memo") or ""
+            if memo.startswith(BOARD_MEMO_TAG):
+                rows.append((blk["height"], blk.get("timestamp"),
+                             tx_mod.tx_hash(t), t))
     return rows
 
 
@@ -737,7 +766,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "dashboard": "dashboard", "explorer": "explorer",
             "block_detail": "explorer", "tx_detail": "explorer",
             "address_lookup": "address", "distribution_bucket": "address",
-            "peers": "peers", "odds": "odds",
+            "board": "board", "network": "network", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
             "settings": "settings",
             "market": "market", "market_take": "market",
@@ -960,21 +989,60 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return {"height": node.view.chain[-1].get("height", 0),
                 "version": LOCAL_VERSION, "addr": _self_external_addr()}
 
-    @app.route("/peers", endpoint=pfx+"peers")
-    def peers():
+    @app.route("/network", endpoint=pfx+"network")
+    def network():
         all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
         total_pages = max(-(-len(all_rows) // PEERS_PER_PAGE), 1)
         page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
         start = (page - 1) * PEERS_PER_PAGE
         end   = start + PEERS_PER_PAGE
         self_height = node.view.chain[-1].get("height", 0)
-        return render_template("peers.html", title="Peers", rows=all_rows[start:end],
+        return render_template("network.html", title="Network", rows=all_rows[start:end],
                                peer_count=len(all_rows),
                                page=page, total_pages=total_pages,
                                page_window=_pagination_window(page, total_pages),
                                has_prev=page > 1, has_next=end < len(all_rows),
                                self_height=self_height,
                                self_version=LOCAL_VERSION, self_addr=_self_external_addr())
+
+    @app.route("/peers", endpoint=pfx+"peers_redirect")
+    def peers_redirect():
+        # Old bookmarks/links: the page moved to /network, keep it working.
+        return redirect(f"/network?{request.query_string.decode()}"
+                         if request.query_string else "/network", code=301)
+
+    @app.route("/board", endpoint=pfx+"board")
+    def board():
+        all_rows = _board_posts(node.view.chain)
+        total_pages = max(-(-len(all_rows) // BOARD_PER_PAGE), 1)
+        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
+        start = (page - 1) * BOARD_PER_PAGE
+        end   = start + BOARD_PER_PAGE
+        return render_template("board.html", title="Board", rows=all_rows[start:end],
+                               post_count=len(all_rows), own_addr=node.addr,
+                               tag_len=len(BOARD_MEMO_TAG),
+                               page=page, total_pages=total_pages,
+                               page_window=_pagination_window(page, total_pages),
+                               has_prev=page > 1, has_next=end < len(all_rows))
+
+    @app.route("/api/board", endpoint=pfx+"api_board")
+    def api_board():
+        page = max(request.args.get("page", 1, type=int) or 1, 1)
+        all_rows = _board_posts(node.view.chain)
+        total_pages = max(-(-len(all_rows) // BOARD_PER_PAGE), 1)
+        page  = min(page, total_pages)
+        start = (page - 1) * BOARD_PER_PAGE
+        end   = start + BOARD_PER_PAGE
+        return jsonify({
+            "post_count": len(all_rows),
+            "own_addr": node.addr,
+            "posts": [
+                {"height": h, "timestamp": ts, "hash": hsh,
+                 "from": t.get("from", ""),
+                 "memo": (t.get("memo") or "")[len(BOARD_MEMO_TAG):]}
+                for h, ts, hsh, t in all_rows[start:end]
+            ],
+        })
 
     # Race-odds data for the current tip, computed once per tip and held
     # here rather than in a module global: one cache per app, keyed by
@@ -1392,7 +1460,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                    fees=fee_estimate(node), csrf_token=csrf_token,
                    outputs_value=_default_send_outputs(node),
                    memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
-                   asset="lapse",
+                   post_to_board_value=False, asset="lapse",
                    xlm_addr=xlm_addr, xlm_spendable=xlm_spendable,
                    xlm_locked=xlm_locked, xlm_to_value="",
                    xlm_amount_value="", xlm_merge_value=False,
@@ -1433,15 +1501,30 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                             ctx["xlm_addr"], ctx["xlm_spendable"], ctx["xlm_locked"] = \
                                 _xlm_view(xlm_keyfile_path)
             else:
-                outputs_raw = request.form.get("outputs", "").strip()
+                post_to_board = request.form.get("post_to_board") == "1"
                 fee_raw     = request.form.get("fee", "0").strip()
                 memo        = request.form.get("memo", "").strip()
-                csv_file    = request.files.get("csv_file")
-                if csv_file and csv_file.filename:
-                    outputs_raw = csv_file.read().decode()
-                ctx["outputs_value"] = outputs_raw
-                ctx["memo_value"] = memo
-                outputs, errors = _parse_csv_outputs(outputs_raw)
+                ctx["post_to_board_value"] = post_to_board
+                errors = []
+                if post_to_board:
+                    # A board post is a self-send carrying a tagged memo,
+                    # not a payment, so the outputs field is derived here
+                    # rather than trusted from the form: what's on the
+                    # board is only ever what this branch built.
+                    outputs_raw = f"{node.addr},1"
+                    ctx["outputs_value"] = ""
+                    if not memo:
+                        errors.append("Write something to post.")
+                    memo = BOARD_MEMO_TAG + memo
+                else:
+                    outputs_raw = request.form.get("outputs", "").strip()
+                    csv_file = request.files.get("csv_file")
+                    if csv_file and csv_file.filename:
+                        outputs_raw = csv_file.read().decode()
+                    ctx["outputs_value"] = outputs_raw
+                ctx["memo_value"] = memo[len(BOARD_MEMO_TAG):] if post_to_board else memo
+                outputs, parse_errors = _parse_csv_outputs(outputs_raw)
+                errors.extend(parse_errors)
                 try:
                     fee = int(fee_raw or "0")
                     if fee < 0:
@@ -1450,7 +1533,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                     errors.append("Fee must be a non-negative integer.")
                     fee = 0
                 if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
-                    errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
+                    errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES - len(BOARD_MEMO_TAG) if post_to_board else tx_mod.MAX_MEMO_BYTES} bytes.")
                 if errors:
                     ctx["alert_err_lines"] = errors
                 elif not outputs:
@@ -1458,7 +1541,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                 else:
                     _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=memo)
                     if ctx["alert_ok_tx"]:
-                        ctx["alert_ok_verb"] = "Sent."
+                        ctx["alert_ok_verb"] = "Posted." if post_to_board else "Sent."
                         ctx["outputs_value"] = ""
                         ctx["memo_value"] = ""
         return render_template("send.html", **ctx)
