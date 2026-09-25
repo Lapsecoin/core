@@ -107,6 +107,23 @@ def public_key_to_address(public_key_bytes):
     return ".".join(words)
 
 
+def burn_address():
+    """A fixed, syntactically valid address nobody holds the key to.
+
+    Addresses are sha256(pubkey) folded into words (see
+    public_key_to_address above), a one-way hash, so there is no key that
+    maps *to* a chosen word sequence, only the reverse. Picking the
+    wordlist's own first ADDRESS_WORD_COUNT entries, rather than a real
+    address seen on chain, makes that plain on sight and costs nothing to
+    verify: the odds of an actual keypair ever hashing to this exact
+    sequence are the same 1-in-2^132 as for any other fixed sequence.
+    Same idea as Bitcoin's well-known eater addresses or Ethereum's
+    0x000...dEaD, just built from this chain's own address format instead
+    of borrowed from another one.
+    """
+    return ".".join(_WORDLIST[:ADDRESS_WORD_COUNT])
+
+
 def is_valid_address(addr):
     """True if addr is exactly ADDRESS_WORD_COUNT dot-separated words, all
     drawn from the BIP39 wordlist. Does not (and cannot) verify the address

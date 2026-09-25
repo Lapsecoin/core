@@ -786,6 +786,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return send_file(os.path.join(_base_dir(), "lapsecoin.svg"),
                          mimetype="image/svg+xml", max_age=3600)
 
+    @app.route("/vendor/force-graph.min.js", endpoint=pfx+"vendor_force_graph")
+    def vendor_force_graph():
+        # Served from disk rather than a CDN, same reasoning as the
+        # favicon above: a node's own UI shouldn't depend on a
+        # third-party host being reachable. See vendor/README.md.
+        return send_file(os.path.join(_base_dir(), "vendor", "force-graph.min.js"),
+                         mimetype="application/javascript", max_age=86400)
+
     @app.route("/lapsecoin.png", endpoint=pfx+"icon_png")
     def icon_png():
         return _serve_icon(200, 200, "png")
@@ -1507,11 +1515,14 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                 ctx["post_to_board_value"] = post_to_board
                 errors = []
                 if post_to_board:
-                    # A board post is a self-send carrying a tagged memo,
-                    # not a payment, so the outputs field is derived here
-                    # rather than trusted from the form: what's on the
-                    # board is only ever what this branch built.
-                    outputs_raw = f"{node.addr},1"
+                    # A board post burns 1 tick to a fixed, keyless address
+                    # rather than paying it to yourself: it costs something
+                    # real, the same way any tx does, without quietly
+                    # inflating your own transaction history every time you
+                    # post. The outputs field is derived here rather than
+                    # trusted from the form: what's on the board is only
+                    # ever what this branch built.
+                    outputs_raw = f"{crypto_mod.burn_address()},1"
                     ctx["outputs_value"] = ""
                     if not memo:
                         errors.append("Write something to post.")
