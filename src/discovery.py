@@ -40,7 +40,6 @@ External public interface (called from main.py):
 
 import json
 import logging
-import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -98,6 +97,12 @@ class Discovery:
         self.port         = port
         self._candidates  = {}  # addr -> learned_from addr, or None (DHT/CLI)
         self._lock        = threading.Lock()
+        # addr -> monotonic time we last sent it our peer list. Regossip
+        # targets the least-recently-sent-to peers each round rather than
+        # a fresh random sample, so "how long can it take a held peer to
+        # get our latest list" has an actual bound (see _regossip_peers)
+        # instead of resting on chance repeatedly picking the same ones.
+        self._last_regossiped = {}
 
         if not node_pubkey_hex:
             log.warning("[dht] no node_pubkey_hex; all such nodes share slot 0")
@@ -359,14 +364,34 @@ class Discovery:
         return False
 
     def _regossip_peers(self):
-        """Re-send our current peer list to a random handful of peers we
-        already hold. The only other sender of PEERS is _ping_and_admit,
-        and that fires once, at admission; without this, anything learned
-        after two nodes connected never reached either of them."""
+        """Re-send our current peer list to a handful of peers we already
+        hold, the ones it's been longest since we last sent to (or never
+        have). The only other sender of PEERS is _ping_and_admit, and that
+        fires once, at admission; without this, anything learned after two
+        nodes connected never reached either of them.
+
+        Least-recently-sent-to rather than a fresh random sample each
+        round: with N held peers and PEX_FANOUT sent to per round, every
+        one of them gets an update within ceil(N / PEX_FANOUT) rounds,
+        guaranteed, not merely likely. A peer that drops out of the pool
+        (evicted, banned) just stops being tracked here (see _forget-style
+        cleanup below) rather than permanently holding a slot in the
+        rotation for an address that no longer needs one.
+        """
         held = self.pool.get_all()
         if not held:
             return
-        targets = random.sample(held, min(PEX_FANOUT, len(held)))
+        held_set = set(held)
+        with self._lock:
+            # Addresses no longer held don't need re-gossiping to and
+            # shouldn't keep growing this dict forever as the pool churns.
+            for addr in list(self._last_regossiped):
+                if addr not in held_set:
+                    del self._last_regossiped[addr]
+            targets = sorted(held, key=lambda a: self._last_regossiped.get(a, 0.0))[:PEX_FANOUT]
+            now = time.monotonic()
+            for addr in targets:
+                self._last_regossiped[addr] = now
         peers = held[:PEERS_PER_MESSAGE_LIMIT]
         for addr in targets:
             self.udp.send_peers(addr, peers)

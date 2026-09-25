@@ -83,6 +83,7 @@ Exchange / third-party integration:
   handle XRP- or Monero-style account-index coins.
 """
 
+import collections
 import logging
 import os
 import secrets
@@ -95,6 +96,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 import block as block_mod
+import discovery as discovery_mod
 import crypto as crypto_mod
 import state as state_mod
 import settings as settings_mod
@@ -112,6 +114,13 @@ PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
 DASHBOARD_TXS_PER_PAGE = 6
 BOARD_PER_PAGE = 20
+
+# Held peers are already bounded by MAX_PEERS (125), but what they claim
+# isn't: up to PEERS_PER_MESSAGE_LIMIT (50) addresses from each of up to
+# MAX_PEERS introducers is a theoretical ~6,250 addresses this node never
+# itself reached. Uncapped, that's both a large response on every 8s poll
+# and an unreadable graph. See _capped_claims.
+CLAIMED_GRAPH_LIMIT = 60
 
 # The board is just an ordinary transaction whose memo happens to start
 # with this tag: nothing at the protocol level marks a tx as a board post,
@@ -999,6 +1008,22 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return {"height": node.view.chain[-1].get("height", 0),
                 "version": LOCAL_VERSION, "addr": _self_external_addr()}
 
+    def _capped_claims(raw_claims, held_addrs):
+        """Trim the addresses no held peer claims to at most
+        CLAIMED_GRAPH_LIMIT, keeping the ones the most introducers
+        currently agree on. Corroboration is the only signal available,
+        no height/version/last-seen travels with a claim, only the
+        address, but it's a real one: an address three separate held
+        peers are all currently pointing at is more informative than one
+        only a single peer mentions. Held addresses are never trimmed,
+        they're already bounded by MAX_PEERS."""
+        corroboration = collections.Counter(
+            addr for addrs in raw_claims.values() for addr in addrs
+            if addr not in held_addrs)
+        keep = {addr for addr, _ in corroboration.most_common(CLAIMED_GRAPH_LIMIT)}
+        return {introducer: [a for a in addrs if a in held_addrs or a in keep]
+                for introducer, addrs in raw_claims.items()}
+
     @app.route("/network", endpoint=pfx+"network")
     def network():
         all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
@@ -1013,7 +1038,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
                                page_window=_pagination_window(page, total_pages),
                                has_prev=page > 1, has_next=end < len(all_rows),
                                self_height=self_height,
-                               self_version=LOCAL_VERSION, self_addr=_self_external_addr())
+                               self_version=LOCAL_VERSION, self_addr=_self_external_addr(),
+                               pex_fanout=discovery_mod.PEX_FANOUT,
+                               pex_interval_min=discovery_mod.PEX_REGOSSIP_INTERVAL // 60,
+                               claimed_graph_limit=CLAIMED_GRAPH_LIMIT)
 
     @app.route("/peers", endpoint=pfx+"peers_redirect")
     def peers_redirect():
@@ -1136,7 +1164,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
             # addresses this node never admitted (couldn't reach, or
             # hasn't tried). Lets the graph draw a relationship it has
             # real evidence for even where it isn't itself one end of it.
-            "claims": pool.claims(),
+            # Capped (_capped_claims) so a peer that happens to know a lot
+            # of other peers can't blow up the response or the graph.
+            "claims": _capped_claims(pool.claims(), {r[0] for r in all_rows}),
         })
 
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")

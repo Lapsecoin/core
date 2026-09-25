@@ -33,7 +33,12 @@
     crawler's own view rather than trying to get every node to agree on one. "Claimed, not held" is real
     data (a peer's own PEERS message), just not firsthand: this node never reached that address itself.
     A claim always reflects the most recent list that peer sent, so an address it stops mentioning stops
-    being shown as its peer. A peer actually lost for good just disappears, same as the table below.
+    being shown as its peer, though it can take a while to hear an update: this node re-sends its own list
+    to the peers it's told least recently, {{ pex_fanout }} of them roughly every {{ pex_interval_min }}
+    minutes, so a given peer is guaranteed a refresh within a bounded number of rounds rather than however
+    long random luck takes. Claimed addresses no held peer confirms are capped at {{ claimed_graph_limit }}
+    on the wire, kept by how many peers currently agree on them, so one very well-connected peer can't
+    blow up this page. A peer actually lost for good just disappears, same as the table below.
   </div>
 </div>
 
