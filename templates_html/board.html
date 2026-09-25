@@ -9,42 +9,45 @@
 <div class="card">
   <div class="card-title">{{ post_count }} post{{ "s" if post_count != 1 }}</div>
   <div class="board" id="board-feed">
-    {% if is_private %}
-    <form method="POST" action="/board?page={{ page }}" class="board-compose">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      {% if compose_err %}<div class="alert alert-err" style="margin:0 0 .4rem">{{ compose_err }}</div>{% endif %}
-      {% if compose_ok %}<div class="alert alert-ok" style="margin:0 0 .4rem">{{ compose_ok }}</div>{% endif %}
-      <div class="board-compose-row">
-        <input type="text" name="message" id="board-message" value="{{ message_value }}"
-               placeholder="Say something" autocomplete="off" style="flex:1">
-        <button type="submit" id="board-send">Send</button>
-      </div>
-      <div class="board-compose-row board-compose-sub">
-        <input type="password" name="passphrase" placeholder="Passphrase" autocomplete="off" style="flex:1 1 160px">
-        <span class="stat-sub" id="board-fee-live" style="margin:0" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post costs more.">
-          fee: {{ board_fee_floor }}+ ticks
-        </span>
-        <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
-      </div>
-    </form>
-    {% endif %}
     {% if rows %}
-      {% for height, ts, hsh, t in rows %}
-      {% set mine = t.from == own_addr %}
-      <div class="board-row {{ 'mine' if mine }}">
+      {% for row in rows %}
+      {% set mine = row.tx.from == own_addr %}
+      <div class="board-row {{ 'mine' if mine }} {{ 'pending' if row.pending }}">
         <div class="board-bubble">
           <div class="board-meta">
-            <a href="/address?addr={{ t.from }}" class="hash-short board-addr">{{ t.from }}</a>
+            <a href="/address?addr={{ row.tx.from }}" class="hash-short board-addr">{{ row.tx.from }}</a>
           </div>
-          <div class="board-text">{{ render_board_text(t.memo[tag_len:]) }}</div>
+          <div class="board-text">{{ render_board_text(row.tx.memo[tag_len:]) }}</div>
           <div class="board-ts">
-            <a href="/explorer/tx/{{ hsh }}" data-ts="{{ ts | int if ts else 0 }}" title="block {{ height }}, verify on the explorer">&nbsp;</a>
+            {% if row.pending %}
+              <span title="Submitted, not yet in a block">pending&hellip;</span>
+            {% else %}
+              <a href="/explorer/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
+            {% endif %}
           </div>
         </div>
       </div>
       {% endfor %}
     {% else %}
       <p style="color:var(--muted);text-align:center">Nothing posted yet.</p>
+    {% endif %}
+    {% if is_private %}
+    <form method="POST" action="/board?page={{ page }}" class="board-compose">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="passphrase" id="board-passphrase">
+      {% if compose_err %}<div class="alert alert-err" style="margin:0 0 .4rem">{{ compose_err }}</div>{% endif %}
+      <div class="board-compose-row">
+        <input type="text" name="message" id="board-message" value="{{ message_value }}"
+               placeholder="Say something" autocomplete="off" style="flex:1">
+        <button type="submit" id="board-send">Send</button>
+      </div>
+      <div class="board-compose-row board-compose-sub">
+        <span class="stat-sub" id="board-fee-live" style="margin:0" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post costs more.">
+          fee: {{ board_fee_floor }}+ ticks
+        </span>
+        <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
+      </div>
+    </form>
     {% endif %}
   </div>
 </div>
@@ -75,6 +78,9 @@
     background: rgba(179,90,12,.08); border-color: var(--accent);
     border-radius: .6rem .6rem 0 .6rem;
   }
+  /* Not-yet-mined: same bubble, visibly provisional rather than a
+     separate banner elsewhere on the page saying the same thing. */
+  .board-row.pending .board-bubble { opacity: .6; border-style: dashed; }
   .board-meta { font-size: .72rem; margin-bottom: .15rem; }
   /* Wallet addresses are one long dot-joined word with no whitespace to
      wrap on; without this the bubble's max-width is powerless (a flex
@@ -87,15 +93,12 @@
 
   .board-compose {
     border: 1px solid var(--rule-lt); background: var(--paper-2);
-    padding: .5rem .6rem; margin-bottom: .3rem; border-radius: .5rem;
+    padding: .5rem .6rem; margin-top: .3rem; border-radius: .5rem;
   }
   .board-compose-row { display: flex; gap: .5rem; align-items: center; }
   .board-compose-row + .board-compose-row { margin-top: .4rem; }
   .board-compose-sub { font-size: .82rem; }
-  .board-compose-sub label { display: flex; align-items: center; gap: .3rem; color: var(--muted); }
-  .board-compose input[type="text"], .board-compose input[type="password"] {
-    padding: .35rem .5rem;
-  }
+  .board-compose input[type="text"] { padding: .35rem .5rem; }
   #board-send { flex: 0 0 auto; padding: .35rem 1rem; }
 </style>
 <script>
@@ -117,6 +120,22 @@
     const ts = parseInt(el.dataset.ts, 10);
     if (ts) el.textContent = fmtTs(ts);
   });
+
+  // Asked for at submit time instead of sitting in the form as a field:
+  // it's only ever needed once, right before signing, so there's nothing
+  // for a visible input to do between page load and clicking Send except
+  // sit there inviting a glance or an autofill.
+  const composeForm = document.querySelector(".board-compose");
+  if (composeForm) {
+    const passInput = document.getElementById("board-passphrase");
+    composeForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const passphrase = window.prompt("Passphrase:");
+      if (passphrase === null) return;  // cancelled, nothing sent
+      passInput.value = passphrase;
+      HTMLFormElement.prototype.submit.call(composeForm);  // bypasses this same listener
+    });
+  }
 
   // Compose box: bytes, not characters, matching the server's own UTF-8
   // byte-length check (tx.MAX_MEMO_BYTES minus the tag it prepends), and

@@ -833,17 +833,49 @@ def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
         del seed
 
 
+def _board_pending(mempool):
+    """Board-tagged txs sitting in the mempool, not yet mined: the same
+    "waiting to be mined" fact a compose-time alert used to state in
+    words, shown instead as a row in the feed itself, since the mempool
+    already knows this and a separate banner was just repeating it less
+    usefully. No ordering guarantee among these (nothing pre-confirmation
+    has one), which is fine, they're always the newest thing on the page
+    regardless of the order a few of them happen to render in.
+    """
+    rows = []
+    for t in mempool.all_txs():
+        memo = t.get("memo") or ""
+        if memo.startswith(BOARD_MEMO_TAG):
+            rows.append({"height": None, "ts": None,
+                         "hash": tx_mod.tx_hash(t), "tx": t, "pending": True})
+    return rows
+
+
 def _board_ctx(node, page_arg, extra=None):
     """Board page context: pagination plus the post list. Shared between
     the GET route (read-only, both apps) and the private app's POST
     handler (which re-renders the same page with an alert after posting),
-    so the two never drift into computing pagination differently."""
+    so the two never drift into computing pagination differently.
+
+    rows renders oldest-first within the page (chat order: the newest
+    confirmed post, and then anything still pending, sit right above the
+    compose box at the bottom) rather than _board_posts' own tip-first
+    order, which /api/board still uses unchanged (it only needs to know
+    what the latest post is, not display order).
+    """
     all_rows = _board_posts(node.view.chain)
     total_pages = max(-(-len(all_rows) // BOARD_PER_PAGE), 1)
     page  = min(max(page_arg, 1), total_pages)
     start = (page - 1) * BOARD_PER_PAGE
     end   = start + BOARD_PER_PAGE
-    ctx = dict(title="Board", rows=all_rows[start:end],
+    page_rows = [{"height": h, "ts": ts, "hash": hsh, "tx": t, "pending": False}
+                 for h, ts, hsh, t in reversed(all_rows[start:end])]
+    # Pending posts are always newer than anything confirmed, so they only
+    # belong on page 1 (the most recent page, the one actually being
+    # composed into), appended last so they sit at the bottom of the feed.
+    if page == 1:
+        page_rows += _board_pending(node.mempool)
+    ctx = dict(title="Board", rows=page_rows,
                post_count=len(all_rows), own_addr=node.addr,
                tag_len=len(BOARD_MEMO_TAG),
                page=page, total_pages=total_pages,
@@ -1784,9 +1816,13 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         if alert_ctx.get("alert_err"):
             return fail(alert_ctx["alert_err"])
 
+        # Rendered as page 1 regardless of which page the form was on:
+        # that's the page pending posts appear on (see _board_ctx), and
+        # the one this post itself now shows up in, at the bottom, right
+        # above the compose box, so posting is its own confirmation. No
+        # separate "waiting to be mined" banner needed, the row is one.
         extra["message_value"] = ""
-        extra["compose_ok"] = "Posted, waiting to be mined."
-        return render_template("board.html", **_board_ctx(node, page, extra))
+        return render_template("board.html", **_board_ctx(node, 1, extra))
 
     # Market and Trades live in their own module: this file is already long
     # and a node with swaps off never reaches any of it.

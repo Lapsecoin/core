@@ -518,6 +518,92 @@ class TestSettingsValidation:
         assert node.settings.get(settings_mod.DRAW_WINDOW_SECONDS) == 7.0
 
 
+class TestBoardPage:
+    """Chat-style layout: oldest post at the top, newest (and anything
+    still pending in the mempool) at the bottom right above the compose
+    box, rather than the old top-down "newest first, compose above
+    everything" arrangement. See api.py's _board_ctx/_board_pending."""
+
+    def _client(self, pending_msgs=()):
+        import tx as tx_mod
+        TAG = tx_mod.BOARD_MEMO_TAG
+        cs = ChainState.from_genesis()
+        for i in range(3):
+            seed_balance(cs.state, i, 1000.0)
+        confirmed = ["oldest confirmed post", "middle confirmed post",
+                     "newest confirmed post"]
+        for i, msg in enumerate(confirmed):
+            t = {"from": address(i % 3), "nonce": i + 1, "fee": 100,
+                 "outputs": [{"to": "1" * 40, "amount": 1}], "memo": TAG + msg}
+            cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
+                             "transactions": [t], "hash": f"h{i}"})
+        cs.state.total_board_posts = len(confirmed)
+        node = _FakeNode(cs)
+        for i, msg in enumerate(pending_msgs):
+            t = make_tx(i % 3, (i + 1) % 3, 1, cs.state, fee=100, memo=TAG + msg)
+            node.mempool.add(t)
+        pool = peerpool_mod.PeerPool()
+        app = api.create_private_app(node, pool)
+        return app.test_client()
+
+    def test_confirmed_posts_render_oldest_first(self):
+        html = self._client().get("/board").get_data(as_text=True)
+        assert (html.index("oldest confirmed post")
+                < html.index("middle confirmed post")
+                < html.index("newest confirmed post"))
+
+    def test_pending_posts_render_after_confirmed_on_page_one(self):
+        html = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
+        assert html.index("newest confirmed post") < html.index("still pending")
+        assert "pending" in html
+
+    def test_pending_posts_do_not_appear_on_page_two(self):
+        import tx as tx_mod
+        TAG = tx_mod.BOARD_MEMO_TAG
+        cs = ChainState.from_genesis()
+        for i in range(3):
+            seed_balance(cs.state, i, 1000.0)
+        # BOARD_PER_PAGE is 20: 21 confirmed posts makes page 2 a real,
+        # distinct (older) page rather than one the router clamps back to
+        # page 1 (which is what a "page 2" that doesn't actually exist
+        # yet would do, and is not what this test means to check).
+        for i in range(21):
+            t = {"from": address(i % 3), "nonce": i + 1, "fee": 100,
+                 "outputs": [{"to": "1" * 40, "amount": 1}], "memo": TAG + f"post {i}"}
+            cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
+                             "transactions": [t], "hash": f"h{i}"})
+        cs.state.total_board_posts = 21
+        node = _FakeNode(cs)
+        t = make_tx(0, 1, 1, cs.state, fee=100, memo=TAG + "still pending")
+        node.mempool.add(t)
+        pool = peerpool_mod.PeerPool()
+        client = api.create_private_app(node, pool).test_client()
+
+        resp = client.get("/board?page=2")
+        html = resp.get_data(as_text=True)
+        assert "still pending" not in html
+        # Sanity: this really is a distinct older page, not a silent
+        # clamp-back to page 1 (which would make the assertion above
+        # meaningless).
+        assert 'class="pager-current">2<' in html
+
+    def test_no_leftover_waiting_to_be_mined_banner(self):
+        """The old compose_ok text this replaced must not still be
+        reachable through this page."""
+        html = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
+        assert "waiting to be mined" not in html
+
+    def test_passphrase_field_is_hidden_not_a_visible_password_input(self):
+        html = self._client().get("/board").get_data(as_text=True)
+        assert 'id="board-passphrase"' in html
+        assert 'type="hidden" name="passphrase"' in html
+        assert 'type="password"' not in html
+
+    def test_compose_form_is_the_last_thing_in_the_feed(self):
+        html = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
+        assert html.index("still pending") < html.index('class="board-compose"')
+
+
 class TestPeersForDownload:
     """_peers_for_download: the list /api/peers/download hands out.
 
