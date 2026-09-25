@@ -274,6 +274,10 @@
     padding: .42rem 1.2rem; font-size: .9rem; font-family: var(--serif); font-weight: bold; cursor: pointer;
   }
   button:hover { background: var(--ink-dim); }
+  button:disabled, button:disabled:hover {
+    background: var(--paper-2); color: var(--muted); border-color: var(--rule-lt);
+    cursor: not-allowed; opacity: .65;
+  }
   .btn-ghost { background: var(--paper); color: var(--ink); }
   .btn-ghost:hover { background: var(--paper-2); }
 
