@@ -1,7 +1,6 @@
 argcomplete>=3.2
 cachetools>=5.3
 chiavdf>=1.1.14
-cryptography>=41.0
 flask>=3.0
 flask-limiter>=3.5
 liboqs-python>=0.14.0
