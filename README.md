@@ -10,6 +10,7 @@
   [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-blue)](docs/whitepaper.md)
   [![Donate BTC](https://img.shields.io/badge/donate-BTC-f7931a)](#support)
   [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/FP2d8JmK6r)
+  [![Reddit](https://img.shields.io/badge/reddit-r%2FLapsecoin-FF4500?logo=reddit&logoColor=white)](https://reddit.com/r/Lapsecoin)
 </div>
 
 **Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [releases page](https://github.com/Lapsecoin/core/releases) are self-contained and require no dependencies.
