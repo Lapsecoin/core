@@ -14,7 +14,6 @@ from cachetools import LRUCache
 
 import crypto
 from crypto import canonical_json
-from params import TICKS_PER_LAPSE
 
 # Signature verifications already performed, so a transaction verified on
 # its way into the mempool is not verified again for every block that
@@ -136,19 +135,26 @@ BOARD_POST_AMOUNT = 1
 # never invalidates a batch of otherwise-fine pending transactions at
 # once, only ones that were genuinely priced below the new floor.
 #
-# Deliberately sized against a lifetime of *posts*, not blocks or block
-# reward: the goal is for the board to become clearly, unmistakably
-# inactive once it has carried a lot of chatter, not to track emission
-# decay (which answers a different question: what a block builder earns,
-# not what posting costs). BOARD_LIFETIME_POSTS is the target post count
-# at which the floor reaches BOARD_MAX_FEE, split evenly across
-# BOARD_FEE_STEPS staircase steps.
-BOARD_BASE_FEE       = 1                # floor for the very first post
-BOARD_MAX_FEE        = TICKS_PER_LAPSE  # 1 LAPSE: unmistakably not casual
-BOARD_LIFETIME_POSTS = 1_000_000        # posts to reach BOARD_MAX_FEE
-BOARD_FEE_STEPS      = 200
-BOARD_STEP_SIZE      = BOARD_LIFETIME_POSTS // BOARD_FEE_STEPS
-BOARD_STEP_INCREMENT = (BOARD_MAX_FEE - BOARD_BASE_FEE) // BOARD_FEE_STEPS
+# Geometric, not linear: the board is treated as a limited number of
+# spots rationed by price, not by a hard post-count cutoff, so it never
+# needs a ceiling that could eventually feel arbitrary or need raising.
+# A flat per-step increase either stays negligible for a huge number of
+# posts or needs one anyway to become expensive in a reasonable number of
+# them; multiplying by BOARD_FEE_RATIO every BOARD_STEP_SIZE posts gets
+# there in the low thousands of posts while staying uncapped: the floor
+# just keeps compounding, so the most recent spot is always strictly more
+# expensive than the one before it.
+#
+# BOARD_BASE_FEE is unchanged from the original flat floor (1 tick) on
+# purpose: board_fee_floor(0) must still equal exactly what every board
+# post made before this formula existed was already validated against
+# (state.total_board_posts was 0 for the very first one), or replaying
+# the existing chain from genesis would retroactively invalidate it. Only
+# posts beyond the current tip land on step > 0, new territory the old
+# formula never priced differently anyway.
+BOARD_BASE_FEE  = 1    # unchanged: see above, this must not move
+BOARD_STEP_SIZE = 250  # posts per step before the floor multiplies again
+BOARD_FEE_RATIO = 3    # floor multiplies by this every BOARD_STEP_SIZE posts
 
 
 def is_board_post(tx_dict):
@@ -160,10 +166,12 @@ def board_fee_floor(total_board_posts):
 
     A staircase, not a continuous per-message increase: total_board_posts
     only moves when a block confirms, so the floor a wallet sees is stable
-    for the whole time it takes to build and broadcast a post.
+    for the whole time it takes to build and broadcast a post. Geometric
+    and deliberately uncapped (see module comment above): there's no
+    post-count limit on the board, price alone rations it.
     """
-    step = min(total_board_posts // BOARD_STEP_SIZE, BOARD_FEE_STEPS)
-    return min(BOARD_BASE_FEE + BOARD_STEP_INCREMENT * step, BOARD_MAX_FEE)
+    step = total_board_posts // BOARD_STEP_SIZE
+    return BOARD_BASE_FEE * (BOARD_FEE_RATIO ** step)
 
 # Outputs are the one required field whose *count* was still unbounded
 # even with the whitelist above: each entry only needs a valid address and

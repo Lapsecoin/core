@@ -2,8 +2,8 @@
 Unit tests for tx.py: the plaintext transaction format.
 
 Covers: create, tx_hash, tx_size, tx_size_in_block, validate (fields/
-outputs, signature, nonce, balance checks). Fees are sender-bid, so there
-is no protocol fee formula to test here.
+outputs, signature, nonce, balance checks), and board_fee_floor, the one
+protocol-enforced fee formula (ordinary sends are otherwise sender-bid).
 
 All tests are pure and local. No network, no chain, no disk.
 """
@@ -404,3 +404,90 @@ class TestValidateBalance:
         ok, err = tx_mod.validate(t, s)
         assert ok is False
         assert "insufficient" in err
+
+
+# ---------------------------------------------------------------------------
+# 8. board_fee_floor: the geometric, uncapped staircase (see tx.py's own
+#    comment on BOARD_BASE_FEE/BOARD_STEP_SIZE/BOARD_FEE_RATIO for why
+#    floor(0) is pinned at exactly 1 -- any post already on chain was
+#    validated at some total_board_posts <= what it is now, and the very
+#    first board post ever made was validated at total_board_posts == 0,
+#    so this is the one value a future formula change can never move
+#    without retroactively invalidating that post on replay from genesis.
+# ---------------------------------------------------------------------------
+
+class TestBoardFeeFloor:
+    def test_floor_at_zero_posts_is_exactly_one(self):
+        """Pinned, not incidental: see the class docstring above. A change
+        that breaks this breaks replaying the existing chain."""
+        assert tx_mod.board_fee_floor(0) == 1
+
+    def test_floor_stays_flat_within_a_step(self):
+        assert (tx_mod.board_fee_floor(0)
+                == tx_mod.board_fee_floor(tx_mod.BOARD_STEP_SIZE - 1))
+
+    def test_floor_multiplies_by_the_ratio_at_each_step_boundary(self):
+        base = tx_mod.board_fee_floor(0)
+        step_size = tx_mod.BOARD_STEP_SIZE
+        for step in range(1, 5):
+            assert (tx_mod.board_fee_floor(step * step_size)
+                    == base * tx_mod.BOARD_FEE_RATIO ** step)
+
+    def test_floor_is_never_negative_or_zero(self):
+        for n in (0, 1, tx_mod.BOARD_STEP_SIZE, 10 ** 6):
+            assert tx_mod.board_fee_floor(n) >= 1
+
+    def test_floor_is_monotonically_non_decreasing(self):
+        prev = tx_mod.board_fee_floor(0)
+        for n in range(0, tx_mod.BOARD_STEP_SIZE * 6, tx_mod.BOARD_STEP_SIZE // 3):
+            cur = tx_mod.board_fee_floor(n)
+            assert cur >= prev
+            prev = cur
+
+    def test_no_ceiling_arbitrarily_far_out(self):
+        """Deliberately uncapped: the board is rationed by price, not by a
+        hard post-count cutoff, so there must be no plateau at any point,
+        however far out."""
+        far = tx_mod.board_fee_floor(tx_mod.BOARD_STEP_SIZE * 50)
+        farther = tx_mod.board_fee_floor(tx_mod.BOARD_STEP_SIZE * 51)
+        assert farther > far
+
+    def test_validate_enforces_the_floor_for_a_board_post(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        s.total_board_posts = tx_mod.BOARD_STEP_SIZE * 4  # floor > 1 here
+        floor = tx_mod.board_fee_floor(s.total_board_posts)
+        outputs = [{"to": address(1), "amount": 1}]
+        t = make_tx(0, 1, 1, s, fee=floor - 1, memo=tx_mod.BOARD_MEMO_TAG + "hi",
+                    outputs_override=outputs)
+        ok, err = tx_mod.validate(t, s)
+        assert ok is False
+        assert "board post fee below current floor" in err
+
+    def test_validate_accepts_a_board_post_at_exactly_the_floor(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        s.total_board_posts = tx_mod.BOARD_STEP_SIZE * 4
+        floor = tx_mod.board_fee_floor(s.total_board_posts)
+        outputs = [{"to": address(1), "amount": 1}]
+        t = make_tx(0, 1, 1, s, fee=floor, memo=tx_mod.BOARD_MEMO_TAG + "hi",
+                    outputs_override=outputs)
+        ok, err = tx_mod.validate(t, s)
+        assert ok is True, err
+
+    def test_the_original_pre_formula_post_still_validates_unchanged(self):
+        """The concrete compatibility case: a board post made when
+        total_board_posts was 0 (the very first one, already on chain)
+        must still pass validate() exactly as it did before this formula
+        existed, with no activation height and no special-casing."""
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        assert s.total_board_posts == 0
+        outputs = [{"to": address(1), "amount": 1}]
+        # Whatever a real client actually paid back then: the old
+        # BOARD_BASE_FEE (1) plus a byte-rate component. Any fee >= 1
+        # must still clear board_fee_floor(0).
+        t = make_tx(0, 1, 1, s, fee=250, memo=tx_mod.BOARD_MEMO_TAG + "first post ever",
+                    outputs_override=outputs)
+        ok, err = tx_mod.validate(t, s)
+        assert ok is True, err
