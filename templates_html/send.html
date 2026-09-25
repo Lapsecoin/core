@@ -42,22 +42,17 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="asset" value="lapse">
     <div class="form-group">
-      <label><input type="checkbox" id="post-to-board" name="post_to_board" value="1" {% if post_to_board_value %}checked{% endif %}>
-        Post to the <a href="/board" target="_blank">public board</a> instead of sending a payment
-        (burns 1 tick, memo becomes the post)</label>
-    </div>
-    <div class="form-group" id="outputs-group">
       <label>CSV outputs (address,amount). Only lines changed to a nonzero amount get sent.
         Use <code>burn</code> in place of an address to destroy it instead of paying anyone.</label>
-      <textarea name="outputs" id="outputs-input" rows="2" placeholder="word1.word2...word12,1000&#10;burn,500">{{ outputs_value }}</textarea>
+      <textarea name="outputs" rows="2" placeholder="word1.word2...word12,1000&#10;burn,500">{{ outputs_value }}</textarea>
     </div>
     <div class="form-group" style="display:flex;gap:.75rem;flex-wrap:wrap">
-      <div style="flex:0 0 auto" id="csv-upload-group">
+      <div style="flex:0 0 auto">
         <label for="csv_file">Or upload CSV</label>
         <input type="file" id="csv_file" name="csv_file" accept=".csv,.txt">
       </div>
       <div style="flex:3 1 240px">
-        <label for="memo-input" id="memo-label" title="Plaintext, permanent, visible to everyone; not encrypted.">Memo, optional</label>
+        <label for="memo-input" title="Plaintext, permanent, visible to everyone; not encrypted.">Memo, optional</label>
         <input type="text" name="memo" id="memo-input" value="{{ memo_value }}"
                placeholder="What this payment is for" style="width:100%">
         <div class="stat-sub" id="memo-counter" style="margin-top:.15rem"></div>
@@ -72,7 +67,7 @@
         <label for="passphrase">Your signing passphrase</label>
         <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
       </div>
-      <button type="submit" id="lapse-submit" style="flex:0 0 auto">Sign &amp; Send</button>
+      <button type="submit" style="flex:0 0 auto">Sign &amp; Send</button>
     </div>
   </form>
 </div>
@@ -139,37 +134,16 @@
   // Bytes, not characters: the server caps memo by its UTF-8 byte length
   // (see tx.MAX_MEMO_BYTES), and one emoji or accented character can cost
   // several bytes, so a character count here would let the field look
-  // fine and still get rejected on submit. In board mode the server also
-  // prepends BOARD_MEMO_TAG before checking that limit, so the budget
-  // shown here is smaller by that many bytes, not the raw max: showing
-  // the raw max would let someone fill the box right up to it and only
-  // find out it was 8 bytes too long after submitting.
-  const rawMax = {{ memo_max_bytes }};
-  const boardTagBytes = {{ board_tag_bytes }};
+  // fine and still get rejected on submit.
+  const max = {{ memo_max_bytes }};
   const input = document.getElementById("memo-input");
   const counter = document.getElementById("memo-counter");
-  const board = document.getElementById("post-to-board");
-  const submitBtn = document.getElementById("lapse-submit");
-
   function refresh() {
-    const onBoard = board && board.checked;
-    const max = onBoard ? rawMax - boardTagBytes : rawMax;
     const bytes = new TextEncoder().encode(input.value).length;
-    const tooLong = bytes > max;
-    const empty = onBoard && input.value.trim() === "";
-
-    counter.textContent = bytes + " / " + max + " bytes"
-      + (onBoard ? " (board tag uses " + boardTagBytes + " of " + rawMax + ")" : "");
-    counter.style.color = tooLong ? "var(--red, #c0392b)" : "var(--muted)";
-    if (empty) {
-      counter.textContent = "Write something to post.";
-      counter.style.color = "var(--red, #c0392b)";
-    }
-
-    if (submitBtn) submitBtn.disabled = tooLong || empty;
+    counter.textContent = bytes + " / " + max + " bytes";
+    counter.style.color = bytes > max ? "var(--red, #c0392b)" : "var(--muted)";
   }
   input.addEventListener("input", refresh);
-  if (board) board.addEventListener("change", refresh);
   refresh();
 })();
 
@@ -193,24 +167,6 @@
   const amount = document.getElementById("xlm-amount");
   if (!merge || !amount) return;
   merge.addEventListener("change", () => { amount.disabled = merge.checked; });
-})();
-
-(function () {
-  const board = document.getElementById("post-to-board");
-  const outputsGroup = document.getElementById("outputs-group");
-  const csvGroup = document.getElementById("csv-upload-group");
-  const memoLabel = document.getElementById("memo-label");
-  const memoInput = document.getElementById("memo-input");
-  if (!board) return;
-  function refresh() {
-    const on = board.checked;
-    outputsGroup.style.display = on ? "none" : "";
-    csvGroup.style.display = on ? "none" : "";
-    memoLabel.textContent = on ? "What do you want to say?" : "Memo, optional";
-    memoInput.placeholder = on ? "Say something to the board" : "What this payment is for";
-  }
-  board.addEventListener("change", refresh);
-  refresh();
 })();
 </script>
 {% endblock %}

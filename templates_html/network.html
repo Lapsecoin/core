@@ -81,7 +81,7 @@
         <td data-label="Last seen" data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
         <td data-label="Status" style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
         <td data-label="Via" class="hash-short" style="color:var(--muted)" title="{{ introduced_by if introduced_by else 'DHT, swarm lookup, or added directly' }}">
-          {{ introduced_by[:15] + "…" if introduced_by else "direct" }}
+          {{ (introduced_by[:15] + "…" if introduced_by|length > 15 else introduced_by) if introduced_by else "direct" }}
         </td>
       </tr>
       {% endfor %}
@@ -186,7 +186,9 @@
       title: p.last_seen ? new Date(p.last_seen * 1000).toLocaleString() : null,
     }));
     tr.appendChild(cell("Status", p.active ? "active" : "cooldown", {color: p.active ? "var(--green)" : "var(--muted)"}));
-    tr.appendChild(cell("Via", p.introduced_by ? p.introduced_by.slice(0, 15) + "…" : "direct", {
+    tr.appendChild(cell("Via", p.introduced_by
+      ? (p.introduced_by.length > 15 ? p.introduced_by.slice(0, 15) + "…" : p.introduced_by)
+      : "direct", {
       cls: "hash-short", color: "var(--muted)",
       title: p.introduced_by || "DHT, swarm lookup, or added directly",
     }));
@@ -234,6 +236,23 @@
   const FADE_MS = 550;
   const nodeMeta = new Map();   // id -> node object (persistent identity)
   const linkMeta = new Map();   // "src=>tgt" -> link object (persistent identity)
+
+  // Rebuilt from linkMeta directly (not from a per-render wantLinks set)
+  // so the fast 200ms prune tick can call it too: without this, a link
+  // pruned between two 8s polls left degree-based sizing (nodeRadius)
+  // reading a stale, too-high count for up to 8s after the edge it
+  // counted had actually finished fading away.
+  function rebuildConnected() {
+    connected.clear();
+    for (const [, l] of linkMeta) {
+      if (l._vanishAt) continue;
+      const src = l.source.id || l.source, tgt = l.target.id || l.target;
+      if (!connected.has(src)) connected.set(src, new Set());
+      if (!connected.has(tgt)) connected.set(tgt, new Set());
+      connected.get(src).add(tgt);
+      connected.get(tgt).add(src);
+    }
+  }
 
   function fadeAlpha(obj) {
     const now = performance.now();
@@ -419,15 +438,7 @@
 
     sweep(nodeMeta, wantNodes);
     sweep(linkMeta, wantLinks);
-
-    connected.clear();
-    wantLinks.forEach(key => {
-      const [src, tgt] = key.split("=>");
-      if (!connected.has(src)) connected.set(src, new Set());
-      if (!connected.has(tgt)) connected.set(tgt, new Set());
-      connected.get(src).add(tgt);
-      connected.get(tgt).add(src);
-    });
+    rebuildConnected();
 
     graph.graphData({ nodes: [...nodeMeta.values()], links: [...linkMeta.values()] });
     if (structureChanged) graph.d3ReheatSimulation();
@@ -490,7 +501,10 @@
     for (const [key, l] of linkMeta) {
       if (l._vanishAt && fadeAlpha(l) <= 0) { linkMeta.delete(key); pruned = true; }
     }
-    if (pruned) graph.graphData({ nodes: [...nodeMeta.values()], links: [...linkMeta.values()] });
+    if (pruned) {
+      rebuildConnected();
+      graph.graphData({ nodes: [...nodeMeta.values()], links: [...linkMeta.values()] });
+    }
   }, 200);
 
   const addForm = document.getElementById("add-peer-form");

@@ -129,6 +129,13 @@ CLAIMED_GRAPH_LIMIT = 60
 # board and a real memo can't be mistaken for one either.
 BOARD_MEMO_TAG = "[board] "
 
+# Burned per post. 1 would already satisfy tx.py's "amount must be
+# positive" floor, but 2 is deliberate: it keeps a post from ever reading
+# as a no-op edge case (an output of the smallest possible unit) and
+# keeps the burn visibly nonzero at a glance rather than the bare minimum
+# the protocol would technically still accept.
+BOARD_POST_AMOUNT = 2
+
 
 
 # ---------------------------------------------------------------------------
@@ -759,9 +766,30 @@ def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
         del seed
 
 
+def _board_ctx(node, page_arg, extra=None):
+    """Board page context: pagination plus the post list. Shared between
+    the GET route (read-only, both apps) and the private app's POST
+    handler (which re-renders the same page with an alert after posting),
+    so the two never drift into computing pagination differently."""
+    all_rows = _board_posts(node.view.chain)
+    total_pages = max(-(-len(all_rows) // BOARD_PER_PAGE), 1)
+    page  = min(max(page_arg, 1), total_pages)
+    start = (page - 1) * BOARD_PER_PAGE
+    end   = start + BOARD_PER_PAGE
+    ctx = dict(title="Board", rows=all_rows[start:end],
+               post_count=len(all_rows), own_addr=node.addr,
+               tag_len=len(BOARD_MEMO_TAG),
+               page=page, total_pages=total_pages,
+               page_window=_pagination_window(page, total_pages),
+               has_prev=page > 1, has_next=end < len(all_rows))
+    if extra:
+        ctx.update(extra)
+    return ctx
+
+
 def _shared_read_only_routes(app, node, pool, limiter,
                               private_port, public_port, is_private,
-                              update_checker=None):
+                              update_checker=None, csrf_token=None):
     """Register all read-only UI and API routes on app."""
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
@@ -1047,17 +1075,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/board", endpoint=pfx+"board")
     def board():
-        all_rows = _board_posts(node.view.chain)
-        total_pages = max(-(-len(all_rows) // BOARD_PER_PAGE), 1)
-        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
-        start = (page - 1) * BOARD_PER_PAGE
-        end   = start + BOARD_PER_PAGE
-        return render_template("board.html", title="Board", rows=all_rows[start:end],
-                               post_count=len(all_rows), own_addr=node.addr,
-                               tag_len=len(BOARD_MEMO_TAG),
-                               page=page, total_pages=total_pages,
-                               page_window=_pagination_window(page, total_pages),
-                               has_prev=page > 1, has_next=end < len(all_rows))
+        extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
+                     message_value="", fee_value="")
+        if csrf_token:   # private app only: composing needs a fee suggestion
+            extra["fees"] = fee_estimate(node)
+        page = request.args.get("page", 1, type=int) or 1
+        return render_template("board.html", **_board_ctx(node, page, extra))
 
     @app.route("/api/board", endpoint=pfx+"api_board")
     def api_board():
@@ -1375,7 +1398,9 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                                  fmt_duration=fmt_duration,
                                  fmt_lapse_dp=fmt_lapse_dp,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
-                                 BURN_ADDRESS=crypto_mod.burn_address())
+                                 BURN_ADDRESS=crypto_mod.burn_address(),
+                                 BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
+                                 MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     # Deliberately not touching the werkzeug logger. main.py already sets it
     # to ERROR, and this line used to put it back to INFO, which is a
@@ -1426,7 +1451,9 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                                  fmt_duration=fmt_duration,
                                  fmt_lapse_dp=fmt_lapse_dp,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
-                                 BURN_ADDRESS=crypto_mod.burn_address())
+                                 BURN_ADDRESS=crypto_mod.burn_address(),
+                                 BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
+                                 MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     _close_db_after_request(app)
 
@@ -1445,7 +1472,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=True,
-                             update_checker=update_checker)
+                             update_checker=update_checker, csrf_token=csrf_token)
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
@@ -1509,8 +1536,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                    fees=fee_estimate(node), csrf_token=csrf_token,
                    outputs_value=_default_send_outputs(node),
                    memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
-                   board_tag_bytes=len(BOARD_MEMO_TAG),
-                   post_to_board_value=False, asset="lapse",
+                   asset="lapse",
                    xlm_addr=xlm_addr, xlm_spendable=xlm_spendable,
                    xlm_locked=xlm_locked, xlm_to_value="",
                    xlm_amount_value="", xlm_merge_value=False,
@@ -1551,33 +1577,15 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                             ctx["xlm_addr"], ctx["xlm_spendable"], ctx["xlm_locked"] = \
                                 _xlm_view(xlm_keyfile_path)
             else:
-                post_to_board = request.form.get("post_to_board") == "1"
+                outputs_raw = request.form.get("outputs", "").strip()
                 fee_raw     = request.form.get("fee", "0").strip()
                 memo        = request.form.get("memo", "").strip()
-                ctx["post_to_board_value"] = post_to_board
-                errors = []
-                if post_to_board:
-                    # A board post burns 1 tick to a fixed, keyless address
-                    # rather than paying it to yourself: it costs something
-                    # real, the same way any tx does, without quietly
-                    # inflating your own transaction history every time you
-                    # post. The outputs field is derived here rather than
-                    # trusted from the form: what's on the board is only
-                    # ever what this branch built.
-                    outputs_raw = f"{crypto_mod.burn_address()},1"
-                    ctx["outputs_value"] = ""
-                    if not memo:
-                        errors.append("Write something to post.")
-                    memo = BOARD_MEMO_TAG + memo
-                else:
-                    outputs_raw = request.form.get("outputs", "").strip()
-                    csv_file = request.files.get("csv_file")
-                    if csv_file and csv_file.filename:
-                        outputs_raw = csv_file.read().decode()
-                    ctx["outputs_value"] = outputs_raw
-                ctx["memo_value"] = memo[len(BOARD_MEMO_TAG):] if post_to_board else memo
-                outputs, parse_errors = _parse_csv_outputs(outputs_raw)
-                errors.extend(parse_errors)
+                csv_file    = request.files.get("csv_file")
+                if csv_file and csv_file.filename:
+                    outputs_raw = csv_file.read().decode()
+                ctx["outputs_value"] = outputs_raw
+                ctx["memo_value"] = memo
+                outputs, errors = _parse_csv_outputs(outputs_raw)
                 try:
                     fee = int(fee_raw or "0")
                     if fee < 0:
@@ -1586,7 +1594,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                     errors.append("Fee must be a non-negative integer.")
                     fee = 0
                 if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
-                    errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES - len(BOARD_MEMO_TAG) if post_to_board else tx_mod.MAX_MEMO_BYTES} bytes.")
+                    errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
                 if errors:
                     ctx["alert_err_lines"] = errors
                 elif not outputs:
@@ -1594,10 +1602,49 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                 else:
                     _submit_and_alert(node, outputs, fee, passphrase, ctx, memo=memo)
                     if ctx["alert_ok_tx"]:
-                        ctx["alert_ok_verb"] = "Posted." if post_to_board else "Sent."
+                        ctx["alert_ok_verb"] = "Sent."
                         ctx["outputs_value"] = ""
                         ctx["memo_value"] = ""
         return render_template("send.html", **ctx)
+
+    @app.route("/board", methods=["POST"], endpoint="board_post")
+    def board_post():
+        page = request.args.get("page", 1, type=int) or 1
+        message    = request.form.get("message", "").strip()
+        fee_raw    = request.form.get("fee", "0").strip()
+        passphrase = request.form.get("passphrase", "").strip()
+        extra = dict(csrf_token=csrf_token, fees=fee_estimate(node),
+                     compose_err="", compose_ok="",
+                     message_value=message, fee_value=fee_raw)
+
+        def fail(msg):
+            extra["compose_err"] = msg
+            return render_template("board.html", **_board_ctx(node, page, extra))
+
+        if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
+            return fail("Session expired; reload the page and try again.")
+        try:
+            fee = int(fee_raw or "0")
+            if fee < 0:
+                raise ValueError
+        except ValueError:
+            return fail("Fee must be a non-negative integer.")
+        if not message:
+            return fail("Write something to post.")
+        memo = BOARD_MEMO_TAG + message
+        over = len(memo.encode("utf-8")) - tx_mod.MAX_MEMO_BYTES
+        if over > 0:
+            return fail(f"{over} byte{'s' if over != 1 else ''} too long.")
+
+        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
+        alert_ctx = {}
+        _submit_and_alert(node, outputs, fee, passphrase, alert_ctx, memo=memo)
+        if alert_ctx.get("alert_err"):
+            return fail(alert_ctx["alert_err"])
+
+        extra["message_value"] = ""
+        extra["compose_ok"] = "Posted, waiting to be mined."
+        return render_template("board.html", **_board_ctx(node, page, extra))
 
     # Market and Trades live in their own module: this file is already long
     # and a node with swaps off never reaches any of it.

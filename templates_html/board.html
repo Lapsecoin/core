@@ -3,13 +3,38 @@
 <h2>Board</h2>
 <p class="stat-sub" style="margin:-.2rem 0 .6rem">
   Public and permanent: every post is a real transaction, plaintext, visible to anyone reading the chain,
-  burning 1 tick to the <a href="/address?addr={{ BURN_ADDRESS }}">burn address</a> to post.
-  {% if is_private %}<a href="/send">Post something</a>.{% endif %}
+  burning {{ BOARD_POST_AMOUNT }} ticks to the <a href="/address?addr={{ BURN_ADDRESS }}">burn address</a> to post.
 </p>
 
 <div class="card">
   <div class="card-title">{{ post_count }} post{{ "s" if post_count != 1 }}</div>
   <div class="board" id="board-feed">
+    {% if is_private %}
+    <form method="POST" action="/board?page={{ page }}" class="board-compose">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if compose_err %}<div class="alert alert-err" style="margin:0 0 .4rem">{{ compose_err }}</div>{% endif %}
+      {% if compose_ok %}<div class="alert alert-ok" style="margin:0 0 .4rem">{{ compose_ok }}</div>{% endif %}
+      <div class="board-compose-row">
+        <input type="text" name="message" id="board-message" value="{{ message_value }}"
+               placeholder="Say something" autocomplete="off" style="flex:1">
+        <button type="submit" id="board-send">Send</button>
+      </div>
+      <div class="board-compose-row board-compose-sub">
+        <input type="password" name="passphrase" placeholder="Passphrase" autocomplete="off" style="flex:1 1 160px">
+        <label>Fee
+          <input type="number" name="fee" id="board-fee" min="0" value="{{ fee_value or 0 }}" style="width:5rem">
+        </label>
+        {% if fees and fees.pending %}
+        <span class="stat-sub" style="margin:0" title="Ticks per byte a transaction needs right now to clear the next block.">
+          ~{{ "%.3f"|format(fees.next_block) }} ticks/byte to clear next block
+        </span>
+        {% else %}
+        <span class="stat-sub" style="margin:0">mempool empty, any fee clears immediately</span>
+        {% endif %}
+        <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
+      </div>
+    </form>
+    {% endif %}
     {% if rows %}
       {% for height, ts, hsh, t in rows %}
       {% set mine = t.from == own_addr %}
@@ -61,6 +86,19 @@
   .board-addr { font-family: var(--mono); }
   .board-text { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
   .board-ts { font-size: .68rem; color: var(--muted); text-align: right; margin-top: .2rem; }
+
+  .board-compose {
+    border: 1px solid var(--rule-lt); background: var(--paper-2);
+    padding: .5rem .6rem; margin-bottom: .3rem; border-radius: .5rem;
+  }
+  .board-compose-row { display: flex; gap: .5rem; align-items: center; }
+  .board-compose-row + .board-compose-row { margin-top: .4rem; }
+  .board-compose-sub { font-size: .82rem; }
+  .board-compose-sub label { display: flex; align-items: center; gap: .3rem; color: var(--muted); }
+  .board-compose input[type="text"], .board-compose input[type="password"] {
+    padding: .35rem .5rem;
+  }
+  #board-send { flex: 0 0 auto; padding: .35rem 1rem; }
 </style>
 <script>
 (function () {
@@ -81,6 +119,27 @@
     const ts = parseInt(el.dataset.ts, 10);
     if (ts) el.textContent = fmtTs(ts);
   });
+
+  // Compose box: bytes, not characters, matching the server's own UTF-8
+  // byte-length check (tx.MAX_MEMO_BYTES minus the tag it prepends), and
+  // disabled rather than silently truncated once over, so what's typed
+  // is always exactly what gets sent.
+  const msgInput = document.getElementById("board-message");
+  if (msgInput) {
+    const maxBytes = {{ MAX_MEMO_BYTES - tag_len }};
+    const counter = document.getElementById("board-msg-counter");
+    const sendBtn = document.getElementById("board-send");
+    function refreshCounter() {
+      const bytes = new TextEncoder().encode(msgInput.value).length;
+      const empty = msgInput.value.trim() === "";
+      const over = bytes > maxBytes;
+      counter.textContent = bytes + " / " + maxBytes;
+      counter.style.color = over ? "var(--red, #c0392b)" : "var(--muted)";
+      if (sendBtn) sendBtn.disabled = empty || over;
+    }
+    msgInput.addEventListener("input", refreshCounter);
+    refreshCounter();
+  }
 
   // Only page 1 polls for new posts landing; older pages are history,
   // not a live view, so they stay exactly what was rendered.
