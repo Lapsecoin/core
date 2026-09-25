@@ -1625,6 +1625,33 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                         ctx["memo_value"] = ""
         return render_template("send.html", **ctx)
 
+    @app.route("/api/fees", endpoint="api_fees")
+    def api_fees():
+        """The same fee-market picture the send page renders at load, for
+        it to poll and stay live: the suggested rate is only true for as
+        long as the mempool doesn't change, and it changes constantly.
+        """
+        return jsonify(fee_estimate(node))
+
+    @app.route("/api/board/fee", endpoint="api_board_fee")
+    def api_board_fee():
+        """The actual fee a board post of this length would pay right now,
+        for the compose box to show live as the message grows instead of a
+        static floor that stops being true the moment typing starts:
+        tx_size (what the fee is computed against) scales with the memo, so
+        a longer message really does cost more, and the mempool's own rate
+        can move between keystrokes too.
+        """
+        msg_bytes = min(max(0, request.args.get("bytes", 0, type=int) or 0), tx_mod.MAX_MEMO_BYTES)
+        # An ASCII placeholder of the same byte length: close enough for an
+        # estimate, and the real message never leaves the browser until
+        # actually posted.
+        memo = BOARD_MEMO_TAG + ("x" * msg_bytes)
+        floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
+        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
+        fee = _auto_fee(node, outputs, memo=memo, floor=floor)
+        return jsonify({"fee": fee, "floor": floor})
+
     @app.route("/board", methods=["POST"], endpoint="board_post")
     def board_post():
         page = request.args.get("page", 1, type=int) or 1

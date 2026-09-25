@@ -22,14 +22,11 @@
   </div>
   <div class="stat" style="flex-basis:220px">
     <div class="stat-label">Fee market</div>
-    {% if fees.pending == 0 %}
-    <div class="stat-sub" style="margin-top:0">Mempool empty; ~{{ "%.3f"|format(fees.next_block) }} ticks/byte (relay floor) clears immediately.</div>
-    {% else %}
-    <div class="stat-sub" style="margin-top:0">
-      {{ fees.pending }} pending &middot;
-      <strong style="color:var(--accent)">~{{ "%.3f"|format(fees.next_block) }} ticks/byte to clear next block</strong>
+    <div class="stat-sub" id="fee-market-live" style="margin-top:0">
+      {% if fees.pending == 0 %}Mempool empty; ~{{ "%.3f"|format(fees.next_block) }} ticks/byte (relay floor) clears immediately.
+      {% else %}{{ fees.pending }} pending &middot; <strong style="color:var(--accent)">~{{ "%.3f"|format(fees.next_block) }} ticks/byte to clear next block</strong>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 </div>
 <div class="card">
@@ -137,6 +134,27 @@
   }
   input.addEventListener("input", refresh);
   refresh();
+})();
+
+(function () {
+  // The fee market shown at load is only true until the mempool next
+  // changes, which is constantly, so it polls rather than sitting stale
+  // for as long as the page is open.
+  const el = document.getElementById("fee-market-live");
+  if (!el) return;
+  async function refresh() {
+    try {
+      const res = await fetch("/api/fees", {cache: "no-store"});
+      if (!res.ok) throw new Error("bad status " + res.status);
+      const fees = await res.json();
+      el.textContent = fees.pending === 0
+        ? "Mempool empty; ~" + fees.next_block.toFixed(3) + " ticks/byte (relay floor) clears immediately."
+        : fees.pending + " pending · ~" + fees.next_block.toFixed(3) + " ticks/byte to clear next block";
+    } catch (e) {
+      // Quiet failure: what rendered at load is still a safe, if stale, number.
+    }
+  }
+  setInterval(refresh, 8000);
 })();
 
 (function () {

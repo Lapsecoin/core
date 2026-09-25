@@ -21,8 +21,8 @@
       </div>
       <div class="board-compose-row board-compose-sub">
         <input type="password" name="passphrase" placeholder="Passphrase" autocomplete="off" style="flex:1 1 160px">
-        <span class="stat-sub" style="margin:0" title="Fee is set automatically to whatever clears the next block, never more: {{ board_fee_floor }} ticks minimum, plus the {{ BOARD_POST_AMOUNT }}-tick burn.">
-          fee: whatever clears next block ({{ board_fee_floor }}+ ticks)
+        <span class="stat-sub" id="board-fee-live" style="margin:0" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post costs more.">
+          fee: {{ board_fee_floor }}+ ticks
         </span>
         <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
       </div>
@@ -122,6 +122,25 @@
     const maxBytes = {{ MAX_MEMO_BYTES - tag_len }};
     const counter = document.getElementById("board-msg-counter");
     const sendBtn = document.getElementById("board-send");
+    const feeEl = document.getElementById("board-fee-live");
+    let feeTimer = null;
+    let feeSeq = 0;
+    function refreshFee(bytes) {
+      clearTimeout(feeTimer);
+      feeTimer = setTimeout(async () => {
+        const seq = ++feeSeq;
+        try {
+          const res = await fetch("/api/board/fee?bytes=" + bytes, {cache: "no-store"});
+          if (!res.ok) throw new Error("bad status " + res.status);
+          const data = await res.json();
+          if (seq !== feeSeq) return;  // a newer keystroke already superseded this one
+          feeEl.textContent = "fee: " + data.fee + " ticks";
+        } catch (e) {
+          // Quiet failure: the floor shown at page load is still a safe
+          // (if stale) lower bound, not a broken page.
+        }
+      }, 200);
+    }
     function refreshCounter() {
       const bytes = new TextEncoder().encode(msgInput.value).length;
       const empty = msgInput.value.trim() === "";
@@ -129,6 +148,7 @@
       counter.textContent = bytes + " / " + maxBytes;
       counter.style.color = over ? "var(--red, #c0392b)" : "var(--muted)";
       if (sendBtn) sendBtn.disabled = empty || over;
+      if (!over) refreshFee(bytes);
     }
     msgInput.addEventListener("input", refreshCounter);
     refreshCounter();
