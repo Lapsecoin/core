@@ -89,16 +89,6 @@ class PeerPool:
         # punch, direct punch can together take tens of seconds) instead
         # of a peer only ever appearing at the moment it's already admitted.
         self._attempting = {}
-        # addr -> the relay descriptor currently carrying traffic to it
-        # (e.g. a relay pool URL), or absent when the connection is direct.
-        # This is a transport detail, never conflated with addr itself:
-        # every consumer of snapshot()/get_all()/all_addrs() keeps seeing
-        # the peer's real, gossiped address; this is additional, separate
-        # information about how bytes currently reach it, so the graph,
-        # peers table, and PEERS messages can each decide independently
-        # whether and how to show it, without addr ever silently becoming
-        # a relay's own socket. See set_relay_transport().
-        self._relayed_via = {}
 
     def _forget(self, addr):
         """Drop addr from every index. Callers hold the lock."""
@@ -107,7 +97,6 @@ class PeerPool:
         self._info.pop(addr, None)
         self._learned_from.pop(addr, None)
         self._claimed.pop(addr, None)
-        self._relayed_via.pop(addr, None)
         subnet = _subnet_key(addr)
         if subnet is not None:
             remaining = self._subnets.get(subnet, 0) - 1
@@ -226,32 +215,6 @@ class PeerPool:
             held = set(self._peers)
             return [a for a in self._attempting if a not in held]
 
-    def set_relay_transport(self, addr, relay_descriptor):
-        """Record that addr is currently being reached via relay_descriptor
-        (e.g. "relay://host:port/?id=..."), or clear it back to direct by
-        passing None. No-op for an address that isn't currently tracked,
-        same guard as update_info/set_http_reachable: this describes an
-        already-held peer's transport, it never admits one.
-
-        Deliberately never touches addr itself, self._peers keeps whatever
-        real address discovery admitted the peer under. A relay carrying
-        the bytes doesn't change who the peer is; only how to reach them
-        right now, which can also change again (relay drops, direct
-        connection recovers) without addr moving at all."""
-        with self._lock:
-            if addr not in self._peers:
-                return
-            if relay_descriptor is None:
-                self._relayed_via.pop(addr, None)
-            else:
-                self._relayed_via[addr] = relay_descriptor
-
-    def relay_transport(self, addr):
-        """The relay descriptor currently carrying traffic to addr, or None
-        if direct (or addr isn't held)."""
-        with self._lock:
-            return self._relayed_via.get(addr)
-
     def update_info(self, addr, height=None, version=""):
         """Cache a peer's last-known height and version, learned directly
         from a GETINFO/INFO exchange. No-op for an address that isn't a
@@ -364,10 +327,10 @@ class PeerPool:
 
     def snapshot(self):
         """Return [(addr, last_seen, active, height, version,
-        http_reachable, introduced_by, relayed_via)] for display. active is
-        False while a peer is in cooldown after repeated failures.
-        height/version are the last-known confirmed values from a GETINFO
-        exchange (see update_info), or (None, "") if none has completed yet.
+        http_reachable, introduced_by)] for display. active is False while
+        a peer is in cooldown after repeated failures. height/version are
+        the last-known confirmed values from a GETINFO exchange (see
+        update_info), or (None, "") if none has completed yet.
 
         No wallet, by design and no longer by omission. A peer's payout
         address is not this node's business to know or to publish: it
@@ -379,9 +342,7 @@ class PeerPool:
         "don't know" rather than assumed reachable. introduced_by is the
         peer whose PEERS message named this one, or None when it came from
         the DHT, a torrent swarm lookup, or the operator directly (see
-        add()). relayed_via is the relay descriptor currently carrying
-        traffic to addr, or None when the connection is direct; addr
-        itself never changes because of it (see set_relay_transport)."""
+        add())."""
         now_mono = time.monotonic()
         now_wall = time.time()
         with self._lock:
@@ -402,6 +363,5 @@ class PeerPool:
                     info.get("version", ""),
                     http_reachable,
                     self._learned_from.get(addr),
-                    self._relayed_via.get(addr),
                 ))
             return result
