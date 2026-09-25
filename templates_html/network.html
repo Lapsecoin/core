@@ -20,10 +20,12 @@
   </div>
   <div id="topology" class="topology"></div>
   <div class="stat-sub" style="margin-top:.3rem">
-    This node's own view of its peers, all {{ peer_count }} of them, not a shared network state:
-    the same way <a href="https://bitnodes.io/nodes/network-map/" target="_blank" rel="noopener">Bitnodes</a>
-    shows a crawler's own view rather than trying to get every node to agree on one. Green means this node
-    currently trusts the peer (no recent strike put it in cooldown); a peer this node has actually lost
+    This node's own view, all {{ peer_count }} known peers, not a shared network state: the same way
+    <a href="https://bitnodes.io/nodes/network-map/" target="_blank" rel="noopener">Bitnodes</a> shows a
+    crawler's own view rather than trying to get every node to agree on one. Every peer links to "you"
+    (it's in this node's own pool); a thicker blue edge between two peers means one's PEERS message is how
+    this node actually learned of the other, real provenance from the wire, not a guess. Green means this
+    node currently trusts the peer (no recent strike put it in cooldown); a peer this node has actually lost
     contact with for good just disappears from here, the same as it does from the table below.
   </div>
 </div>
@@ -32,10 +34,10 @@
   <div class="table-wrap">
   <table class="stacked-wide">
     <colgroup>
-      <col style="width:30%"><col style="width:13%">
-      <col style="width:15%"><col style="width:22%"><col style="width:20%">
+      <col style="width:26%"><col style="width:11%">
+      <col style="width:13%"><col style="width:18%"><col style="width:14%"><col style="width:18%">
     </colgroup>
-    <thead><tr><th>Address</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
+    <thead><tr><th>Address</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th><th>Via</th></tr></thead>
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
         <td data-label="Address" class="hash-short" style="color:var(--live)">{{ self_addr or "self" }}</td>
@@ -43,9 +45,10 @@
         <td data-label="Version">{{ self_version }}</td>
         <td data-label="Last seen">just now</td>
         <td data-label="Status" style="color:var(--green)">active</td>
+        <td data-label="Via">—</td>
       </tr>
     {% if rows %}
-      {% for addr, last_seen, active, height, version, http_reachable in rows %}
+      {% for addr, last_seen, active, height, version, http_reachable, introduced_by in rows %}
       <tr>
         {% if http_reachable %}
         <td data-label="Address" class="hash-short"><a class="peer-link" href="http://{{ addr }}" target="_blank" rel="noopener"
@@ -57,6 +60,9 @@
         <td data-label="Version" style="color:{{ 'var(--muted)' if not version }}">{{ version if version else "unknown" }}</td>
         <td data-label="Last seen" data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
         <td data-label="Status" style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
+        <td data-label="Via" class="hash-short" style="color:var(--muted)" title="{{ introduced_by if introduced_by else 'DHT, swarm lookup, or added directly' }}">
+          {{ introduced_by[:15] + "…" if introduced_by else "direct" }}
+        </td>
       </tr>
       {% endfor %}
     {% else %}
@@ -138,6 +144,10 @@
       title: p.last_seen ? new Date(p.last_seen * 1000).toLocaleString() : null,
     }));
     tr.appendChild(cell("Status", p.active ? "active" : "cooldown", {color: p.active ? "var(--green)" : "var(--muted)"}));
+    tr.appendChild(cell("Via", p.introduced_by ? p.introduced_by.slice(0, 15) + "…" : "direct", {
+      cls: "hash-short", color: "var(--muted)",
+      title: p.introduced_by || "DHT, swarm lookup, or added directly",
+    }));
     return tr;
   }
 
@@ -149,13 +159,8 @@
     tr.appendChild(cell("Version", self.version));
     tr.appendChild(cell("Last seen", "just now"));
     tr.appendChild(cell("Status", "active", {color: "var(--green)"}));
+    tr.appendChild(cell("Via", "—"));
     return tr;
-  }
-
-  function shortAddr(addr) {
-    if (!addr) return "peer";
-    const words = addr.split(".");
-    return words.length > 2 ? words.slice(0, 2).join(".") + "…" : addr;
   }
 
   // active here is exactly the same signal the table's "active"/"cooldown"
@@ -181,8 +186,8 @@
       .nodeLabel(n => n.title)
       .nodeVal(n => n.self ? 10 : 5)
       .nodeColor(n => n.self ? "#b35a0c" : nodeColor(n))
-      .linkColor(() => "rgba(185,178,155,.6)")
-      .linkWidth(1)
+      .linkColor(l => l.introduced ? "rgba(47,79,108,.75)" : "rgba(185,178,155,.5)")
+      .linkWidth(l => l.introduced ? 1.6 : 1)
       .cooldownTicks(60)
       .enableNodeDrag(true)
       .onNodeClick(n => { if (n.href) window.open(n.href, "_blank", "noopener"); });
@@ -193,20 +198,29 @@
 
   function renderTopology(self, peers) {
     if (!graph) initTopology();
+    const known = new Set(peers.map(p => p.address));
     const nodes = [{
       id: "self", self: true,
       title: (self.addr || "self") + " (you)",
     }];
     const links = [];
-    peers.forEach((p, i) => {
-      const id = "peer" + i;
+    peers.forEach(p => {
       nodes.push({
-        id, active: p.active,
+        id: p.address, active: p.active,
         title: p.address + (p.height != null ? " · height " + p.height : "")
-               + (p.active ? "" : " · cooldown"),
+               + (p.active ? "" : " · cooldown")
+               + (p.introduced_by ? " · introduced by " + p.introduced_by : ""),
         href: p.http_reachable ? "http://" + p.address : null,
       });
-      links.push({ source: "self", target: id });
+      // Always linked to self: this node admitted it into its own pool
+      // regardless of who first mentioned it. A second edge to its actual
+      // introducer is drawn only when that introducer is itself a peer
+      // we currently hold, real provenance we can place on the graph,
+      // not a guess about a node we don't otherwise know anything about.
+      links.push({ source: "self", target: p.address });
+      if (p.introduced_by && p.introduced_by !== self.addr && known.has(p.introduced_by)) {
+        links.push({ source: p.introduced_by, target: p.address, introduced: true });
+      }
     });
     graph.graphData({ nodes, links });
   }

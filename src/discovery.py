@@ -83,7 +83,7 @@ class Discovery:
         self.pool         = pool
         self.genesis_hash = genesis_hash
         self.port         = port
-        self._candidates  = set()
+        self._candidates  = {}  # addr -> learned_from addr, or None (DHT/CLI)
         self._lock        = threading.Lock()
 
         if not node_pubkey_hex:
@@ -97,10 +97,16 @@ class Discovery:
     # Public interface
     # ------------------------------------------------------------------
 
-    def enqueue_candidate(self, addr):
+    def enqueue_candidate(self, addr, learned_from=None):
+        """Queue addr to be tried. learned_from is the peer whose PEERS
+        message mentioned it, or None when it came from the DHT, a torrent
+        swarm lookup, or the operator's --peer CLI flag: real provenance,
+        not guessed, kept only so the network page can draw an edge it
+        actually has evidence for instead of just a self-star (see
+        PeerPool._learned_from)."""
         if isinstance(addr, str) and ":" in addr and is_routable_peer_addr(addr):
             with self._lock:
-                self._candidates.add(addr)
+                self._candidates[addr] = learned_from
 
     def _is_own_addr(self, addr: str) -> bool:
         """True if addr is this node's own, by either of the two ways an
@@ -276,7 +282,8 @@ class Discovery:
             self._candidates.clear()
 
         known = set(self.pool.all_addrs())
-        fresh = [a for a in batch if a not in known and not self._is_own_addr(a)]
+        fresh = [(a, src) for a, src in batch.items()
+                 if a not in known and not self._is_own_addr(a)]
         if not fresh:
             return
 
@@ -284,7 +291,7 @@ class Discovery:
         # concluded their peers were being rejected. It is the opposite:
         # these are about to be tried.
         log.info("[peers] trying %d new address(es): %s",
-                 len(fresh), ", ".join(fresh))
+                 len(fresh), ", ".join(a for a, _ in fresh))
 
         # Probed in parallel, on the pool, because a candidate is almost
         # entirely waiting. One unreachable address costs a PING timeout,
@@ -296,7 +303,7 @@ class Discovery:
         # re-broadcasts on the LAN and saves the peer cache. All of it
         # stopped while the node waited on addresses that were never going
         # to answer.
-        results = list(self._executor.map(self._try_candidate, fresh))
+        results = list(self._executor.map(lambda pair: self._try_candidate(*pair), fresh))
         admitted = sum(1 for ok in results if ok)
 
         if admitted:
@@ -305,17 +312,20 @@ class Discovery:
         else:
             log.info("[peers] none of those %d could be reached", len(fresh))
 
-    def _try_candidate(self, addr: str) -> bool:
+    def _try_candidate(self, addr: str, learned_from: str | None = None) -> bool:
         """Everything we will try to reach one candidate: a plain ping, then
         a punch relayed through peers we already have, then a direct punch.
-        Returns whether it ended up admitted."""
+        Returns whether it ended up admitted. learned_from (see
+        enqueue_candidate) rides along through every admit path below, it
+        says how we heard of addr, not how we reached it, so a relay or
+        direct punch doesn't overwrite it with the relay's own address."""
         if self.pool.count() >= self.pool._max_peers:
             return False
-        if self._ping_and_admit(addr):
+        if self._ping_and_admit(addr, learned_from):
             return True
 
         for relay in self.pool.get_all()[:PUNCH_ATTEMPTS]:
-            if self._punch_and_admit(relay, addr):
+            if self._punch_and_admit(relay, addr, learned_from):
                 return True
 
         # No relay worked. Fire UDP bursts directly and re-ping. Both nodes
@@ -325,30 +335,30 @@ class Discovery:
         log.debug("[peer] no relay, direct punch  addr=%s", addr)
         self.udp.punch_direct(addr)
         time.sleep(PUNCH_WAIT)
-        if self._ping_and_admit(addr):
+        if self._ping_and_admit(addr, learned_from):
             return True
         log.debug("[peer] unreachable (no punch)  addr=%s", addr)
         return False
 
-    def _ping_and_admit(self, addr: str) -> bool:
+    def _ping_and_admit(self, addr: str, learned_from: str | None = None) -> bool:
         """UDP PING addr. If PONG arrives, exchange peers and admit. Returns True on success."""
         observed = self.udp.ping(addr)
         if observed is None:
             return False
         # PONG received; node is reachable
-        if self.pool.add(addr):
+        if self.pool.add(addr, learned_from=learned_from):
             log.info("[peers] connected to %s, %d peer(s) in total",
                  addr, self.pool.count())
             # Exchange peer lists
             self.udp.send_peers(addr, self.pool.get_all()[:50])
         return True
 
-    def _punch_and_admit(self, relay: str, target: str) -> bool:
+    def _punch_and_admit(self, relay: str, target: str, learned_from: str | None = None) -> bool:
         """Ask relay to coordinate hole punch to target, then re-ping."""
         log.debug("[peer] punch attempt  relay=%s  target=%s", relay, target)
         self.udp.punch_via(relay, target)
         time.sleep(PUNCH_WAIT)
-        return self._ping_and_admit(target)
+        return self._ping_and_admit(target, learned_from)
 
     # ------------------------------------------------------------------
     # IP fallback (only used if no PONG has arrived yet)

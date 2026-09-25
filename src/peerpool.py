@@ -64,6 +64,11 @@ class PeerPool:
         self._peers     = {}          # addr -> last_seen (wall clock)
         self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
         self._info      = {}          # addr -> {"height": int|None, "version": str}
+        # addr -> the peer whose PEERS message told us about it, or None
+        # (DHT, torrent swarm, or the operator's --peer flag). Real
+        # provenance, kept only for display (see snapshot()); nothing here
+        # decides admission or trust on the strength of who vouched for it.
+        self._learned_from = {}
         self.max_height_observed = 0
         # Held peers per /24 or /64, kept in step with _peers so the
         # diversity cap is a lookup rather than a scan. See add().
@@ -75,6 +80,7 @@ class PeerPool:
         if self._peers.pop(addr, None) is None:
             return
         self._info.pop(addr, None)
+        self._learned_from.pop(addr, None)
         subnet = _subnet_key(addr)
         if subnet is not None:
             remaining = self._subnets.get(subnet, 0) - 1
@@ -85,13 +91,19 @@ class PeerPool:
 
     # ---- Core operations ----
 
-    def add(self, addr, allow_private=False):
+    def add(self, addr, allow_private=False, learned_from=None):
         """Add a peer. Returns True if it was new.
 
         allow_private bypasses the private/loopback/link-local rejection.
         Only for addresses a local operator entered deliberately (the
         private dashboard's manual add-peer form), never for anything
-        sourced from the DHT, peer-exchange, or another peer."""
+        sourced from the DHT, peer-exchange, or another peer.
+
+        learned_from is the peer whose PEERS message named addr, or None
+        when it came from the DHT, a torrent swarm lookup, or the
+        operator directly. Recorded, not acted on: it doesn't affect
+        whether addr is admitted, only what snapshot() can later say
+        about where it came from."""
         if not allow_private and not is_routable_peer_addr(addr):
             return False
         now_mono = time.monotonic()
@@ -113,6 +125,8 @@ class PeerPool:
                     return False
                 self._subnets[subnet] = self._subnets.get(subnet, 0) + 1
             self._peers[addr] = time.time()
+            if learned_from is not None:
+                self._learned_from[addr] = learned_from
         log.debug("[peer] added  addr=%s", addr)
         return True
 
@@ -216,9 +230,9 @@ class PeerPool:
 
     def snapshot(self):
         """Return [(addr, last_seen, active, height, version,
-        http_reachable)] for display. active is False while a peer
-        is in cooldown after repeated failures. height/version are the
-        last-known confirmed values from a GETINFO exchange (see
+        http_reachable, introduced_by)] for display. active is False while
+        a peer is in cooldown after repeated failures. height/version are
+        the last-known confirmed values from a GETINFO exchange (see
         update_info), or (None, "") if none has completed yet.
 
         No wallet, by design and no longer by omission. A peer's payout
@@ -228,7 +242,10 @@ class PeerPool:
         True/False from the most recent HTTP probe (see set_http_reachable)
         if one completed within the last HTTP_REACHABLE_TTL seconds,
         otherwise None, stale or never-checked, treated the same as
-        "don't know" rather than assumed reachable."""
+        "don't know" rather than assumed reachable. introduced_by is the
+        peer whose PEERS message named this one, or None when it came from
+        the DHT, a torrent swarm lookup, or the operator directly (see
+        add())."""
         now_mono = time.monotonic()
         now_wall = time.time()
         with self._lock:
@@ -248,5 +265,6 @@ class PeerPool:
                     info.get("height"),
                     info.get("version", ""),
                     http_reachable,
+                    self._learned_from.get(addr),
                 ))
             return result

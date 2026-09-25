@@ -467,7 +467,7 @@ def main():
     def on_peers(peer_list, sender_addr):
         for p in peer_list:
             if isinstance(p, str) and ":" in p:
-                discovery.enqueue_candidate(p)
+                discovery.enqueue_candidate(p, learned_from=sender_addr)
         pool.touch(sender_addr)
 
     # Ask the local network who's already running a node before claiming a

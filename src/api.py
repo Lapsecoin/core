@@ -400,6 +400,8 @@ def _parse_csv_outputs(outputs_raw):
             errors.append(f"Line {i}: expected 'address,amount'")
             continue
         addr, amt_str = parts[0].strip(), parts[1].strip()
+        if addr.lower() == "burn":
+            addr = crypto_mod.burn_address()
         if not crypto_mod.is_valid_address(addr):
             errors.append(f"Line {i}: invalid address")
             continue
@@ -989,8 +991,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return [
             {"address": addr, "last_seen": int(last_seen), "active": active,
              "height": height, "version": version,
-             "http_reachable": http_reachable}
-            for addr, last_seen, active, height, version, http_reachable in rows
+             "http_reachable": http_reachable, "introduced_by": introduced_by}
+            for addr, last_seen, active, height, version, http_reachable, introduced_by in rows
         ]
 
     def _self_info():
@@ -1475,6 +1477,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                    fees=fee_estimate(node), csrf_token=csrf_token,
                    outputs_value=_default_send_outputs(node),
                    memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
+                   board_tag_bytes=len(BOARD_MEMO_TAG),
                    post_to_board_value=False, asset="lapse",
                    xlm_addr=xlm_addr, xlm_spendable=xlm_spendable,
                    xlm_locked=xlm_locked, xlm_to_value="",
