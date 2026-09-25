@@ -36,7 +36,7 @@
           <div class="board-meta">
             <a href="/address?addr={{ t.from }}" class="hash-short board-addr">{{ t.from }}</a>
           </div>
-          <div class="board-text">{{ t.memo[tag_len:] }}</div>
+          <div class="board-text">{{ render_board_text(t.memo[tag_len:]) }}</div>
           <div class="board-ts">
             <a href="/explorer/tx/{{ hsh }}" data-ts="{{ ts | int if ts else 0 }}" title="block {{ height }}, verify on the explorer">&nbsp;</a>
           </div>
@@ -125,6 +125,17 @@
     const feeEl = document.getElementById("board-fee-live");
     let feeTimer = null;
     let feeSeq = 0;
+
+    // Disabled with the reason on hover, rather than left clickable to
+    // fail after signing: the two common ways a post can't go through
+    // (too long, balance too low) are both known before anything is
+    // signed, so there's nothing to gain by waiting for a submit to say so.
+    function setSendState(disabled, reason) {
+      if (!sendBtn) return;
+      sendBtn.disabled = disabled;
+      sendBtn.title = reason;
+    }
+
     function refreshFee(bytes) {
       clearTimeout(feeTimer);
       feeTimer = setTimeout(async () => {
@@ -135,20 +146,29 @@
           const data = await res.json();
           if (seq !== feeSeq) return;  // a newer keystroke already superseded this one
           feeEl.textContent = "fee: " + data.fee + " ticks";
+          setSendState(!data.ok, data.reason || "");
         } catch (e) {
           // Quiet failure: the floor shown at page load is still a safe
           // (if stale) lower bound, not a broken page.
         }
       }, 200);
     }
+
     function refreshCounter() {
       const bytes = new TextEncoder().encode(msgInput.value).length;
       const empty = msgInput.value.trim() === "";
       const over = bytes > maxBytes;
       counter.textContent = bytes + " / " + maxBytes;
       counter.style.color = over ? "var(--red, #c0392b)" : "var(--muted)";
-      if (sendBtn) sendBtn.disabled = empty || over;
-      if (!over) refreshFee(bytes);
+      if (empty) {
+        setSendState(true, "Write something to post.");
+      } else if (over) {
+        const excess = bytes - maxBytes;
+        setSendState(true, excess + " byte" + (excess !== 1 ? "s" : "") + " too long.");
+      } else {
+        setSendState(false, "");  // provisional; refreshFee may re-disable for balance
+        refreshFee(bytes);
+      }
     }
     msgInput.addEventListener("input", refreshCounter);
     refreshCounter();

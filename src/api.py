@@ -93,6 +93,7 @@ import sys
 import threading
 
 import markdown
+from markupsafe import Markup, escape
 from flask import Flask, jsonify, redirect, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -269,6 +270,32 @@ def _recent_committed_txs(chain, limit, offset=0):
             if len(rows) >= limit:
                 return rows
     return rows
+
+
+# A tiny, safe markdown-like subset for board post text, which is public
+# and written by anyone: real markdown.markdown() (used for the shipped
+# whitepaper.md elsewhere in this file) passes raw HTML straight through
+# unless separately sanitized, and this text is the one place on the site
+# that is untrusted, attacker-controlled input rendered to other people's
+# browsers. Escaping happens first, so every substitution below only ever
+# wraps already-escaped text in tags it introduces itself; by the time any
+# pattern runs, there is no way for a post's own content to contain a
+# literal '<', so nothing typed into it can inject an element of its own.
+_BOARD_CODE_RE = re.compile(r'`([^`]+?)`')
+_BOARD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+_BOARD_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)')
+_BOARD_URL_RE = re.compile(r'(https?://[^\s<]+)')
+
+
+def render_board_text(raw):
+    text = str(escape(raw))
+    text = _BOARD_CODE_RE.sub(r'<code>\1</code>', text)
+    text = _BOARD_BOLD_RE.sub(r'<strong>\1</strong>', text)
+    text = _BOARD_ITALIC_RE.sub(r'<em>\1</em>', text)
+    text = _BOARD_URL_RE.sub(
+        lambda m: f'<a href="{m.group(1)}" rel="nofollow noopener noreferrer" target="_blank">{m.group(1)}</a>',
+        text)
+    return Markup(text.replace("\n", "<br>"))
 
 
 def _board_posts(chain):
@@ -1212,6 +1239,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
             # Capped (_capped_claims) so a peer that happens to know a lot
             # of other peers can't blow up the response or the graph.
             "claims": _capped_claims(pool.claims(), {r[0] for r in all_rows}),
+            # Candidates discovery is actively trying to reach right now
+            # (ping, relayed punch, direct punch), so the graph can show a
+            # connection being attempted instead of peers only ever
+            # appearing at the moment they're already admitted.
+            "attempting": pool.attempting(),
         })
 
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")
@@ -1426,6 +1458,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
                                  BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
+                                 render_board_text=render_board_text,
                                  MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     # Deliberately not touching the werkzeug logger. main.py already sets it
@@ -1479,6 +1512,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
                                  BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
+                                 render_board_text=render_board_text,
                                  MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
     _close_db_after_request(app)
@@ -1633,6 +1667,33 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         """
         return jsonify(fee_estimate(node))
 
+    @app.route("/api/send/fee", endpoint="api_send_fee")
+    def api_send_fee():
+        """Whether the outputs/memo currently in the send form would go
+        through right now, and at what fee, so the Sign & Send button can
+        be disabled with the real reason before anything is signed rather
+        than after. Reuses the same parsing and fee logic the actual POST
+        handler uses, so this can't say "fine" to something that then
+        fails, or the reverse.
+        """
+        outputs, errors = _parse_csv_outputs(request.args.get("outputs", ""))
+        memo = request.args.get("memo", "")
+        if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
+            errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
+        if errors:
+            return jsonify({"ok": False, "reason": errors[0]})
+        if not outputs:
+            return jsonify({"ok": False, "reason": "No valid outputs."})
+        fee = _auto_fee(node, outputs, memo=memo)
+        total_out = sum(o["amount"] for o in outputs)
+        required = total_out + fee
+        balance = node.view.state.get_balance(node.addr)
+        if required > balance:
+            return jsonify({"ok": False, "fee": fee,
+                            "reason": f"Insufficient balance: have {fmt_balance(balance)}, "
+                                      f"need {fmt_balance(required)}."})
+        return jsonify({"ok": True, "fee": fee, "reason": ""})
+
     @app.route("/api/board/fee", endpoint="api_board_fee")
     def api_board_fee():
         """The actual fee a board post of this length would pay right now,
@@ -1650,7 +1711,13 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
         outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
         fee = _auto_fee(node, outputs, memo=memo, floor=floor)
-        return jsonify({"fee": fee, "floor": floor})
+        required = BOARD_POST_AMOUNT + fee
+        balance = node.view.state.get_balance(node.addr)
+        if required > balance:
+            return jsonify({"fee": fee, "floor": floor, "ok": False,
+                            "reason": f"Insufficient balance: have {fmt_balance(balance)}, "
+                                      f"need {fmt_balance(required)}."})
+        return jsonify({"fee": fee, "floor": floor, "ok": True, "reason": ""})
 
     @app.route("/board", methods=["POST"], endpoint="board_post")
     def board_post():

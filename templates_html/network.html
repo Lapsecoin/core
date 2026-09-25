@@ -40,6 +40,7 @@
     <span class="topo-legend-item"><span class="topo-swatch" style="background:#b35a0c"></span>you</span>
     <span class="topo-legend-item"><span class="topo-swatch" style="background:#2f7a4f"></span>trusted</span>
     <span class="topo-legend-item"><span class="topo-swatch" style="background:#b9b29b"></span>cooldown</span>
+    <span class="topo-legend-item"><span class="topo-swatch" style="background:#e0912f"></span>connecting</span>
     <span class="topo-legend-item"><span class="topo-swatch topo-swatch-hollow"></span>seen, not held</span>
     <details class="topo-details">
       <summary>details</summary>
@@ -84,7 +85,8 @@
   // never a guessed timeout. A peer PeerPool actually drops just isn't
   // in graph_peers on the next poll.
   function nodeColor(p) {
-    if (!p.held) return "#7a8290";   // claimed only, unconfirmed by this node
+    if (p.attempting) return "#e0912f";  // discovery is trying it right now
+    if (!p.held) return "#7a8290";       // claimed only, unconfirmed by this node
     return p.active ? "#3ecf8e" : "#7a7466";
   }
 
@@ -143,11 +145,15 @@
     const r = nodeRadius(n) * (0.4 + 0.6 * fade);   // grows in, shrinks out, not just fades
     const color = n.self ? "#e0912f" : nodeColor(n);
     const dimmed = hoverNode && hoverNode !== n.id && !connected.get(hoverNode)?.has(n.id);
-    const glowing = !dimmed && (n.self || (n.held && n.active));
+    // A held peer glows steadily; a connection being attempted pulses
+    // instead, since "in progress" is a different fact than "confirmed
+    // reachable" and shouldn't read identically on the graph.
+    const pulse = n.attempting ? .6 + .4 * Math.sin(performance.now() / 220) : 1;
+    const glowing = !dimmed && (n.self || (n.held && n.active) || n.attempting);
     ctx.globalAlpha = (dimmed ? .25 : 1) * fade;
     if (glowing) {
       ctx.shadowColor = color;
-      ctx.shadowBlur = n.self ? 16 : 9;
+      ctx.shadowBlur = (n.self ? 16 : 9) * pulse;
     }
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
@@ -183,19 +189,22 @@
         const srcId = l.source.id || l.source, tgtId = l.target.id || l.target;
         const dim = hoverNode && srcId !== hoverNode && tgtId !== hoverNode;
         const fade = fadeAlpha(l) * (dim ? .25 : 1);
+        if (l.attempting) return `rgba(224,145,47,${.6 * fade})`;
         return l.introduced ? `rgba(122,167,230,${.55 * fade})` : `rgba(255,255,255,${.18 * fade})`;
       })
       .linkWidth(l => l.introduced ? 1.4 : 1)
       // Particles are what carry the "this is live" feeling once the
       // layout itself has settled and stopped moving: a steady trickle
-      // along every edge, denser on the edges backed by an actual claim.
+      // along every edge, denser on the edges backed by an actual claim,
+      // fastest on one discovery is actively dialing right now.
       // Fading them out with the link (rather than an instant cutoff)
       // keeps a departing edge from just switching off mid-flow.
-      .linkDirectionalParticles(l => fadeAlpha(l) > 0 ? (l.introduced ? 3 : 1) : 0)
+      .linkDirectionalParticles(l => fadeAlpha(l) > 0 ? (l.attempting ? 4 : (l.introduced ? 3 : 1)) : 0)
       .linkDirectionalParticleWidth(1.6)
-      .linkDirectionalParticleSpeed(0.004)
+      .linkDirectionalParticleSpeed(l => l.attempting ? 0.012 : 0.004)
       .linkDirectionalParticleColor(l => {
         const a = fadeAlpha(l);
+        if (l.attempting) return `rgba(224,145,47,${.95 * a})`;
         return l.introduced ? `rgba(122,167,230,${.9 * a})` : `rgba(255,255,255,${.5 * a})`;
       })
       .cooldownTime(Infinity)
@@ -255,7 +264,7 @@
     }
   }
 
-  function renderTopology(self, peers, claims) {
+  function renderTopology(self, peers, claims, attempting) {
     if (!graph) initTopology();
     structureChanged = false;
     const known = new Set(peers.map(p => p.address));
@@ -288,6 +297,21 @@
     // admitted set can't show by itself. An address seen only this way
     // gets its own node, visually distinct (hollow, no pulse, no click
     // target) since this node has no first-hand confirmation of it.
+    // Discovery is trying these right now (ping, relayed punch, direct
+    // punch), which together can run tens of seconds: without this, a
+    // peer only ever appeared on the graph the instant it was already
+    // admitted, and everything discovery does before that was invisible.
+    // A candidate that's also claimed or already held (a claim about an
+    // address discovery hasn't finished dialing yet) is drawn once, as
+    // attempting, not twice.
+    attempting.forEach(addr => {
+      if (addr === self.addr || known.has(addr)) return;
+      upsertNode(addr, { attempting: true, held: false, title: addr + " · connecting…" });
+      wantNodes.add(addr);
+      upsertLink("self", addr, { attempting: true });
+      wantLinks.add("self=>" + addr);
+    });
+
     const unheldSeen = new Set();
     for (const introducer in claims) {
       if (!known.has(introducer)) continue;   // stale claim from an evicted peer
@@ -326,7 +350,7 @@
       if (!res.ok) throw new Error("bad status " + res.status);
       const data = await res.json();
 
-      renderTopology(data.self, data.graph_peers, data.claims || {});
+      renderTopology(data.self, data.graph_peers, data.claims || {}, data.attempting || []);
 
       document.getElementById("peers-count").textContent =
         data.peer_count + " known peer" + (data.peer_count !== 1 ? "s" : "");

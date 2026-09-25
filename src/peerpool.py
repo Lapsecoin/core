@@ -82,6 +82,13 @@ class PeerPool:
         # diversity cap is a lookup rather than a scan. See add().
         self._subnets   = {}          # subnet key -> count
         self._lock      = threading.Lock()
+        # addr -> monotonic time an in-progress connection attempt began.
+        # Display-only, like _learned_from: nothing here reads it back to
+        # decide anything, it exists so the network graph can show a
+        # candidate while discovery is still trying it (ping, relayed
+        # punch, direct punch can together take tens of seconds) instead
+        # of a peer only ever appearing at the moment it's already admitted.
+        self._attempting = {}
 
     def _forget(self, addr):
         """Drop addr from every index. Callers hold the lock."""
@@ -185,6 +192,28 @@ class PeerPool:
         """{introducer: [claimed addr, ...]}, a shallow copy for display."""
         with self._lock:
             return {k: list(v) for k, v in self._claimed.items()}
+
+    def mark_attempting(self, addr):
+        """Record that discovery just started trying to reach addr."""
+        with self._lock:
+            self._attempting[addr] = time.monotonic()
+
+    def unmark_attempting(self, addr):
+        """The attempt for addr is over, admitted or not. A no-op if it
+        was never marked (or already admitted, which unmark doesn't race
+        with: admission and unmark both happen from the end of the same
+        _try_candidate call)."""
+        with self._lock:
+            self._attempting.pop(addr, None)
+
+    def attempting(self):
+        """Addrs discovery is currently trying to reach, for display only.
+        Never includes an already-held peer: admission always happens
+        before the caller unmarks it, so by the time an addr leaves this
+        set it's either in the pool already or genuinely given up on."""
+        with self._lock:
+            held = set(self._peers)
+            return [a for a in self._attempting if a not in held]
 
     def update_info(self, addr, height=None, version=""):
         """Cache a peer's last-known height and version, learned directly

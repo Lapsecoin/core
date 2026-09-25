@@ -344,24 +344,28 @@ class Discovery:
         direct punch doesn't overwrite it with the relay's own address."""
         if self.pool.count() >= self.pool._max_peers:
             return False
-        if self._ping_and_admit(addr, learned_from):
-            return True
-
-        for relay in self.pool.get_all()[:PUNCH_ATTEMPTS]:
-            if self._punch_and_admit(relay, addr, learned_from):
+        self.pool.mark_attempting(addr)
+        try:
+            if self._ping_and_admit(addr, learned_from):
                 return True
 
-        # No relay worked. Fire UDP bursts directly and re-ping. Both nodes
-        # discover each other via DHT simultaneously, so both will fire
-        # toward each other at roughly the same time, which is sufficient to
-        # open symmetric NAT holes without a relay.
-        log.debug("[peer] no relay, direct punch  addr=%s", addr)
-        self.udp.punch_direct(addr)
-        time.sleep(PUNCH_WAIT)
-        if self._ping_and_admit(addr, learned_from):
-            return True
-        log.debug("[peer] unreachable (no punch)  addr=%s", addr)
-        return False
+            for relay in self.pool.get_all()[:PUNCH_ATTEMPTS]:
+                if self._punch_and_admit(relay, addr, learned_from):
+                    return True
+
+            # No relay worked. Fire UDP bursts directly and re-ping. Both
+            # nodes discover each other via DHT simultaneously, so both will
+            # fire toward each other at roughly the same time, which is
+            # sufficient to open symmetric NAT holes without a relay.
+            log.debug("[peer] no relay, direct punch  addr=%s", addr)
+            self.udp.punch_direct(addr)
+            time.sleep(PUNCH_WAIT)
+            if self._ping_and_admit(addr, learned_from):
+                return True
+            log.debug("[peer] unreachable (no punch)  addr=%s", addr)
+            return False
+        finally:
+            self.pool.unmark_attempting(addr)
 
     def _regossip_peers(self):
         """Re-send our current peer list to a handful of peers we already
