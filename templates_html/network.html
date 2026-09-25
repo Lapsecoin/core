@@ -21,24 +21,14 @@
   <div id="topology" class="topology"></div>
   <div class="topo-legend">
     <span class="topo-legend-item"><span class="topo-swatch" style="background:#b35a0c"></span>you</span>
-    <span class="topo-legend-item"><span class="topo-swatch" style="background:#2f7a4f"></span>held, trusted</span>
-    <span class="topo-legend-item"><span class="topo-swatch" style="background:#b9b29b"></span>held, cooldown</span>
-    <span class="topo-legend-item"><span class="topo-swatch topo-swatch-hollow"></span>claimed, not held</span>
-    <span class="topo-legend-item"><span class="topo-swatch-line" style="background:rgba(185,178,155,.6)"></span>in this node's pool</span>
-    <span class="topo-legend-item"><span class="topo-swatch-line" style="background:rgba(47,79,108,.75)"></span>claimed by a peer</span>
-  </div>
-  <div class="stat-sub" style="margin-top:.2rem">
-    This node's own view, not a shared network state: the same way
-    <a href="https://bitnodes.io/nodes/network-map/" target="_blank" rel="noopener">Bitnodes</a> shows a
-    crawler's own view rather than trying to get every node to agree on one. "Claimed, not held" is real
-    data (a peer's own PEERS message), just not firsthand: this node never reached that address itself.
-    A claim always reflects the most recent list that peer sent, so an address it stops mentioning stops
-    being shown as its peer, though it can take a while to hear an update: this node re-sends its own list
-    to the peers it's told least recently, {{ pex_fanout }} of them roughly every {{ pex_interval_min }}
-    minutes, so a given peer is guaranteed a refresh within a bounded number of rounds rather than however
-    long random luck takes. Claimed addresses no held peer confirms are capped at {{ claimed_graph_limit }}
-    on the wire, kept by how many peers currently agree on them, so one very well-connected peer can't
-    blow up this page. A peer actually lost for good just disappears, same as the table below.
+    <span class="topo-legend-item"><span class="topo-swatch" style="background:#2f7a4f"></span>trusted</span>
+    <span class="topo-legend-item"><span class="topo-swatch" style="background:#b9b29b"></span>cooldown</span>
+    <span class="topo-legend-item"><span class="topo-swatch topo-swatch-hollow"></span>seen, not held</span>
+    <details class="topo-details">
+      <summary>details</summary>
+      This is only what this node itself has seen: who it's connected to, and who those peers have
+      mentioned but it hasn't reached itself (the faint dots). Updates live as that changes.
+    </details>
   </div>
 </div>
 
@@ -98,11 +88,11 @@
 {% endif %}
 <style>
   .topology {
-    height: 260px; margin: .6rem 0 .3rem;
+    height: 340px; margin: .6rem 0 .5rem;
     border: 1px solid var(--rule-lt); background: var(--paper-2);
   }
   .topo-legend {
-    display: flex; flex-wrap: wrap; gap: .3rem 1rem;
+    display: flex; flex-wrap: wrap; gap: .3rem 1.1rem;
     font-size: .74rem; color: var(--muted); align-items: center;
   }
   .topo-legend-item { display: inline-flex; align-items: center; gap: .35rem; }
@@ -113,7 +103,10 @@
   .topo-swatch-hollow {
     background: rgba(185,178,155,.35); border: 1px solid var(--rule-lt);
   }
-  .topo-swatch-line { width: 16px; height: 3px; flex: 0 0 auto; display: inline-block; }
+  .topo-details { margin-left: auto; cursor: pointer; }
+  .topo-details summary { color: var(--link); list-style: none; }
+  .topo-details summary::-webkit-details-marker { display: none; }
+  .topo-details[open] summary { margin-bottom: .3rem; }
 </style>
 <script src="/vendor/force-graph.min.js"></script>
 <script>

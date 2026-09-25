@@ -96,7 +96,6 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 import block as block_mod
-import discovery as discovery_mod
 import crypto as crypto_mod
 import state as state_mod
 import settings as settings_mod
@@ -1038,10 +1037,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
                                page_window=_pagination_window(page, total_pages),
                                has_prev=page > 1, has_next=end < len(all_rows),
                                self_height=self_height,
-                               self_version=LOCAL_VERSION, self_addr=_self_external_addr(),
-                               pex_fanout=discovery_mod.PEX_FANOUT,
-                               pex_interval_min=discovery_mod.PEX_REGOSSIP_INTERVAL // 60,
-                               claimed_graph_limit=CLAIMED_GRAPH_LIMIT)
+                               self_version=LOCAL_VERSION, self_addr=_self_external_addr())
 
     @app.route("/peers", endpoint=pfx+"peers_redirect")
     def peers_redirect():
