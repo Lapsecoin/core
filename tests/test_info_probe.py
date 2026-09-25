@@ -47,8 +47,16 @@ class TestProbeRound:
         assert info_probe.probe_round(pool, udp) == 2
         assert sorted(udp.asked) == ["5.6.7.8:8333", "9.10.11.12:8333"]
 
-        addr, _last_seen, _active, height, version, _http = _row(
+        addr, _last_seen, _active, height, version, _http, _ib, _tip = _row(
             pool, "5.6.7.8:8333")
+
+    def test_tip_hash_is_recorded_from_the_answer(self):
+        pool = _pool_with("5.6.7.8:8333")
+        udp = _FakeUDP({"5.6.7.8:8333": {"height": 42, "version": "0.5.1",
+                                          "tip_hash": "deadbeef"}})
+        assert info_probe.probe_round(pool, udp) == 1
+        _a, _ls, _ac, _h, _v, _http, _ib, tip_hash = _row(pool, "5.6.7.8:8333")
+        assert tip_hash == "deadbeef"
 
     def test_every_peer_is_asked_in_one_round(self):
         """The point of the module: one round covers the whole table, rather
@@ -72,7 +80,7 @@ class TestProbeRound:
 
         info_probe.probe_round(pool, _FakeUDP({}))      # no answer this time
 
-        _addr, _ls, _ac, height, version, _http = _row(pool, "5.6.7.8:8333")
+        _addr, _ls, _ac, height, version, _http, _ib, _tip = _row(pool, "5.6.7.8:8333")
         assert height == 42
         assert version == "0.5.1"
 
@@ -84,13 +92,13 @@ class TestProbeRound:
         })
 
         assert info_probe.probe_round(pool, udp) == 1
-        _a, _ls, _ac, height, _v, _http = _row(pool, "9.10.11.12:8333")
+        _a, _ls, _ac, height, _v, _http, _ib, _tip = _row(pool, "9.10.11.12:8333")
         assert height == 41
 
     def test_a_junk_answer_is_ignored(self):
         pool = _pool_with("5.6.7.8:8333")
         assert info_probe.probe_round(pool, _FakeUDP({"5.6.7.8:8333": "nope"})) == 0
-        _a, _ls, _ac, height, _v, _http = _row(pool, "5.6.7.8:8333")
+        _a, _ls, _ac, height, _v, _http, _ib, _tip = _row(pool, "5.6.7.8:8333")
         assert height is None
 
     def test_no_peers_is_a_no_op(self):

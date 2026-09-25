@@ -171,6 +171,35 @@
     ctx.restore();
   }
 
+  // A small red "X" badge, opposite corner from the link-icon badge above
+  // so the two never collide, for a peer whose claimed tip this node can
+  // directly check against its own chain (see api.py's _peer_fork_info)
+  // and disagrees with. Only drawn when that check actually ran and came
+  // back a mismatch, never for a peer whose claim simply couldn't be
+  // verified (ahead of our own tip, or no INFO exchange yet), those are
+  // "unknown", not "known fork", and look identical to a plain peer.
+  function drawForkBadge(n, ctx, r, fade) {
+    if (!n.isFork || fade <= 0) return;
+    const s = Math.max(2.6, r * 0.42);
+    const cx = n.x + r * 0.62, cy = n.y + r * 0.62;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = "#c0392b";
+    ctx.beginPath();
+    ctx.arc(cx, cy, s * 0.72, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = "#14181c";
+    ctx.lineWidth = Math.max(0.7, s * 0.2);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx - s * 0.32, cy - s * 0.32);
+    ctx.lineTo(cx + s * 0.32, cy + s * 0.32);
+    ctx.moveTo(cx + s * 0.32, cy - s * 0.32);
+    ctx.lineTo(cx - s * 0.32, cy + s * 0.32);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawNode(n, ctx) {
     const fade = fadeAlpha(n);
     if (fade <= 0) return;
@@ -199,6 +228,7 @@
     }
     ctx.globalAlpha = 1;
     drawLinkBadge(n, ctx, r, dimmed ? .25 * fade : fade);
+    drawForkBadge(n, ctx, r, dimmed ? .25 * fade : fade);
   }
 
   function initTopology() {
@@ -318,9 +348,17 @@
         // otherwise keep reading attempting:true forever, still pulsing
         // amber long after it settled into a real, held peer.
         active: p.active, held: true, attempting: false,
+        isFork: !!p.is_fork,
         title: p.address + (p.height != null ? " · height " + p.height : "")
                + (p.active ? "" : " · cooldown")
-               + (p.introduced_by ? " · introduced by " + p.introduced_by : ""),
+               + (p.introduced_by ? " · introduced by " + p.introduced_by : "")
+               // Only ever appended when is_fork is actually true, i.e.
+               // this node has its own block at the peer's claimed height
+               // and it disagrees (see api.py's _peer_fork_info) -- never
+               // shown as a guess for a peer whose claim simply couldn't
+               // be checked.
+               + (p.is_fork ? " · known fork, " + p.fork_depth
+                              + " block" + (p.fork_depth === 1 ? "" : "s") + " behind" : ""),
         href: p.http_reachable ? "http://" + p.address : null,
       });
       wantNodes.add(p.address);

@@ -305,7 +305,8 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active, height, version, http_reachable, introduced_by = rows[0]
+        (addr, last_seen, active, height, version, http_reachable,
+         introduced_by, tip_hash) = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
@@ -313,6 +314,7 @@ class TestSnapshot:
         assert version == ""
         assert http_reachable is None
         assert introduced_by is None
+        assert tip_hash == ""
 
     def test_snapshot_reports_cooldown_peer_as_inactive(self):
         p = make_pool()
@@ -399,4 +401,20 @@ class TestNoteRelayedBuilder:
         p.add(peer)
         rows = p.snapshot()
         assert rows[0][3] is None
-        assert rows[0][4] == ""
+
+    def test_tip_hash_recorded_and_defaults_empty(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        assert p.snapshot()[0][7] == ""
+        p.update_info(peer, height=5, tip_hash="deadbeef")
+        assert p.snapshot()[0][7] == "deadbeef"
+
+    def test_tip_hash_cleared_on_remove(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.update_info(peer, height=5, tip_hash="deadbeef")
+        p.remove(peer)
+        p.add(peer)
+        assert p.snapshot()[0][7] == ""

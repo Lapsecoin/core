@@ -82,7 +82,8 @@ def _probe_with(pool, udp, addrs, timeout, executor):
         answered += 1
         pool.update_info(futures[future],
                          height=info.get("height"),
-                         version=info.get("version", ""))
+                         version=info.get("version", ""),
+                         tip_hash=info.get("tip_hash", ""))
     log.debug("[info_probe] asked %d peers, %d answered", len(addrs), answered)
     return answered
 

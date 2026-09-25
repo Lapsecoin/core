@@ -215,10 +215,17 @@ class PeerPool:
             held = set(self._peers)
             return [a for a in self._attempting if a not in held]
 
-    def update_info(self, addr, height=None, version=""):
-        """Cache a peer's last-known height and version, learned directly
-        from a GETINFO/INFO exchange. No-op for an address that isn't a
-        currently tracked peer (mirrors touch()'s same guard).
+    def update_info(self, addr, height=None, version="", tip_hash=""):
+        """Cache a peer's last-known height, version, and claimed tip hash,
+        learned directly from a GETINFO/INFO exchange. No-op for an address
+        that isn't a currently tracked peer (mirrors touch()'s same guard).
+
+        tip_hash is a claim, recorded the same way height already is:
+        nothing here checks it against our own chain (that happens in the
+        one place that has a chain to check it against, see api.py's
+        _peer_fork_info), it's stored purely so a display layer can. A
+        stale or lying peer can only make itself look wrong, never another
+        peer, this is per-addr and never propagated.
 
         No wallet. A peer's payout address used to be carried here, which
         made this a directory of IP to wallet and, through /api/peers, a
@@ -229,8 +236,9 @@ class PeerPool:
             if addr not in self._peers:
                 return
             rec = self._info.setdefault(addr, {})
-            rec["height"]  = height
-            rec["version"] = version or ""
+            rec["height"]   = height
+            rec["version"]  = version or ""
+            rec["tip_hash"] = tip_hash or ""
             if height is not None and height > self.max_height_observed:
                 self.max_height_observed = height
 
@@ -342,7 +350,9 @@ class PeerPool:
         "don't know" rather than assumed reachable. introduced_by is the
         peer whose PEERS message named this one, or None when it came from
         the DHT, a torrent swarm lookup, or the operator directly (see
-        add())."""
+        add()). tip_hash is the peer's last claimed chain tip from a
+        GETINFO/INFO exchange, "" if none has completed yet, purely a
+        claim (see update_info's docstring)."""
         now_mono = time.monotonic()
         now_wall = time.time()
         with self._lock:
@@ -363,5 +373,6 @@ class PeerPool:
                     info.get("version", ""),
                     http_reachable,
                     self._learned_from.get(addr),
+                    info.get("tip_hash", ""),
                 ))
             return result

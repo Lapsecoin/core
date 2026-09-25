@@ -1090,13 +1090,44 @@ def _shared_read_only_routes(app, node, pool, limiter,
         except AttributeError:
             return None
 
+    def _peer_fork_info(chain, height, tip_hash):
+        """(is_fork, depth) for a peer claiming (height, tip_hash) as its
+        tip, against our own chain. is_fork is True only when we can
+        actually check: we have a block of our own at that height and its
+        hash disagrees with the peer's claim. depth is how many blocks
+        behind our own tip that claimed height is (our_height - height),
+        the same number the height column already implies, not a real
+        common-ancestor search: nothing here walks the chain looking for
+        where the two actually diverged, that's the expensive fork search
+        this project deliberately keeps out of a peer-info display (see
+        info_probe.py's module docstring). A peer claiming a height at or
+        past our own tip is never flagged: without a block there ourselves
+        yet, there's nothing to compare its claim against.
+        """
+        if not tip_hash or height is None or height < 0:
+            return False, None
+        our_height = len(chain) - 1
+        if height > our_height:
+            return False, None
+        is_fork = chain[height]["hash"] != tip_hash
+        return is_fork, (our_height - height) if is_fork else None
+
     def _peer_dicts(rows):
-        return [
-            {"address": addr, "last_seen": int(last_seen), "active": active,
-             "height": height, "version": version,
-             "http_reachable": http_reachable, "introduced_by": introduced_by}
-            for addr, last_seen, active, height, version, http_reachable, introduced_by in rows
-        ]
+        chain = node.view.chain
+        result = []
+        for addr, last_seen, active, height, version, http_reachable, introduced_by, tip_hash in rows:
+            is_fork, fork_depth = _peer_fork_info(chain, height, tip_hash)
+            result.append({
+                "address": addr, "last_seen": int(last_seen), "active": active,
+                "height": height, "version": version,
+                "http_reachable": http_reachable, "introduced_by": introduced_by,
+                # True only when this node has direct evidence (its own
+                # block at the peer's claimed height) that the peer is on
+                # a different chain; fork_depth is that height's distance
+                # behind our own tip, see _peer_fork_info.
+                "is_fork": is_fork, "fork_depth": fork_depth,
+            })
+        return result
 
     def _self_info():
         return {"height": node.view.chain[-1].get("height", 0),

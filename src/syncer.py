@@ -282,7 +282,8 @@ class Syncer:
         # Cache for display (e.g. the peers page), regardless of whether a
         # sync ends up happening below.
         self.pool.update_info(peer, height=info.get("height"),
-                              version=info.get("version", ""))
+                              version=info.get("version", ""),
+                              tip_hash=info.get("tip_hash", ""))
 
         remote_height = info["height"]
         local_height  = len(local_chain) - 1

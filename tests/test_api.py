@@ -380,6 +380,51 @@ class TestPeersPage:
         for p in data["graph_peers"]:
             assert "wallet" not in p
 
+    def test_peer_claiming_our_own_genesis_hash_is_not_a_fork(self):
+        node, cs = fresh()
+        pool = peerpool_mod.PeerPool()
+        pool.add("1.2.3.4:9000")
+        pool.update_info("1.2.3.4:9000", height=0, tip_hash=cs.chain[0]["hash"])
+        app = api.create_private_app(node, pool)
+        data = app.test_client().get("/api/peers").get_json()
+        peer = next(p for p in data["graph_peers"] if p["address"] == "1.2.3.4:9000")
+        assert peer["is_fork"] is False
+        assert peer["fork_depth"] is None
+
+    def test_peer_claiming_a_different_hash_at_a_height_we_hold_is_a_fork(self):
+        node, cs = fresh()
+        pool = peerpool_mod.PeerPool()
+        pool.add("1.2.3.4:9000")
+        pool.update_info("1.2.3.4:9000", height=0, tip_hash="not-our-genesis-hash")
+        app = api.create_private_app(node, pool)
+        data = app.test_client().get("/api/peers").get_json()
+        peer = next(p for p in data["graph_peers"] if p["address"] == "1.2.3.4:9000")
+        assert peer["is_fork"] is True
+        assert peer["fork_depth"] == 0  # our own tip is also height 0 here
+
+    def test_peer_claiming_a_height_past_our_own_tip_is_never_flagged(self):
+        """We have nothing of our own to compare a claim past our tip
+        against, so it must read as unknown, not as a fork."""
+        node, cs = fresh()
+        pool = peerpool_mod.PeerPool()
+        pool.add("1.2.3.4:9000")
+        pool.update_info("1.2.3.4:9000", height=50, tip_hash="whatever")
+        app = api.create_private_app(node, pool)
+        data = app.test_client().get("/api/peers").get_json()
+        peer = next(p for p in data["graph_peers"] if p["address"] == "1.2.3.4:9000")
+        assert peer["is_fork"] is False
+        assert peer["fork_depth"] is None
+
+    def test_peer_with_no_tip_hash_yet_is_never_flagged(self):
+        node, cs = fresh()
+        pool = peerpool_mod.PeerPool()
+        pool.add("1.2.3.4:9000")  # no update_info call at all
+        app = api.create_private_app(node, pool)
+        data = app.test_client().get("/api/peers").get_json()
+        peer = next(p for p in data["graph_peers"] if p["address"] == "1.2.3.4:9000")
+        assert peer["is_fork"] is False
+        assert peer["fork_depth"] is None
+
 
 class TestUpdateNav:
     """Smoke test the nav bar's update-available link for each severity,
