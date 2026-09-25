@@ -76,7 +76,12 @@
     border-radius: .6rem .6rem 0 .6rem;
   }
   .board-meta { font-size: .72rem; margin-bottom: .15rem; }
-  .board-addr { font-family: var(--mono); }
+  /* Wallet addresses are one long dot-joined word with no whitespace to
+     wrap on; without this the bubble's max-width is powerless (a flex
+     item's default min-width is its content's unbroken size) and the
+     address forces the whole row wider than the card, exactly like
+     board-text needed word-break to avoid the same thing. */
+  .board-addr { font-family: var(--mono); word-break: break-word; overflow-wrap: anywhere; }
   .board-text { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
   .board-ts { font-size: .68rem; color: var(--muted); text-align: right; margin-top: .2rem; }
 
