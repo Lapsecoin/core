@@ -5,20 +5,20 @@
 
   Peer-to-peer electronic cash, secured by a Verifiable Delay Function instead of proof-of-work mining, with quantum-resistant signatures.
 
-  [![Release](https://img.shields.io/github/v/release/Vic-Nas/lapsecoin)](https://github.com/Vic-Nas/lapsecoin/releases)
+  [![Release](https://img.shields.io/github/v/release/Lapsecoin/core)](https://github.com/Lapsecoin/core/releases)
   [![Live node](https://img.shields.io/badge/node-lapsenode.vicnas.me-2ea44f)](https://lapsenode.vicnas.me/)
   [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-blue)](docs/whitepaper.md)
   [![Donate BTC](https://img.shields.io/badge/donate-BTC-f7931a)](#support)
   [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/FP2d8JmK6r)
 </div>
 
-**Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [releases page](https://github.com/Vic-Nas/lapsecoin/releases) are self-contained and require no dependencies.
+**Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [releases page](https://github.com/Lapsecoin/core/releases) are self-contained and require no dependencies.
 
 Join the [Discord](https://discord.gg/FP2d8JmK6r) for discussions, news, and trades with other coins.
 
 ## Quick start
 
-Grab a binary from the [releases page](https://github.com/Vic-Nas/lapsecoin/releases), self-contained with no dependencies.
+Grab a binary from the [releases page](https://github.com/Lapsecoin/core/releases), self-contained with no dependencies.
 
 ```
 # Linux                    # Windows
