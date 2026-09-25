@@ -321,13 +321,23 @@
     });
   }
 
+  // Set on any render that actually adds, removes, or starts fading a
+  // node or link; renderTopology reheats the simulation only then (see
+  // its end), so the rest of the graph visibly responds to a real
+  // structural change, moving to make room or close a gap, instead of
+  // only the one node that's entering or leaving ever animating while
+  // everything already settled sits frozen through it.
+  let structureChanged = false;
+
   function upsertNode(id, fields) {
     let n = nodeMeta.get(id);
     if (!n) {
       n = { id, _firstSeenAt: performance.now(), _vanishAt: null };
       nodeMeta.set(id, n);
-    } else {
+      structureChanged = true;
+    } else if (n._vanishAt) {
       n._vanishAt = null;   // reappeared mid-fade-out: stop disappearing
+      structureChanged = true;
     }
     Object.assign(n, fields);
     return n;
@@ -339,8 +349,10 @@
     if (!l) {
       l = { source, target, _firstSeenAt: performance.now(), _vanishAt: null };
       linkMeta.set(key, l);
-    } else {
+      structureChanged = true;
+    } else if (l._vanishAt) {
       l._vanishAt = null;
+      structureChanged = true;
     }
     Object.assign(l, fields);
     return l;
@@ -352,13 +364,14 @@
   function sweep(meta, wantKeys) {
     for (const [key, obj] of meta) {
       if (wantKeys.has(key)) continue;
-      if (!obj._vanishAt) obj._vanishAt = performance.now();
+      if (!obj._vanishAt) { obj._vanishAt = performance.now(); structureChanged = true; }
       else if (fadeAlpha(obj) <= 0) meta.delete(key);
     }
   }
 
   function renderTopology(self, peers, claims) {
     if (!graph) initTopology();
+    structureChanged = false;
     const known = new Set(peers.map(p => p.address));
     const wantNodes = new Set(["self"]);
     const wantLinks = new Set();
@@ -417,6 +430,7 @@
     });
 
     graph.graphData({ nodes: [...nodeMeta.values()], links: [...linkMeta.values()] });
+    if (structureChanged) graph.d3ReheatSimulation();
 
     const trusted  = peers.filter(p => p.active).length;
     const cooldown = peers.length - trusted;
