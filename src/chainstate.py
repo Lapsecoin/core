@@ -9,7 +9,31 @@ The node holds one reference and replaces it atomically (GIL-safe).
 """
 
 import block as block_mod
+import crypto
 import state as state_mod
+
+
+def _fork_point(chain_a, chain_b):
+    """Index of the first block where chain_a and chain_b diverge.
+
+    A block's hash commits (transitively, through previous_hash) to every
+    block before it, so equality of hash at some height implies equality of
+    the whole chain up to that height, and once two chains differ at a
+    height they cannot agree again at any later one. That makes "do these
+    chains agree here" monotone in height, so the first disagreement can be
+    found with a binary search instead of a linear scan from genesis.
+
+    Returns min(len(chain_a), len(chain_b)) if one is a plain prefix of the
+    other, i.e. no divergence within the shorter chain's length.
+    """
+    lo, hi = 0, min(len(chain_a), len(chain_b))
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if chain_a[mid]["hash"] == chain_b[mid]["hash"]:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
 
 
 def _apply_to_state(state, blk):
@@ -173,25 +197,104 @@ class ChainState:
 
         Ties (routine, not rare: every block at a given height needs the
         same protocol-required iteration count regardless of who builds
-        it, so any simple same-height fork ties exactly) break on the
-        VDF output, not the block hash. block_hash includes the
-        transaction list, and the transaction list is deliberately not
-        bound into the VDF challenge (block.vdf_challenge), so it can be
-        changed after the fact for free, that's the whole point, it's
-        what lets a block be corrected and rebroadcast without redoing
-        the 120s. But that same freedom means tie-breaking on block_hash
-        would let a single builder, with no extra hardware at all, grind
-        many transaction-list variants after finishing its VDF and pick
-        whichever one hashes lower, biasing ties at nearly zero cost. That
-        defeats the property the VDF exists to enforce: that influence
-        over the chain costs real sequential time. vdf_output is a
-        deterministic function of (previous_hash, builder) alone and
-        cannot be varied without redoing the actual VDF under a different
-        builder address, so tie-breaking on it keeps that cost real.
-        Falls back to hash only for genesis (vdf_output is None there);
-        genesis is the unique starting point and never actually ties
-        against anything in practice.
+        it, so any simple same-height fork ties exactly) break block by
+        block over the whole diverged range, not on a single block. See
+        _wins_tie_break for why: deciding an arbitrarily deep tie from one
+        block let its cost stay flat no matter how much real, equally-
+        proven work sat behind it.
+
+        Two chains with the same tip are never a tie to resolve (including
+        self compared with itself): there is nothing to replace.
         """
         if self.cumulative_iterations != other.cumulative_iterations:
             return self.cumulative_iterations > other.cumulative_iterations
-        return block_mod.tie_break_key(self.tip) < block_mod.tie_break_key(other.tip)
+        if self.tip["hash"] == other.tip["hash"]:
+            return False
+        return self._wins_tie_break(other)
+
+    def _wins_tie_break(self, other):
+        """Break an exact cumulative_iterations tie: majority of per-height
+        draws wins, not the single tip's VDF output.
+
+        Each diverged height had its own draw already, the same kind
+        _reorg_to_sibling settles for the immediate tip: same protocol-
+        required iteration count on both sides, so the lower VDF output at
+        that height is a value fixed by (previous_hash, builder) that
+        cannot be produced without actually redoing that height's VDF, see
+        block.vdf_challenge. Tallying every one of those draws instead of
+        just the last is what makes overturning N blocks of tied work cost
+        sustained advantage across all N of them, the same assumption
+        proof-of-work chains already rest on (matching or beating the
+        network's power, sustained, not just for an instant): a single
+        grinding burst at the final block used to be enough regardless of
+        how deep the tie ran, which priced a thousand-block reorg the same
+        as a one-block one.
+
+        Only the range both chains actually share counts:
+        [fork point, min(len(self.chain), len(other.chain))). A chain with
+        extra blocks past its rival's length gets no extra votes for them:
+        rewarding blocks the other side never had a chance to contest
+        would smuggle back exactly the "more blocks wins" rule
+        cumulative_iterations already exists to reject, just moved into
+        the tie-break instead of the primary comparison. (An equal
+        cumulative_iterations total with differing chain length is only
+        possible when this shared range is non-empty: since every VDF
+        proof carries strictly positive iterations, a longer chain whose
+        extra blocks fell entirely outside this range would have to have
+        more total iterations, not equal ones. So there is always
+        something in range to compare here.)
+
+        A margin-based rule (lowest summed output, say) was considered and
+        rejected: since output values have a bounded range, simulation
+        showed grinding one height down hard enough to offset several
+        honest ones is a real, if bounded, lever, and a per-height count
+        has no such lever, each height is worth exactly one vote regardless
+        of by how much it's won. So is any position-weighted vote (heavier
+        near the tip or near the fork point): that just relocates the
+        cheap single point to grind instead of removing it. Every diverged
+        height counts exactly once.
+        """
+        fork_idx = _fork_point(self.chain, other.chain)
+        end = min(len(self.chain), len(other.chain))
+        self_wins = 0
+        other_wins = 0
+        for i in range(fork_idx, end):
+            a_key = block_mod.tie_break_key(self.chain[i])
+            b_key = block_mod.tie_break_key(other.chain[i])
+            if a_key < b_key:
+                self_wins += 1
+            elif a_key > b_key:
+                other_wins += 1
+            # else: an exact key collision at this height, credited to
+            # neither. Astronomically unlikely with real VDF output (a
+            # 256-bit value), but a bare `else` here used to award it to
+            # "other" no matter which side was asking, so the two chains'
+            # own tallies of the very same height could disagree about who
+            # won it. Both sides computing the same function on the same
+            # data still meant every node agreed with every other node, so
+            # this never split the network, but it could silently
+            # manufacture a false tie (or miscount a margin) rather than
+            # correctly leaving a real collision undecided by this height.
+        if self_wins != other_wins:
+            return self_wins > other_wins
+        # A draw count tie: only possible with an even number of diverged
+        # heights, and only reachable by an attacker able to steer the
+        # outcome of every single one of them, since honest randomness
+        # landing exactly even gets rarer as the range grows. Falling back
+        # to any one block here (including the tip) would hand back
+        # exactly the cheap single-block grind this whole scheme exists to
+        # remove, and the attacker would get to choose when to trigger it.
+        # Combine the entire shared range into one value instead: still
+        # requires having actually produced every one of those blocks, no
+        # single height to target.
+        return (self._fallback_key(fork_idx, end)
+                < other._fallback_key(fork_idx, end))
+
+    def _fallback_key(self, fork_idx, end):
+        """Combine every diverged height's tie-break key in [fork_idx, end)
+        into one value, for the rare exact draw-count tie. See
+        _wins_tie_break."""
+        combined = "".join(
+            block_mod.tie_break_key(self.chain[i]) for i in range(fork_idx, end)
+        )
+        return crypto.sha256_hex(combined)

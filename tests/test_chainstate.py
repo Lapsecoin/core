@@ -255,6 +255,123 @@ class TestIsBetterThan:
         assert cs2.is_better_than(cs1)
         assert not cs1.is_better_than(cs2)
 
+    def _diverging_chains(self, outputs_a, outputs_b, cumulative_iterations):
+        """Two chains sharing genesis, then diverging for len(outputs_a)
+        heights, each block's vdf_output taken from the given list.
+        outputs_a and outputs_b must be the same length. Both chains get
+        the same cumulative_iterations (an exact tie is the only case
+        where the per-height tie-break is ever consulted)."""
+        assert len(outputs_a) == len(outputs_b)
+        g = genesis()
+        chain_a = [g]
+        chain_b = [g]
+        for i, (oa, ob) in enumerate(zip(outputs_a, outputs_b), start=1):
+            chain_a.append(dict(g, height=i, vdf_output=oa, hash=f"a{i}" * 16))
+            chain_b.append(dict(g, height=i, vdf_output=ob, hash=f"b{i}" * 16))
+        state = state_mod.State()
+        cs_a = ChainState(chain_a, state, cumulative_iterations=cumulative_iterations)
+        cs_b = ChainState(chain_b, state, cumulative_iterations=cumulative_iterations)
+        return cs_a, cs_b
+
+    def test_majority_of_diverged_heights_wins_not_the_tip_alone(self):
+        """self wins heights 1 and 2 but loses height 3 (the tip): under
+        the old tip-only rule this chain would have LOST the tie despite
+        winning most of the diverged range. Majority must win instead."""
+        # "0" < "1" lexicographically, so "0..." outputs win their height.
+        cs_a, cs_b = self._diverging_chains(
+            outputs_a=["0" * 64, "0" * 64, "9" * 64],
+            outputs_b=["1" * 64, "1" * 64, "1" * 64],
+            cumulative_iterations=999,
+        )
+        assert cs_a.is_better_than(cs_b)
+        assert not cs_b.is_better_than(cs_a)
+
+    def test_losing_the_tip_alone_no_longer_decides_a_deep_tie(self):
+        """The mirror of the above: self wins only the tip and loses every
+        earlier diverged height. Under the old rule self would win outright
+        (only the tip mattered); under majority it must lose."""
+        cs_a, cs_b = self._diverging_chains(
+            outputs_a=["9" * 64, "9" * 64, "0" * 64],
+            outputs_b=["1" * 64, "1" * 64, "1" * 64],
+            cumulative_iterations=999,
+        )
+        assert not cs_a.is_better_than(cs_b)
+        assert cs_b.is_better_than(cs_a)
+
+    def test_single_diverged_height_matches_old_tip_only_behavior(self):
+        """At depth 1 majority-of-heights and tip-only are the same rule:
+        no regression for the common, shallow case."""
+        cs_a, cs_b = self._diverging_chains(
+            outputs_a=["0" * 64], outputs_b=["1" * 64],
+            cumulative_iterations=1,
+        )
+        assert cs_a.is_better_than(cs_b)
+        assert not cs_b.is_better_than(cs_a)
+
+    def test_exact_draw_count_tie_is_still_decided_and_symmetric(self):
+        """An even diverged range split exactly half and half falls back to
+        a combined-range key, not any single block. Whichever side that
+        favors, the two chains must disagree exactly oppositely, and
+        neither call may raise or hang."""
+        cs_a, cs_b = self._diverging_chains(
+            outputs_a=["0" * 64, "1" * 64],
+            outputs_b=["1" * 64, "0" * 64],
+            cumulative_iterations=2,
+        )
+        assert cs_a.is_better_than(cs_b) != cs_b.is_better_than(cs_a)
+
+    def test_extra_blocks_past_the_shorter_chains_length_earn_no_votes(self):
+        """A longer chain gets no bonus votes for heights its rival never
+        had a chance to contest: that would smuggle back "more blocks
+        wins", the exact rule cumulative_iterations already rejects.
+        Here self has 3 diverged blocks losing all 3 shared heights against
+        other's 2, plus one extra block beyond other's length; despite
+        having "more blocks", self must still lose on the shared range."""
+        g = genesis()
+        state = state_mod.State()
+        chain_a = [g,
+                   dict(g, height=1, vdf_output="9" * 64, hash="a1" * 16),
+                   dict(g, height=2, vdf_output="9" * 64, hash="a2" * 16),
+                   dict(g, height=3, vdf_output="0" * 64, hash="a3" * 16)]
+        chain_b = [g,
+                   dict(g, height=1, vdf_output="0" * 64, hash="b1" * 16),
+                   dict(g, height=2, vdf_output="0" * 64, hash="b2" * 16)]
+        cs_a = ChainState(chain_a, state, cumulative_iterations=999)
+        cs_b = ChainState(chain_b, state, cumulative_iterations=999)
+        assert not cs_a.is_better_than(cs_b)
+        assert cs_b.is_better_than(cs_a)
+
+    def test_cumulative_iterations_still_strictly_primary_over_tie_break(self):
+        """A real iteration deficit can never be made up by winning every
+        single per-height draw: the majority tie-break must only ever be
+        consulted on an exact cumulative_iterations tie."""
+        cs_a, cs_b = self._diverging_chains(
+            outputs_a=["0" * 64, "0" * 64, "0" * 64],  # wins every height
+            outputs_b=["9" * 64, "9" * 64, "9" * 64],
+            cumulative_iterations=1,  # but strictly less real work
+        )
+        cs_b = ChainState(cs_b.chain, cs_b.state, cumulative_iterations=2)
+        assert not cs_a.is_better_than(cs_b)
+        assert cs_b.is_better_than(cs_a)
+
+    def test_exact_key_collision_at_one_height_favors_neither_side_there(self):
+        """A collision in tie_break_key at a diverged height (astronomically
+        unlikely with real 256-bit VDF output, but must not corrupt the
+        count if it ever happens) must not be silently credited to
+        whichever side isn't asking: that made the two chains' own tallies
+        of the very same height disagree about who won it. self wins
+        height 1 outright; height 2 collides and must count for neither,
+        so self must still win overall on the strength of height 1 alone,
+        from both directions."""
+        same = "c" * 64
+        cs_a, cs_b = self._diverging_chains(
+            outputs_a=["0" * 64, same],
+            outputs_b=["9" * 64, same],
+            cumulative_iterations=2,
+        )
+        assert cs_a.is_better_than(cs_b)
+        assert not cs_b.is_better_than(cs_a)
+
     def test_fewer_blocks_with_more_proven_iterations_wins(self):
         """Fork choice weighs cumulative proven VDF work, not raw block
         count: a shorter chain whose blocks each proved more iterations

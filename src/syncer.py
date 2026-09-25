@@ -290,10 +290,24 @@ class Syncer:
         if local_work is None:
             local_work = -1   # unknown: never bail, always compare properly
 
-        # Stop at the first round trip whenever the peer doesn't even claim
-        # more proven work than we already have. Without this, a peer that
-        # is level or behind still cost a full O(log chain) binary-search
-        # fork probe plus a fetch, all to end at "remote chain not better".
+        # Stop at the first round trip whenever the peer claims strictly
+        # less proven work than we already have. Without this, a peer that
+        # is behind still cost a full O(log chain) binary-search fork probe
+        # plus a fetch, all to end at "remote chain not better".
+        #
+        # Strictly less, not "not more": a peer claiming *equal* work is
+        # deliberately still fetched. ChainState.is_better_than can prefer
+        # a tied-work rival over ours (the per-height tie-break, see
+        # _wins_tie_break), and this bail ran before that existed, so it
+        # used to be the only way two honestly-tied forks could ever end
+        # up split forever: neither peer's bulk sync would so much as ask
+        # for the other's chain, only a block arriving one at a time over
+        # gossip could ever reconcile them. Fetching on an equal claim
+        # costs nothing extra when the chains already match: the
+        # "already in sync" check just below this still catches an
+        # identical tip_hash before any fetch happens, so this only adds
+        # a fetch for a rival that is genuinely different despite tying,
+        # exactly the case that needs resolving.
         #
         # Compared on cumulative iterations, never on height. Fork choice
         # does not use height (ChainState.is_better_than) precisely because
@@ -307,8 +321,8 @@ class Syncer:
         # not "nothing": fall through and let validation decide, the way it
         # did before this shortcut existed.
         remote_work = info.get("work")
-        if isinstance(remote_work, int) and remote_work <= local_work:
-            log.debug("[sync] peer=%s claims work=%d, not above local=%d",
+        if isinstance(remote_work, int) and remote_work < local_work:
+            log.debug("[sync] peer=%s claims work=%d, below local=%d",
                       peer, remote_work, local_work)
             return False
         if remote_height == local_height and info.get("tip_hash", "") == local_tip:

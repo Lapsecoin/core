@@ -73,18 +73,34 @@ class TestCheckAndSync:
         assert syncer.check_and_sync(chain_of(3), apply_fn=MagicMock()) is False
         pool.strike.assert_not_called()
 
-    def test_peer_with_no_more_work_costs_one_round_trip(self):
-        """A peer that doesn't even claim more proven work is dropped after
+    def test_peer_with_less_work_costs_one_round_trip(self):
+        """A peer that claims strictly less proven work is dropped after
         the GETINFO. It used to cost a full O(log chain) fork-point search
         plus a fetch to reach the same conclusion, every time, growing with
         chain length."""
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
-        udp.get_info.return_value = {"height": 2, "tip_hash": "", "work": 100}
+        udp.get_info.return_value = {"height": 2, "tip_hash": "", "work": 99}
         apply_fn = MagicMock(return_value=False)
         assert syncer.check_and_sync(chain_of(5), apply_fn=apply_fn,
                                      local_work=100) is False
         apply_fn.assert_not_called()
         udp.request_sync.assert_not_called()
+
+    def test_peer_with_equal_work_is_still_fetched(self):
+        """Equal claimed work is deliberately NOT bailed on: ChainState's
+        per-height tie-break can still prefer a tied-work rival over ours
+        (see chainstate._wins_tie_break), so refusing to even fetch an
+        equal-work peer would leave two honestly-tied forks split forever,
+        never reconciled outside of catching each other's blocks one at a
+        time over gossip. A genuinely identical chain is still caught for
+        free by the tip_hash check right after this one."""
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        udp.get_info.return_value = {"height": 2, "tip_hash": "some-other-tip", "work": 100}
+        udp.request_sync.return_value = wrap_chain(tail_from(0, 2))
+        apply_fn = MagicMock(return_value=False)
+        with patch.object(syncer, "_find_fork_point", return_value=0):
+            syncer.check_and_sync(chain_of(5), apply_fn=apply_fn, local_work=100)
+        apply_fn.assert_called_once()
 
     def test_shorter_chain_with_more_work_is_still_fetched(self):
         """Height is not what fork choice compares: forks retarget from
