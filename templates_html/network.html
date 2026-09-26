@@ -143,31 +143,19 @@
     return base + Math.min(6, Math.sqrt(degree) * 1.6);
   }
 
-  // A small "opens externally" glyph (box + escaping arrow, the standard
-  // external-link icon) for a node whose http_reachable answered a probe
-  // and is therefore actually clickable (see onNodeClick/href below):
-  // nothing on the graph otherwise showed which dots that was true for.
-  function drawLinkBadge(n, ctx, r, fade) {
+  // A plain ring around a node whose http_reachable answered a probe and
+  // is therefore actually clickable (see onNodeClick/href below): reads
+  // as "interactive" the way a focus ring or a hover halo does elsewhere,
+  // rather than a tiny box-and-arrow glyph that just looks like clutter
+  // at this scale.
+  function drawClickableRing(n, ctx, r, fade) {
     if (!n.href || fade <= 0) return;
-    const s = Math.max(2.6, r * 0.42);
-    const cx = n.x + r * 0.62, cy = n.y - r * 0.62;
     ctx.save();
     ctx.globalAlpha = fade;
     ctx.strokeStyle = "#e7ecf2";
-    ctx.lineWidth = Math.max(0.6, s * 0.16);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(1, r * 0.16);
     ctx.beginPath();
-    ctx.moveTo(cx - s * 0.55, cy + s * 0.85);
-    ctx.lineTo(cx - s * 0.55, cy - s * 0.55);
-    ctx.lineTo(cx + s * 0.15, cy - s * 0.55);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(cx - s * 0.25, cy + s * 0.2);
-    ctx.lineTo(cx + s * 0.85, cy - s * 0.7);
-    ctx.moveTo(cx + s * 0.1, cy - s * 0.7);
-    ctx.lineTo(cx + s * 0.85, cy - s * 0.7);
-    ctx.lineTo(cx + s * 0.85, cy - s * 0.05);
+    ctx.arc(n.x, n.y, r + ctx.lineWidth * 1.6, 0, 2 * Math.PI);
     ctx.stroke();
     ctx.restore();
   }
@@ -228,7 +216,7 @@
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    drawLinkBadge(n, ctx, r, dimmed ? .25 * fade : fade);
+    drawClickableRing(n, ctx, r, dimmed ? .25 * fade : fade);
     drawForkBadge(n, ctx, r, dimmed ? .25 * fade : fade);
   }
 
@@ -394,7 +382,11 @@
                // shown as a guess for a peer whose claim simply couldn't
                // be checked.
                + (p.is_fork ? " · known fork, " + p.fork_depth
-                              + " block" + (p.fork_depth === 1 ? "" : "s") + " behind" : ""),
+                              + " block" + (p.fork_depth === 1 ? "" : "s") + " behind" : "")
+               // Only when it actually differs from this node's own
+               // version: agreeing with it is the common case and would
+               // just be noise on every single peer.
+               + (p.version && p.version !== self.version ? " · v" + p.version : ""),
         href: p.http_reachable ? "http://" + p.address : null,
       });
       wantNodes.add(p.address);
