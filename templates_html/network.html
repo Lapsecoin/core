@@ -57,6 +57,7 @@
   .topology {
     height: 340px; margin: .6rem 0 .5rem;
     border: 1px solid var(--rule-lt);
+    overflow: hidden;
     /* Dark on purpose, deliberately breaking from the page's paper theme
        for this one panel: a light background can't carry a glow, and the
        glow is most of what makes a graph like this read as alive rather
@@ -275,11 +276,46 @@
       })
       .cooldownTime(Infinity)
       .d3VelocityDecay(0.35)
+      .minZoom(0.5)
+      .maxZoom(6)
       .enableNodeDrag(true)
-      .onNodeClick(n => { if (n.href) window.open(n.href, "_blank", "noopener"); });
+      .onNodeClick(n => { if (n.href) window.open(n.href, "_blank", "noopener"); })
+      .onZoom(() => { if (!autoFitting) userZoomed = true; })
+      .onEngineStop(maybeAutoFit);
     window.addEventListener("resize", () => {
       graph.width(el.clientWidth).height(el.clientHeight);
+      maybeAutoFit();
     });
+  }
+
+  // Once the user has zoomed or panned by hand, their view wins from then
+  // on: auto-fit only ever applies to a graph nobody has touched yet.
+  let userZoomed = false;
+  let autoFitting = false;   // suppresses onZoom's userZoomed=true during our own zoomToFit
+
+  // Zooming out to fit is only for a graph that's genuinely outgrown the
+  // box, not a reflex for whatever axis happens to be tight. .topology is
+  // a wide, short strip, so height alone is nearly always the scarcer
+  // dimension; triggering on that alone would auto-fit almost every real
+  // graph the moment it had more than a couple of peers. Requiring BOTH
+  // axes to be substantially filled (not just their product, which a
+  // graph that's merely tall and thin could also satisfy) is what "used
+  // up most of the rectangle" actually means here.
+  const AUTOFIT_FILL_THRESHOLD = 0.85;
+
+  function maybeAutoFit() {
+    if (!graph || userZoomed) return;
+    const bbox = graph.getGraphBbox();
+    if (!bbox) return;
+    const el = document.getElementById("topology");
+    const cw = el.clientWidth, ch = el.clientHeight;
+    if (cw <= 0 || ch <= 0) return;
+    const w = bbox.x[1] - bbox.x[0], h = bbox.y[1] - bbox.y[0];
+    const widthUsed = w / cw, heightUsed = h / ch;
+    if (Math.min(widthUsed, heightUsed) < AUTOFIT_FILL_THRESHOLD) return;
+    autoFitting = true;
+    graph.zoomToFit(400, 30);
+    setTimeout(() => { autoFitting = false; }, 450);
   }
 
   // Set on any render that actually adds, removes, or starts fading a
