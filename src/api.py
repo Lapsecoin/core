@@ -102,6 +102,7 @@ from flask_limiter.util import get_remote_address
 import block as block_mod
 import crypto as crypto_mod
 import state as state_mod
+import hardware_info
 import settings as settings_mod
 import storage as storage_mod
 import tx as tx_mod
@@ -1266,9 +1267,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def odds():
         race = _race_for()
         chart = _race_chart(race) if race else None
+        hardware = (hardware_info.describe()
+                    if node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS)
+                    else None)
         return render_template("odds.html", title="Race Odds", race=race,
                                chart=chart, reorgs=node.reorg_stats(),
-                               own_is_estimate=node.own_vdf_is_estimate())
+                               own_is_estimate=node.own_vdf_is_estimate(),
+                               hardware=hardware)
 
     # ---- JSON API (read-only) --------------------------------------------
 
@@ -1648,14 +1653,17 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                 else:
                     ctx["alert_ok"] = "Settings saved."
 
-        ctx["settings"] = [
-            {"key": s_.key, "label": s_.label, "help": s_.help,
-             "is_bool": s_.kind is bool,
-             "value": node.settings.get(s_),
-             "forced": node.settings.forced_by_env(s_),
-             "env_name": s_.env_name}
-            for s_ in settings_mod.ALL
-        ]
+        def _row(s_):
+            value = node.settings.get(s_)
+            return {"key": s_.key, "label": s_.label, "help": s_.help,
+                    "is_bool": s_.kind is bool,
+                    "minimum": s_.minimum, "slider_max": s_.slider_max,
+                    "value": value,
+                    "supports_inf": s_.supports_inf,
+                    "is_inf": s_.supports_inf and value == float("inf"),
+                    "forced": node.settings.forced_by_env(s_),
+                    "env_name": s_.env_name}
+        ctx["settings"] = [_row(s_) for s_ in settings_mod.ALL]
         ctx["own_addr"] = node.addr
         return render_template("settings.html", **ctx)
 

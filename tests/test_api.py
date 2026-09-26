@@ -338,6 +338,24 @@ class TestOddsPage:
         assert self._client(True).get("/api/odds").get_json()["own_is_estimate"] is True
         assert self._client(False).get("/api/odds").get_json()["own_is_estimate"] is False
 
+    def test_hardware_cell_shown_by_default(self):
+        html = self._client(False).get("/odds").get_data(as_text=True)
+        assert '<div class="stat-label">Hardware</div>' in html
+
+    def test_hardware_cell_hidden_when_setting_is_off(self):
+        node = self._OddsNode(False)
+        node.settings.set(settings_mod.SHOW_HARDWARE_DETAILS, False)
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/odds").get_data(as_text=True)
+        assert '<div class="stat-label">Hardware</div>' not in html
+
+    def test_hardware_cell_contents_are_real_values(self):
+        html = self._client(False).get("/odds").get_data(as_text=True)
+        assert "cores" in html
+        # Whatever this machine's OS actually is, not a placeholder.
+        import platform as _platform
+        assert _platform.system() in html
+
 
 class TestPeersPage:
     """/network is a shell now, all peer data comes live from /api/peers
@@ -516,6 +534,56 @@ class TestSettingsValidation:
             "draw_window_seconds": "999",
         })
         assert node.settings.get(settings_mod.DRAW_WINDOW_SECONDS) == 7.0
+
+    def _full_form(self, client, **overrides):
+        """A complete, otherwise-valid submission: every non-bool setting
+        needs a value in the same POST or it fails to parse an empty
+        string, same as any of these tests would if they posted just one
+        field among several required ones."""
+        form = {
+            "csrf_token": self._token(client),
+            "draw_window_seconds": "10.0",
+            "swap_confirm_depth": "2",
+            "swap_auto_accept_min_trust": "0.0",
+        }
+        form.update(overrides)
+        return form
+
+    def test_hardware_switch_checked_is_stored_true(self):
+        client, node = self._client()
+        client.post("/settings", data=self._full_form(
+            client, show_hardware_details="on"))
+        assert node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS) is True
+
+    def test_hardware_switch_omitted_is_stored_false(self):
+        """An unchecked checkbox sends no field at all, browsers never
+        submit one, this is the only signal "off" ever has."""
+        client, node = self._client()
+        node.settings.set(settings_mod.SHOW_HARDWARE_DETAILS, True)
+        client.post("/settings", data=self._full_form(client))
+        assert node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS) is False
+
+    def test_inf_is_accepted_for_min_trust(self):
+        client, node = self._client()
+        resp = client.post("/settings", data=self._full_form(
+            client, swap_auto_accept_min_trust="inf"))
+        assert b"not valid" not in resp.data
+        assert node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST) == float("inf")
+
+    def test_settings_page_marks_the_inf_row_correctly(self):
+        client, node = self._client()
+        node.settings.set(settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST, float("inf"))
+        html = client.get("/settings").get_data(as_text=True)
+        assert 'value="inf"' in html
+        assert "review every" in html
+
+    def test_slider_metadata_reaches_the_page(self):
+        """The three numeric settings render a slider (a range input);
+        show_hardware_details, a bool, renders a switch, not a slider."""
+        client, _ = self._client()
+        html = client.get("/settings").get_data(as_text=True)
+        assert html.count('type="range"') == 3
+        assert html.count('class="switch"') == 1
 
 
 class TestAddressLookupBurnAlias:

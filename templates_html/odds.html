@@ -35,6 +35,16 @@
       {% else %}nothing deeper than a tie so far{% endif %}
     </div>
   </div>
+  {% if hardware %}
+  <div class="stat">
+    <div class="stat-label">Hardware</div>
+    <div class="stat-value">{{ hardware.cores ~ " cores" if hardware.cores else "?" }}</div>
+    <div class="stat-sub">
+      {{ hardware.cpu }}{% if hardware.ram_bytes %} &middot; {{ "%.0f"|format(hardware.ram_bytes / 1073741824) }} GiB RAM{% endif %}
+      &middot; {{ hardware.os }} ({{ hardware.arch }})
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="card">

@@ -11,11 +11,57 @@
 <div class="card">
   <div class="card-title">Node settings</div>
   {% for s in settings %}
-  <div class="form-row">
-    <label for="{{ s.key }}">{{ s.label }}</label>
-    <input type="text" id="{{ s.key }}" name="{{ s.key }}"
-           value="{{ s.value }}" {% if s.forced %}disabled{% endif %}>
-    <span class="stat-sub">
+  <div class="setting-row {{ 'is-forced' if s.forced }}">
+    <div class="setting-main">
+      <label for="{{ s.key }}">{{ s.label }}</label>
+
+      {% if s.is_bool %}
+      <label class="switch">
+        <input type="checkbox" id="{{ s.key }}" name="{{ s.key }}"
+               {% if s.value %}checked{% endif %} {% if s.forced %}disabled{% endif %}>
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+      </label>
+
+      {% elif s.supports_inf %}
+      <div class="setting-control-inf">
+        <div class="setting-control">
+          <input type="range" class="setting-slider" min="{{ s.minimum }}" max="{{ s.slider_max }}"
+                 step="any" value="{{ 0 if s.is_inf else s.value }}"
+                 {% if s.forced or s.is_inf %}disabled{% endif %}
+                 oninput="document.getElementById('{{ s.key }}').value = this.value">
+          <input type="text" id="{{ s.key }}" name="{{ s.key }}" class="setting-number"
+                 value="{{ 'inf' if s.is_inf else s.value }}"
+                 {% if s.forced or s.is_inf %}readonly{% endif %}
+                 oninput="var v = parseFloat(this.value); if (!isNaN(v)) this.previousElementSibling.value = v;">
+        </div>
+        <label class="setting-inf-toggle">
+          <input type="checkbox" {% if s.is_inf %}checked{% endif %} {% if s.forced %}disabled{% endif %}
+                 onchange="var row = this.closest('.setting-control-inf');
+                           var num = row.querySelector('.setting-number');
+                           var range = row.querySelector('.setting-slider');
+                           if (this.checked) { num.dataset.prev = num.value; num.value = 'inf'; num.readOnly = true; range.disabled = true; }
+                           else { num.value = num.dataset.prev || '0'; num.readOnly = false; range.disabled = false; }">
+          review every request myself
+        </label>
+      </div>
+
+      {% elif s.slider_max is not none %}
+      <div class="setting-control">
+        <input type="range" class="setting-slider" min="{{ s.minimum }}" max="{{ s.slider_max }}"
+               step="{{ 1 if s.value is number and s.value == s.value|int else 'any' }}"
+               value="{{ s.value }}" {% if s.forced %}disabled{% endif %}
+               oninput="document.getElementById('{{ s.key }}').value = this.value">
+        <input type="text" id="{{ s.key }}" name="{{ s.key }}" class="setting-number"
+               value="{{ s.value }}" {% if s.forced %}disabled{% endif %}
+               oninput="var v = parseFloat(this.value); if (!isNaN(v)) this.previousElementSibling.value = v;">
+      </div>
+
+      {% else %}
+      <input type="text" id="{{ s.key }}" name="{{ s.key }}" class="setting-number"
+             value="{{ s.value }}" {% if s.forced %}disabled{% endif %}>
+      {% endif %}
+    </div>
+    <span class="stat-sub setting-help">
       {{ s.help }}
       {% if s.forced %}<strong>Set by {{ s.env_name }}.</strong>{% endif %}
     </span>
@@ -25,4 +71,66 @@
 
 <button type="submit" style="margin-top:.75rem">Save</button>
 </form>
+
+<style>
+  .setting-row {
+    padding: .7rem 0; border-bottom: 1px solid var(--rule-lt);
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-row.is-forced { opacity: .7; }
+  .setting-main {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 1rem; flex-wrap: wrap;
+  }
+  .setting-main label:first-child { padding-top: .3rem; }
+  .setting-main label:first-child { font-weight: 600; }
+  .setting-help { display: block; margin-top: .25rem; }
+
+  /* Toggle switch */
+  .switch { position: relative; display: inline-block; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch-track {
+    display: inline-block; width: 2.6rem; height: 1.5rem; border-radius: 1rem;
+    background: var(--rule-lt); border: 1px solid var(--rule); position: relative;
+    transition: background .15s ease;
+  }
+  .switch-thumb {
+    position: absolute; top: 1px; left: 1px; width: 1.2rem; height: 1.2rem;
+    border-radius: 50%; background: var(--paper); box-shadow: 0 1px 2px rgba(0,0,0,.3);
+    transition: transform .15s ease;
+  }
+  .switch input:checked + .switch-track { background: var(--accent); }
+  .switch input:checked + .switch-track .switch-thumb { transform: translateX(1.1rem); }
+  .switch input:disabled + .switch-track { opacity: .5; cursor: not-allowed; }
+
+  /* Slider + number pair */
+  .setting-control {
+    display: flex; align-items: center; gap: .6rem; width: 100%;
+  }
+  /* Outer wrapper when a "review manually" toggle sits below the slider
+     (see setting_control_inf's own docstring): its own row, own width
+     budget, so the slider+number row inside it doesn't have to share
+     flex-wrap ordering with a sibling that isn't part of the same line. */
+  .setting-control-inf {
+    display: flex; flex-direction: column; gap: .35rem;
+    flex: 1 1 260px; max-width: 360px;
+  }
+  .setting-main > .setting-control { flex: 1 1 260px; max-width: 360px; }
+  .setting-slider { flex: 1 1 auto; accent-color: var(--accent); }
+  .setting-number {
+    width: 5rem; flex: 0 0 auto; padding: .3rem .4rem; text-align: right;
+    font-family: var(--mono);
+  }
+  .setting-inf-toggle {
+    display: flex; align-items: center; gap: .35rem; font-size: .8rem;
+    color: var(--ink-dim);
+  }
+  .setting-inf-toggle input {
+    /* base.html's global input rule (width:100%, border, padding) is
+       meant for text fields and otherwise stretches this checkbox into
+       a big bordered box; reset it back to a normal checkbox. */
+    width: auto; flex: 0 0 auto; border: none; padding: 0; margin: 0;
+    accent-color: var(--accent);
+  }
+</style>
 {% endblock %}

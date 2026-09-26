@@ -25,15 +25,32 @@ ENV_PREFIX = "LAPSECOIN_"
 
 
 class Setting:
-    __slots__ = ("key", "default", "kind", "label", "help", "minimum")
+    __slots__ = ("key", "default", "kind", "label", "help", "minimum",
+                 "slider_max", "supports_inf")
 
-    def __init__(self, key, default, kind=str, label="", help="", minimum=None):
+    def __init__(self, key, default, kind=str, label="", help="", minimum=None,
+                 slider_max=None, supports_inf=False):
         self.key     = key
         self.default = default
         self.kind    = kind
         self.label   = label
         self.help    = help
         self.minimum = minimum
+        # Purely a UI convenience (the settings page's slider needs some
+        # upper bound to draw one at all) and never enforced here: parse()
+        # below still accepts anything >= minimum, same as before this
+        # existed. A value above it is still valid, just not reachable by
+        # dragging the slider itself, the page pairs it with a plain
+        # number field for that. None means this setting doesn't get a
+        # slider at all (rendered as a number field only).
+        self.slider_max = slider_max
+        # True only for a setting whose own semantics give infinity a real
+        # meaning (see SWAP_AUTO_ACCEPT_MIN_TRUST), never enforced here
+        # either: parse() already accepts float("inf") for any float
+        # setting on its own terms (Python's float() does), this only
+        # tells the settings page to offer a plain checkbox for that one
+        # state instead of asking someone to drag a slider to infinity.
+        self.supports_inf = supports_inf
 
     @property
     def env_name(self):
@@ -92,7 +109,7 @@ class Setting:
 # local in effect: nodes running very different windows admit different
 # sets of entrants to the same draw, and disagree more often as a result.
 DRAW_WINDOW_SECONDS = Setting(
-    "draw_window_seconds", 10.0, float, minimum=0.0,
+    "draw_window_seconds", 10.0, float, minimum=0.0, slider_max=60.0,
     label="Draw window (seconds)",
     help="How long a height keeps accepting a better same-height block. "
          "Anything finishing inside it is treated as a tie and decided on "
@@ -122,7 +139,7 @@ DRAW_WINDOW_SECONDS = Setting(
 # Snapshotted onto a trade when it starts, so changing this never moves
 # the goalposts on a trade already running.
 SWAP_CONFIRM_DEPTH = Setting(
-    "swap_confirm_depth", 2, int, minimum=2,
+    "swap_confirm_depth", 2, int, minimum=2, slider_max=50,
     label="Swap confirmation depth (blocks)",
     help="How many blocks must bury a LapseCoin payment before a swap "
          "counts it as settled. Two is the minimum and the default: the "
@@ -171,7 +188,8 @@ SWAP_CONFIRM_DEPTH = Setting(
 # already earned some standing while everyone else waits for a person;
 # inf is the limit of that, everyone waits for a person.
 SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
-    "swap_auto_accept_min_trust", 0.0, float, minimum=0.0,
+    "swap_auto_accept_min_trust", 0.0, float, minimum=0.0, slider_max=20.0,
+    supports_inf=True,
     label="Minimum trust to auto-accept",
     help="A fill request auto-accepts only if this counterparty's trust "
          "score is at least this. Zero (the default) auto-accepts "
@@ -191,7 +209,26 @@ SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
 # Node._handle_inbound_alive), so neither has anything left to do: there
 # is no advertised address to make private, and no second key to hold the
 # proceeds.
-ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH, SWAP_AUTO_ACCEPT_MIN_TRUST]
+
+# Whether the odds page's hardware cell (CPU, cores, RAM, OS, see
+# hardware_info.describe) is shown at all. On by default: it's this
+# node's own machine, read fresh on every request, never sent to a peer
+# or stored anywhere (see hardware_info's own module docstring), so
+# there's nothing to protect by default. The switch exists for whoever
+# is showing the dashboard on a screen they don't want naming their own
+# hardware to whoever's looking, a stream, a shared display, and the
+# like, not because showing it is otherwise a risk.
+SHOW_HARDWARE_DETAILS = Setting(
+    "show_hardware_details", True, bool,
+    label="Show hardware details on the odds page",
+    help="Displays this node's own CPU, core count, RAM, and OS on the "
+         "odds page. Read fresh on every request, never sent anywhere; "
+         "turn off if you'd rather your screen not name your hardware to "
+         "whoever's looking at it.",
+)
+
+ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH, SWAP_AUTO_ACCEPT_MIN_TRUST,
+       SHOW_HARDWARE_DETAILS]
 
 
 # How long a value read from storage is reused before going back to the
