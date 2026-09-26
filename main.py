@@ -36,6 +36,7 @@ from swap_worker import SwapWorker
 from syncer import Syncer
 from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
+from updater import Updater
 from version import LOCAL_VERSION
 
 LOG_FILE = "lapsecoin.log"
@@ -213,6 +214,48 @@ def _env_port(name, fallback):
     return port
 
 
+def _run_console_update(args):
+    """--update: checks once, offers to update if this install can do so
+    safely, and exits either way. Deliberately doesn't start the node,
+    servers, or GUI -- a plain, fast, separate path from a normal launch,
+    for someone who just wants to update from a terminal without opening
+    a browser."""
+    checker = UpdateChecker(
+        local_version=LOCAL_VERSION,
+        version_url=args.update_check_url,
+        releases_url=args.releases_url,
+    )
+    checker.check_once()
+    if not checker.severity:
+        print(f"Already up to date (v{LOCAL_VERSION}).")
+        return
+
+    print(f"\nA newer version is available: v{checker.latest_version} "
+          f"(current: v{LOCAL_VERSION}, severity: {checker.severity}).\n")
+
+    updater = Updater()
+    if not updater.can_self_update():
+        print(f"This is a {updater.install_type!r} install; it can't update itself.")
+        print(f"Get the new version from: {checker.releases_url}")
+        return
+
+    answer = input("Update now? [y/N] ").strip().lower()
+    if answer != "y":
+        print(f"Not updating. Releases page: {checker.releases_url}")
+        return
+
+    def on_progress(stage, detail):
+        print(f"[{stage}] {detail}")
+
+    # A successful attempt replaces this process (os.execv) or hands off
+    # to a helper and exits (os._exit) from inside run_sync() itself, so
+    # reaching the lines below at all means it didn't succeed.
+    session = updater.run_sync(checker.latest_version, on_progress=on_progress)
+    print(f"\nUpdate failed: {session.error}")
+    print(f"You can update manually from: {checker.releases_url}")
+    sys.exit(1)
+
+
 def _serve(app, host, port):
     """Serve a Flask app on its own daemon thread.
 
@@ -318,6 +361,14 @@ def main():
              "instead of the desktop status window. Implied automatically "
              "when LAPSECOIN_PASSPHRASE is set (headless/server runs).",
     )
+    parser.add_argument(
+        "--update", action="store_true",
+        help="Check for a newer release and, if this install is one that "
+             "can safely update itself (a prebuilt binary/AppImage, or a "
+             "`pip install lapsecoin`), offer to do so, then exit. Does "
+             "nothing to a source checkout beyond printing the releases "
+             "URL: never touches a git working tree.",
+    )
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
@@ -363,6 +414,17 @@ def main():
             _root.destroy()
         except Exception:
             pass
+        sys.exit(0)
+
+    if args.update:
+        # Checked after the single-instance lock (so this never races a
+        # currently-running copy over the same files) but before anything
+        # else -- GUI, passphrase, node startup -- since none of that is
+        # needed just to update and exit.
+        try:
+            _run_console_update(args)
+        finally:
+            instance_lock.release()
         sys.exit(0)
 
     use_gui = not args.no_gui and not os.environ.get("LAPSECOIN_PASSPHRASE")
@@ -588,6 +650,7 @@ def main():
             releases_url=args.releases_url,
         )
         update_checker.start()
+        updater = Updater()
 
         # Drives swap steps. Its own thread rather than part of the block
         # cycle, because a step waits on a public API over the network and a
@@ -620,13 +683,15 @@ def main():
         # HTTP servers: browser UI only, no peer routes
         # ------------------------------------------------------------------
         app = create_app(node, pool, private_port=private_port,
-                         public_port=port, update_checker=update_checker)
+                         public_port=port, update_checker=update_checker,
+                         updater=updater)
         _serve(app, args.host, port)
         log.info("[startup] public API on http://%s:%d", args.host, port)
 
         private_app = create_private_app(node, pool, private_port=private_port,
                                          public_port=port,
-                                         update_checker=update_checker)
+                                         update_checker=update_checker,
+                                         updater=updater)
         _serve(private_app, "127.0.0.1", private_port)
         log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
         log.info("[startup] genesis=%s", genesis["hash"][:12])

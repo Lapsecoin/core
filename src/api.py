@@ -883,7 +883,8 @@ def _board_ctx(node, page_arg, extra=None):
 
 def _shared_read_only_routes(app, node, pool, limiter,
                               private_port, public_port, is_private,
-                              update_checker=None, csrf_token=None):
+                              update_checker=None, csrf_token=None,
+                              updater=None):
     """Register all read-only UI and API routes on app."""
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
@@ -908,7 +909,33 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 "private_port": private_port,
                 "public_port": public_port,
                 "update_checker": update_checker,
+                "updater": updater,
+                # None on the public app (never passed a csrf_token), which
+                # is fine: the one thing this token guards, the self-update
+                # trigger button, is only ever rendered when is_private.
+                "csrf_token": csrf_token,
                 "nav_active": nav_active}
+
+    @app.route("/api/update/status", endpoint=pfx+"api_update_status")
+    def api_update_status():
+        # Available on both apps (same reasoning as /api/peers): stage and
+        # install_type aren't sensitive, and the browser polling this may
+        # well be looking at the public app. detail/error are different --
+        # they can hold a raw pip output line or an "X isn't writable"
+        # message naming this machine's own install path, so those are
+        # only ever sent to the private (127.0.0.1-only) app; a public,
+        # possibly internet-facing one only gets the stage name itself.
+        # Only /api/update/start (private-only, below) can ever change
+        # anything either way.
+        if updater is None:
+            snap = {"stage": "idle", "detail": "", "error": None,
+                   "install_type": None, "can_self_update": False}
+        else:
+            snap = updater.status()
+        if not is_private:
+            snap = {"stage": snap["stage"], "install_type": snap["install_type"],
+                    "can_self_update": snap["can_self_update"]}
+        return jsonify(**snap)
 
     @app.route("/favicon.svg", endpoint=pfx+"favicon")
     def favicon():
@@ -1523,7 +1550,7 @@ def _generate_icon(icon_path, width, height, ext):
 # ---------------------------------------------------------------------------
 
 def create_app(node, pool, private_port=8335, public_port=8333,
-               update_checker=None):
+               update_checker=None, updater=None):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
@@ -1552,7 +1579,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=False,
-                             update_checker=update_checker)
+                             update_checker=update_checker, updater=updater)
 
     # Send disabled on public port; show locked page
     @app.route("/send")
@@ -1576,7 +1603,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 # ---------------------------------------------------------------------------
 
 def create_private_app(node, pool, private_port=8335, public_port=8333,
-                       update_checker=None):
+                       update_checker=None, updater=None):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
@@ -1606,7 +1633,31 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=True,
-                             update_checker=update_checker, csrf_token=csrf_token)
+                             update_checker=update_checker, csrf_token=csrf_token,
+                             updater=updater)
+
+    @app.route("/api/update/start", methods=["POST"])
+    def api_update_start():
+        # Same CSRF token /settings and /send already use: fixed for this
+        # process's lifetime, checked with a constant-time compare, never
+        # put in a URL. Private-only (127.0.0.1), same as those two, since
+        # this is the one route that actually changes anything about the
+        # install rather than just reporting on it.
+        if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
+            return jsonify(ok=False, error="Session expired; reload the page and try again."), 403
+        if updater is None or not updater.can_self_update():
+            return jsonify(ok=False, error="This install can't auto-update."), 400
+        target_version = request.form.get("target_version", "").strip()
+        # This becomes part of a github.com download URL (see updater.py's
+        # DOWNLOAD_BASE); a plain semver shape can't smuggle in a path
+        # segment or otherwise change what that URL points to, but there's
+        # no reason to accept anything else here regardless -- the browser
+        # only ever sends back the value update_checker itself reported.
+        if not re.fullmatch(r"\d+\.\d+\.\d+", target_version):
+            return jsonify(ok=False, error="invalid target_version"), 400
+        if not updater.start(target_version):
+            return jsonify(ok=False, error="An update is already running."), 409
+        return jsonify(ok=True)
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():

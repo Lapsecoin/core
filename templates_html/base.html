@@ -365,15 +365,104 @@
       {% endif %}
     </nav>
     {% if update_checker and update_checker.severity %}
-    <a class="version-alert" href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
-       title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
-      {{ {'protocol': 'Protocol update required', 'critical': 'Critical update available', 'minor': 'New version available'}[update_checker.severity] }}
-    </a>
+      {% set sev_text = {'protocol': 'Protocol update required', 'critical': 'Critical update available', 'minor': 'New version available'}[update_checker.severity] %}
+      {% if is_private and updater and updater.can_self_update() %}
+      <div class="version-alert" id="update-alert"
+           title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
+        <span id="update-alert-text">{{ sev_text }}</span>
+        <button type="button" id="update-btn" class="btn-sm" style="margin-left:.5rem; vertical-align:1px;">Update now</button>
+      </div>
+      {% else %}
+      <a class="version-alert" href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
+         title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
+        {{ sev_text }}
+      </a>
+      {% endif %}
     {% endif %}
   </div>
 </header>
 <div class="page">
 {% block content %}{% endblock %}
 </div>
+{% if is_private and updater and updater.can_self_update() and update_checker and update_checker.severity %}
+<script>
+(function () {
+  var btn      = document.getElementById("update-btn");
+  var textEl   = document.getElementById("update-alert-text");
+  var csrfToken     = {{ csrf_token | tojson }};
+  var targetVersion = {{ update_checker.latest_version | tojson }};
+  var releasesUrl   = {{ update_checker.releases_url | tojson }};
+  var pollTimer = null;
+  var failedPolls = 0;
+
+  function setText(s) { textEl.textContent = s; }
+
+  function poll() {
+    fetch("/api/update/status", {cache: "no-store"}).then(function (res) {
+      if (!res.ok) throw new Error("bad status " + res.status);
+      return res.json();
+    }).then(function (data) {
+      failedPolls = 0;
+      if (data.stage === "failed") {
+        setText("Update failed: " + (data.error || data.detail || "unknown error") +
+                 " -- see " + releasesUrl);
+        clearInterval(pollTimer);
+        btn.disabled = false;
+        btn.textContent = "Update now";
+        return;
+      }
+      if (data.stage === "unsupported") {
+        setText(data.detail || "Can't auto-update this install.");
+        clearInterval(pollTimer);
+        return;
+      }
+      setText("Updating: " + data.stage + (data.detail ? " (" + data.detail + ")" : ""));
+      // Once stage is "restarting", the node process is about to replace
+      // or exit itself: the next few polls below are expected to fail
+      // while it's down, which is exactly what the catch() below treats
+      // as "it's back up (or coming back up), reload".
+    }).catch(function () {
+      failedPolls += 1;
+      if (failedPolls >= 3) {
+        setText("Restarting -- reloading the page shortly...");
+        clearInterval(pollTimer);
+        setTimeout(function retry() {
+          fetch("/api/update/status", {cache: "no-store"})
+            .then(function () { location.reload(); })
+            .catch(function () { setTimeout(retry, 2000); });
+        }, 2000);
+      }
+    });
+  }
+
+  btn.addEventListener("click", function () {
+    if (!confirm("Update LapseCoin from " + {{ update_checker.local_version | tojson }} +
+                 " to " + targetVersion + " now? The node will restart when it's done.")) {
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = "Updating...";
+    var body = new URLSearchParams({csrf_token: csrfToken, target_version: targetVersion});
+    fetch("/api/update/start", {method: "POST", body: body}).then(function (res) {
+      return res.json();
+    }).then(function (data) {
+      if (!data.ok) {
+        setText("Couldn't start update: " + data.error);
+        btn.disabled = false;
+        btn.textContent = "Update now";
+        return;
+      }
+      failedPolls = 0;
+      pollTimer = setInterval(poll, 1000);
+      poll();
+    }).catch(function () {
+      setText("Couldn't reach the node to start the update.");
+      btn.disabled = false;
+      btn.textContent = "Update now";
+    });
+  });
+})();
+</script>
+{% endif %}
 </body>
 </html>
