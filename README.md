@@ -47,7 +47,7 @@ Block timing is enforced by a VDF anchored to real elapsed time, believed to hav
 <details>
 <summary>Running from source</summary>
 
-Requires Python 3.11+ and native build dependencies for your platform (liboqs, chiavdf).
+Requires Python 3.11+.
 
 ```
 pip install lapsecoin
@@ -61,9 +61,16 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Either way, `liboqs` still needs to be installed on your system first (see the CI workflow's own build steps for the exact commands per OS); the PyPI package is a convenience for installing the app itself, not a way around that native dependency.
+`liboqs` builds itself automatically on first run (a few minutes, once) if it's missing, no separate install step. It just needs `cmake`, `git`, and a C compiler already on your `PATH`:
 
-If that fails on `libtorrent` specifically: it's a C extension with real wheel gaps on some platforms (Windows in particular, where a new Python release regularly goes months without a published one), so it can be the one line standing between you and a working install. Delete it from `requirements.txt` and install everything else, then get a `lapsecoin_peers.json` from someone else's running node (their peers page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting. This node reads that file to seed known-good addresses on startup regardless of `libtorrent`, so you still connect without it, just via a peer someone handed you instead of the DHT finding one on its own.
+```bash
+# Debian/Ubuntu
+sudo apt install cmake git build-essential
+# macOS
+brew install cmake git
+```
+
+`libtorrent` (DHT peer discovery only) has real wheel gaps on some platforms, Windows especially. If it fails to install, drop it from `requirements.txt`; the node still connects fine using a `lapsecoin_peers.json` from another running node's `/api/peers/download`.
 </details>
 
 <details>
