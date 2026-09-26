@@ -143,19 +143,31 @@
     return base + Math.min(6, Math.sqrt(degree) * 1.6);
   }
 
-  // A plain ring around a node whose http_reachable answered a probe and
-  // is therefore actually clickable (see onNodeClick/href below): reads
-  // as "interactive" the way a focus ring or a hover halo does elsewhere,
-  // rather than a tiny box-and-arrow glyph that just looks like clutter
-  // at this scale.
-  function drawClickableRing(n, ctx, r, fade) {
+  // A small chain-link glyph (the standard hyperlink icon: two rounded
+  // capsules crossing at 45°) in a node's corner for one whose
+  // http_reachable answered a probe and is therefore actually clickable
+  // (see onNodeClick/href below). Earlier tries were either too literal
+  // (a box+arrow "external link" icon) or too loud (a ring around the
+  // whole node, which changes its silhouette and draws the eye more than
+  // a link should). This is small, muted, and reads as "link" on sight
+  // rather than as a status indicator.
+  function drawLinkIcon(n, ctx, r, fade) {
     if (!n.href || fade <= 0) return;
+    const s = Math.max(3.2, r * 0.52);
+    const cx = n.x + r * 0.62, cy = n.y - r * 0.62;
     ctx.save();
     ctx.globalAlpha = fade;
-    ctx.strokeStyle = "#e7ecf2";
-    ctx.lineWidth = Math.max(1, r * 0.16);
+    ctx.strokeStyle = "#8d99a8";
+    ctx.lineWidth = Math.max(0.8, s * 0.22);
+    ctx.lineCap = "round";
+    ctx.translate(cx, cy);
+    ctx.rotate(-Math.PI / 4);
+    const capW = s * 0.62, capH = s * 0.34, rad = capH / 2, gap = s * 0.06;
     ctx.beginPath();
-    ctx.arc(n.x, n.y, r + ctx.lineWidth * 1.6, 0, 2 * Math.PI);
+    ctx.roundRect(-capW - gap / 2, -capH / 2, capW, capH, rad);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.roundRect(gap / 2, -capH / 2, capW, capH, rad);
     ctx.stroke();
     ctx.restore();
   }
@@ -216,7 +228,7 @@
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    drawClickableRing(n, ctx, r, dimmed ? .25 * fade : fade);
+    drawLinkIcon(n, ctx, r, dimmed ? .25 * fade : fade);
     drawForkBadge(n, ctx, r, dimmed ? .25 * fade : fade);
   }
 
