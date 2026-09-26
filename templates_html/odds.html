@@ -36,10 +36,9 @@
     </div>
   </div>
   {% if hardware %}
-  <div class="stat" style="flex-basis:100px; min-width:100px">
+  <div class="stat" style="flex-basis:100%">
     <div class="stat-label">Hardware</div>
-    <div class="stat-value" style="font-size:.75rem; line-height:1.25">{{ hardware.cpu }}</div>
-    <div class="stat-sub">{{ hardware.os }}</div>
+    <div class="stat-value" style="font-size:.9rem">{{ hardware.cpu }} &middot; {{ hardware.os }}</div>
   </div>
   {% endif %}
 </div>
