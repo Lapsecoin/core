@@ -47,7 +47,7 @@ Block timing is enforced by a VDF anchored to real elapsed time, believed to hav
 <details>
 <summary>Running from source</summary>
 
-Requires Python 3.11+. One command handles everything: build tools, the app itself, and (only if needed) a libtorrent-free fallback with a starter peers list.
+Requires Python 3.11+.
 
 **Linux/macOS:**
 
@@ -61,11 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/Lapsecoin/core/main/scripts/install
 irm https://raw.githubusercontent.com/Lapsecoin/core/main/scripts/install.ps1 | iex
 ```
 
-Either way, once it finishes: `lapsecoin`.
-
-What it does: makes sure `cmake`, `git`, and a C compiler are present (liboqs needs these to build itself automatically on first run, no separate step), then `pip install lapsecoin`. If that fails specifically on `libtorrent`, a C extension with real wheel gaps on some platforms, Windows especially, it retries without it and fetches a starter `lapsecoin_peers.json` into the current directory so the node still has somewhere to connect. Every step is safe to re-run.
-
-Prefer to do it by hand, or from a clone? `pip install lapsecoin` / `pip install -r requirements.txt` work exactly the same as always; the script is a convenience, not a requirement.
+Then: `lapsecoin`. Installs build tools if missing, then the app; falls back to skipping `libtorrent` (with a starter peers list) only if that's what fails.
 </details>
 
 <details>
