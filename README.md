@@ -110,6 +110,15 @@ python main.py
 ```
 
 `--port` still wins if you pass it, so the variable sets the default rather than overriding what you typed. The private port follows from it as usual unless you set `--private-port`.
+
+The log level can be set the same way:
+
+```bash
+export LAPSECOIN_LOG_LEVEL=DEBUG
+python main.py
+```
+
+`--log-level` still wins if you pass it.
 </details>
 
 <details>
@@ -137,7 +146,7 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 | `--db` | `lapsecoin_chain.db` | Path to SQLite chain database |
 | `--peer host:port` | - | Bootstrap peer (repeatable) |
 | `--max-peers` | `125` | Hard cap on peer table size |
-| `--log-level` | `INFO` | Verbosity: DEBUG, INFO, WARNING, ERROR. DEBUG adds the HTTP access log |
+| `--log-level` | `INFO` (or `LAPSECOIN_LOG_LEVEL`) | Verbosity: DEBUG, INFO, WARNING, ERROR. DEBUG adds the HTTP access log |
 | `--no-gui` | off | Headless. Implied when `LAPSECOIN_PASSPHRASE` is set |
 | `--no-update-check` | off | Don't check for new releases |
 | `--update-check-url` | *(project)* | Where to look for the current version |

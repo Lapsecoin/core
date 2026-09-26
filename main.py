@@ -296,7 +296,7 @@ def main():
         "--max-peers", type=int, default=params.MAX_PEERS,
     )
     parser.add_argument(
-        "--log-level", default="INFO",
+        "--log-level", default=os.environ.get("LAPSECOIN_LOG_LEVEL", "INFO"),
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     parser.add_argument(
