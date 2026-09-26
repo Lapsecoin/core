@@ -49,19 +49,25 @@ Block timing is enforced by a VDF anchored to real elapsed time, believed to hav
 
 Requires Python 3.11+.
 
-```
+**Linux/macOS:**
+
+```bash
+./scripts/install_build_tools.sh   # cmake, git, a C compiler -- no-ops if you already have them
 pip install lapsecoin
 lapsecoin
 ```
 
 or, from a clone:
 
-```
+```bash
+./scripts/install_build_tools.sh
 pip install -r requirements.txt
 python main.py
 ```
 
-`liboqs` builds itself automatically on first run (a few minutes, once) if it's missing, no separate install step. It just needs `cmake`, `git`, and a C compiler already on your `PATH`; if you're not sure you have them, `scripts/install_build_tools.sh` gets them for you (Linux/macOS).
+`liboqs` itself needs no separate install step: it builds and installs on first run automatically (a few minutes, once) using exactly the tools that script gets you.
+
+**Windows:** no equivalent script (the real recipe is choco + MSYS2, different enough from Linux/macOS that a translated script wouldn't help). Install `cmake`, `git`, and a C/C++ toolchain (e.g. Visual Studio Build Tools) yourself, then `pip install lapsecoin` / `pip install -r requirements.txt` as above.
 
 If install fails on `libtorrent` specifically: it's a C extension with real wheel gaps on some platforms, Windows especially, so it can be the one line standing between you and a working install. Install everything else with `pip install lapsecoin --no-deps` (then the rest of the dependencies above, minus `libtorrent`) or, from a clone, delete it from `requirements.txt` before running `pip install -r requirements.txt`. Either way, the node still connects fine without it: grab a `lapsecoin_peers.json` from another running node's dashboard (its `/network` page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting. This node reads that file to seed known-good addresses on startup regardless of `libtorrent`, just via a peer someone handed you instead of the DHT finding one on its own.
 </details>
