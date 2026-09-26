@@ -270,17 +270,34 @@
       .onNodeClick(n => { if (n.href) window.open(n.href, "_blank", "noopener"); })
       .onZoom(() => { if (!autoFitting) userZoomed = true; })
       .onEngineStop(maybeAutoFit);
-    // Plain defaults left nodes clustered tight enough that edges crossed
-    // more than the graph's actual structure required. More repulsion
-    // plus a longer rest length for links spreads things out enough to
-    // resolve most of the avoidable crossings; measured against a
-    // 19-node/33-link peer set, this cut crossings from 5 to 3 without
-    // pushing any node outside the canvas. Real crossing minimization is
-    // a much harder graph-drawing problem and isn't worth it at this
-    // scale. d3Force() returns the underlying d3-force object, not the
-    // graph itself, so these can't join the fluent chain above.
-    graph.d3Force("charge").strength(-120);
-    graph.d3Force("link").distance(60);
+    // A fixed stronger-charge/longer-link tuning was tried here and
+    // measured against larger peer counts: it made crossings *worse* past
+    // ~60 peers (more repulsion spreads the graph into a bigger ring
+    // where more edge pairs happen to cross) while also bloating the
+    // graph's footprint, so plain defaults stay. d3Force() returns the
+    // underlying d3-force object, not the graph itself, so this can't
+    // join the fluent chain above.
+    //
+    // A hard per-tick boundary force (clamping every node to the
+    // currently visible box) was also tried and measured, and reverted:
+    // it fought maybeAutoFit rather than complementing it, since clamping
+    // every node into the current view keeps the graph's real bounding
+    // box from ever growing past the canvas, which is exactly what
+    // maybeAutoFit's fill-ratio check watches for before zooming out.
+    // Instead of "zoom out to use the unused space" it just compressed
+    // everyone into whatever box was already visible, raising density
+    // and crossings. maybeAutoFit already handles the actual "don't run
+    // out of room" case by zooming the camera out; this doesn't fight it.
+    //
+    // A per-tick randomized local crossing-reduction nudge ("try a random
+    // node against a random nearby trial position, keep it only if that
+    // node's own crossings go down") was also tried and measured: it made
+    // crossings worse, not just a wash, at every scale tested (7-26%
+    // above plain defaults). Injecting per-tick perturbations into a
+    // simulation that runs forever (cooldownTime is Infinity, so it never
+    // fully settles) apparently doesn't pay for the noise it adds. Not
+    // worth carrying, so it's gone too; maybeAutoFit is what actually
+    // earns its keep here.
     window.addEventListener("resize", () => {
       graph.width(el.clientWidth).height(el.clientHeight);
       maybeAutoFit();
