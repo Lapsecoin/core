@@ -12,9 +12,13 @@
 </div>
 {% if addr == BURN_ADDRESS %}
 <div class="card" style="border-color:var(--accent)">
-  &#128293; This is the burn address: a fixed, valid address nobody holds the key to
-  (see <code>crypto.burn_address()</code>). Anything sent here, including every
-  <a href="/board">board</a> post's fee, is gone for good.
+  &#128293; This is the burn address: a fixed word sequence (see
+  <code>crypto.burn_address()</code>), not derived from any key the way a
+  real address is, so there's no key to hold in the first place. Every
+  node also enforces this directly: consensus rejects any transaction
+  claiming to spend from it, outright, regardless of what it claims to
+  prove. Anything sent here, including every <a href="/board">board</a>
+  post's fee, is gone for good.
 </div>
 {% endif %}
 {% if holder_count %}

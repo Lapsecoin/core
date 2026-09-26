@@ -91,6 +91,7 @@ import re
 import secrets
 import sys
 import threading
+from urllib.parse import urlencode
 
 import markdown
 from markupsafe import Markup, escape
@@ -1026,6 +1027,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/address", methods=["GET", "POST"], endpoint=pfx+"address_lookup")
     def address_lookup():
         addr = request.args.get("addr", "").strip()
+        # "burn" is a lot easier to type than the real twelve-word address,
+        # and the real one isn't a secret, it's the wordlist's own first
+        # ADDRESS_WORD_COUNT entries (see crypto.burn_address). Redirecting
+        # to it rather than silently substituting it keeps the URL itself
+        # the actual address, bookmarkable and shareable like any other
+        # lookup, not a special case that only works when typed as "burn".
+        if addr.lower() == "burn":
+            query = request.args.to_dict(flat=True)
+            query["addr"] = crypto_mod.burn_address()
+            return redirect(f"/address?{urlencode(query)}")
         page = max(request.args.get("page", 1, type=int) or 1, 1)
         v = node.view
         # The distribution histogram is only shown before a lookup runs, so

@@ -393,6 +393,52 @@ class TestValidateBalance:
         ok, err = tx_mod.validate(t, s)
         assert ok is True, err
 
+
+# ---------------------------------------------------------------------------
+# 9. validate: the burn address can never be a sender (see
+#    _check_not_from_burn_address). Not left to rest on "nobody could ever
+#    forge a signature for it": that's still true (burn_address() isn't
+#    derived from any key), but this check makes it unconditional, so it
+#    holds even if a signature somehow verified anyway.
+# ---------------------------------------------------------------------------
+
+class TestBurnAddressCannotSpend:
+    def test_rejected_before_signature_is_even_checked(self):
+        """A garbage signature must still fail with the burn-address
+        message specifically, proving this check runs first and doesn't
+        depend on the signature verifying at all."""
+        s = fresh_state()
+        outputs = [{"to": address(1), "amount": 1}]
+        t = {"from": crypto.burn_address(), "pubkey": pubkey_hex(0),
+             "outputs": outputs, "nonce": 1, "fee": 0, "signature": "00" * 10}
+        ok, err = tx_mod.validate(t, s)
+        assert ok is False
+        assert "burn address" in err
+
+    def test_rejected_even_with_a_real_valid_signature(self):
+        """The stronger claim: even a tx some keypair genuinely signed
+        (from field set to the burn address regardless of whose key it
+        really is) is still rejected. Nothing about signature validity
+        can ever make this pass."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        # Funding the burn address itself so this can't also be read as
+        # merely an insufficient-balance failure.
+        s.credit(crypto.burn_address(), TICKS_PER_LAPSE)
+        outputs = [{"to": address(1), "amount": 1}]
+        sk, _ = keypair(0)
+        t = tx_mod.create(crypto.burn_address(), pubkey_hex(0), outputs, 1, 0, sk)
+        ok, err = tx_mod.validate(t, s)
+        assert ok is False
+        assert "burn address" in err
+
+    def test_ordinary_addresses_are_unaffected(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, 1, s)
+        ok, err = tx_mod.validate(t, s)
+        assert ok is True, err
+
     def test_fee_included_in_required_balance(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)

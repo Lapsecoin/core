@@ -183,6 +183,25 @@ def board_fee_floor(total_board_posts):
 MAX_OUTPUTS = 500
 
 
+def _check_not_from_burn_address(tx_dict):
+    """The burn address can never be a sender, unconditionally.
+
+    Without this, "nobody can spend from it" rests entirely on a
+    cryptographic assumption: burn_address() is a fixed word sequence, not
+    derived by hashing anything (see crypto.burn_address's own docstring),
+    so a valid signature from it would require a SHA-256 preimage, judged
+    astronomically unlikely (1-in-2^132) but not impossible in the way a
+    consensus rule is. This check needs no such assumption: it rejects the
+    from field outright, so even a future hash weakness, an implementation
+    bug elsewhere, or anything else that produced a technically-valid
+    signature for it still would not be enough, the tx never gets past
+    this line. Costs nothing: no legitimate transaction is ever sent from
+    the burn address, so this can never reject one."""
+    if tx_dict.get("from") == crypto.burn_address():
+        return False, "the burn address can never be a sender"
+    return True, None
+
+
 def _check_fields_and_outputs(tx_dict):
     unexpected = set(tx_dict) - _ALLOWED_FIELDS
     if unexpected:
@@ -290,11 +309,12 @@ def validate(tx_dict, state, board_fee_floor_override=None):
     there: an individual submission just needs today's real number.
     """
     for check, args in (
-        (_check_fields_and_outputs, (tx_dict,)),
-        (_check_signature,          (tx_dict,)),
-        (_check_nonce,              (tx_dict, state)),
-        (_check_balance,            (tx_dict, state)),
-        (_check_board_fee,          (tx_dict, state, board_fee_floor_override)),
+        (_check_fields_and_outputs,    (tx_dict,)),
+        (_check_not_from_burn_address, (tx_dict,)),
+        (_check_signature,             (tx_dict,)),
+        (_check_nonce,                 (tx_dict, state)),
+        (_check_balance,               (tx_dict, state)),
+        (_check_board_fee,             (tx_dict, state, board_fee_floor_override)),
     ):
         ok, err = check(*args)
         if not ok:

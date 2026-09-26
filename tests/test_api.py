@@ -518,6 +518,47 @@ class TestSettingsValidation:
         assert node.settings.get(settings_mod.DRAW_WINDOW_SECONDS) == 7.0
 
 
+class TestAddressLookupBurnAlias:
+    """Typing "burn" is a lot easier than the real twelve-word address;
+    it isn't a secret (crypto.burn_address() is public and deterministic),
+    so redirecting to it is just a convenience, not a trust decision."""
+
+    def _client(self):
+        node, _ = fresh()
+        # address_lookup's full render path (history) reads node.storage;
+        # _FakeNode doesn't carry one (nothing else in this file exercises
+        # that path). An empty index is enough here: these tests care about
+        # the redirect and the banner, not this address's transaction
+        # history.
+        node.storage = SimpleNamespace(get_tx_heights_for_addr=lambda addr: [])
+        pool = peerpool_mod.PeerPool()
+        return api.create_private_app(node, pool).test_client()
+
+    def test_burn_redirects_to_the_real_address(self):
+        import crypto as crypto_mod
+        resp = self._client().get("/address?addr=burn", follow_redirects=False)
+        assert resp.status_code == 302
+        assert f"addr={crypto_mod.burn_address()}" in resp.headers["Location"]
+
+    def test_case_insensitive_and_trims_whitespace(self):
+        resp = self._client().get("/address?addr=%20BURN%20", follow_redirects=False)
+        assert resp.status_code == 302
+
+    def test_other_query_params_survive_the_redirect(self):
+        resp = self._client().get("/address?addr=burn&page=2", follow_redirects=False)
+        assert resp.status_code == 302
+        assert "page=2" in resp.headers["Location"]
+
+    def test_redirect_target_actually_shows_the_burn_banner(self):
+        resp = self._client().get("/address?addr=burn", follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"burn address" in resp.data
+
+    def test_an_ordinary_address_is_not_treated_as_the_alias(self):
+        resp = self._client().get("/address?addr=" + address(0), follow_redirects=False)
+        assert resp.status_code == 200  # rendered directly, no redirect
+
+
 class TestBoardPage:
     """Chat-style layout: oldest post at the top, newest (and anything
     still pending in the mempool) at the bottom right above the compose
