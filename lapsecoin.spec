@@ -85,6 +85,7 @@ _all_datas = [
     ("lapsecoin.png",       "."),
     ("favicon.ico",        "."),
     ("templates_html",     "templates_html"),
+    ("vendor",             "vendor"),
     *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas,
 ]
 _all_hiddenimports = [
