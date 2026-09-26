@@ -4,6 +4,7 @@ chiavdf>=1.1.14
 flask>=3.0
 flask-limiter>=3.5
 liboqs-python>=0.14.0
+libtorrent>=2.0.0
 markdown>=3.5
 msgpack>=1.0
 orjson>=3.9
@@ -15,10 +16,3 @@ pytest>=8.0
 requests>=2.31
 stellar-sdk>=13.0
 waitress>=3.0
-
-# libtorrent is DHT peer discovery only (discovery_dht.py already tolerates
-# it being missing) and has real wheel gaps on some platforms. Kept out of
-# the required list above so one broken wheel can't take the whole install
-# down with it: `pip install -r requirements.txt` fails ENTIRELY, installing
-# nothing at all, if any single line in it can't be resolved. Add it
-# yourself if you want it: pip install libtorrent>=2.0.0

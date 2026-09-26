@@ -63,9 +63,7 @@ python main.py
 
 `liboqs` builds itself automatically on first run (a few minutes, once) if it's missing, no separate install step. It just needs `cmake`, `git`, and a C compiler already on your `PATH`; if you're not sure you have them, `scripts/install_build_tools.sh` gets them for you (Linux/macOS).
 
-`libtorrent` (DHT peer discovery) is optional and not installed by default, it has real wheel gaps on some platforms, Windows especially, and a single broken wheel would otherwise take the whole install down with it. Get it with `pip install lapsecoin[dht]` (or `pip install libtorrent>=2.0.0` from a clone) if you want it.
-
-Without it, the node still connects fine: grab a `lapsecoin_peers.json` from another running node's dashboard (its `/network` page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting.
+If install fails on `libtorrent` specifically: it's a C extension with real wheel gaps on some platforms, Windows especially, so it can be the one line standing between you and a working install. Install everything else with `pip install lapsecoin --no-deps` (then the rest of the dependencies above, minus `libtorrent`) or, from a clone, delete it from `requirements.txt` before running `pip install -r requirements.txt`. Either way, the node still connects fine without it: grab a `lapsecoin_peers.json` from another running node's dashboard (its `/network` page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting. This node reads that file to seed known-good addresses on startup regardless of `libtorrent`, just via a peer someone handed you instead of the DHT finding one on its own.
 </details>
 
 <details>
