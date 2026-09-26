@@ -16,7 +16,6 @@ dependencies = [
     "flask>=3.0",
     "flask-limiter>=3.5",
     "liboqs-python>=0.14.0",
-    "libtorrent>=2.0.0",
     "markdown>=3.5",
     "msgpack>=1.0",
     "orjson>=3.9",
@@ -28,6 +27,14 @@ dependencies = [
     "stellar-sdk>=13.0",
     "waitress>=3.0",
 ]
+
+# libtorrent (DHT peer discovery) is genuinely optional at runtime --
+# discovery_dht.py already tolerates it being missing -- and has real wheel
+# gaps on some platforms, so it must never be a hard dependency: a failed
+# libtorrent build would otherwise take the whole install down with it,
+# installing nothing at all, not just skipping this one feature.
+[project.optional-dependencies]
+dht = ["libtorrent>=2.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/Lapsecoin/core"

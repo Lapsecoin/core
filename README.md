@@ -61,16 +61,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
-`liboqs` builds itself automatically on first run (a few minutes, once) if it's missing, no separate install step. It just needs `cmake`, `git`, and a C compiler already on your `PATH`:
+`liboqs` builds itself automatically on first run (a few minutes, once) if it's missing, no separate install step. It just needs `cmake`, `git`, and a C compiler already on your `PATH`; if you're not sure you have them, `scripts/install_build_tools.sh` gets them for you (Linux/macOS).
 
-```bash
-# Debian/Ubuntu
-sudo apt install cmake git build-essential
-# macOS
-brew install cmake git
-```
+`libtorrent` (DHT peer discovery) is optional and not installed by default, it has real wheel gaps on some platforms, Windows especially, and a single broken wheel would otherwise take the whole install down with it. Get it with `pip install lapsecoin[dht]` (or `pip install libtorrent>=2.0.0` from a clone) if you want it.
 
-`libtorrent` (DHT peer discovery only) has real wheel gaps on some platforms, Windows especially. If it fails to install, drop it from `requirements.txt`; the node still connects fine using a `lapsecoin_peers.json` from another running node's `/api/peers/download`.
+Without it, the node still connects fine: grab a `lapsecoin_peers.json` from another running node's dashboard (its `/network` page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting.
 </details>
 
 <details>

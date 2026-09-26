@@ -151,6 +151,12 @@ jobs:
           # one by default, so it's installed here instead, purely for the
           # release binary; the app already runs fine without it either way.
           pip install pyinstaller cairosvg Pillow miniupnpc
+          # libtorrent (DHT peer discovery) is also optional -- pyproject.toml's
+          # [dht] extra, not a hard dependency, since a broken wheel on some
+          # platforms would otherwise take the whole install down with it (see
+          # README). CI's own Python/OS combo has working wheels, so the
+          # release binary still ships with DHT support.
+          pip install libtorrent>=2.0.0
 
       - name: Install appimagetool
         run: |
@@ -217,6 +223,12 @@ jobs:
           # one by default, so it's installed here instead, purely for the
           # release binary; the app already runs fine without it either way.
           pip install pyinstaller cairosvg Pillow miniupnpc
+          # libtorrent (DHT peer discovery) is also optional -- pyproject.toml's
+          # [dht] extra, not a hard dependency, since a broken wheel on some
+          # platforms would otherwise take the whole install down with it (see
+          # README). CI's own Python/OS combo has working wheels, so the
+          # release binary still ships with DHT support.
+          pip install libtorrent>=2.0.0
 
       - name: Generate icons
         shell: pwsh
