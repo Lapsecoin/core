@@ -155,6 +155,13 @@
   .stat-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .2rem; }
   .stat-value { font-size: 1.1rem; font-weight: bold; font-family: var(--mono); overflow-wrap: break-word; }
   .stat-sub { color: var(--ink-dim); font-size: .78rem; margin-top: .2rem; }
+  /* Scoped to a stat tile specifically (not every .stat-sub, some are
+     form hint text elsewhere and should keep wrapping normally): label +
+     value + one line of this is the budget, a tile never grows a 4th
+     line for a long sentence. */
+  .stat .stat-sub {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   /* Several small figures sharing one box, each keeping its own label so
      none of them has to be guessed from context. Same label and value
      type as a box holding one figure, just in columns. */
