@@ -61,10 +61,7 @@
              value="{{ s.value }}" {% if s.forced %}disabled{% endif %}>
       {% endif %}
     </div>
-    <span class="stat-sub setting-help">
-      {{ s.help }}
-      {% if s.forced %}<strong>Set by {{ s.env_name }}.</strong>{% endif %}
-    </span>
+    {% if s.forced %}<span class="stat-sub setting-help"><strong>Set by {{ s.env_name }}.</strong></span>{% endif %}
   </div>
   {% endfor %}
 </div>

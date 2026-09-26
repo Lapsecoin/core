@@ -351,7 +351,6 @@ class TestOddsPage:
 
     def test_hardware_cell_contents_are_real_values(self):
         html = self._client(False).get("/odds").get_data(as_text=True)
-        assert "cores" in html
         # Whatever this machine's OS actually is, not a placeholder.
         import platform as _platform
         assert _platform.system() in html

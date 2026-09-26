@@ -36,13 +36,12 @@
     </div>
   </div>
   {% if hardware %}
-  <div class="stat">
+  <div class="stat" style="flex-basis:100px; min-width:100px">
     <div class="stat-label">Hardware</div>
-    <div class="stat-value">{{ hardware.cores ~ " cores" if hardware.cores else "?" }}</div>
-    <div class="stat-sub">
-      {{ hardware.cpu }}{% if hardware.ram_bytes %} &middot; {{ "%.0f"|format(hardware.ram_bytes / 1073741824) }} GiB RAM{% endif %}
-      &middot; {{ hardware.os }} ({{ hardware.arch }})
-    </div>
+    <div class="stat-value" style="font-size:.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis"
+         title="{{ hardware.cpu }}">{{ hardware.cpu }}</div>
+    <div class="stat-sub" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis"
+         title="{{ hardware.os }}">{{ hardware.os }}</div>
   </div>
   {% endif %}
 </div>
