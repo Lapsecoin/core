@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lapsecoin"
+dynamic = ["version"]
+description = "LapseCoin full node: Falcon-512 post-quantum signatures, a VDF-based consensus clock, and a built-in wallet dashboard."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "argcomplete>=3.2",
+    "cachetools>=5.3",
+    "chiavdf>=1.1.14",
+    "flask>=3.0",
+    "flask-limiter>=3.5",
+    "liboqs-python>=0.14.0",
+    "libtorrent>=2.0.0",
+    "markdown>=3.5",
+    "msgpack>=1.0",
+    "orjson>=3.9",
+    "peewee>=3.17",
+    "Pillow>=10.0",
+    "PyNaCl>=1.5",
+    "pystray>=0.19",
+    "requests>=2.31",
+    "stellar-sdk>=13.0",
+    "waitress>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Lapsecoin/core"
+Repository = "https://github.com/Lapsecoin/core"
+
+[project.scripts]
+lapsecoin = "lapsecoin_data.lapsecoin_launcher:run"
+
+[tool.setuptools]
+packages = ["lapsecoin_data"]
+package-dir = { "lapsecoin_data" = "." }
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.setuptools.package-data]
+lapsecoin_data = [
+    "VERSION",
+    "lapsecoin.svg",
+    "lapsecoin.png",
+    "favicon.ico",
+    "docs/whitepaper.md",
+    "src/*.py",
+    "src/bip39_english.txt",
+    "templates_html/*.html",
+    "vendor/*",
+]

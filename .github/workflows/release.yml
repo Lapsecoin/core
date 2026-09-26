@@ -307,7 +307,40 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-pypi:
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted publishing (OIDC): PyPI checks this token against the
+      # pending publisher registered on the project page (repo + this
+      # workflow file), so there's no PYPI_API_TOKEN secret to hold or
+      # rotate. First successful publish from here claims the project
+      # under whichever PyPI account registered that pending publisher.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
   revert-on-failure:
+    # publish-pypi deliberately isn't in this list: by the time it runs,
+    # the GitHub release with real binaries is already public, so there's
+    # nothing left to cleanly "not have happened yet" -- reverting VERSION
+    # and deleting the tag at that point would just orphan an already-live
+    # release. A failed PyPI publish should fail loudly and get re-run on
+    # its own, not roll back a release that already succeeded.
     needs: [version, set-genesis, test, build-linux, build-windows, release]
     runs-on: ubuntu-latest
     if: |
