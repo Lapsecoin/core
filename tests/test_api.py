@@ -785,10 +785,10 @@ class TestPeerListPublishesNoAddresses:
 
 
 # ---------------------------------------------------------------------------
-# /send's XLM half (plan item 5.1): a plain payment or an account-merge
-# through the same wallet market_routes trades against. No Flask app or
-# HTTP involved; api._submit_xlm_and_alert is a pure function of (node,
-# wallet path, form values, ctx dict) once Horizon itself is faked out.
+# /send's XLM half: a plain payment through the same wallet
+# market_routes trades against. No Flask app or HTTP involved;
+# api._submit_xlm_and_alert is a pure function of (node, wallet path,
+# form values, ctx dict) once Horizon itself is faked out.
 # ---------------------------------------------------------------------------
 
 import crypto as crypto_mod
@@ -915,24 +915,4 @@ class TestSubmitXlmAndAlert:
         api._submit_xlm_and_alert(node, path, dest, 100, node.passphrase, ctx)
         assert "tx_bad_seq" in ctx["alert_err"]
         assert ctx["alert_ok_tx"] == ""
-
-    def test_merge_ignores_the_spendable_check_and_the_amount(self, tmp_path, monkeypatch):
-        """The whole point of a merge is reclaiming the reserve a plain
-        payment can never touch, so it must not be gated by the same
-        spendable-only check a payment is."""
-        node = _XlmSendNode(tmp_path)
-        path, _pub = _make_wallet(tmp_path, node)
-        _seed, dest = xlm_mod.generate_keypair()
-        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: 1)
-        monkeypatch.setattr(xlm_mod, "get_spendable_stroops",
-                            lambda addr: (_ for _ in ()).throw(AssertionError(
-                                "merge must not consult spendable balance")))
-        monkeypatch.setattr(xlm_mod, "build_account_merge",
-                            lambda seed, to, seq: ("xdr", "mergehash"))
-        monkeypatch.setattr(xlm_mod, "submit_envelope",
-                            lambda xdr: (True, "mergehash", "submitted"))
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, path, dest, 0, node.passphrase, ctx, merge=True)
-        assert ctx["alert_ok_tx"] == "mergehash"
-        assert "closed" in ctx["alert_ok_verb"].lower()
 

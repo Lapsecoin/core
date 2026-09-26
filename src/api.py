@@ -779,15 +779,12 @@ def _xlm_view(xlm_keyfile_path):
 
 
 def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
-                          passphrase, ctx, merge=False):
-    """The XLM half of /send: a plain payment, or an account-merge that
-    closes the wallet and reclaims its reserve (see xlm.build_account_merge).
-
-    Mirrors _submit_and_alert's shape (build, submit, report) but this
-    wallet has no crash-recovery path the way a swap's does: it is a
-    one-off manual action, so nothing here persists an envelope before
-    sending it. A failed submit is simply not retried; the user sees the
-    error and can try again.
+                          passphrase, ctx):
+    """The XLM half of /send. Mirrors _submit_and_alert's shape (build,
+    submit, report) but this wallet has no crash-recovery path the way a
+    swap's does: it is a one-off manual action, so nothing here persists
+    an envelope before sending it. A failed submit is simply not retried;
+    the user sees the error and can try again.
     """
     import xlm as xlm_mod
     if not passphrase:
@@ -811,18 +808,14 @@ def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
             ctx["alert_err"] = "That is this wallet's own address."
             return
         sequence = xlm_mod.get_sequence(source)
-        if merge:
-            xdr, tx_hash = xlm_mod.build_account_merge(seed, to_addr, sequence)
-            verb = "Wallet closed; its balance was sent."
-        else:
-            spendable = xlm_mod.get_spendable_stroops(source)
-            if amount_stroops > spendable:
-                ctx["alert_err"] = (
-                    "That is more than this wallet can spend; "
-                    f"{xlm_mod.stroops_to_str(spendable)} XLM is free of its reserve.")
-                return
-            xdr, tx_hash = xlm_mod.build_payment(seed, to_addr, amount_stroops, "", sequence)
-            verb = "Sent."
+        spendable = xlm_mod.get_spendable_stroops(source)
+        if amount_stroops > spendable:
+            ctx["alert_err"] = (
+                "That is more than this wallet can spend; "
+                f"{xlm_mod.stroops_to_str(spendable)} XLM is free of its reserve.")
+            return
+        xdr, tx_hash = xlm_mod.build_payment(seed, to_addr, amount_stroops, "", sequence)
+        verb = "Sent."
         ok, tx_hash, detail = xlm_mod.submit_envelope(xdr)
         if ok:
             ctx["alert_ok_tx"] = tx_hash
@@ -1681,7 +1674,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                    asset="lapse",
                    xlm_addr=xlm_addr, xlm_spendable=xlm_spendable,
                    xlm_locked=xlm_locked, xlm_to_value="",
-                   xlm_amount_value="", xlm_merge_value=False,
+                   xlm_amount_value="",
                    alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
         if request.method == "POST":
             if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
@@ -1694,28 +1687,22 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
             if asset == "xlm":
                 to_addr = request.form.get("xlm_to", "").strip()
-                merge = request.form.get("xlm_merge") == "1"
                 amount_raw = request.form.get("xlm_amount", "").strip()
                 ctx["xlm_to_value"] = to_addr
                 ctx["xlm_amount_value"] = amount_raw
-                ctx["xlm_merge_value"] = merge
                 if not to_addr:
                     ctx["alert_err"] = "Enter a destination address."
                 else:
-                    amount_stroops = 0
-                    if not merge:
-                        try:
-                            amount_stroops = market_routes.parse_xlm(amount_raw)
-                        except ValueError as e:
-                            ctx["alert_err"] = str(e)
+                    try:
+                        amount_stroops = market_routes.parse_xlm(amount_raw)
+                    except ValueError as e:
+                        ctx["alert_err"] = str(e)
                     if not ctx["alert_err"]:
                         _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr,
-                                              amount_stroops, passphrase, ctx,
-                                              merge=merge)
+                                              amount_stroops, passphrase, ctx)
                         if ctx["alert_ok_tx"]:
                             ctx["xlm_to_value"] = ""
                             ctx["xlm_amount_value"] = ""
-                            ctx["xlm_merge_value"] = False
                             ctx["xlm_addr"], ctx["xlm_spendable"], ctx["xlm_locked"] = \
                                 _xlm_view(xlm_keyfile_path)
             else:

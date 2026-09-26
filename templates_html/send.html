@@ -97,13 +97,7 @@
       <div style="flex:1 1 160px">
         <label for="xlm-amount">Amount, in XLM</label>
         <input type="text" id="xlm-amount" name="xlm_amount" value="{{ xlm_amount_value }}"
-               placeholder="0.0000000" style="width:100%" {% if xlm_merge_value %}disabled{% endif %}>
-      </div>
-      <div style="flex:0 0 auto;padding-bottom:.4rem">
-        <label title="Sends this wallet's entire balance, reserve included, and closes the account.">
-          <input type="checkbox" id="xlm-merge" name="xlm_merge" value="1" {% if xlm_merge_value %}checked{% endif %}>
-          Close wallet (send everything, including the reserve)
-        </label>
+               placeholder="0.0000000" style="width:100%">
       </div>
     </div>
     <div class="form-group" style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
@@ -216,13 +210,6 @@
   }
   radios.forEach(r => r.addEventListener("change", refresh));
   refresh();
-})();
-
-(function () {
-  const merge = document.getElementById("xlm-merge");
-  const amount = document.getElementById("xlm-amount");
-  if (!merge || !amount) return;
-  merge.addEventListener("change", () => { amount.disabled = merge.checked; });
 })();
 </script>
 {% endblock %}
