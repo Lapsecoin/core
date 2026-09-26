@@ -67,7 +67,15 @@ python main.py
 
 `liboqs` itself needs no separate install step: it builds and installs on first run automatically (a few minutes, once) using exactly the tools that script gets you.
 
-**Windows:** no equivalent script (the real recipe is choco + MSYS2, different enough from Linux/macOS that a translated script wouldn't help). Install `cmake`, `git`, and a C/C++ toolchain (e.g. Visual Studio Build Tools) yourself, then `pip install lapsecoin` / `pip install -r requirements.txt` as above.
+**Windows:**
+
+```powershell
+.\scripts\install_build_tools.ps1   # cmake, git, Visual Studio Build Tools -- no-ops if you already have them
+pip install lapsecoin
+lapsecoin
+```
+
+The C++ toolchain step there is a multi-GB install with no fast equivalent to apt/brew, so it can take a while the first time. This script hasn't been run against a real Windows machine as part of this change (unlike the Linux/macOS one, which was); if it doesn't work for you, install `cmake`, `git`, and Visual Studio Build Tools (C++ workload) yourself and open an issue.
 
 If install fails on `libtorrent` specifically: it's a C extension with real wheel gaps on some platforms, Windows especially, so it can be the one line standing between you and a working install. Install everything else with `pip install lapsecoin --no-deps` (then the rest of the dependencies above, minus `libtorrent`) or, from a clone, delete it from `requirements.txt` before running `pip install -r requirements.txt`. Either way, the node still connects fine without it: grab a `lapsecoin_peers.json` from another running node's dashboard (its `/network` page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting. This node reads that file to seed known-good addresses on startup regardless of `libtorrent`, just via a peer someone handed you instead of the DHT finding one on its own.
 </details>
