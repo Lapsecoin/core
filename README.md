@@ -47,37 +47,25 @@ Block timing is enforced by a VDF anchored to real elapsed time, believed to hav
 <details>
 <summary>Running from source</summary>
 
-Requires Python 3.11+.
+Requires Python 3.11+. One command handles everything: build tools, the app itself, and (only if needed) a libtorrent-free fallback with a starter peers list.
 
 **Linux/macOS:**
 
 ```bash
-./scripts/install_build_tools.sh   # cmake, git, a C compiler -- no-ops if you already have them
-pip install lapsecoin
-lapsecoin
+curl -fsSL https://raw.githubusercontent.com/Lapsecoin/core/main/scripts/install.sh | bash
 ```
 
-or, from a clone:
-
-```bash
-./scripts/install_build_tools.sh
-pip install -r requirements.txt
-python main.py
-```
-
-`liboqs` itself needs no separate install step: it builds and installs on first run automatically (a few minutes, once) using exactly the tools that script gets you.
-
-**Windows:**
+**Windows (PowerShell):**
 
 ```powershell
-.\scripts\install_build_tools.ps1   # cmake, git, Visual Studio Build Tools -- no-ops if you already have them
-pip install lapsecoin
-lapsecoin
+irm https://raw.githubusercontent.com/Lapsecoin/core/main/scripts/install.ps1 | iex
 ```
 
-The C++ toolchain step there is a multi-GB install with no fast equivalent to apt/brew, so it can take a while the first time. This script hasn't been run against a real Windows machine as part of this change (unlike the Linux/macOS one, which was); if it doesn't work for you, install `cmake`, `git`, and Visual Studio Build Tools (C++ workload) yourself and open an issue.
+Either way, once it finishes: `lapsecoin`.
 
-If install fails on `libtorrent` specifically: it's a C extension with real wheel gaps on some platforms, Windows especially, so it can be the one line standing between you and a working install. Install everything else with `pip install lapsecoin --no-deps` (then the rest of the dependencies above, minus `libtorrent`) or, from a clone, delete it from `requirements.txt` before running `pip install -r requirements.txt`. Either way, the node still connects fine without it: grab a `lapsecoin_peers.json` from another running node's dashboard (its `/network` page has a "Download JSON" button, `/api/peers/download`) and drop it in your own node's working directory before starting. This node reads that file to seed known-good addresses on startup regardless of `libtorrent`, just via a peer someone handed you instead of the DHT finding one on its own.
+What it does: makes sure `cmake`, `git`, and a C compiler are present (liboqs needs these to build itself automatically on first run, no separate step), then `pip install lapsecoin`. If that fails specifically on `libtorrent`, a C extension with real wheel gaps on some platforms, Windows especially, it retries without it and fetches a starter `lapsecoin_peers.json` into the current directory so the node still has somewhere to connect. Every step is safe to re-run.
+
+Prefer to do it by hand, or from a clone? `pip install lapsecoin` / `pip install -r requirements.txt` work exactly the same as always; the script is a convenience, not a requirement.
 </details>
 
 <details>
