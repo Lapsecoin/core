@@ -18,6 +18,7 @@ import webbrowser
 from tkinter import ttk
 
 import crypto
+from version import LOCAL_VERSION
 
 log = logging.getLogger("ec.gui")
 
@@ -353,7 +354,7 @@ def run_status_window(node, udp, private_port, log_file):
     """
     root = tk.Tk()
     _install_tk_exception_logging(root)
-    root.title("LapseCoin")
+    root.title(f"LapseCoin v{LOCAL_VERSION}")
     root.minsize(440, 300)
     _apply_icon(root)
     style = _style_dark(root)
@@ -364,7 +365,7 @@ def run_status_window(node, udp, private_port, log_file):
     header = ttk.Frame(outer, style="Dark.TFrame")
     header.pack(fill="x")
     ttk.Label(
-        header, text="LapseCoin", style="Dark.TLabel", font=("", 15, "bold"),
+        header, text=f"LapseCoin v{LOCAL_VERSION}", style="Dark.TLabel", font=("", 15, "bold"),
     ).pack(anchor="w")
     ttk.Label(
         header, text="Node is running", style="Dim.TLabel", font=("", 9),
