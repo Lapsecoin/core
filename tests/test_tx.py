@@ -537,3 +537,67 @@ class TestBoardFeeFloor:
                     outputs_override=outputs)
         ok, err = tx_mod.validate(t, s)
         assert ok is True, err
+
+
+class TestBoardNicknameConsensus:
+    """_check_nickname_available: a board post claiming a name
+    state.nicknames already shows owned by a different address is
+    rejected by validate() itself, not just hidden at display time (see
+    api.py's own docstrings on why the two used to be separate and now
+    read the same registry)."""
+
+    def _post(self, sender, s, nick, fee=1000):
+        outputs = [{"to": address((sender + 1) % 3), "amount": 1}]
+        memo = tx_mod.BOARD_MEMO_TAG + tx_mod.build_board_body("hi", icon=0, nick=nick)
+        return make_tx(sender, (sender + 1) % 3, 1, s, fee=fee, memo=memo,
+                        outputs_override=outputs)
+
+    def test_first_claim_validates(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        t = self._post(0, s, "Al")
+        ok, err = tx_mod.validate(t, s)
+        assert ok is True, err
+
+    def test_a_different_address_claiming_the_same_name_is_rejected(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        seed_balance(s, 1, 1000.0)
+        s.apply_tx(self._post(0, s, "Al"))
+        t2 = self._post(1, s, "Al")
+        ok, err = tx_mod.validate(t2, s)
+        assert ok is False
+        assert "already taken" in err
+
+    def test_claiming_it_case_insensitively_is_still_rejected(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        seed_balance(s, 1, 1000.0)
+        s.apply_tx(self._post(0, s, "Al"))
+        t2 = self._post(1, s, "al")
+        ok, _err = tx_mod.validate(t2, s)
+        assert ok is False
+
+    def test_the_same_address_re_setting_its_own_name_still_validates(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        s.apply_tx(self._post(0, s, "Al"))
+        t2 = self._post(0, s, "Al")
+        ok, err = tx_mod.validate(t2, s)
+        assert ok is True, err
+
+    def test_a_post_with_no_nickname_is_unaffected(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        seed_balance(s, 1, 1000.0)
+        s.apply_tx(self._post(0, s, "Al"))
+        t2 = make_tx(1, 2, 1, s, fee=1000, memo=tx_mod.BOARD_MEMO_TAG + "just a message",
+                    outputs_override=[{"to": address(2), "amount": 1}])
+        ok, err = tx_mod.validate(t2, s)
+        assert ok is True, err
+
+    def test_apply_tx_registers_the_claim_in_state_nicknames(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        s.apply_tx(self._post(0, s, "Al"))
+        assert s.nicknames["al"] == address(0)

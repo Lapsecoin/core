@@ -650,12 +650,21 @@ class TestAddressLookupNicknameRedirect:
 
     def _client_with_nickname(self, nick="Al", owner_index=0):
         import tx as tx_mod
-        node, cs = fresh()
+        cs = ChainState.from_genesis()
+        for i in range(3):
+            seed_balance(cs.state, i, 1000.0)
         t = {"from": address(owner_index), "nonce": 1, "fee": 1,
              "outputs": [{"to": "1" * 40, "amount": 1}],
              "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("hi", icon=0, nick=nick)}
         cs.chain.append({"height": len(cs.chain), "timestamp": 1000,
                          "transactions": [t], "hash": "h0"})
+        cs.state.apply_tx(t)  # so state.nicknames actually reflects the claim
+        # _FakeNode (via NodeView) takes a snapshot of cs.state at
+        # construction time, so it has to be built *after* the claim
+        # above is applied, not before -- constructing it first would
+        # freeze a view of state.nicknames from before this test's own
+        # nickname ever existed.
+        node = _FakeNode(cs)
         node.storage = SimpleNamespace(get_tx_heights_for_addr=lambda addr: [])
         pool = peerpool_mod.PeerPool()
         return api.create_private_app(node, pool).test_client()
@@ -802,13 +811,23 @@ class TestBoardMemoParsing:
         assert nick == "Bob"
         assert text == "hi"
 
-    def test_out_of_range_icon_index_falls_back_to_none(self):
+    def test_out_of_range_icon_index_parses_as_a_raw_int(self):
         # Hand-built rather than through build_board_body, which would
         # never emit an out-of-range index itself: this simulates an
         # older/newer client with a differently sized palette.
-        icon, nick, reply_ref, text = api.parse_board_body(f"[p:{len(api.ICON_PALETTE) + 5}:X]hi")
-        assert icon is None
+        # parse_board_body itself doesn't bounds-check (that's tx.py's
+        # job now, a consensus-neutral parser) -- see _icon_emoji below
+        # for where the fallback to the ghost placeholder actually lives.
+        idx = len(api.ICON_PALETTE) + 5
+        icon, nick, reply_ref, text = api.parse_board_body(f"[p:{idx}:X]hi")
+        assert icon == idx
         assert text == "hi"
+
+    def test_icon_emoji_falls_back_to_ghost_when_out_of_range(self):
+        idx = len(api.ICON_PALETTE) + 5
+        assert api._icon_emoji(idx) == api.ICON_GHOST
+        assert api._icon_emoji(None) == api.ICON_GHOST
+        assert api._icon_emoji(0) == api.ICON_PALETTE[0]
 
 
 class TestBoardProfilesAndVotes:
@@ -835,6 +854,11 @@ class TestBoardProfilesAndVotes:
                  "outputs": [{"to": "1" * 40, "amount": 1}], "memo": memo}
             cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
                              "transactions": [t], "hash": f"h{i}"})
+            # apply_tx (not just appending to the chain list) so
+            # cs.state.nicknames -- now the real source
+            # _board_profiles_and_votes reads -- comes out exactly like a
+            # node's own would after accepting these same transactions.
+            cs.state.apply_tx(t)
         return cs
 
     def test_latest_profile_per_address_wins(self):
@@ -842,7 +866,7 @@ class TestBoardProfilesAndVotes:
             (0, self.TAG + api.build_board_body("first", icon=1, nick="Old")),
             (0, self.TAG + api.build_board_body("second", icon=5, nick="New")),
         )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain)
+        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert profiles[address(0)] == {"icon": 5, "nick": "New"}
 
     def test_different_addresses_keep_separate_profiles(self):
@@ -850,7 +874,7 @@ class TestBoardProfilesAndVotes:
             (0, self.TAG + api.build_board_body("hi", icon=1, nick="A")),
             (1, self.TAG + api.build_board_body("hi", icon=2, nick="B")),
         )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain)
+        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert profiles[address(0)] == {"icon": 1, "nick": "A"}
         assert profiles[address(1)] == {"icon": 2, "nick": "B"}
 
@@ -859,7 +883,7 @@ class TestBoardProfilesAndVotes:
             (0, api.VOTE_UP_TAG + "abcdef"),
             (0, api.VOTE_DOWN_TAG + "abcdef"),
         )
-        _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain)
+        _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert votes["abcdef"]["up"] == 0
         assert votes["abcdef"]["down"] == 1
 
@@ -868,7 +892,7 @@ class TestBoardProfilesAndVotes:
             (0, api.VOTE_UP_TAG + "abcdef"),
             (1, api.VOTE_UP_TAG + "abcdef"),
         )
-        _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain)
+        _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert votes["abcdef"]["up"] == 2
 
     def test_nickname_is_first_come_first_served(self):
@@ -879,7 +903,7 @@ class TestBoardProfilesAndVotes:
             (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
             (1, self.TAG + api.build_board_body("hey", icon=2, nick="Al")),
         )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain)
+        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert profiles[address(0)] == {"icon": 1, "nick": "Al"}
         assert profiles[address(1)] == {"icon": 2, "nick": None}
 
@@ -888,16 +912,16 @@ class TestBoardProfilesAndVotes:
             (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
             (1, self.TAG + api.build_board_body("hey", icon=2, nick="al")),
         )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain)
+        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert profiles[address(1)]["nick"] is None
 
     def test_nickname_owned_by_reports_the_first_claimant(self):
         cs = self._chain_with(
             (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
         )
-        assert api._nickname_owned_by(cs.chain, "AL") == address(0)
-        assert api._nickname_owned_by(cs.chain, "Bob") is None
-        assert api._nickname_owned_by(cs.chain, "") is None
+        assert api._nickname_owned_by(cs.state, "AL") == address(0)
+        assert api._nickname_owned_by(cs.state, "Bob") is None
+        assert api._nickname_owned_by(cs.state, "") is None
 
 
     def test_vote_tag_is_not_a_board_post(self):
@@ -911,13 +935,13 @@ class TestBoardProfilesAndVotes:
         node = _FakeNode(cs)
         t = make_tx(0, 1, 1, cs.state, fee=100, memo=api.VOTE_UP_TAG + "abcdef")
         node.mempool.add(t)
-        _profiles, votes, pending_refs = api._board_profiles_and_votes(cs.chain, node.mempool)
+        _profiles, votes, pending_refs = api._board_profiles_and_votes(cs.chain, cs.state.nicknames, node.mempool)
         assert votes["abcdef"]["up"] == 1
         assert "abcdef" in pending_refs
 
     def test_confirmed_vote_is_not_marked_pending(self):
         cs = self._chain_with((0, api.VOTE_UP_TAG + "abcdef"))
-        _profiles, _votes, pending_refs = api._board_profiles_and_votes(cs.chain)
+        _profiles, _votes, pending_refs = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert pending_refs == set()
 
 
@@ -975,7 +999,7 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
         for i, t in enumerate(base + list(extra_txs)):
             cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
                              "transactions": [t], "hash": f"h{i}"})
-        cs.state.total_board_posts = 1
+            cs.state.apply_tx(t)  # so state.nicknames reflects the profile claim
         node = _FakeNode(cs, addr=address(0))
         pool = peerpool_mod.PeerPool()
         app = api.create_private_app(node, pool)

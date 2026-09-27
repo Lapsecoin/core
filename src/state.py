@@ -28,9 +28,18 @@ class State:
         self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
         self.total_minted = 0   # ticks minted via block rewards since genesis
         self.total_board_posts = 0  # confirmed board posts since genesis
+        # nickname (lowercased) -> address that first claimed it. Consensus
+        # state, not a display cache: tx.validate()'s
+        # _check_nickname_available reads this directly, so every node
+        # enforces the exact same first-come-first-served ownership.
+        self.nicknames = {}
         # Addresses whose balance or nonce has moved since the last time
         # this state was written to disk. See dirty_addresses().
         self._dirty       = set()
+        # Nicknames claimed since the last write -- same reasoning as
+        # _dirty above, so a commit only ever inserts the handful of names
+        # claimed in that block instead of rewriting the whole registry.
+        self._dirty_nicknames = set()
 
     # ------------------------------------------------------------------
     # Balance and nonce access
@@ -100,9 +109,20 @@ class State:
         """
         return frozenset(self._dirty)
 
+    def dirty_nicknames(self):
+        """Nicknames (lowercased) claimed since the last mark_persisted(),
+        each with its owner -- the only rows a commit needs to insert,
+        same reasoning as dirty_addresses() above. A nickname is only
+        ever inserted once (see apply_tx: _dirty_nicknames only gains a
+        key the first time it's claimed), never updated or removed, so
+        there's no equivalent of "look it up again" to worry about here.
+        """
+        return {nick: self.nicknames[nick] for nick in self._dirty_nicknames}
+
     def mark_persisted(self):
         """Called by storage once the dirty set has been written."""
         self._dirty.clear()
+        self._dirty_nicknames.clear()
 
     # ------------------------------------------------------------------
     # Transaction application
@@ -123,6 +143,17 @@ class State:
         self.set_nonce(sender, tx_dict["nonce"])
         if tx_mod.is_board_post(tx_dict):
             self.total_board_posts += 1
+            nick = tx_mod.board_post_nickname(tx_dict)
+            if nick:
+                # setdefault, not assignment: tx.validate() already refused
+                # any tx that would conflict with an existing claim, so
+                # this only ever either registers a genuinely new name or
+                # re-confirms the same address's own existing one -- never
+                # overwrites a different address's claim.
+                nick_l = nick.lower()
+                if nick_l not in self.nicknames:
+                    self.nicknames[nick_l] = sender
+                    self._dirty_nicknames.add(nick_l)
 
     # ------------------------------------------------------------------
     # Emission
@@ -155,7 +186,8 @@ class State:
 
     @classmethod
     def from_snapshot(cls, balances: dict, nonces: dict,
-                      total_minted: int, total_board_posts: int = 0) -> "State":
+                      total_minted: int, total_board_posts: int = 0,
+                      nicknames: dict = None) -> "State":
         """Restore a State from persisted data. Replaces direct field assignment.
 
         Zero balances are dropped on the way in, because the table on disk
@@ -171,6 +203,7 @@ class State:
         s._nonces      = nonces
         s.total_minted = total_minted
         s.total_board_posts = total_board_posts
+        s.nicknames    = dict(nicknames) if nicknames else {}
         return s
 
     # ------------------------------------------------------------------
@@ -191,7 +224,9 @@ class State:
         s._nonces      = self._nonces.copy()
         s.total_minted = self.total_minted
         s.total_board_posts = self.total_board_posts
+        s.nicknames    = self.nicknames.copy()
         s._dirty       = set(self._dirty)
+        s._dirty_nicknames = set(self._dirty_nicknames)
         return s
 
     # ------------------------------------------------------------------

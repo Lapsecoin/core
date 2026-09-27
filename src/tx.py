@@ -8,6 +8,7 @@ blocks are built by picking whichever valid, pending transactions pay
 the most per byte.
 """
 
+import re
 import threading
 
 from cachetools import LRUCache
@@ -157,6 +158,74 @@ BOARD_STEP_SIZE = 250  # posts per step before the floor multiplies again
 BOARD_FEE_RATIO = 3    # floor multiplies by this every BOARD_STEP_SIZE posts
 
 
+# A board post's memo body (everything after BOARD_MEMO_TAG) may start
+# with a small fixed-grammar header: an optional profile update (icon
+# index + nickname) and/or an optional reply reference, before the
+# literal text. This lives here rather than in the web UI because the
+# nickname it can carry is now consensus-relevant (see
+# _check_nickname_available below): the parser that decides what a post
+# claims has to be the same one that decides whether that claim is
+# valid, or the two could disagree about what a memo actually says.
+# Icon/reply-target resolution (palette lookup, quoting the parent post)
+# stay presentation-only concerns and are left to api.py.
+_PROFILE_RE = re.compile(r'^\[p:(\d{1,2}):([^\]\n]{0,16})\]')
+_REPLY_RE   = re.compile(r'^\[r:([0-9a-f]{6})\]')
+REPLY_REF_LEN = 6
+
+
+def parse_board_body(body):
+    """Split a board post's memo body into its optional profile header
+    (icon index, nickname), optional reply reference, and the literal
+    text. Order is fixed: profile header first, then reply header, then
+    free text -- a post can carry either, both, or neither. icon is a
+    raw index with no palette-range check (that's a display concern, see
+    api.py's ICON_PALETTE): an out-of-range index parses fine and just
+    means "no icon" once looked up against whatever palette a given
+    client uses.
+    """
+    icon = nick = reply_ref = None
+    m = _PROFILE_RE.match(body)
+    if m:
+        icon = int(m.group(1))
+        nick = m.group(2) or None
+        body = body[m.end():]
+    m = _REPLY_RE.match(body)
+    if m:
+        reply_ref = m.group(1)
+        body = body[m.end():]
+    return icon, nick, reply_ref, body
+
+
+def build_board_body(text, icon=None, nick=None, reply_ref=None):
+    """Inverse of parse_board_body: the memo body a client should
+    actually send. Empty unless the caller is deliberately changing the
+    profile or replying -- an ordinary post gets no header at all, so its
+    cost is unaffected by either feature existing.
+    """
+    prefix = ""
+    if icon is not None:
+        # ']' and newlines would otherwise let a nickname break out of the
+        # header parse_board_body reads back out of the next post that
+        # reads it; stripped rather than rejected, since a nickname is
+        # cosmetic and silently dropping two characters costs nothing real.
+        clean_nick = (nick or "").replace("]", "").replace("\n", "")
+        prefix += f"[p:{icon}:{clean_nick}]"
+    if reply_ref:
+        prefix += f"[r:{reply_ref}]"
+    return prefix + text
+
+
+def board_post_nickname(tx_dict):
+    """The nickname this board post's own memo header claims, or None if
+    it carries no profile header or an empty one. The one piece of
+    parse_board_body's output _check_nickname_available actually needs."""
+    if not is_board_post(tx_dict):
+        return None
+    _icon, nick, _reply_ref, _text = parse_board_body(
+        tx_dict.get("memo", "")[len(BOARD_MEMO_TAG):])
+    return nick
+
+
 def is_board_post(tx_dict):
     return tx_dict.get("memo", "").startswith(BOARD_MEMO_TAG)
 
@@ -289,10 +358,33 @@ def _check_board_fee(tx_dict, state, floor_override):
     return True, None
 
 
+def _check_nickname_available(tx_dict, state):
+    """A board post claiming a nickname state.nicknames already shows
+    owned by a different address is rejected outright, not just hidden
+    at display time: first-come-first-served, case-insensitive, exactly
+    like an address's own uniqueness -- see state.py's own comment on why
+    this needs no protocol-floor bump (a validation tightening that runs
+    the same for every node regardless of peer version, not a wire-format
+    change). No override parameter unlike _check_board_fee: nicknames
+    resolving in strict tx order within a single block (first claim
+    inside the block wins, same as across blocks) is exactly the
+    first-come-first-served behavior wanted here, not a hazard to freeze
+    against.
+    """
+    nick = board_post_nickname(tx_dict)
+    if not nick:
+        return True, None
+    owner = state.nicknames.get(nick.lower())
+    if owner is not None and owner != tx_dict["from"]:
+        return False, f"nickname '{nick}' is already taken"
+    return True, None
+
+
 def validate(tx_dict, state, board_fee_floor_override=None):
     """Validate a transaction. Returns (True, None) or (False, error_string).
 
-    state: object with .get_balance(addr), .get_nonce(addr), .total_board_posts
+    state: object with .get_balance(addr), .get_nonce(addr),
+    .total_board_posts, .nicknames
 
     board_fee_floor_override: the floor to check a board post's fee
     against, frozen ahead of time rather than read live off
@@ -315,6 +407,7 @@ def validate(tx_dict, state, board_fee_floor_override=None):
         (_check_nonce,                 (tx_dict, state)),
         (_check_balance,               (tx_dict, state)),
         (_check_board_fee,             (tx_dict, state, board_fee_floor_override)),
+        (_check_nickname_available,    (tx_dict, state)),
     ):
         ok, err = check(*args)
         if not ok:

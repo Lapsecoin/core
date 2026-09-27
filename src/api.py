@@ -131,25 +131,15 @@ CLAIMED_GRAPH_LIMIT = 60
 BOARD_MEMO_TAG    = tx_mod.BOARD_MEMO_TAG
 BOARD_POST_AMOUNT = tx_mod.BOARD_POST_AMOUNT
 
-# Profile (icon + nickname) and reply-reference are not separate
-# transactions: they're a small fixed-grammar header a post's own memo may
-# start with, folded into whatever post the user was about to make anyway
-# rather than spent as a post of their own. This is the whole point --
-# an address only pays for a profile change on top of a post it was
-# already sending, never as its own extra board slot. Both headers are
-# only ever written by this server's own compose form, never hand-typed,
-# the same convention BOARD_MEMO_TAG itself already relies on, so a real
-# message that happens to start with one of these exact patterns is
-# treated as the header it looks like -- an accepted, deliberate tradeoff
-# for staying inside consensus's plain byte-string memo rather than
-# needing a structured field of its own.
-#
-# Anchored at the very start of the body (right after BOARD_MEMO_TAG) and
-# only there: not searched for elsewhere, so nothing after the header,
-# however it's formatted, can be mistaken for a second one.
-_PROFILE_RE = re.compile(r'^\[p:(\d{1,2}):([^\]\n]{0,16})\]')
-_REPLY_RE   = re.compile(r'^\[r:([0-9a-f]{6})\]')
-REPLY_REF_LEN = 6
+# Profile (icon + nickname) and reply-reference parsing/building now
+# lives in tx.py, not here: the nickname a profile header carries is
+# consensus-relevant (tx.validate()'s _check_nickname_available), so the
+# code that decides what a post claims and the code that decides whether
+# that claim is valid have to be the same one, or api.py's own idea of a
+# memo's contents could quietly drift from what tx.py actually enforces.
+parse_board_body  = tx_mod.parse_board_body
+build_board_body  = tx_mod.build_board_body
+REPLY_REF_LEN     = tx_mod.REPLY_REF_LEN
 
 # Small built-in set so "icon" never means an uploaded image or a URL --
 # both would cost far more bytes than this feature is worth and an <img>
@@ -165,6 +155,17 @@ ICON_PALETTE = ["\U0001F47B", "\U0001F600", "\U0001F42C", "\U0001F984",
                 "\U0001F98B", "\U0001F41B", "\U0001F340", "\U0001F32E"]
 ICON_GHOST = "\U0001F47B"  # shown for an address with no profile post yet
 
+
+def _icon_emoji(idx):
+    """ICON_PALETTE[idx], or the ghost placeholder for an index outside
+    it. tx.parse_board_body deliberately doesn't bounds-check icon (see
+    its own docstring: that's a display concern, not a consensus one),
+    so an older/newer client's differently sized palette, or simply
+    nobody having set an icon at all, has to fall back safely here
+    instead of indexing out of range.
+    """
+    return ICON_PALETTE[idx] if idx is not None and 0 <= idx < len(ICON_PALETTE) else ICON_GHOST
+
 # Votes are ordinary transactions, not board posts: a different tag family
 # entirely (tx.is_board_post only matches BOARD_MEMO_TAG), so voting never
 # advances state.total_board_posts and never pays the board fee floor --
@@ -175,66 +176,16 @@ VOTE_UP_TAG   = "[vote+] "
 VOTE_DOWN_TAG = "[vote-] "
 
 
-def parse_board_body(body):
-    """Split a board post's memo body (everything after BOARD_MEMO_TAG)
-    into its optional profile header, optional reply reference, and the
-    literal text to render. Order is fixed: profile header first, then
-    reply header, then free text -- a post can carry either, both, or
-    neither.
-    """
-    icon = nick = reply_ref = None
-    m = _PROFILE_RE.match(body)
-    if m:
-        idx = int(m.group(1))
-        icon = idx if 0 <= idx < len(ICON_PALETTE) else None
-        nick = m.group(2) or None
-        body = body[m.end():]
-    m = _REPLY_RE.match(body)
-    if m:
-        reply_ref = m.group(1)
-        body = body[m.end():]
-    return icon, nick, reply_ref, body
-
-
-def build_board_body(text, icon=None, nick=None, reply_ref=None):
-    """Inverse of parse_board_body: the memo body build_and_sign_tx should
-    actually send. Empty unless the caller is deliberately changing the
-    profile or replying -- an ordinary post gets no header at all, so its
-    cost is unaffected by either feature existing.
-    """
-    prefix = ""
-    if icon is not None:
-        # ']' and newlines would otherwise let a nickname break out of the
-        # header _PROFILE_RE parses back out of the next post that reads
-        # it; stripped rather than rejected, since a nickname is cosmetic
-        # and silently dropping two characters costs nothing real.
-        clean_nick = (nick or "").replace("]", "").replace("\n", "")
-        prefix += f"[p:{icon}:{clean_nick}]"
-    if reply_ref:
-        prefix += f"[r:{reply_ref}]"
-    return prefix + text
-
-
-def _nickname_owned_by(chain, nick):
+def _nickname_owned_by(state, nick):
     """The address that owns nick (first board post to ever claim it,
-    case-insensitively -- see _board_profiles_and_votes' own docstring on
-    why first-claim-wins needs no new consensus rule), or None if nobody
-    has. Used to warn/refuse *before* a post pays for a nickname that
-    would silently not apply, not just to decide what to display after
-    the fact.
+    case-insensitively), or None if nobody has. Now a thin read of
+    consensus state itself (tx.validate()'s _check_nickname_available
+    enforces the exact same registry, see state.py), not a separate scan
+    api.py used to run on its own -- used to warn/refuse *before* a post
+    pays for a nickname that would fail validation, not just to decide
+    what to display after the fact.
     """
-    if not nick:
-        return None
-    nick_l = nick.lower()
-    for blk in chain:
-        for t in blk.get("transactions", []):
-            memo = t.get("memo") or ""
-            if not memo.startswith(BOARD_MEMO_TAG):
-                continue
-            _icon, n, _reply_ref, _text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
-            if n and n.lower() == nick_l:
-                return t.get("from")
-    return None
+    return state.nicknames.get(nick.lower()) if nick else None
 
 
 
@@ -455,7 +406,7 @@ def _board_posts(chain):
     return rows
 
 
-def _board_profiles_and_votes(chain, mempool=None):
+def _board_profiles_and_votes(chain, nicknames, mempool=None):
     """One more full pass over the chain (see _board_posts' own docstring
     on why that's fine at this scale), building the two pieces of state a
     board post's header can affect but that no single post ever *is* by
@@ -469,14 +420,12 @@ def _board_profiles_and_votes(chain, mempool=None):
     "avatar looked up live, not frozen at post time" behaviour any chat
     client gives you.
 
-    Nicknames are first-come-first-served, case-insensitively: whichever
-    address claimed a given name earliest (chain order, oldest first)
-    keeps it, and a later post from a different address setting the same
-    text just never gets it displayed (icon still applies -- only the
-    name is impersonation-relevant). This needs no new consensus rule:
-    every node computes the same answer from the same chain, since it's
-    a pure, deterministic read of history, not a claim anyone can
-    contest after the fact.
+    nicknames: addr's claimed nick is only honored if it matches
+    state.nicknames (passed in, not recomputed here) -- first-come-first-
+    served, case-insensitive, enforced by tx.validate()'s own
+    _check_nickname_available, so this is a read of the same consensus
+    registry every node already maintains, not a separate, display-only
+    notion of ownership that could disagree with it.
 
     votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
     (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain,
@@ -528,19 +477,6 @@ def _board_profiles_and_votes(chain, mempool=None):
             if ref is not None:
                 pending_vote_refs.add(ref)
 
-    # Oldest-first (chain is already stored that way) so the first claim
-    # of a given name is the one seen first here, establishing ownership
-    # before the tip-first pass below decides what to display.
-    nickname_owner = {}
-    for blk in chain:
-        for t in blk.get("transactions", []):
-            memo = t.get("memo") or ""
-            if not memo.startswith(BOARD_MEMO_TAG):
-                continue
-            _icon, nick, _reply_ref, _text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
-            if nick:
-                nickname_owner.setdefault(nick.lower(), t.get("from"))
-
     for blk in reversed(chain):
         for t in reversed(blk.get("transactions", [])):
             memo = t.get("memo") or ""
@@ -549,8 +485,8 @@ def _board_profiles_and_votes(chain, mempool=None):
                 if addr in profiles:
                     continue
                 icon, nick, _, _ = parse_board_body(memo[len(BOARD_MEMO_TAG):])
-                if nick and nickname_owner.get(nick.lower()) != addr:
-                    nick = None  # claimed by (an earlier post from) a different address
+                if nick and nicknames.get(nick.lower()) != addr:
+                    nick = None  # claimed by a different address; see state.nicknames
                 if icon is not None:
                     profiles[addr] = {"icon": icon, "nick": nick}
             else:
@@ -1100,7 +1036,7 @@ def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_
     memo = row["tx"].get("memo") or ""
     icon, _nick, reply_ref, text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
     prof = profiles.get(row["tx"].get("from"))
-    row["icon"] = ICON_PALETTE[prof["icon"]] if prof else ICON_GHOST
+    row["icon"] = _icon_emoji(prof["icon"]) if prof else ICON_GHOST
     row["nick"] = prof.get("nick") if prof else None
     row["text"] = text
     row["ref6"] = row["hash"][:REPLY_REF_LEN]
@@ -1151,7 +1087,8 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
     pending_rows = _board_pending(node.mempool) if page == 1 else []
     page_rows += pending_rows
 
-    profiles, votes, pending_vote_refs = _board_profiles_and_votes(node.view.chain, node.mempool)
+    profiles, votes, pending_vote_refs = _board_profiles_and_votes(
+        node.view.chain, node.view.state.nicknames, node.mempool)
     # Every row on chain, not just this page, so a reply on page 3 can
     # still preview a parent that landed on page 1.
     hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
@@ -1164,7 +1101,7 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
     own_icon_idx = own_profile["icon"] if own_profile else None
     ctx = dict(title="Board", rows=page_rows,
                post_count=len(all_rows), own_addr=own_addr,
-               own_icon=ICON_PALETTE[own_icon_idx] if own_icon_idx is not None else ICON_GHOST,
+               own_icon=_icon_emoji(own_icon_idx),
                own_icon_idx=own_icon_idx or 0,
                own_nick=own_profile.get("nick") if own_profile else None,
                icon_palette=ICON_PALETTE,
@@ -1376,7 +1313,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # so typing a name here lands on exactly the address that name
         # actually belongs to, not a second, separate notion of identity.
         if addr and not crypto_mod.is_valid_address(addr):
-            owner = _nickname_owned_by(node.view.chain, addr)
+            owner = _nickname_owned_by(node.view.state, addr)
             if owner is not None:
                 query = request.args.to_dict(flat=True)
                 query["addr"] = owner
@@ -2169,9 +2106,9 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         # set a name that's already someone else's is a real cost for a
         # change that would then silently never show, so the compose box
         # needs to know before the user signs anything, not after.
-        owner = _nickname_owned_by(node.view.chain, nick)
+        owner = _nickname_owned_by(node.view.state, nick)
         if nick and owner is not None and owner != node.addr:
-            return jsonify({"fee": 0, "floor": 0, "ok": False,
+            return jsonify({"fee": 0, "floor": 0, "ok": False, "nick_taken": True,
                             "reason": f"'{nick}' is already taken."})
         header = build_board_body("", icon=icon, nick=nick, reply_ref=reply_ref)
         # An ASCII placeholder of the same byte length: close enough for an
@@ -2251,11 +2188,12 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
             return fail("Session expired; reload the page and try again.")
         if not message:
             return fail("Write something to post.")
-        # Refused outright, not just silently dropped at display time (see
-        # _board_profiles_and_votes): otherwise this post would still pay
-        # the fee and go on chain forever with a nickname nobody will ever
-        # see attached to it.
-        owner = _nickname_owned_by(node.view.chain, nick)
+        # Refused outright, not just silently dropped at display time: a
+        # tx claiming a taken name now also fails tx.validate() itself
+        # (_check_nickname_available), but that check runs against the
+        # live floor node.addr; catching it here first still saves the
+        # round trip to a node that would only reject it anyway.
+        owner = _nickname_owned_by(node.view.state, nick)
         if nick and owner is not None and owner != node.addr:
             return fail(f"'{nick}' is already taken.")
         body = build_board_body(message, icon=icon, nick=nick, reply_ref=reply_ref)

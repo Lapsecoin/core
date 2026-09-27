@@ -106,21 +106,21 @@ class TestStatePersistence:
         s = fresh_state()
         s.credit(address(0), 5000)
         store.save_state(s)
-        balances, nonces, minted, _bp = store.load_state()
+        balances, nonces, minted, _bp, _nn = store.load_state()
         assert balances[address(0)] == 5000
 
     def test_load_state_restores_nonces(self, store):
         s = fresh_state()
         s.set_nonce(address(0), 7)
         store.save_state(s)
-        _, nonces, _, _bp = store.load_state()
+        _, nonces, _, _bp, _nn = store.load_state()
         assert nonces[address(0)] == 7
 
     def test_load_state_restores_emission(self, store):
         s = fresh_state()
         s.total_minted = 12345
         store.save_state(s)
-        _, _, minted, _bp = store.load_state()
+        _, _, minted, _bp, _nn = store.load_state()
         assert minted == 12345
 
     def test_save_state_replaces_previous(self, store):
@@ -130,8 +130,44 @@ class TestStatePersistence:
         s2 = fresh_state()
         s2.credit(address(0), 9999)
         store.save_state(s2)
-        balances, _, _, _bp = store.load_state()
+        balances, _, _, _bp, _nn = store.load_state()
         assert balances[address(0)] == 9999
+
+
+class TestNicknamePersistence:
+    """The Nickname table: consensus state (see state.py's own comment),
+    so it has to round-trip through save_state/load_state the same way
+    total_board_posts already does, not just live in memory."""
+
+    def _claim(self, s, sender_index, nick):
+        seed_balance(s, sender_index, 1000.0)
+        memo = tx_mod.BOARD_MEMO_TAG + tx_mod.build_board_body("hi", icon=0, nick=nick)
+        t = make_tx(sender_index, (sender_index + 1) % 3, 1, s, fee=1, memo=memo)
+        s.apply_tx(t)
+
+    def test_full_rewrite_persists_nicknames(self, store):
+        s = fresh_state()
+        self._claim(s, 0, "Al")
+        store.save_state(s)
+        _b, _n, _tm, _bp, nicknames = store.load_state()
+        assert nicknames == {"al": address(0)}
+
+    def test_delta_write_persists_a_newly_claimed_name(self, store):
+        s = fresh_state()
+        self._claim(s, 0, "Al")
+        store.save_state(s)  # full rewrite once, to seed state_exists()
+        self._claim(s, 1, "Bob")
+        blk = make_block(1, genesis()["hash"], [], 0)
+        store.save_block_and_state(blk, s)
+        _b, _n, _tm, _bp, nicknames = store.load_state()
+        assert nicknames == {"al": address(0), "bob": address(1)}
+
+    def test_from_snapshot_round_trips_through_storage(self, store):
+        s = fresh_state()
+        self._claim(s, 0, "Al")
+        store.save_state(s)
+        restored = state_mod.State.from_snapshot(*store.load_state())
+        assert restored.nicknames == {"al": address(0)}
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +318,7 @@ class TestSaveBlockAndState:
         s.credit(address(0), 42_000)
         store.save_block_and_state(b1, s)
         assert store.chain_height() == 1
-        balances, _, _, _bp = store.load_state()
+        balances, _, _, _bp, _nn = store.load_state()
         assert balances[address(0)] == 42_000
 
 
@@ -306,7 +342,7 @@ class TestReplaceChainAndState:
         store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=s2)
 
         assert store.chain_height() == 1
-        balances, _, _, _bp = store.load_state()
+        balances, _, _, _bp, _nn = store.load_state()
         assert balances[address(0)] == 9999
 
 
@@ -561,7 +597,7 @@ class TestIncrementalStateWrites:
         blk = make_block(1, genesis()["hash"], [], 0)
         store.save_block_and_state(blk, st)
 
-        balances, _nonces, _tm, _bp = store.load_state()
+        balances, _nonces, _tm, _bp, _nn = store.load_state()
         assert balances["addr0"] == 105
         assert balances["addr7"] == 100      # untouched rows survive
         assert len(balances) == 50
@@ -576,7 +612,7 @@ class TestIncrementalStateWrites:
         blk = make_block(1, genesis()["hash"], [], 0)
         store.save_block_and_state(blk, st)
 
-        balances, _nonces, _tm, _bp = store.load_state()
+        balances, _nonces, _tm, _bp, _nn = store.load_state()
         assert "alice" not in balances
         assert balances["bob"] == 100
 
@@ -590,7 +626,7 @@ class TestIncrementalStateWrites:
         blk = make_block(1, genesis()["hash"], [], 0)
         store.save_block_and_state(blk, st)
 
-        balances, nonces, _tm, _bp = store.load_state()
+        balances, nonces, _tm, _bp, _nn = store.load_state()
         assert balances["alice"] == 0
         assert nonces["alice"] == 4
 
@@ -626,7 +662,7 @@ class TestIncrementalStateWrites:
         blk = make_block(1, genesis()["hash"], [], 0)
         store.replace_chain_and_state(1, [blk], replacement)
 
-        balances, _nonces, _tm, _bp = store.load_state()
+        balances, _nonces, _tm, _bp, _nn = store.load_state()
         assert balances == {"carol": 7}
 
     def test_total_minted_is_written_even_with_nothing_touched(self, store):
@@ -637,5 +673,5 @@ class TestIncrementalStateWrites:
 
         blk = make_block(1, genesis()["hash"], [], 0)
         store.save_block_and_state(blk, st)
-        _balances, _nonces, total_minted, _bp = store.load_state()
+        _balances, _nonces, total_minted, _bp, _nn = store.load_state()
         assert total_minted == 500

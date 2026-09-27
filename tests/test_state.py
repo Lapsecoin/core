@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import state as state_mod
+import tx as tx_mod
 from state import compute_reward
 from params import (
     EMISSION_DECAY_NUMERATOR, EMISSION_DECAY_DENOMINATOR, SUPPLY_CAP, TICKS_PER_LAPSE
@@ -361,3 +362,86 @@ class TestDirtyTracking:
         probe = s.snapshot()
         probe.mark_persisted()
         assert s.dirty_addresses() == frozenset({"alice"})
+
+
+# ---------------------------------------------------------------------------
+# 6. Nickname registry (consensus state, not a display cache -- see
+#    tx.py's _check_nickname_available and this class's own docstring)
+# ---------------------------------------------------------------------------
+
+def _board_post(sender_index, s, nick, recipient_index=None):
+    recipient_index = recipient_index if recipient_index is not None else (sender_index + 1) % 3
+    memo = tx_mod.BOARD_MEMO_TAG + tx_mod.build_board_body("hi", icon=0, nick=nick)
+    return make_tx(sender_index, recipient_index, 1, s, fee=1, memo=memo)
+
+
+class TestNicknameRegistry:
+    def test_apply_tx_registers_a_new_claim(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        s.apply_tx(_board_post(0, s, "Al"))
+        assert s.nicknames == {"al": address(0)}
+
+    def test_registration_is_case_insensitive(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        s.apply_tx(_board_post(0, s, "AL"))
+        assert "al" in s.nicknames
+
+    def test_a_post_with_no_nickname_registers_nothing(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, 1, s, fee=1, memo=tx_mod.BOARD_MEMO_TAG + "just a message")
+        s.apply_tx(t)
+        assert s.nicknames == {}
+
+    def test_re_applying_the_same_owner_does_not_error_or_change_owner(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        s.apply_tx(_board_post(0, s, "Al"))
+        s.apply_tx(_board_post(0, s, "Al"))
+        assert s.nicknames["al"] == address(0)
+
+    def test_snapshot_carries_nicknames(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        s.apply_tx(_board_post(0, s, "Al"))
+        snap = s.snapshot()
+        assert snap.nicknames == {"al": address(0)}
+        snap.nicknames["bob"] = "someone-else"
+        assert "bob" not in s.nicknames  # independent copy, not a shared reference
+
+    def test_from_snapshot_restores_nicknames(self):
+        s = fresh_state()
+        seed_balance(s, 0, 10.0)
+        s.apply_tx(_board_post(0, s, "Al"))
+        s2 = state_mod.State.from_snapshot(
+            s.all_balances(), s.all_nonces(), s.total_minted,
+            s.total_board_posts, s.nicknames)
+        assert s2.nicknames == {"al": address(0)}
+
+    def test_from_snapshot_defaults_to_an_empty_registry(self):
+        s2 = state_mod.State.from_snapshot({}, {}, 0)
+        assert s2.nicknames == {}
+
+    def test_dirty_nicknames_reports_only_newly_claimed_names(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        s.apply_tx(_board_post(0, s, "Al"))
+        assert s.dirty_nicknames() == {"al": address(0)}
+
+    def test_re_claiming_your_own_name_is_not_reported_as_dirty_again(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        s.apply_tx(_board_post(0, s, "Al"))
+        s.mark_persisted()
+        s.apply_tx(_board_post(0, s, "Al"))
+        assert s.dirty_nicknames() == {}
+
+    def test_marking_persisted_clears_dirty_nicknames(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        s.apply_tx(_board_post(0, s, "Al"))
+        s.mark_persisted()
+        assert s.dirty_nicknames() == {}
+        assert s.nicknames == {"al": address(0)}  # the registry itself is untouched
