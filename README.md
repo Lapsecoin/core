@@ -149,7 +149,6 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 `APPIMAGE` is set by the AppImage runtime itself and is not normally configured by users. `LAPSECOIN_REPO_RAW` is used only by the source installer to override where it downloads `requirements.txt` from.
 
-**Upgrading from 0.6.2 or earlier with the privacy setting on?** That version created a second key file, `lapsecoin_key.json.privacy`, and advertised its address for peers to pay. Nodes no longer advertise an address at all, so nothing creates or uses that file any more, but yours still exists and may hold what peers already sent it. **Keep it, and back it up.** It is an ordinary key file with its own salt, so the same passphrase opens it on its own whenever you want those funds.
 </details>
 
 <details>
