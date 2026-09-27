@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mempool-page">
+  <div class="mempool-heading">
+    <div>
+      <h2>Pending transactions</h2>
+      <p class="stat-sub">Transactions waiting for inclusion in a block.</p>
+    </div>
+    <div class="mempool-count" id="mempool-count">{{ transactions|length }}</div>
+  </div>
+  <div class="mempool-table-wrap">
+    <table class="stacked mempool-table">
+      <thead>
+        <tr><th>Hash</th><th>From</th><th>Fee</th><th>Outputs</th><th>Status</th></tr>
+      </thead>
+      <tbody id="mempool-rows">
+        {% include "mempool_rows.html" %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<style>
+  .mempool-page { font-size: 16px; }
+  .mempool-heading { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; margin-bottom:.5rem; }
+  .mempool-heading h2 { margin-bottom:0; }
+  .mempool-count { font-family:var(--mono); font-size:1.15rem; font-weight:bold; color:var(--accent); }
+  .mempool-table-wrap { max-height:calc(100vh - 14rem); overflow:auto; border:1px solid var(--rule); }
+  .mempool-table { margin:0; }
+  .mempool-table td, .mempool-table th { padding:.35rem .55rem; }
+  .mempool-status { color:var(--live); font-weight:bold; white-space:nowrap; }
+  @media (max-width:640px) {
+    .mempool-table-wrap { max-height:none; border-left:0; border-right:0; }
+    .mempool-table td, .mempool-table th { padding:.45rem .35rem; }
+  }
+</style>
+<script>
+(function () {
+  const rows = document.getElementById("mempool-rows");
+  const count = document.getElementById("mempool-count");
+  let pollInFlight = false;
+
+  async function refresh() {
+    if (pollInFlight) return;
+    pollInFlight = true;
+    try {
+      const res = await fetch("/api/mempool/fragment", {cache: "no-store"});
+      if (!res.ok) throw new Error("bad status " + res.status);
+      const data = await res.json();
+      rows.innerHTML = data.html;
+      count.textContent = data.size;
+    } catch (e) {
+      // Keep the last good queue visible during a temporary network failure.
+    } finally {
+      pollInFlight = false;
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 5000);
+})();
+</script>
+{% endblock %}

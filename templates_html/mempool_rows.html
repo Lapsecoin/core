@@ -1,0 +1,13 @@
+{% if transactions %}
+  {% for row in transactions %}
+  <tr>
+    <td data-label="Hash" class="hash-short"><a href="/explorer/tx/{{ row.hash }}">{{ row.hash[:20] }}&hellip;</a></td>
+    <td data-label="From" class="hash-short">{{ row.tx.from[:24] }}&hellip;</td>
+    <td data-label="Fee">{{ row.tx.fee }}</td>
+    <td data-label="Outputs">{{ row.tx.outputs|length }}</td>
+    <td data-label="Status" class="mempool-status">pending</td>
+  </tr>
+  {% endfor %}
+{% else %}
+  <tr><td colspan="5" style="color:var(--muted);text-align:center">No pending transactions</td></tr>
+{% endif %}
