@@ -2041,6 +2041,26 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                                       f"need {fmt_balance(required)}."})
         return jsonify({"fee": fee, "floor": floor, "ok": True, "reason": ""})
 
+    @app.route("/api/board/vote_fee", endpoint="api_board_vote_fee")
+    def api_board_vote_fee():
+        """What a vote on ref would actually cost right now: real coins
+        leave the wallet for this (the same 1-tick burn a board post
+        makes, plus whatever fee clears the next block), so the compose
+        UI shows it before the passphrase prompt, not after.
+        """
+        ref = (request.args.get("ref") or "")[:REPLY_REF_LEN]
+        tag = VOTE_UP_TAG if request.args.get("dir") == "+" else VOTE_DOWN_TAG
+        memo = tag + ref
+        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
+        fee = _auto_fee(node, outputs, memo=memo)
+        required = BOARD_POST_AMOUNT + fee
+        balance = node.view.state.get_balance(node.addr)
+        if required > balance:
+            return jsonify({"fee": fee, "ok": False,
+                            "reason": f"Insufficient balance: have {fmt_balance(balance)}, "
+                                      f"need {fmt_balance(required)}."})
+        return jsonify({"fee": fee, "ok": True, "reason": ""})
+
     @app.route("/board", methods=["POST"], endpoint="board_post")
     def board_post():
         page = request.args.get("page", 1, type=int) or 1

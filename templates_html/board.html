@@ -11,53 +11,49 @@
 
 <div class="card">
   <div class="card-title">{{ post_count }} post{{ "s" if post_count != 1 }}</div>
-  <div class="board" id="board-feed">
+  <div class="board" id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
     {% if rows %}
       {% for row in rows %}
       {% set mine = row.tx.from == own_addr %}
-      <div class="board-row {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}">
-        <div class="board-head">
-          <span class="board-icon" aria-hidden="true">{{ row.icon }}</span>
-          <a href="/address?addr={{ row.tx.from }}" class="board-name {{ 'hash-short' if not row.nick }}">{{ row.nick or row.tx.from }}</a>
-          <span class="board-ts">
-            {% if row.pending %}
-              <span title="Submitted, not yet in a block">pending&hellip;</span>
-            {% else %}
-              <a href="/explorer/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
+      {% set score = row.up - row.down %}
+      <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}">
+        <div class="rc-info">
+          <span class="rc-avatar" aria-hidden="true">{{ row.icon }}</span>
+          <a href="/address?addr={{ row.tx.from }}" class="rc-username {{ 'hash-short' if not row.nick }}">{{ row.nick or row.tx.from }}</a>
+          {% if row.pending %}
+            <span class="rc-time" title="Submitted, not yet in a block">pending&hellip;</span>
+          {% else %}
+            <a class="rc-time" href="/explorer/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
+          {% endif %}
+          {# Vote widget: markup/CSS/icon ported from Remark42's own
+             CommentVotes component (comment-votes.tsx/.module.css,
+             icons/arrow.tsx) rather than written fresh -- only the
+             color tokens are remapped, onto this project's existing
+             theme variables instead of forking in Remark42's own palette. #}
+          <span class="rc-vote-root">
+            {% if is_private %}
+            <button type="button" class="rc-voteButton rc-downVoteButton" data-ref="{{ row.ref6 }}" data-dir="-" title="Vote down">
+              <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            {% endif %}
+            <span class="rc-votes {{ 'rc-votesPositive' if score > 0 else ('rc-votesNegative' if score < 0 else '') }}" title="Votes score">{{ score }}</span>
+            {% if is_private %}
+            <button type="button" class="rc-voteButton rc-upVoteButton rc-upVoteIcon" data-ref="{{ row.ref6 }}" data-dir="+" title="Vote up">
+              <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             {% endif %}
           </span>
         </div>
-        {% if row.reply_ref %}
-        <a class="board-reply-quote" href="#post-{{ row.reply_ref }}">
-          {% if row.reply_from %}replying to {{ row.reply_from[:14] }}&hellip;: &ldquo;{{ row.reply_snippet }}&rdquo;
-          {% else %}replying to an earlier post{% endif %}
-        </a>
-        {% endif %}
-        <div class="board-text">{{ render_board_text(row.text) }}</div>
-        <div class="board-foot">
-          <span class="board-votes">
-            {% if is_private %}
-            <form method="POST" action="/board/vote?page={{ page }}" class="board-vote-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="ref" value="{{ row.ref6 }}">
-              <input type="hidden" name="dir" value="+">
-              <input type="hidden" name="passphrase" class="board-vote-pass">
-              <button type="submit" class="board-vote-btn" title="Upvote">&#9650;</button>
-            </form>
-            {% endif %}
-            <span class="board-vote-count">{{ row.up - row.down }}</span>
-            {% if is_private %}
-            <form method="POST" action="/board/vote?page={{ page }}" class="board-vote-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="ref" value="{{ row.ref6 }}">
-              <input type="hidden" name="dir" value="-">
-              <input type="hidden" name="passphrase" class="board-vote-pass">
-              <button type="submit" class="board-vote-btn" title="Downvote">&#9660;</button>
-            </form>
-            {% endif %}
-          </span>
+        <div class="rc-body">
+          {% if row.reply_ref %}
+          <a class="rc-replyQuote" href="#post-{{ row.reply_ref }}">
+            {% if row.reply_from %}replying to {{ row.reply_from[:14] }}&hellip;: &ldquo;{{ row.reply_snippet }}&rdquo;
+            {% else %}replying to an earlier post{% endif %}
+          </a>
+          {% endif %}
+          <div class="rc-text">{{ render_board_text(row.text) }}</div>
           {% if is_private and not row.pending %}
-          <button type="button" class="board-reply-btn"
+          <button type="button" class="rc-replyBtn"
                   data-ref="{{ row.ref6 }}" data-addr="{{ row.tx.from }}"
                   data-snippet="{{ row.text[:60] }}">Reply</button>
           {% endif %}
@@ -124,41 +120,52 @@
 {% endif %}
 
 <style>
-  /* Compact row layout (one thin header line, full-width text below it)
-     rather than a half-width chat bubble: on a board that's a flat public
-     feed, not a two-party conversation, the bubble metaphor mostly bought
-     wasted margin, not clarity. */
+  /* Row layout (.rc-root/.rc-info/.rc-body/.rc-avatar/.rc-username/.rc-time/
+     .rc-text) and the vote widget (.rc-vote-root/.rc-voteButton/.rc-votes
+     and friends) are ported from Remark42's own comment.module.css and
+     comment-votes.module.css (github.com/umputun/remark42, MIT), not
+     written fresh: same property values, "rc-" prefixed to stay out of
+     this project's own class namespace. Only the color tokens are
+     remapped -- Remark42's var(--colorN)/rgb(var(--color12)) tokens don't
+     exist on this site, so each is pointed at the nearest equivalent this
+     theme already defines, rather than importing a second, disconnected
+     palette alongside the one this site already themes light/dark with.
+     A chat bubble is gone in favor of this thin-header-line-plus-full-width-
+     text shape because the board is a flat public feed, not a two-party
+     conversation -- the bubble mostly bought wasted margin, not clarity. */
   .board { display: flex; flex-direction: column; padding-top: .2rem; }
-  .board-row {
-    padding: .5rem 0; border-bottom: 1px solid var(--rule-lt);
-  }
-  .board-row.mine { background: rgba(179,90,12,.05); }
-  .board-row.pending { opacity: .6; }
-  .board-head { display: flex; align-items: center; gap: .35rem; font-size: .8rem; flex-wrap: wrap; }
-  .board-icon { font-size: 1.1rem; line-height: 1; }
-  .board-name { font-weight: 700; text-decoration: none; }
-  .board-name.hash-short { font-family: var(--mono); font-weight: 400; word-break: break-word; overflow-wrap: anywhere; }
-  .board-ts { margin-left: auto; font-size: .68rem; color: var(--muted); }
-  .board-reply-quote {
+  .rc-root { display: block; padding: 12px 0 8px; font-size: 16px; line-height: 1.4; border-bottom: 1px solid var(--rule-lt); }
+  .rc-root.mine { background: rgba(179,90,12,.05); }
+  .rc-root.pending { opacity: .6; }
+  .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 14px; position: relative; }
+  .rc-avatar { width: 20px; margin-right: 6px; font-size: 1.1rem; line-height: 1; }
+  .rc-username { font-weight: 700; vertical-align: middle; text-decoration: none; }
+  .rc-username:hover { opacity: .75; }
+  .rc-username.hash-short { font-family: var(--mono); font-weight: 400; word-break: break-word; overflow-wrap: anywhere; }
+  .rc-time { margin-left: auto; font-size: .68rem; color: var(--muted); text-decoration: none; }
+  .rc-time:hover { text-decoration: underline; }
+  .rc-body { padding-left: 26px; }
+  .rc-replyQuote {
     display: block; font-size: .75rem; color: var(--muted); text-decoration: none;
     margin: .15rem 0; padding-left: .5rem; border-left: 2px solid var(--rule-lt);
   }
-  .board-reply-quote:hover { color: var(--accent); }
-  .board-text { white-space: pre-wrap; word-break: break-word; line-height: 1.4; margin-top: .15rem; }
-  .board-foot { display: flex; align-items: center; gap: .6rem; margin-top: .25rem; }
-  .board-votes { display: flex; align-items: center; gap: .25rem; font-size: .75rem; }
-  .board-vote-form { display: inline; }
-  .board-vote-btn {
-    background: none; border: none; cursor: pointer; padding: 0 .2rem;
-    font-size: .7rem; color: var(--muted);
-  }
-  .board-vote-btn:hover { color: var(--accent); }
-  .board-vote-count { min-width: 1.2rem; text-align: center; color: var(--muted); }
-  .board-reply-btn {
+  .rc-replyQuote:hover { color: var(--accent); }
+  .rc-text { white-space: pre-wrap; word-break: break-word; margin-bottom: 4px; }
+  .rc-replyBtn {
     background: none; border: none; cursor: pointer; padding: 0;
     font-size: .75rem; color: var(--muted); text-decoration: underline;
   }
-  .board-reply-btn:hover { color: var(--accent); }
+  .rc-replyBtn:hover { color: var(--accent); }
+
+  .rc-vote-root { display: flex; align-items: center; margin-left: .5rem; font-weight: 700; line-height: 16px; user-select: none; }
+  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .4; color: var(--muted); background: none; border: none; cursor: pointer; transition: opacity .15s, color .15s; }
+  .rc-root:hover .rc-voteButton { opacity: 1; }
+  .rc-upVoteButton:hover { color: #259c06; opacity: 1; }
+  .rc-downVoteButton:hover { color: #c00606; opacity: 1; }
+  .rc-votes { margin: 0 4px; padding: 2px 6px; font-weight: 700; border-radius: 3px; min-width: 16px; text-align: center; color: var(--muted); }
+  .rc-votesNegative { color: #c00606; background-color: rgba(204,6,6,.1); }
+  .rc-votesPositive { color: #259c06; background-color: rgba(37,156,6,.1); }
+  .rc-upVoteIcon .rc-voteIcon { transform: rotate(180deg); }
 
   .board-compose {
     border: 1px solid var(--rule-lt); background: var(--paper-2);
@@ -205,7 +212,7 @@
     return new Date(ts * 1000).toLocaleDateString();
   }
 
-  document.querySelectorAll(".board-ts a[data-ts]").forEach(el => {
+  document.querySelectorAll(".rc-time[data-ts]").forEach(el => {
     const ts = parseInt(el.dataset.ts, 10);
     if (ts) el.textContent = fmtTs(ts);
   });
@@ -223,8 +230,38 @@
     });
   }
 
-  document.querySelectorAll(".board-vote-form").forEach(form => {
-    wirePassphrasePrompt(form, form.querySelector(".board-vote-pass"));
+  // A vote spends real coins (the same 1-tick burn a post makes, plus a
+  // congestion fee), so it gets the exact cost quoted right in the same
+  // prompt that asks for the passphrase, not just a bare "Passphrase:"
+  // like a free action would get.
+  const feedEl = document.getElementById("board-feed");
+  const CSRF = feedEl ? feedEl.dataset.csrf : "";
+  const BURN = feedEl ? feedEl.dataset.burn : "0";
+
+  async function handleVoteClick(btn) {
+    const ref = btn.dataset.ref;
+    const dir = btn.dataset.dir;
+    let fee = null;
+    try {
+      const res = await fetch(`/api/board/vote_fee?ref=${encodeURIComponent(ref)}&dir=${encodeURIComponent(dir)}`, {cache: "no-store"});
+      const data = await res.json();
+      if (!data.ok) { window.alert(data.reason || "Can't vote."); return; }
+      fee = data.fee;
+    } catch (e) {
+      // Fee lookup failed; still lets the vote through with a generic
+      // prompt rather than blocking on a courtesy estimate.
+    }
+    const label = fee !== null
+      ? `This vote burns ${BURN} tick + ~${fee} tick fee (real coins). Passphrase:`
+      : "Passphrase:";
+    const passphrase = window.prompt(label);
+    if (passphrase === null) return;  // cancelled, nothing sent
+    const body = new URLSearchParams({csrf_token: CSRF, ref, dir, passphrase});
+    await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
+    location.reload();  // same "post is its own confirmation" pattern as composing
+  }
+  document.querySelectorAll(".rc-voteButton[data-ref]").forEach(btn => {
+    btn.addEventListener("click", () => handleVoteClick(btn));
   });
 
   const composeForm = document.getElementById("board-compose");
@@ -279,7 +316,7 @@
     });
     nickInput.addEventListener("input", markProfileDirty);
 
-    document.querySelectorAll(".board-reply-btn").forEach(btn => {
+    document.querySelectorAll(".rc-replyBtn").forEach(btn => {
       btn.addEventListener("click", () => {
         replyRefInput.value = btn.dataset.ref;
         replyText.textContent = "replying to " + btn.dataset.addr.slice(0, 14) + "…: “" + btn.dataset.snippet + "”";
