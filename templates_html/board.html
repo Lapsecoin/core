@@ -27,18 +27,22 @@
           {% endif %}
           {# Vote widget: markup/CSS/icon ported from Remark42's own
              CommentVotes component (comment-votes.tsx/.module.css,
-             icons/arrow.tsx) rather than written fresh -- only the
-             color tokens are remapped, onto this project's existing
-             theme variables instead of forking in Remark42's own palette. #}
+             icons/arrow.tsx), full identity intact -- same class names,
+             same color tokens (var(--colorN)), same disabled/active
+             states once already voted, not a fresh rebuild. #}
           <span class="rc-vote-root">
             {% if is_private %}
-            <button type="button" class="rc-voteButton rc-downVoteButton" data-ref="{{ row.ref6 }}" data-dir="-" title="Vote down">
+            <button type="button" class="rc-voteButton rc-downVoteButton {{ 'rc-downVoteButtonActive' if row.my_vote == 'down' }}"
+                    data-ref="{{ row.ref6 }}" data-dir="-" title="Vote down"
+                    {{ 'disabled' if row.my_vote == 'down' }}>
               <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             {% endif %}
             <span class="rc-votes {{ 'rc-votesPositive' if score > 0 else ('rc-votesNegative' if score < 0 else '') }}" title="Votes score">{{ score }}</span>
             {% if is_private %}
-            <button type="button" class="rc-voteButton rc-upVoteButton rc-upVoteIcon" data-ref="{{ row.ref6 }}" data-dir="+" title="Vote up">
+            <button type="button" class="rc-voteButton rc-upVoteButton rc-upVoteIcon {{ 'rc-upVoteButtonActive' if row.my_vote == 'up' }}"
+                    data-ref="{{ row.ref6 }}" data-dir="+" title="Vote up"
+                    {{ 'disabled' if row.my_vote == 'up' }}>
               <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             {% endif %}
@@ -90,9 +94,23 @@
         {% endfor %}
       </div>
 
+      {# Toolbar ported unmodified from GitHub's own markdown-toolbar-element
+         (github/markdown-toolbar-element, MIT -- see vendor/README.md),
+         the exact same custom element Remark42's own compose box wires up
+         to its textarea. Only header/quote/list/image are left out: this
+         board's own render_board_text only ever understands bold, italic,
+         code and a bare autolinked URL, so a button for markdown this
+         page can't render would be wiring a lie, not "everything". #}
+      <markdown-toolbar for="board-message" class="rc-toolbar">
+        <div class="rc-toolbar-group">
+          <md-bold class="rc-toolbar-item" title="Bold"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M1 2h3.83c2.48 0 4.3.75 4.3 2.95 0 1.14-.63 2.23-1.67 2.61v.06c1.33.3 2.3 1.23 2.3 2.86 0 2.39-1.97 3.52-4.61 3.52H1V2zm3.66 4.95c1.67 0 2.38-.66 2.38-1.69 0-1.17-.78-1.61-2.34-1.61H3.13v3.3h1.53zm.27 5.39c1.77 0 2.75-.64 2.75-1.98 0-1.27-.95-1.81-2.75-1.81h-1.8v3.8h1.8v-.01z"/></svg></md-bold>
+          <md-italic class="rc-toolbar-item" title="Italic"><svg viewBox="0 0 6 16" width="6" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M2.81 5h1.98L3 14H1l1.81-9zm.36-2.7c0-.7.58-1.3 1.33-1.3.56 0 1.13.38 1.13 1.03 0 .75-.59 1.3-1.33 1.3-.58 0-1.13-.38-1.13-1.03z"/></svg></md-italic>
+          <md-code class="rc-toolbar-item" title="Code"><svg viewBox="0 0 14 16" width="14" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M9.5 3L8 4.5 11.5 8 8 11.5 9.5 13 14 8 9.5 3zm-5 0L0 8l4.5 5L6 11.5 2.5 8 6 4.5 4.5 3z"/></svg></md-code>
+        </div>
+      </markdown-toolbar>
       <div class="board-compose-row">
-        <input type="text" name="message" id="board-message" value="{{ message_value }}"
-               placeholder="Say something" autocomplete="off" style="flex:1">
+        <textarea name="message" id="board-message" rows="1"
+               placeholder="Say something" autocomplete="off" style="flex:1">{{ message_value }}</textarea>
         <button type="submit" id="board-send">Send</button>
       </div>
       <div class="board-compose-row board-compose-sub">
@@ -102,6 +120,7 @@
         <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
       </div>
     </form>
+    <script type="module" src="/vendor/markdown-toolbar-element.js"></script>
     {% endif %}
   </div>
 </div>
@@ -120,52 +139,69 @@
 {% endif %}
 
 <style>
+  /* Remark42's own color tokens (custom-properties.css, light theme --
+     this site has no dark-mode toggle to key a .dark variant off of),
+     used verbatim so the ported components below keep their real,
+     un-remapped identity rather than this site's serif/paper palette.
+     Full fit-to-site pass comes after this is working, not before. */
+  #board-feed, .board-compose {
+    --color37: #586069; --color9: #0aa; --color10: #777; --color11: #969696;
+    --color13: #888; --color16: #e2e8f0; --color12: 37, 158, 6;
+    --color30: 204, 6, 6; --color35: #d1d5db; --color20: #ddd;
+  }
   /* Row layout (.rc-root/.rc-info/.rc-body/.rc-avatar/.rc-username/.rc-time/
-     .rc-text) and the vote widget (.rc-vote-root/.rc-voteButton/.rc-votes
-     and friends) are ported from Remark42's own comment.module.css and
-     comment-votes.module.css (github.com/umputun/remark42, MIT), not
-     written fresh: same property values, "rc-" prefixed to stay out of
-     this project's own class namespace. Only the color tokens are
-     remapped -- Remark42's var(--colorN)/rgb(var(--color12)) tokens don't
-     exist on this site, so each is pointed at the nearest equivalent this
-     theme already defines, rather than importing a second, disconnected
-     palette alongside the one this site already themes light/dark with.
+     .rc-text), the vote widget (.rc-vote-root/.rc-voteButton/.rc-votes and
+     friends) and the compose toolbar (.rc-toolbar*) are ported from
+     Remark42's own comment.module.css, comment-votes.module.css and
+     markdown-toolbar.module.css (github.com/umputun/remark42, MIT):
+     same class shape, same property values, same color tokens, "rc-"
+     prefixed only to stay out of this project's own class namespace.
      A chat bubble is gone in favor of this thin-header-line-plus-full-width-
      text shape because the board is a flat public feed, not a two-party
      conversation -- the bubble mostly bought wasted margin, not clarity. */
   .board { display: flex; flex-direction: column; padding-top: .2rem; }
-  .rc-root { display: block; padding: 12px 0 8px; font-size: 16px; line-height: 1.4; border-bottom: 1px solid var(--rule-lt); }
+  .rc-root { display: block; padding: 12px 0 8px; font-size: 16px; line-height: 1.4; border-bottom: 1px solid var(--color16); }
   .rc-root.mine { background: rgba(179,90,12,.05); }
   .rc-root.pending { opacity: .6; }
   .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 14px; position: relative; }
   .rc-avatar { width: 20px; margin-right: 6px; font-size: 1.1rem; line-height: 1; }
-  .rc-username { font-weight: 700; vertical-align: middle; text-decoration: none; }
+  .rc-username { font-weight: 700; vertical-align: middle; text-decoration: none; color: var(--color10); }
   .rc-username:hover { opacity: .75; }
   .rc-username.hash-short { font-family: var(--mono); font-weight: 400; word-break: break-word; overflow-wrap: anywhere; }
-  .rc-time { margin-left: auto; font-size: .68rem; color: var(--muted); text-decoration: none; }
-  .rc-time:hover { text-decoration: underline; }
+  .rc-time { margin-left: auto; font-size: .68rem; color: var(--color11); text-decoration: none; }
+  .rc-time:hover { color: var(--color10); text-decoration: underline; }
   .rc-body { padding-left: 26px; }
   .rc-replyQuote {
-    display: block; font-size: .75rem; color: var(--muted); text-decoration: none;
-    margin: .15rem 0; padding-left: .5rem; border-left: 2px solid var(--rule-lt);
+    display: block; font-size: .75rem; color: var(--color11); text-decoration: none;
+    margin: .15rem 0; padding-left: .5rem; border-left: 2px solid var(--color16);
   }
-  .rc-replyQuote:hover { color: var(--accent); }
+  .rc-replyQuote:hover { color: var(--color9); }
   .rc-text { white-space: pre-wrap; word-break: break-word; margin-bottom: 4px; }
   .rc-replyBtn {
     background: none; border: none; cursor: pointer; padding: 0;
-    font-size: .75rem; color: var(--muted); text-decoration: underline;
+    font-size: .75rem; color: var(--color11); text-decoration: underline;
   }
-  .rc-replyBtn:hover { color: var(--accent); }
+  .rc-replyBtn:hover { color: var(--color9); }
 
   .rc-vote-root { display: flex; align-items: center; margin-left: .5rem; font-weight: 700; line-height: 16px; user-select: none; }
-  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .4; color: var(--muted); background: none; border: none; cursor: pointer; transition: opacity .15s, color .15s; }
+  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .4; color: var(--color13); background: none; border: none; cursor: pointer; transition: opacity .15s, color .15s; }
+  .rc-voteButton:disabled { cursor: default; }
   .rc-root:hover .rc-voteButton { opacity: 1; }
-  .rc-upVoteButton:hover { color: #259c06; opacity: 1; }
-  .rc-downVoteButton:hover { color: #c00606; opacity: 1; }
-  .rc-votes { margin: 0 4px; padding: 2px 6px; font-weight: 700; border-radius: 3px; min-width: 16px; text-align: center; color: var(--muted); }
-  .rc-votesNegative { color: #c00606; background-color: rgba(204,6,6,.1); }
-  .rc-votesPositive { color: #259c06; background-color: rgba(37,156,6,.1); }
+  .rc-upVoteButton:hover, .rc-upVoteButtonActive { color: rgb(var(--color12)); opacity: 1; }
+  .rc-downVoteButton:hover, .rc-downVoteButtonActive { color: rgb(var(--color30)); opacity: 1; }
+  .rc-votes { margin: 0 4px; padding: 2px 6px; font-weight: 700; border-radius: 3px; min-width: 16px; text-align: center; color: var(--color11); }
+  .rc-votesNegative { color: rgb(var(--color30)); background-color: rgba(var(--color30), .1); }
+  .rc-votesPositive { color: rgb(var(--color12)); background-color: rgba(var(--color12), .1); }
   .rc-upVoteIcon .rc-voteIcon { transform: rotate(180deg); }
+
+  .rc-toolbar { display: block; text-align: right; margin-bottom: .25rem; }
+  .rc-toolbar-group { display: inline-block; }
+  .rc-toolbar-item {
+    background: none; border: 0; color: var(--color37); display: inline-flex;
+    height: 24px; width: 24px; justify-content: center; align-items: center; cursor: pointer;
+  }
+  .rc-toolbar-item:hover { color: var(--color9); }
+  .rc-toolbar-item svg { fill: currentColor; }
 
   .board-compose {
     border: 1px solid var(--rule-lt); background: var(--paper-2);
@@ -175,6 +211,10 @@
   .board-compose-row + .board-compose-row { margin-top: .4rem; }
   .board-compose-sub { font-size: .82rem; }
   .board-compose input[type="text"] { padding: .35rem .5rem; }
+  #board-message {
+    padding: .35rem .5rem; font-family: inherit; font-size: 1em; resize: none;
+    overflow: hidden; max-height: 8rem; overflow-y: auto;
+  }
   #board-send { flex: 0 0 auto; padding: .35rem 1rem; }
   .board-icon-btn {
     font-size: 1.2rem; line-height: 1; background: none; border: 1px solid var(--rule-lt);
@@ -395,8 +435,16 @@
         refreshFee(bytes);
       }
     }
-    msgInput.addEventListener("input", refreshCounter);
+    // Grows with content instead of scrolling internally, the same
+    // behaviour Remark42's own compose box gets from its text-expander
+    // element -- a plain textarea has no auto-resize of its own.
+    function autoGrow() {
+      msgInput.style.height = "auto";
+      msgInput.style.height = msgInput.scrollHeight + "px";
+    }
+    msgInput.addEventListener("input", () => { refreshCounter(); autoGrow(); });
     refreshCounter();
+    autoGrow();
   }
 
   // Only page 1 polls for new posts landing; older pages are history,
