@@ -418,11 +418,21 @@ def _board_profiles_and_votes(chain):
 
     votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
     (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain.
+    One vote per (address, target) survives, not one per transaction: a
+    vote isn't a repeatable action that piles up, it's a single choice
+    that can change your mind, exactly like Remark42's own model (a vote
+    there is one stored value per user per comment, overwritten by a
+    later click, never summed). Walking tip-first and keeping only the
+    first vote seen per (address, target) pair gets that same "latest
+    replaces, doesn't add" semantics for free, the same trick profiles
+    above already uses for "latest icon/nickname wins".
+
     Confirmed votes only; a pending vote in the mempool isn't counted
     until it lands, same as a pending board post isn't in post_count.
     """
     profiles = {}
     votes = {}
+    voted = set()  # (address, target ref) already counted, most recent first
     for blk in reversed(chain):
         for t in reversed(blk.get("transactions", [])):
             memo = t.get("memo") or ""
@@ -437,8 +447,14 @@ def _board_profiles_and_votes(chain):
                 up = memo.startswith(VOTE_UP_TAG)
                 tag = VOTE_UP_TAG if up else VOTE_DOWN_TAG
                 ref = memo[len(tag):len(tag) + REPLY_REF_LEN]
-                tally = votes.setdefault(ref, {"up": 0, "down": 0})
+                voter = t.get("from")
+                key = (voter, ref)
+                if key in voted:
+                    continue
+                voted.add(key)
+                tally = votes.setdefault(ref, {"up": 0, "down": 0, "by": {}})
                 tally["up" if up else "down"] += 1
+                tally["by"][voter] = "up" if up else "down"
     return profiles, votes
 
 
@@ -969,12 +985,14 @@ def _board_pending(mempool):
     return rows
 
 
-def _enrich_board_row(row, profiles, votes, hash6_index):
+def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None):
     """Attach everything board.html actually renders for one row -- the
     poster's current icon/nickname (looked up live, see
-    _board_profiles_and_votes), this post's own vote tally, and a reply
-    preview if it has one -- so the template only ever reads plain fields
-    off row, never re-parses a memo itself.
+    _board_profiles_and_votes), this post's own vote tally, the viewer's
+    own prior vote if any (so the matching button can show the same
+    already-voted, disabled state Remark42's own CommentVotes does), and
+    a reply preview if it has one -- so the template only ever reads
+    plain fields off row, never re-parses a memo itself.
     """
     memo = row["tx"].get("memo") or ""
     icon, _nick, reply_ref, text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
@@ -983,8 +1001,9 @@ def _enrich_board_row(row, profiles, votes, hash6_index):
     row["nick"] = prof.get("nick") if prof else None
     row["text"] = text
     row["ref6"] = row["hash"][:REPLY_REF_LEN]
-    tally = votes.get(row["ref6"], {"up": 0, "down": 0})
+    tally = votes.get(row["ref6"], {"up": 0, "down": 0, "by": {}})
     row["up"], row["down"] = tally["up"], tally["down"]
+    row["my_vote"] = tally.get("by", {}).get(own_addr)
     row["reply_ref"] = reply_ref
     row["reply_from"] = row["reply_snippet"] = None
     if reply_ref:
@@ -1035,7 +1054,7 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
     for row in pending_rows:
         hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
     for row in page_rows:
-        _enrich_board_row(row, profiles, votes, hash6_index)
+        _enrich_board_row(row, profiles, votes, hash6_index, own_addr)
 
     own_profile = profiles.get(own_addr)
     own_icon_idx = own_profile["icon"] if own_profile else None
@@ -1133,6 +1152,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # favicon above: a node's own UI shouldn't depend on a
         # third-party host being reachable. See vendor/README.md.
         return send_file(os.path.join(_base_dir(), "vendor", "force-graph.min.js"),
+                         mimetype="application/javascript", max_age=86400)
+
+    @app.route("/vendor/markdown-toolbar-element.js", endpoint=pfx+"vendor_markdown_toolbar")
+    def vendor_markdown_toolbar():
+        # Same reasoning as vendor_force_graph above. See vendor/README.md.
+        return send_file(os.path.join(_base_dir(), "vendor", "markdown-toolbar-element.js"),
                          mimetype="application/javascript", max_age=86400)
 
     @app.route("/lapsecoin.png", endpoint=pfx+"icon_png")
