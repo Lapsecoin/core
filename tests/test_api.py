@@ -642,6 +642,43 @@ class TestAddressLookupBurnAlias:
         assert resp.status_code == 200  # rendered directly, no redirect
 
 
+class TestAddressLookupNicknameRedirect:
+    """A board nickname typed into the address lookup redirects to
+    whichever address actually owns it -- same pattern, same reasoning,
+    as the "burn" alias above, just resolved via _nickname_owned_by
+    instead of a fixed constant."""
+
+    def _client_with_nickname(self, nick="Al", owner_index=0):
+        import tx as tx_mod
+        node, cs = fresh()
+        t = {"from": address(owner_index), "nonce": 1, "fee": 1,
+             "outputs": [{"to": "1" * 40, "amount": 1}],
+             "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("hi", icon=0, nick=nick)}
+        cs.chain.append({"height": len(cs.chain), "timestamp": 1000,
+                         "transactions": [t], "hash": "h0"})
+        node.storage = SimpleNamespace(get_tx_heights_for_addr=lambda addr: [])
+        pool = peerpool_mod.PeerPool()
+        return api.create_private_app(node, pool).test_client()
+
+    def test_nickname_redirects_to_its_owner(self):
+        client = self._client_with_nickname(nick="Al", owner_index=0)
+        resp = client.get("/address?addr=Al", follow_redirects=False)
+        assert resp.status_code == 302
+        assert f"addr={address(0)}" in resp.headers["Location"]
+
+    def test_lookup_is_case_insensitive(self):
+        client = self._client_with_nickname(nick="Al", owner_index=0)
+        resp = client.get("/address?addr=AL", follow_redirects=False)
+        assert resp.status_code == 302
+        assert f"addr={address(0)}" in resp.headers["Location"]
+
+    def test_unclaimed_name_is_not_redirected(self):
+        client = self._client_with_nickname(nick="Al", owner_index=0)
+        resp = client.get("/address?addr=Nobody", follow_redirects=False)
+        assert resp.status_code == 200
+        assert "Invalid address format" in resp.get_data(as_text=True)
+
+
 class TestBoardPage:
     """Chat-style layout: oldest post at the top, newest (and anything
     still pending in the mempool) at the bottom right above the compose
@@ -834,6 +871,35 @@ class TestBoardProfilesAndVotes:
         _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain)
         assert votes["abcdef"]["up"] == 2
 
+    def test_nickname_is_first_come_first_served(self):
+        """A later address claiming an already-taken name (impersonation)
+        gets its icon but not the name -- see _board_profiles_and_votes'
+        own docstring on why first-claim-wins needs no consensus rule."""
+        cs = self._chain_with(
+            (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
+            (1, self.TAG + api.build_board_body("hey", icon=2, nick="Al")),
+        )
+        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain)
+        assert profiles[address(0)] == {"icon": 1, "nick": "Al"}
+        assert profiles[address(1)] == {"icon": 2, "nick": None}
+
+    def test_nickname_ownership_is_case_insensitive(self):
+        cs = self._chain_with(
+            (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
+            (1, self.TAG + api.build_board_body("hey", icon=2, nick="al")),
+        )
+        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain)
+        assert profiles[address(1)]["nick"] is None
+
+    def test_nickname_owned_by_reports_the_first_claimant(self):
+        cs = self._chain_with(
+            (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
+        )
+        assert api._nickname_owned_by(cs.chain, "AL") == address(0)
+        assert api._nickname_owned_by(cs.chain, "Bob") is None
+        assert api._nickname_owned_by(cs.chain, "") is None
+
+
     def test_vote_tag_is_not_a_board_post(self):
         """Confirms voting never shares the board's fee-floor staircase:
         is_board_post only matches BOARD_MEMO_TAG, a different tag family
@@ -853,6 +919,37 @@ class TestBoardProfilesAndVotes:
         cs = self._chain_with((0, api.VOTE_UP_TAG + "abcdef"))
         _profiles, _votes, pending_refs = api._board_profiles_and_votes(cs.chain)
         assert pending_refs == set()
+
+
+class TestRenderBoardText:
+    """render_board_text's markdown-like subset, including the quote and
+    link support added alongside the toolbar buttons for them (see
+    board.html): both are only ever rendered from already-escaped text,
+    so a post's own content can never inject a real tag of its own."""
+
+    def test_quote_line_becomes_a_blockquote(self):
+        html = str(api.render_board_text("intro\n> quoted\nafter"))
+        assert "<blockquote>quoted</blockquote>" in html
+
+    def test_non_quote_lines_are_not_touched(self):
+        html = str(api.render_board_text("a > b"))
+        assert "<blockquote>" not in html
+
+    def test_bracket_link_renders_as_anchor_with_given_text(self):
+        html = str(api.render_board_text("see [our site](https://example.com) now"))
+        assert '<a href="https://example.com" rel="nofollow noopener noreferrer" target="_blank">our site</a>' in html
+
+    def test_bracket_link_does_not_get_double_wrapped_by_autolink(self):
+        """The autolink pass runs after link syntax is stashed behind a
+        placeholder specifically so it never sees the raw URL sitting in
+        the href it's about to render -- this pins that ordering."""
+        html = str(api.render_board_text("[x](https://example.com)"))
+        assert html.count("<a ") == 1
+
+    def test_bare_url_still_autolinks_without_bracket_syntax(self):
+        html = str(api.render_board_text("see https://example.com now"))
+        assert '<a href="https://example.com"' in html
+        assert html.count("<a ") == 1
 
 
 class TestBoardPageRendersProfilesRepliesAndVotes:
@@ -914,6 +1011,15 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
         client, _node = self._client(extra_txs=[vote_tx])
         html = client.get("/board").get_data(as_text=True)
         assert 'class="rc-votes rc-votesPositive ' in html
+
+    def test_preview_endpoint_renders_through_the_same_function_as_posts(self):
+        """No signing needed here (unlike board_post/board_vote): preview
+        never touches the chain, mempool or a balance, it just renders
+        text, so this one write-side-looking route IS testable over
+        real HTTP."""
+        client, _node = self._client()
+        resp = client.post("/api/board/preview", data={"text": "**bold** and `code`"})
+        assert resp.get_json()["html"] == "<strong>bold</strong> and <code>code</code>"
 
 
 class TestPeersForDownload:

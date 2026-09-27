@@ -215,6 +215,28 @@ def build_board_body(text, icon=None, nick=None, reply_ref=None):
     return prefix + text
 
 
+def _nickname_owned_by(chain, nick):
+    """The address that owns nick (first board post to ever claim it,
+    case-insensitively -- see _board_profiles_and_votes' own docstring on
+    why first-claim-wins needs no new consensus rule), or None if nobody
+    has. Used to warn/refuse *before* a post pays for a nickname that
+    would silently not apply, not just to decide what to display after
+    the fact.
+    """
+    if not nick:
+        return None
+    nick_l = nick.lower()
+    for blk in chain:
+        for t in blk.get("transactions", []):
+            memo = t.get("memo") or ""
+            if not memo.startswith(BOARD_MEMO_TAG):
+                continue
+            _icon, n, _reply_ref, _text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
+            if n and n.lower() == nick_l:
+                return t.get("from")
+    return None
+
+
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -369,7 +391,9 @@ def _recent_committed_txs(chain, limit, offset=0):
 _BOARD_CODE_RE = re.compile(r'`([^`]+?)`')
 _BOARD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
 _BOARD_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)')
+_BOARD_LINK_RE = re.compile(r'\[([^\]\n]+?)\]\((https?://[^\s()<>]+)\)')
 _BOARD_URL_RE = re.compile(r'(https?://[^\s<]+)')
+_BOARD_QUOTE_LINE_RE = re.compile(r'^&gt; ?(.*)$')
 
 
 def render_board_text(raw):
@@ -377,10 +401,39 @@ def render_board_text(raw):
     text = _BOARD_CODE_RE.sub(r'<code>\1</code>', text)
     text = _BOARD_BOLD_RE.sub(r'<strong>\1</strong>', text)
     text = _BOARD_ITALIC_RE.sub(r'<em>\1</em>', text)
+
+    # [text](url) is pulled out to a placeholder before the bare-URL
+    # autolink pass runs, then stitched back in afterward: run in the
+    # other order, autolink would also match the raw url sitting inside
+    # the href="..." this substitution is about to produce, corrupting
+    # the tag it just built rather than leaving it alone.
+    links = []
+
+    def _stash_link(m):
+        links.append((m.group(1), m.group(2)))
+        return f"\x00LINK{len(links) - 1}\x00"
+
+    text = _BOARD_LINK_RE.sub(_stash_link, text)
     text = _BOARD_URL_RE.sub(
         lambda m: f'<a href="{m.group(1)}" rel="nofollow noopener noreferrer" target="_blank">{m.group(1)}</a>',
         text)
-    return Markup(text.replace("\n", "<br>"))
+    for i, (link_text, url) in enumerate(links):
+        text = text.replace(
+            f"\x00LINK{i}\x00",
+            f'<a href="{url}" rel="nofollow noopener noreferrer" target="_blank">{link_text}</a>')
+
+    # Quote: a line starting with "> " (its escaped form, "&gt; ", since
+    # escaping already ran) becomes its own <blockquote>, checked per
+    # line after all inline formatting above so a quoted line can still
+    # contain bold/code/a link.
+    rendered_lines = []
+    for line in text.split("\n"):
+        m = _BOARD_QUOTE_LINE_RE.match(line)
+        if m:
+            rendered_lines.append(f"<blockquote>{m.group(1)}</blockquote>")
+        else:
+            rendered_lines.append(line)
+    return Markup("<br>".join(rendered_lines))
 
 
 def _board_posts(chain):
@@ -415,6 +468,15 @@ def _board_profiles_and_votes(chain, mempool=None):
     currently is, not who they were when they wrote it -- the same
     "avatar looked up live, not frozen at post time" behaviour any chat
     client gives you.
+
+    Nicknames are first-come-first-served, case-insensitively: whichever
+    address claimed a given name earliest (chain order, oldest first)
+    keeps it, and a later post from a different address setting the same
+    text just never gets it displayed (icon still applies -- only the
+    name is impersonation-relevant). This needs no new consensus rule:
+    every node computes the same answer from the same chain, since it's
+    a pure, deterministic read of history, not a claim anyone can
+    contest after the fact.
 
     votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
     (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain,
@@ -466,6 +528,19 @@ def _board_profiles_and_votes(chain, mempool=None):
             if ref is not None:
                 pending_vote_refs.add(ref)
 
+    # Oldest-first (chain is already stored that way) so the first claim
+    # of a given name is the one seen first here, establishing ownership
+    # before the tip-first pass below decides what to display.
+    nickname_owner = {}
+    for blk in chain:
+        for t in blk.get("transactions", []):
+            memo = t.get("memo") or ""
+            if not memo.startswith(BOARD_MEMO_TAG):
+                continue
+            _icon, nick, _reply_ref, _text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
+            if nick:
+                nickname_owner.setdefault(nick.lower(), t.get("from"))
+
     for blk in reversed(chain):
         for t in reversed(blk.get("transactions", [])):
             memo = t.get("memo") or ""
@@ -474,6 +549,8 @@ def _board_profiles_and_votes(chain, mempool=None):
                 if addr in profiles:
                     continue
                 icon, nick, _, _ = parse_board_body(memo[len(BOARD_MEMO_TAG):])
+                if nick and nickname_owner.get(nick.lower()) != addr:
+                    nick = None  # claimed by (an earlier post from) a different address
                 if icon is not None:
                     profiles[addr] = {"icon": icon, "nick": nick}
             else:
@@ -1293,6 +1370,17 @@ def _shared_read_only_routes(app, node, pool, limiter,
             query = request.args.to_dict(flat=True)
             query["addr"] = crypto_mod.burn_address()
             return redirect(f"/address?{urlencode(query)}")
+        # Same redirect-to-the-real-address pattern as "burn" above: a
+        # board nickname is looked up the same deterministic way every
+        # node already resolves one for display (see _nickname_owned_by),
+        # so typing a name here lands on exactly the address that name
+        # actually belongs to, not a second, separate notion of identity.
+        if addr and not crypto_mod.is_valid_address(addr):
+            owner = _nickname_owned_by(node.view.chain, addr)
+            if owner is not None:
+                query = request.args.to_dict(flat=True)
+                query["addr"] = owner
+                return redirect(f"/address?{urlencode(query)}")
         page = max(request.args.get("page", 1, type=int) or 1, 1)
         v = node.view
         # The distribution histogram is only shown before a lookup runs, so
@@ -2077,6 +2165,14 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         icon = request.args.get("icon", type=int)
         nick = (request.args.get("nick") or "")[:16] or None
         reply_ref = request.args.get("reply_ref") or None
+        # Checked before quoting a fee, not just before display: paying to
+        # set a name that's already someone else's is a real cost for a
+        # change that would then silently never show, so the compose box
+        # needs to know before the user signs anything, not after.
+        owner = _nickname_owned_by(node.view.chain, nick)
+        if nick and owner is not None and owner != node.addr:
+            return jsonify({"fee": 0, "floor": 0, "ok": False,
+                            "reason": f"'{nick}' is already taken."})
         header = build_board_body("", icon=icon, nick=nick, reply_ref=reply_ref)
         # An ASCII placeholder of the same byte length: close enough for an
         # estimate, and the real message never leaves the browser until
@@ -2113,6 +2209,17 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                                       f"need {fmt_balance(required)}."})
         return jsonify({"fee": fee, "ok": True, "reason": ""})
 
+    @app.route("/api/board/preview", methods=["POST"], endpoint="api_board_preview")
+    def api_board_preview():
+        """Renders exactly what board_post's own memo will render as, via
+        the same render_board_text() every already-posted row goes
+        through -- a client-side reimplementation of that regex subset
+        would drift from it eventually, this way "Preview" is never able
+        to show something the real post won't.
+        """
+        text = request.form.get("text", "")[:tx_mod.MAX_MEMO_BYTES]
+        return jsonify({"html": str(render_board_text(text))})
+
     @app.route("/board", methods=["POST"], endpoint="board_post")
     def board_post():
         page = request.args.get("page", 1, type=int) or 1
@@ -2144,6 +2251,13 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
             return fail("Session expired; reload the page and try again.")
         if not message:
             return fail("Write something to post.")
+        # Refused outright, not just silently dropped at display time (see
+        # _board_profiles_and_votes): otherwise this post would still pay
+        # the fee and go on chain forever with a nickname nobody will ever
+        # see attached to it.
+        owner = _nickname_owned_by(node.view.chain, nick)
+        if nick and owner is not None and owner != node.addr:
+            return fail(f"'{nick}' is already taken.")
         body = build_board_body(message, icon=icon, nick=nick, reply_ref=reply_ref)
         memo = BOARD_MEMO_TAG + body
         over = len(memo.encode("utf-8")) - tx_mod.MAX_MEMO_BYTES
