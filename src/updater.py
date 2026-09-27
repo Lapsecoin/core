@@ -162,14 +162,10 @@ def _verify_pe(path):
 
 def _cleanup_stray_update_files():
     """Removes leftovers from a windows-exe update whose helper never got
-    to run (see the CREATE_BREAKAWAY_FROM_JOB comment in
-    UpdateSession._run_windows_exe): a downloaded .lapsecoin-update-*.exe
-    next to the real one, and its now-orphaned lapsecoin-update-*.bat in
-    the temp dir. A successful run always cleans both of these up itself
-    (the batch script's own move/del), so anything still here on startup
-    is from a run that didn't finish -- never a file this attempt itself
-    just created, since this only ever runs at process start, before any
-    update has begun.
+    to run. A successful run always cleans both the download and the helper
+    script up itself, so anything still here on startup is from a run that
+    didn't finish -- never a file this attempt itself just created, since
+    this only ever runs before any update has begun.
     """
     install_dir = os.path.dirname(os.path.realpath(sys.executable))
     with contextlib.suppress(OSError):
@@ -180,7 +176,9 @@ def _cleanup_stray_update_files():
     tmp_dir = tempfile.gettempdir()
     with contextlib.suppress(OSError):
         for name in os.listdir(tmp_dir):
-            if name.startswith("lapsecoin-update-") and name.endswith(".bat"):
+            if name.startswith("lapsecoin-update-") and (
+                name.endswith(".bat") or name.endswith(".ps1")
+            ):
                 with contextlib.suppress(OSError):
                     os.remove(os.path.join(tmp_dir, name))
 
@@ -328,47 +326,49 @@ class UpdateSession:
                 os.remove(tmp_path)
             raise
 
-        # Windows refuses to overwrite a running exe. A small helper batch
-        # script waits for this process's PID to disappear from `tasklist`,
-        # swaps the new file in, then relaunches -- the standard indirection
-        # any Windows self-updater needs. This has not been exercised on a
-        # real Windows machine (no Windows environment was available while
-        # writing it, the same caveat scripts/install.ps1 already carries);
-        # treat it as unverified until someone has actually watched it run.
+        # Windows refuses to overwrite a running EXE. We hand off to a
+        # dedicated helper process that waits for the original PID to vanish,
+        # retries the replace if the file is still briefly locked, then
+        # launches the new EXE. This is much more robust than a tiny batch
+        # file: antivirus and the process loader can keep a PE file locked for
+        # a beat after the parent exits, and a one-shot move is easy to lose
+        # in that race.
         self._set("installing", "handing off to the update helper")
         pid = os.getpid()
-        bat_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.bat")
-        with open(bat_path, "w") as f:
-            f.write(
-                "@echo off\r\n"
-                ":wait\r\n"
-                f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL\r\n'
-                "if not errorlevel 1 (\r\n"
-                "  timeout /t 1 /nobreak >NUL\r\n"
-                "  goto wait\r\n"
-                ")\r\n"
-                f'move /Y "{tmp_path}" "{exe_path}"\r\n'
-                f'start "" "{exe_path}"\r\n'
-                'del "%~f0"\r\n'
-            )
-        # CREATE_BREAKAWAY_FROM_JOB matters more than it looks: a PyInstaller
-        # onefile build's bootloader puts the real (extracted) process in a
-        # Windows Job Object with "kill on close" so the whole tree dies
-        # together if the bootloader is killed -- and a child spawned from
-        # inside that process is a member of the same job by default. Without
-        # breaking away, this helper is still in that job when we os._exit()
-        # below, and Windows tears it down right along with us before it
-        # ever runs the batch script -- silently, with nothing left behind
-        # but the downloaded tmp_path next to the real exe (exactly what a
-        # failed update looks like from the outside: no crash, no restart,
-        # just a stray .lapsecoin-update-<pid>.exe file). Confirmed against
-        # real Windows: earlier versions of this method didn't have this
-        # flag and that's exactly how it failed.
+        helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.ps1")
+        helper_script = (
+            "$ErrorActionPreference = 'Stop'\n"
+            "$exe = @'" + exe_path + "'@\n"
+            "$tmp = @'" + tmp_path + "'@\n"
+            "for ($i = 0; $i -lt 60; $i++) {\n"
+            "  $proc = Get-CimInstance Win32_Process -Filter \"ProcessId = " + str(pid) + "\" -ErrorAction SilentlyContinue\n"
+            "  if (-not $proc) { break }\n"
+            "  Start-Sleep -Seconds 1\n"
+            "}\n"
+            "for ($i = 0; $i -lt 120; $i++) {\n"
+            "  try {\n"
+            "    if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction Stop }\n"
+            "    Move-Item -LiteralPath $tmp -Destination $exe -Force -ErrorAction Stop\n"
+            "    break\n"
+            "  } catch {\n"
+            "    Start-Sleep -Milliseconds 250\n"
+            "  }\n"
+            "}\n"
+            "if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }\n"
+            "Start-Process -FilePath $exe -NoNewWindow\n"
+            "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n"
+        )
+        with open(helper_path, "w", encoding="utf-8") as f:
+            f.write(helper_script)
+
         creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
                         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
                         getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
-        subprocess.Popen(["cmd", "/c", bat_path], creationflags=creationflags,
-                         close_fds=True)
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper_path],
+            creationflags=creationflags,
+            close_fds=True,
+        )
         self._set("restarting", "exiting so the update helper can finish")
         os._exit(0)
 
