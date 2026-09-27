@@ -114,7 +114,7 @@ class _PassphraseDialog:
     a too-short new one re-shows the same dialog with an error message
     instead of crashing or reopening a fresh window each attempt."""
 
-    def __init__(self, keyfile):
+    def __init__(self, keyfile, preset_passphrase=None):
         self.keyfile = keyfile
         self.is_new = not os.path.exists(keyfile)
         self.result = None  # (pk, kek, passphrase) on success
@@ -143,6 +143,8 @@ class _PassphraseDialog:
 
         ttk.Label(frame, text="Passphrase", style="Dim.TLabel").pack(anchor="w", pady=(10, 2))
         self.pass1 = tk.StringVar()
+        if preset_passphrase is not None:
+            self.pass1.set(preset_passphrase)
         entry1 = ttk.Entry(frame, textvariable=self.pass1, show="*", width=30, style="Dark.TEntry")
         entry1.pack(anchor="w")
 
@@ -150,6 +152,8 @@ class _PassphraseDialog:
         if self.is_new:
             ttk.Label(frame, text="Confirm passphrase", style="Dim.TLabel").pack(anchor="w", pady=(10, 2))
             self.pass2 = tk.StringVar()
+            if preset_passphrase is not None:
+                self.pass2.set(preset_passphrase)
             ttk.Entry(
                 frame, textvariable=self.pass2, show="*", width=30, style="Dark.TEntry",
             ).pack(anchor="w")
@@ -162,6 +166,8 @@ class _PassphraseDialog:
 
         entry1.bind("<Return>", lambda e: self._submit())
         entry1.focus_set()
+        if preset_passphrase is not None:
+            self.root.after(0, self._submit)
 
     def _cancel(self):
         self.result = None
@@ -213,10 +219,10 @@ class _PassphraseDialog:
         return self.result
 
 
-def load_or_create_key_gui(keyfile):
+def load_or_create_key_gui(keyfile, preset_passphrase=None):
     """GUI equivalent of main._load_or_create_key. Returns
     (pk, kek, passphrase), or exits the process if the user cancels."""
-    result = _PassphraseDialog(keyfile).run()
+    result = _PassphraseDialog(keyfile, preset_passphrase).run()
     if result is None:
         sys.exit(0)
     return result
