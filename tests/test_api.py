@@ -191,24 +191,24 @@ class TestDashboardTxPaging:
 
     def test_the_first_page_holds_the_newest(self):
         html = self._client(20).get("/").get_data(as_text=True)
-        assert self._amounts(html) == [20, 19, 18, 17, 16, 15]
+        assert self._amounts(html) == [20, 19, 18, 17, 16]
 
     def test_the_second_page_continues_where_it_left_off(self):
         html = self._client(20).get("/?tx_page=2").get_data(as_text=True)
-        assert self._amounts(html) == [14, 13, 12, 11, 10, 9]
+        assert self._amounts(html) == [15, 14, 13, 12, 11]
 
     def test_the_last_page_holds_the_remainder(self):
         html = self._client(20).get("/?tx_page=4").get_data(as_text=True)
-        assert self._amounts(html) == [2, 1]
+        assert self._amounts(html) == [5, 4, 3, 2, 1]
 
     def test_a_page_past_the_end_clamps_to_the_last(self):
         html = self._client(20).get("/?tx_page=99").get_data(as_text=True)
-        assert self._amounts(html) == [2, 1]
+        assert self._amounts(html) == [5, 4, 3, 2, 1]
 
     def test_a_page_before_the_start_clamps_to_the_first(self):
         for bad in ("0", "-3", "banana"):
             html = self._client(20).get(f"/?tx_page={bad}").get_data(as_text=True)
-            assert self._amounts(html) == [20, 19, 18, 17, 16, 15], bad
+            assert self._amounts(html) == [20, 19, 18, 17, 16], bad
 
     def test_no_pager_when_everything_fits_on_one_page(self):
         html = self._client(4).get("/").get_data(as_text=True)
