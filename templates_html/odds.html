@@ -15,8 +15,13 @@
 <div class="stats">
   <div class="stat">
     <div class="stat-label">Odds</div>
+    {% if waiting_zero_odds %}
+    <div class="stat-value" id="odds-pct-val">Not mining</div>
+    <div class="stat-sub" id="odds-pct-sub">odds are 0%, watching before building</div>
+    {% else %}
     <div class="stat-value" id="odds-pct-val">{{ ("%.1f"|format(race.odds_pct) ~ "%") if race.odds_pct is not none else "--" }}</div>
     <div class="stat-sub" id="odds-pct-sub">{% set w = "%g"|format(race.draw_window) %}{% if race.odds_pct is none %}no blocks to judge from yet{% elif race.odds_pct == 0 %}never inside the {{ w }}s draw window{% elif race.in_draw_pct < 95 %}in the {{ w }}s draw window on {{ "%.0f"|format(race.in_draw_pct) }}% of heights{% elif race.entrants < 1.05 %}only builder inside the {{ w }}s draw window{% else %}{{ "%.1f"|format(race.entrants) }} builders inside the {{ w }}s draw window{% endif %}</div>
+    {% endif %}
   </div>
   <div class="stat">
     <div class="stat-label">Blocks won</div>
@@ -378,16 +383,22 @@
       const data = await res.json();
       if (!data) return;
 
-      document.getElementById("odds-pct-val").textContent =
-        data.odds_pct !== null ? fmt1(data.odds_pct) + "%" : "--";
-      const win = data.draw_window + "s draw window";
-      document.getElementById("odds-pct-sub").textContent =
-        data.odds_pct === null ? "no blocks to judge from yet"
-          : data.odds_pct === 0 ? "never inside the " + win
-          : data.in_draw_pct < 95
-              ? "in the " + win + " on " + Math.round(data.in_draw_pct) + "% of heights"
-          : data.entrants < 1.05 ? "only builder inside the " + win
-          : fmt1(data.entrants) + " builders inside the " + win;
+      if (data.waiting_zero_odds) {
+        document.getElementById("odds-pct-val").textContent = "Not mining";
+        document.getElementById("odds-pct-sub").textContent =
+          "odds are 0%, watching before building";
+      } else {
+        document.getElementById("odds-pct-val").textContent =
+          data.odds_pct !== null ? fmt1(data.odds_pct) + "%" : "--";
+        const win = data.draw_window + "s draw window";
+        document.getElementById("odds-pct-sub").textContent =
+          data.odds_pct === null ? "no blocks to judge from yet"
+            : data.odds_pct === 0 ? "never inside the " + win
+            : data.in_draw_pct < 95
+                ? "in the " + win + " on " + Math.round(data.in_draw_pct) + "% of heights"
+            : data.entrants < 1.05 ? "only builder inside the " + win
+            : fmt1(data.entrants) + " builders inside the " + win;
+      }
       document.getElementById("win-share-val").textContent =
         data.win_share_pct !== null ? fmt1(data.win_share_pct) + "%" : "--";
       document.getElementById("win-share-sub").textContent =

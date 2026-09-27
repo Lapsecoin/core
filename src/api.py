@@ -1294,7 +1294,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
                                chart=chart, reorgs=node.reorg_stats(),
                                own_is_estimate=node.own_vdf_is_estimate(),
                                hardware=hardware,
-                               mining_enabled=node.settings.get(settings_mod.MINING_ENABLED))
+                               mining_enabled=node.settings.get(settings_mod.MINING_ENABLED),
+                               # Transient, not a setting: this cycle measured
+                               # 0% and the node is watching for the field
+                               # before it builds anyway (see
+                               # Node._wait_for_field_or_own_pace). Only that
+                               # one status_line value starts this way.
+                               waiting_zero_odds=getattr(node, "status_line", "").startswith("waiting"))
 
     # ---- JSON API (read-only) --------------------------------------------
 
@@ -1321,6 +1327,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "window_len": len(race["window"]), "chart": _race_chart(race),
             "reorgs": node.reorg_stats(),
             "mining_enabled": node.settings.get(settings_mod.MINING_ENABLED),
+            "waiting_zero_odds": getattr(node, "status_line", "").startswith("waiting"),
         })
 
     @app.route("/api/peers", endpoint=pfx+"api_peers")
