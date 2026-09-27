@@ -330,6 +330,13 @@ def _recent_committed_txs(chain, limit, offset=0):
     return rows
 
 
+def _mempool_rows(mempool):
+    """Return pending transactions in the order block assembly prefers."""
+    txs = mempool.all_txs()
+    txs.sort(key=lambda t: (-tx_mod.fee_rate(t), tx_mod.tx_hash(t)))
+    return [{"hash": tx_mod.tx_hash(t), "tx": t} for t in txs]
+
+
 # A tiny, safe markdown-like subset for board post text, which is public
 # and written by anyone: real markdown.markdown() (used for the shipped
 # whitepaper.md elsewhere in this file) passes raw HTML straight through
@@ -1151,7 +1158,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "dashboard": "dashboard", "explorer": "explorer",
             "block_detail": "explorer", "tx_detail": "explorer",
             "address_lookup": "address", "distribution_bucket": "address",
-            "board": "board", "network": "network", "odds": "odds",
+            "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
             "settings": "settings",
             "market": "market", "market_take": "market",
@@ -1274,6 +1281,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
             recent=chain[start:end][::-1], page=page, total_pages=total_pages,
             page_window=_pagination_window(page, total_pages),
             has_prev=page > 1, has_next=start > 0)
+
+    @app.route("/mempool", endpoint=pfx+"mempool")
+    def mempool_page():
+        return render_template("mempool.html", title="Mempool",
+                               transactions=_mempool_rows(node.mempool))
 
     @app.route("/explorer/block/<int:height>", endpoint=pfx+"block_detail")
     def block_detail(height):
@@ -1764,6 +1776,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
                     "outputs": t["outputs"], "fee": t["fee"]}
 
         return jsonify({"size": len(txs), "transactions": [_summarize(t) for t in txs]})
+
+    @app.route("/api/mempool/fragment", endpoint=pfx+"api_mempool_fragment")
+    def api_mempool_fragment():
+        rows = _mempool_rows(node.mempool)
+        html = render_template("mempool_rows.html", transactions=rows)
+        return jsonify({"size": len(rows), "html": html})
 
     @app.route("/api/tx/send", methods=["POST"], endpoint=pfx+"api_send_tx")
     @limiter.limit("20 per second")
