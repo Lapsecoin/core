@@ -66,6 +66,14 @@ class Emission(_Base):
     value = IntegerField(default=0)
 
 
+class Nickname(_Base):
+    # Consensus state (see state.py's own comment), not a display cache:
+    # one row per claimed name, never updated or deleted once written --
+    # first-come-first-served ownership doesn't change hands.
+    nick  = TextField(primary_key=True)  # already lowercased by the caller
+    owner = TextField()
+
+
 class Meta(_Base):
     key   = TextField(primary_key=True)
     value = TextField()
@@ -100,7 +108,7 @@ class AddrIndex(_Base):
         indexes = ((("addr",), False),)
 
 
-_TABLES = [Block, State, Emission, Meta, TxIndex, AddrIndex]
+_TABLES = [Block, State, Emission, Meta, TxIndex, AddrIndex, Nickname]
 
 
 def _pack_block(blk):
@@ -313,6 +321,11 @@ class Storage:
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
         Emission.insert(key="total_board_posts",
                          value=state.total_board_posts).on_conflict_replace().execute()
+        Nickname.delete().execute()
+        if state.nicknames:
+            Nickname.insert_many(
+                [{"nick": nick, "owner": owner} for nick, owner in state.nicknames.items()]
+            ).execute()
         state.mark_persisted()
 
     def _save_state_delta_inner(self, state):
@@ -353,6 +366,15 @@ class Storage:
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
         Emission.insert(key="total_board_posts",
                          value=state.total_board_posts).on_conflict_replace().execute()
+        new_nicknames = state.dirty_nicknames()
+        if new_nicknames:
+            # Insert only, never on_conflict_replace: a nickname row is
+            # never rewritten once claimed (see the Nickname model's own
+            # comment), and dirty_nicknames() only ever contains names
+            # apply_tx itself just registered for the first time.
+            Nickname.insert_many(
+                [{"nick": nick, "owner": owner} for nick, owner in new_nicknames.items()]
+            ).execute()
         state.mark_persisted()
 
     def save_state(self, state):
@@ -364,7 +386,9 @@ class Storage:
         balances = {r.addr: r.balance for r in rows}
         nonces   = {r.addr: r.nonce   for r in rows}
         em       = {r.key: r.value for r in Emission.select()}
-        return balances, nonces, em.get("total_minted", 0), em.get("total_board_posts", 0)
+        nicknames = {r.nick: r.owner for r in Nickname.select()}
+        return (balances, nonces, em.get("total_minted", 0),
+                em.get("total_board_posts", 0), nicknames)
 
     def state_exists(self):
         return State.select().exists()
