@@ -4,8 +4,9 @@
 <div class="card">
   <form method="GET">
     <div class="form-group">
-      <label>Address (twelve dot-separated words)</label>
-      <input name="addr" value="{{ addr }}" placeholder="word1.word2.word3...">
+      <label>Address (twelve dot-separated words) or board nickname</label>
+      <input name="addr" value="{{ addr }}" placeholder="word1.word2.word3... or a board nickname">
+      <span class="stat-sub">A nickname redirects to whichever address actually owns it (see /board).</span>
     </div>
     <button type="submit">Look up</button>
   </form>

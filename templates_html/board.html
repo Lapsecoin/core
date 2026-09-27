@@ -18,7 +18,7 @@
         <div class="rc-info">
           <span class="rc-avatar" aria-hidden="true">{{ row.icon }}</span>
           <a href="/address?addr={{ row.tx.from }}" class="rc-username {{ 'hash-short' if not row.nick }}"
-             title="{{ row.tx.from }}{{ ' — nickname: ' + row.nick if row.nick else ' — no nickname set' }}">{{ row.nick or row.tx.from }}</a>
+             title="{{ row.tx.from }}{{ ' - nickname: ' + row.nick if row.nick else ' - no nickname set' }}">{{ row.nick or row.tx.from }}</a>
           {% if row.pending %}
             <span class="rc-time" title="Submitted, not yet in a block">pending&hellip;</span>
           {% else %}
@@ -97,20 +97,27 @@
       {# Toolbar ported unmodified from GitHub's own markdown-toolbar-element
          (github/markdown-toolbar-element, MIT -- see vendor/README.md),
          the exact same custom element Remark42's own compose box wires up
-         to its textarea. Only header/quote/list/image are left out: this
-         board's own render_board_text only ever understands bold, italic,
-         code and a bare autolinked URL, so a button for markdown this
-         page can't render would be wiring a lie, not "everything". #}
-      <markdown-toolbar for="board-message" class="rc-toolbar">
+         to its textarea. Header/list/image are still left out: this
+         board's own render_board_text has no support for those, so a
+         button for markdown this page can't render would be wiring a
+         lie. Bold, italic, code, quote and link all now have a matching
+         render_board_text rule (see api.py), so all five get a button. #}
+      <markdown-toolbar for="board-message" class="rc-toolbar" id="board-toolbar">
         <div class="rc-toolbar-group">
           <md-bold class="rc-toolbar-item" title="Bold"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M1 2h3.83c2.48 0 4.3.75 4.3 2.95 0 1.14-.63 2.23-1.67 2.61v.06c1.33.3 2.3 1.23 2.3 2.86 0 2.39-1.97 3.52-4.61 3.52H1V2zm3.66 4.95c1.67 0 2.38-.66 2.38-1.69 0-1.17-.78-1.61-2.34-1.61H3.13v3.3h1.53zm.27 5.39c1.77 0 2.75-.64 2.75-1.98 0-1.27-.95-1.81-2.75-1.81h-1.8v3.8h1.8v-.01z"/></svg></md-bold>
           <md-italic class="rc-toolbar-item" title="Italic"><svg viewBox="0 0 6 16" width="6" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M2.81 5h1.98L3 14H1l1.81-9zm.36-2.7c0-.7.58-1.3 1.33-1.3.56 0 1.13.38 1.13 1.03 0 .75-.59 1.3-1.33 1.3-.58 0-1.13-.38-1.13-1.03z"/></svg></md-italic>
+        </div>
+        <div class="rc-toolbar-group">
+          <md-quote class="rc-toolbar-item" title="Quote"><svg viewBox="0 0 14 16" width="14" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M6.16 3.5C3.73 5.06 2.55 6.67 2.55 9.36c.16-.05.3-.05.44-.05 1.27 0 2.5.86 2.5 2.41 0 1.61-1.03 2.61-2.5 2.61-1.9 0-2.99-1.52-2.99-4.25 0-3.8 1.75-6.53 5.02-8.42L6.16 3.5zm7 0c-2.43 1.56-3.61 3.17-3.61 5.86.16-.05.3-.05.44-.05 1.27 0 2.5.86 2.5 2.41 0 1.61-1.03 2.61-2.5 2.61-1.89 0-2.98-1.52-2.98-4.25 0-3.8 1.75-6.53 5.02-8.42l1.14 1.84h-.01z"/></svg></md-quote>
           <md-code class="rc-toolbar-item" title="Code"><svg viewBox="0 0 14 16" width="14" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M9.5 3L8 4.5 11.5 8 8 11.5 9.5 13 14 8 9.5 3zm-5 0L0 8l4.5 5L6 11.5 2.5 8 6 4.5 4.5 3z"/></svg></md-code>
+          <md-link class="rc-toolbar-item" title="Link"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"/></svg></md-link>
         </div>
       </markdown-toolbar>
+      <div class="rc-text" id="board-preview" hidden></div>
       <div class="board-compose-row">
         <textarea name="message" id="board-message" rows="1"
                placeholder="Say something" autocomplete="off" style="flex:1">{{ message_value }}</textarea>
+        <button type="button" id="board-preview-btn">Preview</button>
         <button type="submit" id="board-send">Send</button>
       </div>
       <div class="board-compose-row board-compose-sub">
@@ -138,17 +145,18 @@
 {% endif %}
 
 <style>
-  /* Remark42's own color tokens (custom-properties.css, light theme --
-     this site has no dark-mode toggle to key a .dark variant off of),
-     used verbatim so the ported components below keep their real,
-     un-remapped identity. Scoped to #board-feed/.board-compose so it
-     doesn't leak onto the rest of the site. */
+  /* Remark42's structure/markup/spacing stays exactly as ported; only
+     the color VALUES behind its own token names are remapped here, onto
+     this site's existing palette (base.html's --paper/--ink/--accent/
+     --muted/--gain/--loss/--rule-lt), so the board reads as part of this
+     site rather than a foreign widget dropped into it. Same variable
+     names as before so nothing else in this file needs to change. */
   #board-feed, .board-compose {
-    --color5: #eee; --color6: #fff; --color9: #0aa; --color10: #777;
-    --color11: #969696; --color13: #888; --color15: #099; --color16: #e2e8f0;
-    --color20: #ddd; --color33: #06c5c5; --color35: #d1d5db; --color37: #586069;
-    --color38: #ef0000; --color12: 37, 158, 6; --color30: 204, 6, 6;
-    --primary-text-color: 38, 38, 38; --primary-background-color: 255, 255, 255;
+    --color5: var(--rule-lt); --color6: var(--paper); --color9: var(--accent);
+    --color10: var(--muted); --color11: var(--muted); --color13: var(--muted);
+    --color15: var(--accent); --color16: var(--rule-lt); --color33: var(--ink-dim);
+    --color37: var(--muted); --color12: 47, 92, 51; --color30: 122, 34, 34;
+    --primary-text-color: 28, 26, 20; --primary-background-color: 246, 243, 234;
   }
   /* This site's global `button`/`input`/`textarea` rules (base.html) give
      every button a bold filled site-chrome look and every input a
@@ -201,7 +209,7 @@
      text shape because the board is a flat public feed, not a two-party
      conversation -- the bubble mostly bought wasted margin, not clarity. */
   .rc-root { display: block; padding: 12px 0 8px; font-size: 16px; line-height: 1.4; border-bottom: 1px solid var(--color16); }
-  .rc-root.mine { background: rgba(10,170,170,.05); }
+  .rc-root.mine { background: rgba(179,90,12,.05); }
   .rc-root.pending { opacity: .6; }
   .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 14px; position: relative; }
   .rc-avatar { width: 20px; margin-right: 6px; font-size: 1.1rem; line-height: 1; }
@@ -217,6 +225,8 @@
   }
   .rc-replyQuote:hover { color: var(--color9); }
   .rc-text { white-space: pre-wrap; word-break: break-word; margin-bottom: 4px; }
+  .rc-text blockquote { margin: .3rem 0; padding: .2rem .2rem .2rem .6rem; border-left: 2px solid var(--rule-lt); }
+  .rc-text code { font-family: var(--mono); background: var(--rule-lt); padding: .05rem .3rem; border-radius: 3px; }
   .rc-replyBtn {
     font-size: .75rem; font-weight: 600; color: var(--color9); text-decoration: none;
   }
@@ -265,6 +275,14 @@
     background: var(--color15); color: var(--color6); font-weight: 600;
   }
   #board-send:hover:not(:disabled) { background: var(--color33); }
+  /* Remark42's own kindSecondary button look, for the same "Preview"
+     button next to Send its own compose box has. */
+  #board-preview-btn {
+    flex: 0 0 auto; height: 2rem; padding: 0 12px; border-radius: 4px;
+    background: var(--color6);
+  }
+  #board-preview-btn:hover { box-shadow: inset 0 0 0 2px var(--color33); }
+  #board-preview { min-height: 2rem; padding: .35rem .5rem; }
   .board-icon-btn { font-size: 1.2rem; line-height: 1; padding: .1rem .3rem; border-radius: 4px; }
   .board-icon-btn:hover { background: var(--color5); }
   #board-nick { border-bottom: 1px solid var(--color16); padding: .2rem 0; }
@@ -381,8 +399,40 @@
     const counter        = document.getElementById("board-msg-counter");
     const sendBtn         = document.getElementById("board-send");
     const feeEl           = document.getElementById("board-fee-live");
+    const previewBtn      = document.getElementById("board-preview-btn");
+    const previewEl       = document.getElementById("board-preview");
+    const toolbarEl       = document.getElementById("board-toolbar");
     let feeTimer = null;
     let feeSeq = 0;
+
+    // Renders through the server's own render_board_text (see
+    // /api/board/preview in api.py) rather than a second, client-side
+    // reimplementation of the same regex subset: two copies of "what
+    // markdown does this board support" would eventually drift apart,
+    // and Preview showing something the real post then renders
+    // differently would be worse than not having Preview at all.
+    previewBtn.addEventListener("click", async () => {
+      const previewing = !previewEl.hidden;
+      if (previewing) {
+        previewEl.hidden = true;
+        msgInput.hidden = false;
+        toolbarEl.hidden = false;
+        previewBtn.textContent = "Preview";
+        return;
+      }
+      try {
+        const body = new URLSearchParams({text: msgInput.value});
+        const res = await fetch("/api/board/preview", {method: "POST", body});
+        const data = await res.json();
+        previewEl.innerHTML = data.html || "<em>Nothing to preview.</em>";
+      } catch (e) {
+        previewEl.textContent = "Preview failed to load.";
+      }
+      previewEl.hidden = false;
+      msgInput.hidden = true;
+      toolbarEl.hidden = true;
+      previewBtn.textContent = "Edit";
+    });
 
     function currentIconIdx() {
       return parseInt(iconValue.value, 10) || 0;
