@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="dashboard-page">
 <div class="stats">
   {# Height, peers and mempool share one box, each with its own label:
      six boxes wrapped the row onto a second line and left net emission
@@ -208,4 +209,8 @@
   setInterval(refresh, 6000);
 })();
 </script>
+<style>
+  .dashboard-page { font-size: 16px; }
+</style>
+</div>
 {% endblock %}
