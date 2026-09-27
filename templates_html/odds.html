@@ -88,7 +88,7 @@
     {% set prev = chart.points[loop.index0 - 1] %}
     <line x1="{{ prev.x }}" y1="{{ prev.y }}" x2="{{ p.x }}" y2="{{ p.y }}"
           stroke="{{ p.color }}" stroke-width="1.75">
-      <title>Block {{ p.height }}: {{ "%.1f"|format(p.seconds) }}s{{ ", " ~ p.builder if p.builder }}{{ " (off scale, clipped to the edge)" if p.clipped }}</title>
+      <title>Block {{ p.height }}: {{ "%.1f"|format(p.seconds) }}s{{ ", " ~ p.nick ~ " (" ~ p.builder ~ ")" if p.nick else (", " ~ p.builder if p.builder) }}{{ " (off scale, clipped to the edge)" if p.clipped }}</title>
     </line>
     {% endif %}
     {% endfor %}
@@ -116,7 +116,10 @@
     {% for entry in chart.legend or [] %}
     <span style="display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--ink-dim)">
       <span style="width:9px;height:9px;border-radius:50%;background:{{ entry.color }};display:inline-block"></span>
-      {% if entry.label %}<span class="hash-short" style="display:inline;max-width:11ch" title="{{ entry.label }}">{{ entry.label[:10] }}&hellip;</span>{% else %}<span>Other</span>{% endif %}
+      {% if entry.label %}
+        {% if entry.nick %}<span style="display:inline;max-width:11ch" title="{{ entry.nick }} ({{ entry.label }})">{{ entry.nick }}</span>
+        {% else %}<span class="hash-short" style="display:inline;max-width:11ch" title="{{ entry.label }}">{{ entry.label[:10] }}&hellip;</span>{% endif %}
+      {% else %}<span>Other</span>{% endif %}
       <span style="color:var(--muted)">({{ entry.count }})</span>
     </span>
     {% endfor %}
@@ -148,6 +151,18 @@
 (function () {
   function fmt1(n) { return n.toFixed(1); }
   function fmt0(n) { return Math.round(n); }
+
+  // A nickname is free-form user text (see api.py's build_board_body),
+  // unlike an address (a fixed BIP39 word list, no special characters
+  // possible), so it's the one thing here that has to be escaped before
+  // going into innerHTML below -- the server-rendered legend gets this
+  // for free from Jinja's own auto-escaping, this JS-rebuilt one (the
+  // live /api/odds refresh) does not.
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
 
   // ---- height-axis spacing -------------------------------------------
   // The axis ticks double as handles. Dragging one moves where that block
@@ -291,7 +306,8 @@
       const x = xOf(chart, p.idx);
       if (i > 0) {
         const prev = chart.points[i - 1];
-        const label = p.builder ? ", " + p.builder : "";
+        const label = p.nick ? ", " + escapeHtml(p.nick) + " (" + escapeHtml(p.builder) + ")"
+                     : (p.builder ? ", " + escapeHtml(p.builder) : "");
         const off = p.clipped ? " (off scale, clipped to the edge)" : "";
         s += `<line x1="${prevX}" y1="${prev.y}" x2="${x}" y2="${p.y}" stroke="${p.color}" stroke-width="1.75">` +
              `<title>Block ${p.height}: ${fmt1(p.seconds)}s${label}${off}</title></line>`;
@@ -367,9 +383,12 @@
   function renderLegend(legend) {
     if (!legend || !legend.length) return "";
     return legend.map(function (entry) {
-      const labelHtml = entry.label
-        ? `<span class="hash-short" style="display:inline;max-width:11ch" title="${entry.label}">${entry.label.slice(0, 10)}&hellip;</span>`
-        : "<span>Other</span>";
+      let labelHtml = "<span>Other</span>";
+      if (entry.label) {
+        labelHtml = entry.nick
+          ? `<span style="display:inline;max-width:11ch" title="${escapeHtml(entry.nick)} (${escapeHtml(entry.label)})">${escapeHtml(entry.nick)}</span>`
+          : `<span class="hash-short" style="display:inline;max-width:11ch" title="${escapeHtml(entry.label)}">${escapeHtml(entry.label.slice(0, 10))}&hellip;</span>`;
+      }
       return `<span style="display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--ink-dim)">` +
              `<span style="width:9px;height:9px;border-radius:50%;background:${entry.color};display:inline-block"></span>` +
              `${labelHtml}<span style="color:var(--muted)">(${entry.count})</span></span>`;

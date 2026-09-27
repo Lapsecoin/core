@@ -168,7 +168,7 @@ class TestDashboardTxPaging:
                                              # amount reads back as the index
                                              "amount": n * TICKS_PER_LAPSE}]})
                 chain.append({"height": len(chain), "transactions": txs})
-            self.view = SimpleNamespace(chain=chain)
+            self.view = SimpleNamespace(chain=chain, state=SimpleNamespace(nicknames={}))
 
         def get_info(self):
             return {"height": len(self.view.chain) - 1, "tip_hash": "ab" * 32,
@@ -263,7 +263,7 @@ class TestOddsPage:
                  "builder": address(0) if own_blocks else address(2)},
                 {"height": 2, "timestamp": 1320, "vdf_iterations": 100,
                  "builder": address(1)},
-            ])
+            ], state=SimpleNamespace(nicknames={}))
             self._is_estimate = is_estimate
             self._own_median = own_median
 
@@ -945,6 +945,83 @@ class TestBoardProfilesAndVotes:
         assert pending_refs == set()
 
 
+class TestCurrentNicknamesByAddress:
+    """The odds page's builder labels and the dashboard's own-address line
+    both derive addr -> nick from _board_profiles_and_votes' own profiles
+    dict, rather than a second scan -- this just checks that derivation."""
+
+    def _chain_with(self, *memos_by_sender):
+        import tx as tx_mod
+        cs = ChainState.from_genesis()
+        for i in range(3):
+            seed_balance(cs.state, i, 1000.0)
+        for i, (sender, memo) in enumerate(memos_by_sender):
+            t = {"from": address(sender), "nonce": i + 1, "fee": 100,
+                 "outputs": [{"to": "1" * 40, "amount": 1}], "memo": memo}
+            cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
+                             "transactions": [t], "hash": f"h{i}"})
+            cs.state.apply_tx(t)
+        return cs, tx_mod
+
+    def _nicknames_by_address(self, cs):
+        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
+        return {addr: prof["nick"] for addr, prof in profiles.items()}
+
+    def test_latest_nickname_per_address(self):
+        # Second post overwrites the *display* nick, not the registry --
+        # "Old" stays permanently owned by address(0), it just isn't
+        # what's shown once a newer post says otherwise.
+        cs, _tx_mod = self._chain_with(
+            (0, api.BOARD_MEMO_TAG + api.build_board_body("a", icon=0, nick="Old")),
+            (0, api.BOARD_MEMO_TAG + api.build_board_body("b", icon=1, nick="New")),
+        )
+        result = self._nicknames_by_address(cs)
+        assert result[address(0)] == "New"
+
+    def test_address_with_no_profile_post_is_absent(self):
+        cs, _tx_mod = self._chain_with((0, api.BOARD_MEMO_TAG + "just text, no header"))
+        result = self._nicknames_by_address(cs)
+        assert address(0) not in result
+
+    def test_a_nickname_claimed_by_someone_else_never_displays(self):
+        cs, _tx_mod = self._chain_with(
+            (0, api.BOARD_MEMO_TAG + api.build_board_body("a", icon=0, nick="Al")),
+            (1, api.BOARD_MEMO_TAG + api.build_board_body("b", icon=1, nick="Al")),
+        )
+        result = self._nicknames_by_address(cs)
+        assert result[address(0)] == "Al"
+        assert result[address(1)] is None
+
+
+class TestRaceChartNicknames:
+    """_race_chart(race, nicknames_by_addr): the odds page's builder
+    labels, wired to the same registry the board itself reads."""
+
+    def _race(self, builders):
+        """builders: list of address strings, oldest first, one 100s
+        block-interval row each."""
+        window = [(i + 1, 100.0, b) for i, b in enumerate(builders)]
+        return {"window": window, "median": 100.0, "own_pace": 100.0}
+
+    def test_points_carry_the_builders_nickname(self):
+        race = self._race([address(0), address(1)])
+        chart = api._race_chart(race, {address(0): "Al"})
+        by_height = {p["height"]: p for p in chart["points"]}
+        assert by_height[1]["nick"] == "Al"
+        assert by_height[2]["nick"] is None
+
+    def test_legend_carries_the_builders_nickname(self):
+        race = self._race([address(0)] * 5)
+        chart = api._race_chart(race, {address(0): "Al"})
+        assert chart["legend"][0]["label"] == address(0)
+        assert chart["legend"][0]["nick"] == "Al"
+
+    def test_missing_nicknames_dict_defaults_to_no_nicknames_shown(self):
+        race = self._race([address(0)])
+        chart = api._race_chart(race)  # no nicknames_by_addr at all
+        assert chart["points"][0]["nick"] is None
+
+
 class TestRenderBoardText:
     """render_board_text's markdown-like subset, including the quote and
     link support added alongside the toolbar buttons for them (see
@@ -1217,6 +1294,57 @@ class TestAddressHiddenPublicly:
         client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
         data = client.get("/api/board").get_json()
         assert data["own_addr"] == node.addr
+
+
+class TestDashboardNickname:
+    """The dashboard's own-address card shows a nickname when this node
+    has claimed one, but only ever alongside the address itself -- never
+    as a substitute that would keep showing identity once
+    HIDE_ADDRESS_PUBLICLY has hidden the address it's derived from (see
+    dashboard()'s own comment on why)."""
+
+    def _node_with_nickname(self, nick="Al", hide=None):
+        import tx as tx_mod
+        cs = ChainState.from_genesis()
+        seed_balance(cs.state, 0, 1000.0)
+        t = {"from": address(0), "nonce": 1, "fee": 100,
+             "outputs": [{"to": "1" * 40, "amount": 1}],
+             "memo": tx_mod.BOARD_MEMO_TAG + tx_mod.build_board_body("hi", icon=0, nick=nick)}
+        cs.chain.append({"height": len(cs.chain), "timestamp": 1000,
+                         "transactions": [t], "hash": "h0"})
+        cs.state.apply_tx(t)
+        node = _InfoNode(cs)
+        if hide is not None:
+            node.settings.set(settings_mod.HIDE_ADDRESS_PUBLICLY, hide)
+        return node
+
+    def test_nickname_shown_on_private_dashboard(self):
+        node = self._node_with_nickname()
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/").get_data(as_text=True)
+        assert "Al" in html
+        assert node.addr in html
+
+    def test_api_info_carries_the_nickname_on_private_app(self):
+        node = self._node_with_nickname()
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        data = client.get("/api/info").get_json()
+        assert data["nick"] == "Al"
+
+    def test_nickname_hidden_alongside_the_address_on_public_app_by_default(self):
+        node = self._node_with_nickname()
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        data = client.get("/api/info").get_json()
+        assert data["address"] is None
+        assert data["nick"] is None
+        html = client.get("/").get_data(as_text=True)
+        assert "Al" not in html
+
+    def test_nickname_shown_on_public_app_when_hiding_is_off(self):
+        node = self._node_with_nickname(hide=False)
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        data = client.get("/api/info").get_json()
+        assert data["nick"] == "Al"
 
 
 # ---------------------------------------------------------------------------
