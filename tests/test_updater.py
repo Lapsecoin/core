@@ -20,8 +20,8 @@ class TestCleanupStrayUpdateFiles:
         open(exe_path, "w").close()
         stray = os.path.join(d, ".lapsecoin-update-999.exe")
         open(stray, "w").close()
-        stray_ps1 = os.path.join(tempfile.gettempdir(), "lapsecoin-update-999.ps1")
-        open(stray_ps1, "w").close()
+        stray_bat = os.path.join(tempfile.gettempdir(), "lapsecoin-update-999.bat")
+        open(stray_bat, "w").close()
         keep = os.path.join(d, "some_other_file.txt")
         open(keep, "w").close()
         monkeypatch.setattr(sys, "executable", exe_path)
@@ -29,7 +29,7 @@ class TestCleanupStrayUpdateFiles:
         updater._cleanup_stray_update_files()
 
         assert not os.path.exists(stray)
-        assert not os.path.exists(stray_ps1)
+        assert not os.path.exists(stray_bat)
         assert os.path.exists(exe_path)
         assert os.path.exists(keep)
 
@@ -51,10 +51,11 @@ class TestWindowsHelperBreaksAwayFromJob:
     until the EXE is no longer locked; otherwise the update leaves the new
     binary next to the original and never relaunches the app."""
 
-    def test_windows_exe_update_spawns_retrying_helper_with_breakaway_flag(self, monkeypatch, tmp_path):
+    def test_windows_exe_update_spawns_retrying_batch_with_breakaway_flag(self, monkeypatch, tmp_path):
         exe_path = tmp_path / "lapsecoin.exe"
         exe_path.write_bytes(b"MZ" + b"\0" * 2_000_000)
         monkeypatch.setattr(sys, "executable", str(exe_path))
+        monkeypatch.setattr(sys, "argv", [str(exe_path), "--no-gui", "--port", "9000"])
         monkeypatch.setattr(updater, "_download", lambda url, dest, on_progress=None:
                              open(dest, "wb").write(b"MZ" + b"\0" * 2_000_000))
         monkeypatch.setattr(os, "access", lambda path, mode: True)
@@ -76,9 +77,15 @@ class TestWindowsHelperBreaksAwayFromJob:
         except SystemExit:
             pass
 
-        assert seen["args"][0:4] == ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass"]
-        assert seen["args"][-2] == "-File"
-        assert "Move-Item -LiteralPath $tmp" in open(seen["args"][-1], encoding="utf-8").read()
+        assert seen["args"][0:3] == ["cmd.exe", "/D", "/C"]
+        assert len(seen["args"]) == 4
+        helper = open(seen["args"][-1], encoding="ascii").read()
+        assert "taskkill /PID" in helper
+        assert "for /L %%N in (1,1,120)" in helper
+        assert "move /Y" in helper
+        assert "goto moved" in helper
+        assert "start \"\"" in helper
+        assert 'start "" "' + str(exe_path) + '" --no-gui --port 9000' in helper
         breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         detached = getattr(subprocess, "DETACHED_PROCESS", 0)
         new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
