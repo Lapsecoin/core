@@ -160,6 +160,31 @@ def _verify_pe(path):
         raise RuntimeError("downloaded file doesn't look like a Windows executable; refusing to install it")
 
 
+def _cleanup_stray_update_files():
+    """Removes leftovers from a windows-exe update whose helper never got
+    to run (see the CREATE_BREAKAWAY_FROM_JOB comment in
+    UpdateSession._run_windows_exe): a downloaded .lapsecoin-update-*.exe
+    next to the real one, and its now-orphaned lapsecoin-update-*.bat in
+    the temp dir. A successful run always cleans both of these up itself
+    (the batch script's own move/del), so anything still here on startup
+    is from a run that didn't finish -- never a file this attempt itself
+    just created, since this only ever runs at process start, before any
+    update has begun.
+    """
+    install_dir = os.path.dirname(os.path.realpath(sys.executable))
+    with contextlib.suppress(OSError):
+        for name in os.listdir(install_dir):
+            if name.startswith(".lapsecoin-update-") and name.endswith(".exe"):
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(install_dir, name))
+    tmp_dir = tempfile.gettempdir()
+    with contextlib.suppress(OSError):
+        for name in os.listdir(tmp_dir):
+            if name.startswith("lapsecoin-update-") and name.endswith(".bat"):
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(tmp_dir, name))
+
+
 class UpdateSession:
     """One update attempt. A fresh instance per attempt; a retry after a
     failure just gets a new one, there's nothing about a half-finished
@@ -326,8 +351,22 @@ class UpdateSession:
                 f'start "" "{exe_path}"\r\n'
                 'del "%~f0"\r\n'
             )
+        # CREATE_BREAKAWAY_FROM_JOB matters more than it looks: a PyInstaller
+        # onefile build's bootloader puts the real (extracted) process in a
+        # Windows Job Object with "kill on close" so the whole tree dies
+        # together if the bootloader is killed -- and a child spawned from
+        # inside that process is a member of the same job by default. Without
+        # breaking away, this helper is still in that job when we os._exit()
+        # below, and Windows tears it down right along with us before it
+        # ever runs the batch script -- silently, with nothing left behind
+        # but the downloaded tmp_path next to the real exe (exactly what a
+        # failed update looks like from the outside: no crash, no restart,
+        # just a stray .lapsecoin-update-<pid>.exe file). Confirmed against
+        # real Windows: earlier versions of this method didn't have this
+        # flag and that's exactly how it failed.
         creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
-                        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
+                        getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         subprocess.Popen(["cmd", "/c", bat_path], creationflags=creationflags,
                          close_fds=True)
         self._set("restarting", "exiting so the update helper can finish")
@@ -342,6 +381,8 @@ class Updater:
         self.install_type = install_type if install_type is not None else detect_install_type()
         self._session = None
         self._lock = threading.Lock()
+        if self.install_type == "windows-exe":
+            _cleanup_stray_update_files()
 
     def can_self_update(self):
         return self.install_type in SELF_UPDATABLE
