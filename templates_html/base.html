@@ -417,6 +417,25 @@
         clearInterval(pollTimer);
         return;
       }
+      if (data.stage === "ready") {
+        if (!confirm("The update is ready. Click OK to open the LapseCoin folder with update.bat selected, then double click update.bat to apply it.")) {
+          setText("Update ready. Run update.bat in the LapseCoin folder.");
+          clearInterval(pollTimer);
+          btn.disabled = false;
+          btn.textContent = "Update now";
+          return;
+        }
+        fetch("/api/update/open", {method: "POST", body: new URLSearchParams({csrf_token: csrfToken})})
+          .then(function (res) { return res.json(); })
+          .then(function (result) {
+            setText(result.ok ? "Folder opened. Double click update.bat to apply the update." : result.error);
+          })
+          .catch(function () { setText("Could not open the update folder."); });
+        clearInterval(pollTimer);
+        btn.disabled = false;
+        btn.textContent = "Update now";
+        return;
+      }
       setText("Updating: " + data.stage + (data.detail ? " (" + data.detail + ")" : ""));
       // Once stage is "restarting", the node process is about to replace
       // or exit itself: the next few polls below are expected to fail
