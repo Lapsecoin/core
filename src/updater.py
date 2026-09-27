@@ -53,11 +53,10 @@ DEFAULT_PEERS_URL   = "https://lapsenode.vicnas.me/api/peers/download"
 
 SELF_UPDATABLE = {"windows-exe", "linux-appimage", "pip"}
 
-# Stages, in the order a successful attempt moves through them. "restarting"
-# is the last one any caller ever observes: every self-update path either
-# execs a new process image or hands off to a helper and exits, so nothing
-# after that point runs in this process to report a later stage.
-_TERMINAL_STAGES = {"unsupported", "failed"}
+# Stages, in the order a successful attempt moves through them. Windows
+# reaches "ready" after preparing the manual update batch; Linux and pip
+# still replace the current process image immediately.
+_TERMINAL_STAGES = {"unsupported", "failed", "ready"}
 
 
 def detect_install_type():
@@ -199,6 +198,7 @@ class UpdateSession:
         self.error  = None
         self._on_progress = on_progress
         self._lock = threading.Lock()
+        self._helper_path = None
 
     def _set(self, stage, detail=""):
         with self._lock:
@@ -324,40 +324,49 @@ class UpdateSession:
                 os.remove(tmp_path)
             raise
 
-        # Windows refuses to overwrite a running EXE. Follow the portable
-        # handoff used by Bitflash: start a detached stock cmd.exe, terminate
-        # this process from outside, then move and relaunch. The loop and
-        # move-success gate make the handoff tolerate a short PE file-lock
-        # tail without ever starting the old executable as if it were new.
-        self._set("installing", "handing off to the update helper")
+        # Windows refuses to overwrite a running EXE. Put a visible batch
+        # file beside the app and let the user start it from Explorer. The
+        # current process stays alive until that explicit action, so a failed
+        # handoff cannot take down the working installation by itself.
+        self._set("installing", "creating update.bat")
         pid = os.getpid()
-        helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.bat")
-        launch_args = subprocess.list2cmdline(sys.argv[1:])
+        helper_path = os.path.join(install_dir, "update.bat")
         helper_script = (
             "@echo off\r\n"
+            "setlocal\r\n"
+            "echo LapseCoin update\r\n"
+            "echo Closing the running LapseCoin process...\r\n"
             f'taskkill /PID {pid} /F >nul 2>&1\r\n'
+            "if not errorlevel 1 echo Process closed.\r\n"
+            "echo Replacing the executable...\r\n"
             "for /L %%N in (1,1,120) do (\r\n"
             f'  move /Y "{tmp_path}" "{exe_path}" >nul 2>&1 && goto moved\r\n'
-            "  timeout /T 1 /NOBREAK >nul\r\n"
             ")\r\n"
+            "echo Update could not replace the executable.\r\n"
+            "echo The downloaded update was kept for inspection.\r\n"
+            "pause\r\n"
             "exit /B 1\r\n"
             ":moved\r\n"
-            f'start "" "{exe_path}"{(" " + launch_args) if launch_args else ""}\r\n'
+            "echo Update installed. LapseCoin is closed.\r\n"
             'del "%~f0"\r\n'
+            "endlocal\r\n"
         )
         with open(helper_path, "w", encoding="ascii") as f:
             f.write(helper_script)
 
-        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
-                        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
-                        getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+        self._helper_path = helper_path
+        self._set("ready", f"Open {helper_path} and run it to finish the update")
+
+    def open_update_file(self):
+        if self.stage != "ready" or not self._helper_path:
+            return False
+        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0)
         subprocess.Popen(
-            ["cmd.exe", "/D", "/C", helper_path],
+            ["explorer.exe", f"/select,{self._helper_path}"],
             creationflags=creationflags,
             close_fds=True,
         )
-        self._set("restarting", "exiting so the update helper can finish")
-        os._exit(0)
+        return True
 
 
 class Updater:
@@ -415,3 +424,8 @@ class Updater:
             session = self._session
         session.run()
         return session
+
+    def open_ready_update(self):
+        with self._lock:
+            session = self._session
+        return session is not None and session.open_update_file()

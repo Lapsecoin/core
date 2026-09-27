@@ -55,7 +55,6 @@ class TestWindowsHelperBreaksAwayFromJob:
         exe_path = tmp_path / "lapsecoin.exe"
         exe_path.write_bytes(b"MZ" + b"\0" * 2_000_000)
         monkeypatch.setattr(sys, "executable", str(exe_path))
-        monkeypatch.setattr(sys, "argv", [str(exe_path), "--no-gui", "--port", "9000"])
         monkeypatch.setattr(updater, "_download", lambda url, dest, on_progress=None:
                              open(dest, "wb").write(b"MZ" + b"\0" * 2_000_000))
         monkeypatch.setattr(os, "access", lambda path, mode: True)
@@ -69,24 +68,21 @@ class TestWindowsHelperBreaksAwayFromJob:
             return None
 
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
-        monkeypatch.setattr(os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
-
         session = updater.UpdateSession("windows-exe", "9.9.9")
-        try:
-            session._run_windows_exe()
-        except SystemExit:
-            pass
+        session._run_windows_exe()
 
-        assert seen["args"][0:3] == ["cmd.exe", "/D", "/C"]
-        assert len(seen["args"]) == 4
-        helper = open(seen["args"][-1], encoding="ascii").read()
+        assert session.stage == "ready"
+        helper = open(tmp_path / "update.bat", encoding="ascii").read()
         assert "taskkill /PID" in helper
         assert "for /L %%N in (1,1,120)" in helper
         assert "move /Y" in helper
         assert "goto moved" in helper
-        assert "start \"\"" in helper
-        assert 'start "" "' + str(exe_path) + '" --no-gui --port 9000' in helper
-        breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+        assert "start \"\"" not in helper
+        assert "pause" in helper
+        assert "Starting LapseCoin" not in helper
+        assert "LapseCoin is closed" in helper
         detached = getattr(subprocess, "DETACHED_PROCESS", 0)
-        new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        assert seen["creationflags"] == detached | new_group | breakaway
+        assert session.open_update_file()
+        assert seen["args"][0:2] == ["explorer.exe", "/select," + str(tmp_path / "update.bat")]
+        assert len(seen["args"]) == 2
+        assert seen["creationflags"] == detached

@@ -1987,6 +1987,14 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
             return jsonify(ok=False, error="An update is already running."), 409
         return jsonify(ok=True)
 
+    @app.route("/api/update/open", methods=["POST"])
+    def api_update_open():
+        if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
+            return jsonify(ok=False, error="Session expired; reload the page and try again."), 403
+        if updater is None or not updater.open_ready_update():
+            return jsonify(ok=False, error="The update is not ready yet."), 409
+        return jsonify(ok=True)
+
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
         balance_lapse = node.view.state.get_balance(node.addr) / TICKS_PER_LAPSE

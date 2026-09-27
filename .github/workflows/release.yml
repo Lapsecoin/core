@@ -227,6 +227,12 @@ jobs:
       - name: Build
         run: pyinstaller --clean --noconfirm lapsecoin.spec
 
+      - name: Smoke test Windows executable
+        shell: pwsh
+        run: |
+          & .\dist\lapsecoin.exe -h
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

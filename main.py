@@ -247,10 +247,12 @@ def _run_console_update(args):
     def on_progress(stage, detail):
         print(f"[{stage}] {detail}")
 
-    # A successful attempt replaces this process (os.execv) or hands off
-    # to a helper and exits (os._exit) from inside run_sync() itself, so
-    # reaching the lines below at all means it didn't succeed.
+    # Windows returns after preparing update.bat; Linux and pip replace this
+    # process image from inside run_sync() on success.
     session = updater.run_sync(checker.latest_version, on_progress=on_progress)
+    if session.stage == "ready":
+        print(f"\nUpdate ready. Run update.bat to finish the update.")
+        return
     print(f"\nUpdate failed: {session.error}")
     print(f"You can update manually from: {checker.releases_url}")
     sys.exit(1)
