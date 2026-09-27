@@ -324,15 +324,17 @@ class UpdateSession:
                 os.remove(tmp_path)
             raise
 
-        # Windows refuses to overwrite a running EXE. Follow the portable
-        # handoff used by Bitflash: start a detached stock cmd.exe, terminate
-        # this process from outside, then move and relaunch. The loop and
-        # move-success gate make the handoff tolerate a short PE file-lock
-        # tail without ever starting the old executable as if it were new.
         self._set("installing", "handing off to the update helper")
         pid = os.getpid()
         helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.bat")
         launch_args = subprocess.list2cmdline(sys.argv[1:])
+
+        # The handoff sequence:
+        # 1. Terminate the original process forcefully if it lingers.
+        # 2. Loop until the OS lock is released and the file move succeeds.
+        # 3. Timeout for 2 seconds to ensure PyInstaller generates a completely unique _MEI folder name.
+        # 4. Start the new executable.
+        # 5. Silently delete the helper script in the same cycle.
         helper_script = (
             "@echo off\r\n"
             f'taskkill /PID {pid} /F >nul 2>&1\r\n'
@@ -342,8 +344,9 @@ class UpdateSession:
             ")\r\n"
             "exit /B 1\r\n"
             ":moved\r\n"
+            "timeout /T 2 /NOBREAK >nul\r\n"
             f'start "" "{exe_path}"{(" " + launch_args) if launch_args else ""}\r\n'
-            'del "%~f0"\r\n'
+            '(goto) 2>nul & del "%~f0"\r\n'
         )
         with open(helper_path, "w", encoding="ascii") as f:
             f.write(helper_script)
@@ -351,10 +354,20 @@ class UpdateSession:
         creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
                         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
                         getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+
+        # Deep scrub of all PyInstaller variables using case-insensitive matching
+        # to guarantee the new process does not attempt to extract into the old directory.
+        clean_env = {}
+        for k, v in os.environ.items():
+            if not k.upper().startswith(("_MEI", "_PYI", "PYINSTALLER", "TCL", "TK")):
+                clean_env[k] = v
+
         subprocess.Popen(
             ["cmd.exe", "/D", "/C", helper_path],
             creationflags=creationflags,
             close_fds=True,
+            env=clean_env,
+            cwd=install_dir,  # Force execution outside of dying _MEI temp folders
         )
         self._set("restarting", "exiting so the update helper can finish")
         os._exit(0)
