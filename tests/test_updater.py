@@ -20,6 +20,8 @@ class TestCleanupStrayUpdateFiles:
         open(exe_path, "w").close()
         stray = os.path.join(d, ".lapsecoin-update-999.exe")
         open(stray, "w").close()
+        stray_ps1 = os.path.join(tempfile.gettempdir(), "lapsecoin-update-999.ps1")
+        open(stray_ps1, "w").close()
         keep = os.path.join(d, "some_other_file.txt")
         open(keep, "w").close()
         monkeypatch.setattr(sys, "executable", exe_path)
@@ -27,6 +29,7 @@ class TestCleanupStrayUpdateFiles:
         updater._cleanup_stray_update_files()
 
         assert not os.path.exists(stray)
+        assert not os.path.exists(stray_ps1)
         assert os.path.exists(exe_path)
         assert os.path.exists(keep)
 
@@ -44,12 +47,11 @@ class TestCleanupStrayUpdateFiles:
 
 
 class TestWindowsHelperBreaksAwayFromJob:
-    """CREATE_BREAKAWAY_FROM_JOB is what keeps the update helper alive once
-    this process os._exit()s: without it, a PyInstaller onefile build's own
-    Job Object kills the helper right along with us before it ever runs
-    (see the comment in _run_windows_exe for how that was confirmed)."""
+    """The helper must outlive the original process and retry the file swap
+    until the EXE is no longer locked; otherwise the update leaves the new
+    binary next to the original and never relaunches the app."""
 
-    def test_windows_exe_update_spawns_helper_with_breakaway_flag(self, monkeypatch, tmp_path):
+    def test_windows_exe_update_spawns_retrying_helper_with_breakaway_flag(self, monkeypatch, tmp_path):
         exe_path = tmp_path / "lapsecoin.exe"
         exe_path.write_bytes(b"MZ" + b"\0" * 2_000_000)
         monkeypatch.setattr(sys, "executable", str(exe_path))
@@ -60,7 +62,9 @@ class TestWindowsHelperBreaksAwayFromJob:
         seen = {}
 
         def fake_popen(args, creationflags=0, close_fds=True):
+            seen["args"] = args
             seen["creationflags"] = creationflags
+            seen["close_fds"] = close_fds
             return None
 
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -72,11 +76,9 @@ class TestWindowsHelperBreaksAwayFromJob:
         except SystemExit:
             pass
 
-        # getattr(..., 0) here mirrors production: on non-Windows platforms
-        # (this test suite's own CI) subprocess has none of these
-        # attributes, and the flag is always a no-op 0 -- the real
-        # assertion this locks in is that _run_windows_exe ORs the same
-        # flag in, whatever it resolves to on the platform actually running.
+        assert seen["args"][0:4] == ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass"]
+        assert seen["args"][-2] == "-File"
+        assert "Move-Item -LiteralPath $tmp" in open(seen["args"][-1], encoding="utf-8").read()
         breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         detached = getattr(subprocess, "DETACHED_PROCESS", 0)
         new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
