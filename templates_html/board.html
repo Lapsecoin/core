@@ -38,7 +38,8 @@
               <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             {% endif %}
-            <span class="rc-votes {{ 'rc-votesPositive' if score > 0 else ('rc-votesNegative' if score < 0 else '') }}" title="Votes score">{{ score }}</span>
+            <span class="rc-votes {{ 'rc-votesPositive' if score > 0 else ('rc-votesNegative' if score < 0 else '') }} {{ 'rc-votesPending' if row.vote_pending }}"
+                  title="{{ 'Includes a vote not yet in a block' if row.vote_pending else 'Votes score' }}">{{ score }}{{ '…' if row.vote_pending }}</span>
             {% if is_private %}
             <button type="button" class="rc-voteButton rc-upVoteButton rc-upVoteIcon {{ 'rc-upVoteButtonActive' if row.my_vote == 'up' }}"
                     data-ref="{{ row.ref6 }}" data-dir="+" title="Vote up"
@@ -142,13 +143,54 @@
   /* Remark42's own color tokens (custom-properties.css, light theme --
      this site has no dark-mode toggle to key a .dark variant off of),
      used verbatim so the ported components below keep their real,
-     un-remapped identity rather than this site's serif/paper palette.
-     Full fit-to-site pass comes after this is working, not before. */
+     un-remapped identity. Scoped to #board-feed/.board-compose so it
+     doesn't leak onto the rest of the site. */
   #board-feed, .board-compose {
-    --color37: #586069; --color9: #0aa; --color10: #777; --color11: #969696;
-    --color13: #888; --color16: #e2e8f0; --color12: 37, 158, 6;
-    --color30: 204, 6, 6; --color35: #d1d5db; --color20: #ddd;
+    --color5: #eee; --color6: #fff; --color9: #0aa; --color10: #777;
+    --color11: #969696; --color13: #888; --color15: #099; --color16: #e2e8f0;
+    --color20: #ddd; --color33: #06c5c5; --color35: #d1d5db; --color37: #586069;
+    --color38: #ef0000; --color12: 37, 158, 6; --color30: 204, 6, 6;
+    --primary-text-color: 38, 38, 38; --primary-background-color: 255, 255, 255;
   }
+  /* This site's global `button`/`input`/`textarea` rules (base.html) give
+     every button a bold filled site-chrome look and every input a
+     monospace/white-box look -- exactly wrong for Remark42's own mostly
+     unstyled, ghost-button components. Reset to Remark42's own
+     global.css defaults first; the specific .rc- and .board- prefixed rules
+     below then apply Remark42's OWN button/input styling on top of that,
+     never this site's. :where(#board-feed) rather than a bare #board-feed:
+     an ID plus a tag (#board-feed button) outranks a lone ID or class
+     selector (#board-send, .board-icon-btn), so a plain reset here would
+     silently beat the very overrides it exists to make room for --
+     :where() scopes it to this page without adding any specificity of
+     its own, so it only ever wins when nothing more specific says otherwise. */
+  :where(#board-feed) button {
+    background: none; border: 0; padding: 0; margin: 0; font: inherit;
+    color: inherit; font-weight: normal; cursor: pointer;
+  }
+  :where(#board-feed) button:disabled { opacity: .6; cursor: default; }
+  :where(#board-feed) input, :where(#board-feed) textarea {
+    font-family: inherit; font-size: inherit; color: inherit; background: none; border: 0;
+  }
+  :where(#board-feed) a { color: var(--color9); text-decoration: none; }
+  :where(#board-feed) a:hover { color: var(--color33); }
+
+  /* Container: Remark42's own background/text color/type, not this
+     site's paper/ink serif -- this is the actual "full identity" part,
+     not just the components inside it. */
+  #board-feed {
+    background: rgb(var(--primary-background-color)); color: rgb(var(--primary-text-color));
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px; display: flex; flex-direction: column; padding: .5rem;
+  }
+  /* Elements meant to be hidden by the `hidden` attribute must actually
+     stay hidden: a bare class selector below (e.g. `.board-icon-palette
+     { display: flex }`) has higher specificity than the browser's own
+     `[hidden] { display: none }` rule, so without this override picking
+     "icon" or "reply" would have shown a permanently-open panel instead
+     of a toggled one. */
+  #board-feed [hidden] { display: none !important; }
+
   /* Row layout (.rc-root/.rc-info/.rc-body/.rc-avatar/.rc-username/.rc-time/
      .rc-text), the vote widget (.rc-vote-root/.rc-voteButton/.rc-votes and
      friends) and the compose toolbar (.rc-toolbar*) are ported from
@@ -159,9 +201,8 @@
      A chat bubble is gone in favor of this thin-header-line-plus-full-width-
      text shape because the board is a flat public feed, not a two-party
      conversation -- the bubble mostly bought wasted margin, not clarity. */
-  .board { display: flex; flex-direction: column; padding-top: .2rem; }
   .rc-root { display: block; padding: 12px 0 8px; font-size: 16px; line-height: 1.4; border-bottom: 1px solid var(--color16); }
-  .rc-root.mine { background: rgba(179,90,12,.05); }
+  .rc-root.mine { background: rgba(10,170,170,.05); }
   .rc-root.pending { opacity: .6; }
   .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 14px; position: relative; }
   .rc-avatar { width: 20px; margin-right: 6px; font-size: 1.1rem; line-height: 1; }
@@ -178,13 +219,12 @@
   .rc-replyQuote:hover { color: var(--color9); }
   .rc-text { white-space: pre-wrap; word-break: break-word; margin-bottom: 4px; }
   .rc-replyBtn {
-    background: none; border: none; cursor: pointer; padding: 0;
-    font-size: .75rem; color: var(--color11); text-decoration: underline;
+    font-size: .75rem; font-weight: 600; color: var(--color9); text-decoration: none;
   }
-  .rc-replyBtn:hover { color: var(--color9); }
+  .rc-replyBtn:hover { color: var(--color33); }
 
   .rc-vote-root { display: flex; align-items: center; margin-left: .5rem; font-weight: 700; line-height: 16px; user-select: none; }
-  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .4; color: var(--color13); background: none; border: none; cursor: pointer; transition: opacity .15s, color .15s; }
+  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .4; color: var(--color13); transition: opacity .15s, color .15s; }
   .rc-voteButton:disabled { cursor: default; }
   .rc-root:hover .rc-voteButton { opacity: 1; }
   .rc-upVoteButton:hover, .rc-upVoteButtonActive { color: rgb(var(--color12)); opacity: 1; }
@@ -192,48 +232,54 @@
   .rc-votes { margin: 0 4px; padding: 2px 6px; font-weight: 700; border-radius: 3px; min-width: 16px; text-align: center; color: var(--color11); }
   .rc-votesNegative { color: rgb(var(--color30)); background-color: rgba(var(--color30), .1); }
   .rc-votesPositive { color: rgb(var(--color12)); background-color: rgba(var(--color12), .1); }
+  .rc-votesPending { opacity: .6; border: 1px dashed currentColor; }
   .rc-upVoteIcon .rc-voteIcon { transform: rotate(180deg); }
 
   .rc-toolbar { display: block; text-align: right; margin-bottom: .25rem; }
   .rc-toolbar-group { display: inline-block; }
   .rc-toolbar-item {
-    background: none; border: 0; color: var(--color37); display: inline-flex;
-    height: 24px; width: 24px; justify-content: center; align-items: center; cursor: pointer;
+    color: var(--color37); display: inline-flex;
+    height: 24px; width: 24px; justify-content: center; align-items: center;
   }
   .rc-toolbar-item:hover { color: var(--color9); }
   .rc-toolbar-item svg { fill: currentColor; }
 
+  /* Compose box: Remark42's own comment-form.root shape (light gray
+     border, no filled card background) instead of this site's tan/paper
+     card, per the same "container gets the real identity too" fix as
+     #board-feed above. */
   .board-compose {
-    border: 1px solid var(--rule-lt); background: var(--paper-2);
-    padding: .5rem .6rem; margin-top: .5rem; border-radius: .5rem;
+    border: 6px solid var(--color5); border-radius: 2px; padding: 8px; margin-top: .5rem;
   }
   .board-compose-row { display: flex; gap: .5rem; align-items: center; }
   .board-compose-row + .board-compose-row { margin-top: .4rem; }
-  .board-compose-sub { font-size: .82rem; }
-  .board-compose input[type="text"] { padding: .35rem .5rem; }
+  .board-compose-sub { font-size: .82rem; color: var(--color11); }
   #board-message {
-    padding: .35rem .5rem; font-family: inherit; font-size: 1em; resize: none;
-    overflow: hidden; max-height: 8rem; overflow-y: auto;
+    width: 100%; padding: 10px 12px; font-size: 16px; line-height: 1.4;
+    resize: none; overflow: hidden; max-height: 8rem; overflow-y: auto;
   }
-  #board-send { flex: 0 0 auto; padding: .35rem 1rem; }
-  .board-icon-btn {
-    font-size: 1.2rem; line-height: 1; background: none; border: 1px solid var(--rule-lt);
-    border-radius: .4rem; padding: .15rem .4rem; cursor: pointer;
+  /* Remark42's own primary-button look (kindPrimary/sizeMiddle in its
+     button.module.css): filled teal, not this site's bold dark-ink
+     button chrome. */
+  #board-send {
+    flex: 0 0 auto; height: 2rem; padding: 0 12px; border-radius: 4px;
+    background: var(--color15); color: var(--color6); font-weight: 600;
   }
+  #board-send:hover:not(:disabled) { background: var(--color33); }
+  .board-icon-btn { font-size: 1.2rem; line-height: 1; padding: .1rem .3rem; border-radius: 4px; }
+  .board-icon-btn:hover { background: var(--color5); }
+  #board-nick { border-bottom: 1px solid var(--color16); padding: .2rem 0; }
   .board-icon-palette {
     display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .3rem;
-    padding: .3rem; border: 1px solid var(--rule-lt); border-radius: .4rem;
+    padding: .3rem; border: 1px solid var(--color16); border-radius: 4px;
   }
-  .board-icon-choice {
-    font-size: 1.1rem; background: none; border: none; cursor: pointer;
-    padding: .1rem .25rem; border-radius: .3rem;
-  }
-  .board-icon-choice:hover { background: var(--rule-lt); }
+  .board-icon-choice { font-size: 1.1rem; padding: .1rem .25rem; border-radius: 4px; }
+  .board-icon-choice:hover { background: var(--color5); }
   .board-reply-banner {
-    justify-content: space-between; font-size: .78rem; color: var(--muted);
-    background: var(--rule-lt); border-radius: .3rem; padding: .25rem .4rem;
+    justify-content: space-between; font-size: .78rem; color: var(--color11);
+    background: var(--color5); border-radius: 4px; padding: .25rem .4rem;
   }
-  #board-reply-cancel { background: none; border: none; cursor: pointer; color: var(--muted); }
+  #board-reply-cancel { color: var(--color11); }
 </style>
 <script>
 (function () {
@@ -279,26 +325,37 @@
   const BURN = feedEl ? feedEl.dataset.burn : "0";
 
   async function handleVoteClick(btn) {
-    const ref = btn.dataset.ref;
-    const dir = btn.dataset.dir;
-    let fee = null;
+    // Disabled for the whole round trip, not just while the request is
+    // in flight: the fee lookup and the passphrase prompt both take real
+    // time a second click could land inside, and a vote is a paid
+    // transaction, not a toggle -- two overlapping submissions is two
+    // paid votes, not one.
+    if (btn.disabled) return;
+    btn.disabled = true;
     try {
-      const res = await fetch(`/api/board/vote_fee?ref=${encodeURIComponent(ref)}&dir=${encodeURIComponent(dir)}`, {cache: "no-store"});
-      const data = await res.json();
-      if (!data.ok) { window.alert(data.reason || "Can't vote."); return; }
-      fee = data.fee;
-    } catch (e) {
-      // Fee lookup failed; still lets the vote through with a generic
-      // prompt rather than blocking on a courtesy estimate.
+      const ref = btn.dataset.ref;
+      const dir = btn.dataset.dir;
+      let fee = null;
+      try {
+        const res = await fetch(`/api/board/vote_fee?ref=${encodeURIComponent(ref)}&dir=${encodeURIComponent(dir)}`, {cache: "no-store"});
+        const data = await res.json();
+        if (!data.ok) { window.alert(data.reason || "Can't vote."); return; }
+        fee = data.fee;
+      } catch (e) {
+        // Fee lookup failed; still lets the vote through with a generic
+        // prompt rather than blocking on a courtesy estimate.
+      }
+      const label = fee !== null
+        ? `This vote burns ${BURN} tick + ~${fee} tick fee (real coins). Passphrase:`
+        : "Passphrase:";
+      const passphrase = window.prompt(label);
+      if (passphrase === null) return;  // cancelled, nothing sent
+      const body = new URLSearchParams({csrf_token: CSRF, ref, dir, passphrase});
+      await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
+      location.reload();  // same "post is its own confirmation" pattern as composing
+    } finally {
+      btn.disabled = false;
     }
-    const label = fee !== null
-      ? `This vote burns ${BURN} tick + ~${fee} tick fee (real coins). Passphrase:`
-      : "Passphrase:";
-    const passphrase = window.prompt(label);
-    if (passphrase === null) return;  // cancelled, nothing sent
-    const body = new URLSearchParams({csrf_token: CSRF, ref, dir, passphrase});
-    await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
-    location.reload();  // same "post is its own confirmation" pattern as composing
   }
   document.querySelectorAll(".rc-voteButton[data-ref]").forEach(btn => {
     btn.addEventListener("click", () => handleVoteClick(btn));

@@ -402,7 +402,7 @@ def _board_posts(chain):
     return rows
 
 
-def _board_profiles_and_votes(chain):
+def _board_profiles_and_votes(chain, mempool=None):
     """One more full pass over the chain (see _board_posts' own docstring
     on why that's fine at this scale), building the two pieces of state a
     board post's header can affect but that no single post ever *is* by
@@ -417,22 +417,55 @@ def _board_profiles_and_votes(chain):
     client gives you.
 
     votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
-    (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain.
-    One vote per (address, target) survives, not one per transaction: a
-    vote isn't a repeatable action that piles up, it's a single choice
-    that can change your mind, exactly like Remark42's own model (a vote
-    there is one stored value per user per comment, overwritten by a
-    later click, never summed). Walking tip-first and keeping only the
-    first vote seen per (address, target) pair gets that same "latest
-    replaces, doesn't add" semantics for free, the same trick profiles
-    above already uses for "latest icon/nickname wins".
+    (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain,
+    plus (this is why mempool is a param) any of the same still sitting
+    unconfirmed -- counted first, exactly like _board_pending already
+    puts an unconfirmed post at the bottom of the feed instead of making
+    the page look like the click did nothing until a block lands. One
+    vote per (address, target) survives, not one per transaction: a vote
+    isn't a repeatable action that piles up, it's a single choice that
+    can change your mind, exactly like Remark42's own model (a vote there
+    is one stored value per user per comment, overwritten by a later
+    click, never summed). Walking mempool-then-tip-first and keeping only
+    the first vote seen per (address, target) pair gets that same
+    "latest replaces, doesn't add" semantics for free, the same trick
+    profiles above already uses for "latest icon/nickname wins".
 
-    Confirmed votes only; a pending vote in the mempool isn't counted
-    until it lands, same as a pending board post isn't in post_count.
+    pending_vote_refs: the set of target refs with an unconfirmed vote
+    counted above, so a row can show its score as still-settling instead
+    of implying a mined, final number.
     """
     profiles = {}
     votes = {}
-    voted = set()  # (address, target ref) already counted, most recent first
+    voted = set()  # (address, target ref) already counted, most recent/pending first
+    pending_vote_refs = set()
+
+    def _tally_vote(t):
+        """Counts t if it's a vote, returning the ref it targeted (so the
+        caller can mark that ref pending) or None if it wasn't a vote at
+        all."""
+        memo = t.get("memo") or ""
+        if not (memo.startswith(VOTE_UP_TAG) or memo.startswith(VOTE_DOWN_TAG)):
+            return None
+        up = memo.startswith(VOTE_UP_TAG)
+        tag = VOTE_UP_TAG if up else VOTE_DOWN_TAG
+        ref = memo[len(tag):len(tag) + REPLY_REF_LEN]
+        voter = t.get("from")
+        key = (voter, ref)
+        if key in voted:
+            return ref
+        voted.add(key)
+        tally = votes.setdefault(ref, {"up": 0, "down": 0, "by": {}})
+        tally["up" if up else "down"] += 1
+        tally["by"][voter] = "up" if up else "down"
+        return ref
+
+    if mempool is not None:
+        for t in mempool.all_txs():
+            ref = _tally_vote(t)
+            if ref is not None:
+                pending_vote_refs.add(ref)
+
     for blk in reversed(chain):
         for t in reversed(blk.get("transactions", [])):
             memo = t.get("memo") or ""
@@ -443,19 +476,9 @@ def _board_profiles_and_votes(chain):
                 icon, nick, _, _ = parse_board_body(memo[len(BOARD_MEMO_TAG):])
                 if icon is not None:
                     profiles[addr] = {"icon": icon, "nick": nick}
-            elif memo.startswith(VOTE_UP_TAG) or memo.startswith(VOTE_DOWN_TAG):
-                up = memo.startswith(VOTE_UP_TAG)
-                tag = VOTE_UP_TAG if up else VOTE_DOWN_TAG
-                ref = memo[len(tag):len(tag) + REPLY_REF_LEN]
-                voter = t.get("from")
-                key = (voter, ref)
-                if key in voted:
-                    continue
-                voted.add(key)
-                tally = votes.setdefault(ref, {"up": 0, "down": 0, "by": {}})
-                tally["up" if up else "down"] += 1
-                tally["by"][voter] = "up" if up else "down"
-    return profiles, votes
+            else:
+                _tally_vote(t)
+    return profiles, votes, pending_vote_refs
 
 
 def _committed_tx_count(chain):
@@ -985,13 +1008,16 @@ def _board_pending(mempool):
     return rows
 
 
-def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None):
+def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_vote_refs=frozenset()):
     """Attach everything board.html actually renders for one row -- the
     poster's current icon/nickname (looked up live, see
-    _board_profiles_and_votes), this post's own vote tally, the viewer's
-    own prior vote if any (so the matching button can show the same
-    already-voted, disabled state Remark42's own CommentVotes does), and
-    a reply preview if it has one -- so the template only ever reads
+    _board_profiles_and_votes), this post's own vote tally, whether that
+    tally still has an unconfirmed vote in it (so the count can read as
+    still-settling instead of implying a final, mined number -- the same
+    "pending..." honesty a freshly posted message already gets), the
+    viewer's own prior vote if any (so the matching button can show the
+    same already-voted, disabled state Remark42's own CommentVotes does),
+    and a reply preview if it has one -- so the template only ever reads
     plain fields off row, never re-parses a memo itself.
     """
     memo = row["tx"].get("memo") or ""
@@ -1004,6 +1030,7 @@ def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None):
     tally = votes.get(row["ref6"], {"up": 0, "down": 0, "by": {}})
     row["up"], row["down"] = tally["up"], tally["down"]
     row["my_vote"] = tally.get("by", {}).get(own_addr)
+    row["vote_pending"] = row["ref6"] in pending_vote_refs
     row["reply_ref"] = reply_ref
     row["reply_from"] = row["reply_snippet"] = None
     if reply_ref:
@@ -1047,14 +1074,14 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
     pending_rows = _board_pending(node.mempool) if page == 1 else []
     page_rows += pending_rows
 
-    profiles, votes = _board_profiles_and_votes(node.view.chain)
+    profiles, votes, pending_vote_refs = _board_profiles_and_votes(node.view.chain, node.mempool)
     # Every row on chain, not just this page, so a reply on page 3 can
     # still preview a parent that landed on page 1.
     hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
     for row in pending_rows:
         hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
     for row in page_rows:
-        _enrich_board_row(row, profiles, votes, hash6_index, own_addr)
+        _enrich_board_row(row, profiles, votes, hash6_index, own_addr, pending_vote_refs)
 
     own_profile = profiles.get(own_addr)
     own_icon_idx = own_profile["icon"] if own_profile else None
