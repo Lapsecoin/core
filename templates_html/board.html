@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<p class="stat-sub" style="margin:.2rem 0 .6rem">
+<p style="margin:.2rem 0 .6rem; font-size:.78rem; color:var(--muted); line-height:1.5">
   Public, permanent, on-chain. Posting burns {{ BOARD_POST_AMOUNT }} tick,
   plus a separate network fee, currently {{ board_fee_floor }}+ ticks and rising
   as the board fills up or with congestion. Voting is an ordinary transaction
@@ -9,9 +9,7 @@
   post of their own.
 </p>
 
-<div class="card">
-  <div class="card-title">{{ post_count }} post{{ "s" if post_count != 1 }}</div>
-  <div class="board" id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
+<div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
     {% if rows %}
       {% for row in rows %}
       {% set mine = row.tx.from == own_addr %}
@@ -19,7 +17,8 @@
       <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}">
         <div class="rc-info">
           <span class="rc-avatar" aria-hidden="true">{{ row.icon }}</span>
-          <a href="/address?addr={{ row.tx.from }}" class="rc-username {{ 'hash-short' if not row.nick }}">{{ row.nick or row.tx.from }}</a>
+          <a href="/address?addr={{ row.tx.from }}" class="rc-username {{ 'hash-short' if not row.nick }}"
+             title="{{ row.tx.from }}{{ ' — nickname: ' + row.nick if row.nick else ' — no nickname set' }}">{{ row.nick or row.tx.from }}</a>
           {% if row.pending %}
             <span class="rc-time" title="Submitted, not yet in a block">pending&hellip;</span>
           {% else %}
@@ -123,7 +122,6 @@
     </form>
     <script type="module" src="/vendor/markdown-toolbar-element.js"></script>
     {% endif %}
-  </div>
 </div>
 
 {% if total_pages > 1 %}
@@ -182,6 +180,7 @@
     background: rgb(var(--primary-background-color)); color: rgb(var(--primary-text-color));
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 14px; display: flex; flex-direction: column; padding: .5rem;
+    border: 1px solid var(--color16); border-radius: 4px;
   }
   /* Elements meant to be hidden by the `hidden` attribute must actually
      stay hidden: a bare class selector below (e.g. `.board-icon-palette
