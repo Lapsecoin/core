@@ -880,13 +880,13 @@ class TestAddressHiddenPublicly:
         node = self._node()
         client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
         html = client.get("/board").get_data(as_text=True)
-        assert 'class="board-row mine' not in html
+        assert 'class="rc-root mine' not in html
 
     def test_board_shows_which_post_is_own_on_public_app_when_setting_off(self):
         node = self._node(hide=False)
         client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
         html = client.get("/board").get_data(as_text=True)
-        assert 'class="board-row mine' in html
+        assert 'class="rc-root mine' in html
 
     def test_api_board_omits_own_addr_on_public_app_by_default(self):
         node = self._node()
