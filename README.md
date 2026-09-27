@@ -135,8 +135,19 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `LAPSECOIN_PASSPHRASE` | prompted | Non-interactive wallet passphrase; also implies `--no-gui` |
+| `LAPSECOIN_PORT` | `8333` | Default public HTTP and peer port; `--port` wins when supplied |
+| `LAPSECOIN_LOG_LEVEL` | `INFO` | Default log level: `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
+| `LAPSECOIN_DOCKER` | unset | Set to `1` inside the project Docker image; disables self-update |
+| `LAPSECOIN_PEERS_URL` | project default | Starter peer-list URL used by the installer and update fallback |
+| `LAPSECOIN_DRAW_WINDOW_SECONDS` | `10` | Same-height draw window in seconds |
 | `LAPSECOIN_SWAP_CONFIRM_DEPTH` | `2` | How many blocks must bury a LapseCoin payment before a swap treats it as settled |
 | `LAPSECOIN_SWAP_AUTO_ACCEPT_MIN_TRUST` | `0` | Minimum counterparty trust score for a fill request to auto-accept |
+| `LAPSECOIN_SHOW_HARDWARE_DETAILS` | `true` | Show this node's hardware details on the odds page |
+| `LAPSECOIN_MINING_ENABLED` | `true` | Enable this node's block building |
+| `LAPSECOIN_HIDE_ADDRESS_PUBLICLY` | `true` | Hide this node's address from the public dashboard |
+
+`APPIMAGE` is set by the AppImage runtime itself and is not normally configured by users. `LAPSECOIN_REPO_RAW` is used only by the source installer to override where it downloads `requirements.txt` from.
 
 **Upgrading from 0.6.2 or earlier with the privacy setting on?** That version created a second key file, `lapsecoin_key.json.privacy`, and advertised its address for peers to pay. Nodes no longer advertise an address at all, so nothing creates or uses that file any more, but yours still exists and may hold what peers already sent it. **Keep it, and back it up.** It is an ordinary key file with its own salt, so the same passphrase opens it on its own whenever you want those funds.
 </details>

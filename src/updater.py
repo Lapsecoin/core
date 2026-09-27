@@ -176,9 +176,7 @@ def _cleanup_stray_update_files():
     tmp_dir = tempfile.gettempdir()
     with contextlib.suppress(OSError):
         for name in os.listdir(tmp_dir):
-            if name.startswith("lapsecoin-update-") and (
-                name.endswith(".bat") or name.endswith(".ps1")
-            ):
+            if name.startswith("lapsecoin-update-") and name.endswith(".bat"):
                 with contextlib.suppress(OSError):
                     os.remove(os.path.join(tmp_dir, name))
 
@@ -326,46 +324,35 @@ class UpdateSession:
                 os.remove(tmp_path)
             raise
 
-        # Windows refuses to overwrite a running EXE. We hand off to a
-        # dedicated helper process that waits for the original PID to vanish,
-        # retries the replace if the file is still briefly locked, then
-        # launches the new EXE. This is much more robust than a tiny batch
-        # file: antivirus and the process loader can keep a PE file locked for
-        # a beat after the parent exits, and a one-shot move is easy to lose
-        # in that race.
+        # Windows refuses to overwrite a running EXE. Follow the portable
+        # handoff used by Bitflash: start a detached stock cmd.exe, terminate
+        # this process from outside, then move and relaunch. The loop and
+        # move-success gate make the handoff tolerate a short PE file-lock
+        # tail without ever starting the old executable as if it were new.
         self._set("installing", "handing off to the update helper")
         pid = os.getpid()
-        helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.ps1")
+        helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.bat")
+        launch_args = subprocess.list2cmdline(sys.argv[1:])
         helper_script = (
-            "$ErrorActionPreference = 'Stop'\n"
-            "$exe = @'" + exe_path + "'@\n"
-            "$tmp = @'" + tmp_path + "'@\n"
-            "for ($i = 0; $i -lt 60; $i++) {\n"
-            "  $proc = Get-CimInstance Win32_Process -Filter \"ProcessId = " + str(pid) + "\" -ErrorAction SilentlyContinue\n"
-            "  if (-not $proc) { break }\n"
-            "  Start-Sleep -Seconds 1\n"
-            "}\n"
-            "for ($i = 0; $i -lt 120; $i++) {\n"
-            "  try {\n"
-            "    if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction Stop }\n"
-            "    Move-Item -LiteralPath $tmp -Destination $exe -Force -ErrorAction Stop\n"
-            "    break\n"
-            "  } catch {\n"
-            "    Start-Sleep -Milliseconds 250\n"
-            "  }\n"
-            "}\n"
-            "if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }\n"
-            "Start-Process -FilePath $exe -NoNewWindow\n"
-            "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n"
+            "@echo off\r\n"
+            f'taskkill /PID {pid} /F >nul 2>&1\r\n'
+            "for /L %%N in (1,1,120) do (\r\n"
+            f'  move /Y "{tmp_path}" "{exe_path}" >nul 2>&1 && goto moved\r\n'
+            "  timeout /T 1 /NOBREAK >nul\r\n"
+            ")\r\n"
+            "exit /B 1\r\n"
+            ":moved\r\n"
+            f'start "" "{exe_path}"{(" " + launch_args) if launch_args else ""}\r\n'
+            'del "%~f0"\r\n'
         )
-        with open(helper_path, "w", encoding="utf-8") as f:
+        with open(helper_path, "w", encoding="ascii") as f:
             f.write(helper_script)
 
         creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
                         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
                         getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         subprocess.Popen(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper_path],
+            ["cmd.exe", "/D", "/C", helper_path],
             creationflags=creationflags,
             close_fds=True,
         )
