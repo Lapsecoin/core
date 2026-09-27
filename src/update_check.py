@@ -27,7 +27,7 @@ DEFAULT_RELEASES_URL = "https://github.com/Lapsecoin/core/releases"
 
 # A version bump is a rare event; this just keeps latency to noticing one
 # low without polling anything unnecessarily.
-CHECK_INTERVAL_SECONDS = 3600
+CHECK_INTERVAL_SECONDS = 1800
 
 
 def _parse_version(s):
