@@ -115,7 +115,7 @@ log = logging.getLogger("ec.api")
 # transaction history are paginated rather than truncated to "recent N".
 BLOCKS_PER_PAGE  = 8
 HISTORY_PER_PAGE = 3
-DASHBOARD_TXS_PER_PAGE = 6
+DASHBOARD_TXS_PER_PAGE = 5
 BOARD_PER_PAGE = 20
 
 # Held peers are already bounded by MAX_PEERS (125), but what they claim
