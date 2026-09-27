@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  .odds-page { font-size: 16px; }
+</style>
 {% if not race %}
-<div class="card">
+<div class="card odds-page">
   <div class="card-title">Race odds</div>
   <p>Not enough chain history yet, check back after a few blocks.</p>
 </div>
 {% else %}
+<div class="odds-page">
 {% if not mining_enabled %}
 <div class="card" style="border-color:var(--rule);color:var(--muted)">
   Not building right now: mining is off. Still fully validating and
@@ -126,12 +130,6 @@
   </div>
   <button type="button" id="odds-zoom-reset" class="btn-sm" style="display:none">Reset spacing</button>
   </div>
-  <p class="stat-sub" style="margin-top:.4rem">
-    <span id="odds-axis-hint" style="display:none">Drag a marker along the bottom axis to
-    give the blocks beside it more room; every block stays on the chart, so spreading one
-    stretch out squeezes its neighbour. </span>
-    Block interval is a proxy for the winning builder's real build time.
-  </p>
 </div>
 <style>
   /* The mark is a slider thumb, so it takes the cursor and the emphasis
@@ -334,8 +332,6 @@
     if (svg) svg.innerHTML = renderChart(chart, medianVal);
     const reset = document.getElementById("odds-zoom-reset");
     if (reset) reset.style.display = (draggable(chart) && !isDefault(chart)) ? "" : "none";
-    const hint = document.getElementById("odds-axis-hint");
-    if (hint) hint.style.display = draggable(chart) ? "inline" : "none";
   }
 
   const svgEl = document.getElementById("odds-svg");
@@ -456,5 +452,6 @@
   setInterval(refresh, 6000);
 })();
 </script>
+</div>
 {% endif %}
 {% endblock %}
