@@ -739,8 +739,15 @@ def _x_ticks(rows):
             for idx in idxs]
 
 
-def _race_chart(race):
+def _race_chart(race, nicknames_by_addr=None):
     """Precompute SVG pixel geometry for the race-odds chart.
+
+    nicknames_by_addr: addr -> nickname (built from _board_profiles_and_votes'
+    own profiles dict), or None for a caller that doesn't
+    have one handy -- every "nick" this function attaches then just
+    reads as None, which the template already treats as "show the
+    address" (unchanged behaviour), so a caller that skips wiring this
+    up isn't required to.
 
     Axis range is a display decision, kept separate from the stats: it
     hugs the typical cluster of values (within 2x of the median either
@@ -757,6 +764,7 @@ def _race_chart(race):
     entry, rather than an unbounded set of generated colors, see
     _BUILDER_COLOR_SLOTS.
     """
+    nicknames_by_addr = nicknames_by_addr or {}
     rows = race["window"]
     n = len(rows)
     plot_w = _CHART_W - _CHART_PAD_L
@@ -805,10 +813,12 @@ def _race_chart(race):
     points = [{"x": round(x_at(idx), 1), "y": round(y_at(seconds), 1),
                "idx": idx, "height": h, "seconds": seconds,
                "clipped": seconds > axis_hi or seconds < axis_lo,
-               "builder": builder, "color": color_by_builder.get(builder, _OTHER_COLOR)}
+               "builder": builder, "nick": nicknames_by_addr.get(builder),
+               "color": color_by_builder.get(builder, _OTHER_COLOR)}
               for idx, (h, seconds, builder) in enumerate(rows)]
 
-    legend = [{"label": b, "color": color_by_builder[b], "count": builder_counts[b]}
+    legend = [{"label": b, "nick": nicknames_by_addr.get(b),
+               "color": color_by_builder[b], "count": builder_counts[b]}
               for b in top_builders]
     other_count = sum(c for b, c in builder_counts.items() if b not in color_by_builder)
     if other_count:
@@ -1234,6 +1244,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def dashboard():
         info = dict(node.get_info())
         info["address"] = _own_addr_or_hidden()
+        # Only ever looked up when the address itself is already showing:
+        # a nickname here would be exactly the identity-revealing side
+        # channel HIDE_ADDRESS_PUBLICLY exists to close if it appeared
+        # while the address itself stayed hidden.
+        info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
         total = _committed_tx_count(chain)
         total_pages = max(-(-total // DASHBOARD_TXS_PER_PAGE), 1)
@@ -1544,10 +1559,27 @@ def _shared_read_only_routes(app, node, pool, limiter,
             odds_cache["key"], odds_cache["race"] = key, race
         return race
 
+    # Same tip-keyed cache pattern as odds_cache, kept separate since this
+    # depends only on the chain's board posts and state.nicknames, not on
+    # the draw window or own_vdf_median odds_cache's own key includes.
+    nickname_cache = {}
+
+    def _builder_nicknames_for():
+        tip = node.view.chain[-1]
+        key = (tip.get("hash"), tip.get("height"))
+        with odds_lock:
+            if nickname_cache.get("key") == key:
+                return nickname_cache["nicknames"]
+        profiles, _votes, _pending = _board_profiles_and_votes(node.view.chain, node.view.state.nicknames)
+        nicknames = {addr: prof["nick"] for addr, prof in profiles.items()}
+        with odds_lock:
+            nickname_cache["key"], nickname_cache["nicknames"] = key, nicknames
+        return nicknames
+
     @app.route("/odds", endpoint=pfx+"odds")
     def odds():
         race = _race_for()
-        chart = _race_chart(race) if race else None
+        chart = _race_chart(race, _builder_nicknames_for()) if race else None
         hardware = (hardware_info.describe()
                     if node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS)
                     else None)
@@ -1585,7 +1617,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "in_draw_pct": race["in_draw_pct"],
             "draw_window": race["draw_window"],
             "field_builders": race["field_builders"],
-            "window_len": len(race["window"]), "chart": _race_chart(race),
+            "window_len": len(race["window"]), "chart": _race_chart(race, _builder_nicknames_for()),
             "reorgs": node.reorg_stats(),
             "mining_enabled": node.settings.get(settings_mod.MINING_ENABLED),
             "waiting_zero_odds": getattr(node, "status_line", "").startswith("waiting"),
@@ -1639,6 +1671,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def api_info():
         info = dict(node.get_info())
         info["address"] = _own_addr_or_hidden()
+        info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
         info["recent_txs"] = [
             {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount}
