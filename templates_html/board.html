@@ -10,63 +10,9 @@
 </p>
 
 <div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
-    {% if rows %}
-      {% for row in rows %}
-      {% set mine = row.tx.from == own_addr %}
-      {% set score = row.up - row.down %}
-      <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}">
-        <div class="rc-info">
-          <span class="rc-avatar" aria-hidden="true">{{ row.icon }}</span>
-          <a href="/address?addr={{ row.tx.from }}" class="rc-username {{ 'hash-short' if not row.nick }}"
-             title="{{ row.tx.from }}{{ ' - nickname: ' + row.nick if row.nick else ' - no nickname set' }}">{{ row.nick or row.tx.from }}</a>
-          {% if row.pending %}
-            <span class="rc-time" title="Submitted, not yet in a block">pending&hellip;</span>
-          {% else %}
-            <a class="rc-time" href="/explorer/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
-          {% endif %}
-          {# Vote widget: markup/CSS/icon ported from Remark42's own
-             CommentVotes component (comment-votes.tsx/.module.css,
-             icons/arrow.tsx), full identity intact -- same class names,
-             same color tokens (var(--colorN)), same disabled/active
-             states once already voted, not a fresh rebuild. #}
-          <span class="rc-vote-root">
-            {% if is_private %}
-            <button type="button" class="rc-voteButton rc-downVoteButton {{ 'rc-downVoteButtonActive' if row.my_vote == 'down' }}"
-                    data-ref="{{ row.ref6 }}" data-dir="-" title="Vote down"
-                    {{ 'disabled' if row.my_vote == 'down' }}>
-              <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
-            {% endif %}
-            <span class="rc-votes {{ 'rc-votesPositive' if score > 0 else ('rc-votesNegative' if score < 0 else '') }} {{ 'rc-votesPending' if row.vote_pending }}"
-                  title="{{ 'Includes a vote not yet in a block' if row.vote_pending else 'Votes score' }}">{{ score }}{{ '…' if row.vote_pending }}</span>
-            {% if is_private %}
-            <button type="button" class="rc-voteButton rc-upVoteButton rc-upVoteIcon {{ 'rc-upVoteButtonActive' if row.my_vote == 'up' }}"
-                    data-ref="{{ row.ref6 }}" data-dir="+" title="Vote up"
-                    {{ 'disabled' if row.my_vote == 'up' }}>
-              <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
-            {% endif %}
-          </span>
-        </div>
-        <div class="rc-body">
-          {% if row.reply_ref %}
-          <a class="rc-replyQuote" href="#post-{{ row.reply_ref }}">
-            {% if row.reply_from %}replying to {{ row.reply_from[:14] }}&hellip;: &ldquo;{{ row.reply_snippet }}&rdquo;
-            {% else %}replying to an earlier post{% endif %}
-          </a>
-          {% endif %}
-          <div class="rc-text">{{ render_board_text(row.text) }}</div>
-          {% if is_private and not row.pending %}
-          <button type="button" class="rc-replyBtn"
-                  data-ref="{{ row.ref6 }}" data-addr="{{ row.tx.from }}"
-                  data-snippet="{{ row.text[:60] }}">Reply</button>
-          {% endif %}
-        </div>
-      </div>
-      {% endfor %}
-    {% else %}
-      <p style="color:var(--muted);text-align:center">Nothing posted yet.</p>
-    {% endif %}
+    <div id="board-rows">
+      {% include "board_rows.html" %}
+    </div>
     {% if is_private %}
     <form method="POST" action="/board?page={{ page }}" class="board-compose" id="board-compose"
           data-own-nick="{{ own_nick or '' }}" data-own-icon-idx="{{ own_icon_idx }}">
@@ -232,16 +178,16 @@
   }
   .rc-replyBtn:hover { color: var(--color33); }
 
-  .rc-vote-root { display: flex; align-items: center; margin-left: .5rem; font-weight: 700; line-height: 16px; user-select: none; }
+  .rc-vote-root { display: flex; flex: 0 0 auto; align-items: center; margin-left: .5rem; font-weight: 700; line-height: 16px; white-space: nowrap; user-select: none; }
   .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .4; color: var(--color13); transition: opacity .15s, color .15s; }
   .rc-voteButton:disabled { cursor: default; }
   .rc-root:hover .rc-voteButton { opacity: 1; }
   .rc-upVoteButton:hover, .rc-upVoteButtonActive { color: rgb(var(--color12)); opacity: 1; }
   .rc-downVoteButton:hover, .rc-downVoteButtonActive { color: rgb(var(--color30)); opacity: 1; }
-  .rc-votes { margin: 0 4px; padding: 2px 6px; font-weight: 700; border-radius: 3px; min-width: 16px; text-align: center; color: var(--color11); }
+  .rc-votes { display: inline-block; flex: 0 0 auto; margin: 0 4px; padding: 2px 6px; font-weight: 700; border-radius: 3px; min-width: 16px; text-align: center; color: var(--color11); }
   .rc-votesNegative { color: rgb(var(--color30)); background-color: rgba(var(--color30), .1); }
   .rc-votesPositive { color: rgb(var(--color12)); background-color: rgba(var(--color12), .1); }
-  .rc-votesPending { opacity: .6; border: 1px dashed currentColor; }
+  .rc-votesPending { opacity: .6; }
   .rc-upVoteIcon .rc-voteIcon { transform: rotate(180deg); }
 
   .rc-toolbar { display: block; text-align: right; margin-bottom: .25rem; }
@@ -315,10 +261,13 @@
     return new Date(ts * 1000).toLocaleDateString();
   }
 
-  document.querySelectorAll(".rc-time[data-ts]").forEach(el => {
-    const ts = parseInt(el.dataset.ts, 10);
-    if (ts) el.textContent = fmtTs(ts);
-  });
+  function updateTimes(root) {
+    (root || document).querySelectorAll(".rc-time[data-ts]").forEach(el => {
+      const ts = parseInt(el.dataset.ts, 10);
+      if (ts) el.textContent = fmtTs(ts);
+    });
+  }
+  updateTimes(document);
 
   // Same "ask right before signing" trick used by every form on this page
   // that moves coins: nothing sits in a visible passphrase field between
@@ -369,14 +318,17 @@
       if (passphrase === null) return;  // cancelled, nothing sent
       const body = new URLSearchParams({csrf_token: CSRF, ref, dir, passphrase});
       await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
-      location.reload();  // same "post is its own confirmation" pattern as composing
+      if (PAGE === 1) pollBoard();
     } finally {
       btn.disabled = false;
     }
   }
-  document.querySelectorAll(".rc-voteButton[data-ref]").forEach(btn => {
-    btn.addEventListener("click", () => handleVoteClick(btn));
-  });
+  function wireVoteButtons(root) {
+    (root || document).querySelectorAll(".rc-voteButton[data-ref]").forEach(btn => {
+      btn.addEventListener("click", () => handleVoteClick(btn));
+    });
+  }
+  wireVoteButtons(document);
 
   const composeForm = document.getElementById("board-compose");
   if (composeForm) {
@@ -462,14 +414,14 @@
     });
     nickInput.addEventListener("input", markProfileDirty);
 
-    document.querySelectorAll(".rc-replyBtn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        replyRefInput.value = btn.dataset.ref;
-        replyText.textContent = "replying to " + btn.dataset.addr.slice(0, 14) + "…: “" + btn.dataset.snippet + "”";
-        replyBanner.hidden = false;
-        msgInput.focus();
-        refreshCounter();
-      });
+    feedEl.addEventListener("click", event => {
+      const btn = event.target.closest(".rc-replyBtn");
+      if (!btn) return;
+      replyRefInput.value = btn.dataset.ref;
+      replyText.textContent = "replying to " + btn.dataset.addr.slice(0, 14) + "…: “" + btn.dataset.snippet + "”";
+      replyBanner.hidden = false;
+      msgInput.focus();
+      refreshCounter();
     });
     replyCancel.addEventListener("click", () => {
       replyRefInput.value = "";
@@ -557,27 +509,33 @@
   // not a live view, so they stay exactly what was rendered.
   if (PAGE !== 1) return;
 
-  let knownFirstHash = null;
+  let pollInFlight = false;
   const statusEl = document.getElementById("live-status");
 
-  async function poll() {
+  async function pollBoard() {
+    if (pollInFlight) return;
+    pollInFlight = true;
     try {
-      const res = await fetch("/api/board?page=1", {cache: "no-store"});
+      const res = await fetch("/api/board/fragment?page=1", {cache: "no-store"});
       if (!res.ok) throw new Error("bad status " + res.status);
-      const data = await res.json();
-      const latest = data.posts[0] && data.posts[0].hash;
-      if (knownFirstHash === null) {
-        knownFirstHash = latest || "";
-      } else if (latest && latest !== knownFirstHash) {
-        statusEl.textContent = "new posts – reload to see them";
-      }
+      const html = await res.text();
+      const next = document.createElement("template");
+      next.innerHTML = html.trim();
+      const rows = document.getElementById("board-rows");
+      if (!rows || !next.content.firstElementChild) return;
+      rows.replaceChildren(...next.content.childNodes);
+      updateTimes(rows);
+      wireVoteButtons(rows);
+      statusEl.textContent = "";
     } catch (e) {
-      // Quiet failure: this is a courtesy nudge, not a required feature.
+      // Keep the current feed usable when a poll is temporarily offline.
+    } finally {
+      pollInFlight = false;
     }
   }
 
-  poll();
-  setInterval(poll, 15000);
+  pollBoard();
+  setInterval(pollBoard, 5000);
 })();
 </script>
 {% endblock %}

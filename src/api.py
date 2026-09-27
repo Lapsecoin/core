@@ -1533,6 +1533,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
             ],
         })
 
+    @app.route("/api/board/fragment", endpoint=pfx+"api_board_fragment")
+    def api_board_fragment():
+        """Return live board rows without replacing the compose box."""
+        page = request.args.get("page", 1, type=int) or 1
+        ctx = _board_ctx(node, page, _own_addr_or_hidden())
+        return render_template("board_rows.html", **ctx)
+
     # Race-odds data for the current tip, computed once per tip and held
     # here rather than in a module global: one cache per app, keyed by
     # nothing that can be absent. race_odds simulates ten thousand draws

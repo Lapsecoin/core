@@ -1113,6 +1113,19 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
         html = client.get("/board").get_data(as_text=True)
         assert 'class="rc-votes rc-votesPositive ' in html
 
+    def test_pending_vote_score_stays_numeric_and_describes_pending_on_hover(self):
+        import tx as tx_mod
+        parent_tx = self._client()[1].view.chain[1]["transactions"][0]
+        parent_ref = tx_mod.tx_hash(parent_tx)[:api.REPLY_REF_LEN]
+        vote_tx = {"from": address(1), "nonce": 1, "fee": 100,
+                   "outputs": [{"to": "1" * 40, "amount": 1}],
+                   "memo": api.VOTE_UP_TAG + parent_ref}
+        client, node = self._client()
+        node.mempool.add(vote_tx)
+        html = client.get("/board").get_data(as_text=True)
+        assert 'class="rc-votes rc-votesPositive rc-votesPending"' in html
+        assert 'title="Includes a vote not yet in a block">1</span>' in html
+
     def test_preview_endpoint_renders_through_the_same_function_as_posts(self):
         """No signing needed here (unlike board_post/board_vote): preview
         never touches the chain, mempool or a balance, it just renders
