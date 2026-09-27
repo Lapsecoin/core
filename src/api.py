@@ -131,6 +131,89 @@ CLAIMED_GRAPH_LIMIT = 60
 BOARD_MEMO_TAG    = tx_mod.BOARD_MEMO_TAG
 BOARD_POST_AMOUNT = tx_mod.BOARD_POST_AMOUNT
 
+# Profile (icon + nickname) and reply-reference are not separate
+# transactions: they're a small fixed-grammar header a post's own memo may
+# start with, folded into whatever post the user was about to make anyway
+# rather than spent as a post of their own. This is the whole point --
+# an address only pays for a profile change on top of a post it was
+# already sending, never as its own extra board slot. Both headers are
+# only ever written by this server's own compose form, never hand-typed,
+# the same convention BOARD_MEMO_TAG itself already relies on, so a real
+# message that happens to start with one of these exact patterns is
+# treated as the header it looks like -- an accepted, deliberate tradeoff
+# for staying inside consensus's plain byte-string memo rather than
+# needing a structured field of its own.
+#
+# Anchored at the very start of the body (right after BOARD_MEMO_TAG) and
+# only there: not searched for elsewhere, so nothing after the header,
+# however it's formatted, can be mistaken for a second one.
+_PROFILE_RE = re.compile(r'^\[p:(\d{1,2}):([^\]\n]{0,16})\]')
+_REPLY_RE   = re.compile(r'^\[r:([0-9a-f]{6})\]')
+REPLY_REF_LEN = 6
+
+# Small built-in set so "icon" never means an uploaded image or a URL --
+# both would cost far more bytes than this feature is worth and an <img>
+# is exactly what render_board_text's whitelist refuses to ever emit.
+# Index into this list is all a profile header carries; unknown/out of
+# range indexes (an older client's palette was shorter, say) just fall
+# back to the ghost placeholder rather than failing to render.
+ICON_PALETTE = ["\U0001F47B", "\U0001F600", "\U0001F42C", "\U0001F984",
+                "\U0001F41D", "\U0001F340", "\U0001F525", "\U0001F30A",
+                "\U0001F31F", "\U0001F3AF", "\U0001F9E9", "\U0001F680",
+                "\U0001F338", "\U0001F9CA", "\U0001F98A", "\U0001F989",
+                "\U0001F42D", "\U0001F419", "\U0001F995", "\U0001F43C",
+                "\U0001F98B", "\U0001F41B", "\U0001F340", "\U0001F32E"]
+ICON_GHOST = "\U0001F47B"  # shown for an address with no profile post yet
+
+# Votes are ordinary transactions, not board posts: a different tag family
+# entirely (tx.is_board_post only matches BOARD_MEMO_TAG), so voting never
+# advances state.total_board_posts and never pays the board fee floor --
+# just the same congestion-based fee as any other send, plus the same
+# 1-tick burn a board post makes, on purpose (see conversation: kept equal
+# so a vote is still a real, priced action, just never a rationed one).
+VOTE_UP_TAG   = "[vote+] "
+VOTE_DOWN_TAG = "[vote-] "
+
+
+def parse_board_body(body):
+    """Split a board post's memo body (everything after BOARD_MEMO_TAG)
+    into its optional profile header, optional reply reference, and the
+    literal text to render. Order is fixed: profile header first, then
+    reply header, then free text -- a post can carry either, both, or
+    neither.
+    """
+    icon = nick = reply_ref = None
+    m = _PROFILE_RE.match(body)
+    if m:
+        idx = int(m.group(1))
+        icon = idx if 0 <= idx < len(ICON_PALETTE) else None
+        nick = m.group(2) or None
+        body = body[m.end():]
+    m = _REPLY_RE.match(body)
+    if m:
+        reply_ref = m.group(1)
+        body = body[m.end():]
+    return icon, nick, reply_ref, body
+
+
+def build_board_body(text, icon=None, nick=None, reply_ref=None):
+    """Inverse of parse_board_body: the memo body build_and_sign_tx should
+    actually send. Empty unless the caller is deliberately changing the
+    profile or replying -- an ordinary post gets no header at all, so its
+    cost is unaffected by either feature existing.
+    """
+    prefix = ""
+    if icon is not None:
+        # ']' and newlines would otherwise let a nickname break out of the
+        # header _PROFILE_RE parses back out of the next post that reads
+        # it; stripped rather than rejected, since a nickname is cosmetic
+        # and silently dropping two characters costs nothing real.
+        clean_nick = (nick or "").replace("]", "").replace("\n", "")
+        prefix += f"[p:{icon}:{clean_nick}]"
+    if reply_ref:
+        prefix += f"[r:{reply_ref}]"
+    return prefix + text
+
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +400,46 @@ def _board_posts(chain):
                 rows.append((blk["height"], blk.get("timestamp"),
                              tx_mod.tx_hash(t), t))
     return rows
+
+
+def _board_profiles_and_votes(chain):
+    """One more full pass over the chain (see _board_posts' own docstring
+    on why that's fine at this scale), building the two pieces of state a
+    board post's header can affect but that no single post ever *is* by
+    itself:
+
+    profiles: addr -> {"icon", "nick"}, from the latest (tip-first, so
+    first-seen-per-address) board post that address ever set a profile
+    header on. Every rendered row looks its poster up here rather than
+    trusting its own memo, so an old post always shows who its author
+    currently is, not who they were when they wrote it -- the same
+    "avatar looked up live, not frozen at post time" behaviour any chat
+    client gives you.
+
+    votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
+    (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain.
+    Confirmed votes only; a pending vote in the mempool isn't counted
+    until it lands, same as a pending board post isn't in post_count.
+    """
+    profiles = {}
+    votes = {}
+    for blk in reversed(chain):
+        for t in reversed(blk.get("transactions", [])):
+            memo = t.get("memo") or ""
+            if memo.startswith(BOARD_MEMO_TAG):
+                addr = t.get("from")
+                if addr in profiles:
+                    continue
+                icon, nick, _, _ = parse_board_body(memo[len(BOARD_MEMO_TAG):])
+                if icon is not None:
+                    profiles[addr] = {"icon": icon, "nick": nick}
+            elif memo.startswith(VOTE_UP_TAG) or memo.startswith(VOTE_DOWN_TAG):
+                up = memo.startswith(VOTE_UP_TAG)
+                tag = VOTE_UP_TAG if up else VOTE_DOWN_TAG
+                ref = memo[len(tag):len(tag) + REPLY_REF_LEN]
+                tally = votes.setdefault(ref, {"up": 0, "down": 0})
+                tally["up" if up else "down"] += 1
+    return profiles, votes
 
 
 def _committed_tx_count(chain):
@@ -846,6 +969,34 @@ def _board_pending(mempool):
     return rows
 
 
+def _enrich_board_row(row, profiles, votes, hash6_index):
+    """Attach everything board.html actually renders for one row -- the
+    poster's current icon/nickname (looked up live, see
+    _board_profiles_and_votes), this post's own vote tally, and a reply
+    preview if it has one -- so the template only ever reads plain fields
+    off row, never re-parses a memo itself.
+    """
+    memo = row["tx"].get("memo") or ""
+    icon, _nick, reply_ref, text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
+    prof = profiles.get(row["tx"].get("from"))
+    row["icon"] = ICON_PALETTE[prof["icon"]] if prof else ICON_GHOST
+    row["nick"] = prof.get("nick") if prof else None
+    row["text"] = text
+    row["ref6"] = row["hash"][:REPLY_REF_LEN]
+    tally = votes.get(row["ref6"], {"up": 0, "down": 0})
+    row["up"], row["down"] = tally["up"], tally["down"]
+    row["reply_ref"] = reply_ref
+    row["reply_from"] = row["reply_snippet"] = None
+    if reply_ref:
+        target = hash6_index.get(reply_ref)
+        if target is not None:
+            row["reply_from"] = target["tx"].get("from")
+            _, _, _, target_text = parse_board_body(
+                (target["tx"].get("memo") or "")[len(BOARD_MEMO_TAG):])
+            row["reply_snippet"] = target_text[:60]
+    return row
+
+
 def _board_ctx(node, page_arg, own_addr, extra=None):
     """Board page context: pagination plus the post list. Shared between
     the GET route (read-only, both apps) and the private app's POST
@@ -874,10 +1025,26 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
     # Pending posts are always newer than anything confirmed, so they only
     # belong on page 1 (the most recent page, the one actually being
     # composed into), appended last so they sit at the bottom of the feed.
-    if page == 1:
-        page_rows += _board_pending(node.mempool)
+    pending_rows = _board_pending(node.mempool) if page == 1 else []
+    page_rows += pending_rows
+
+    profiles, votes = _board_profiles_and_votes(node.view.chain)
+    # Every row on chain, not just this page, so a reply on page 3 can
+    # still preview a parent that landed on page 1.
+    hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
+    for row in pending_rows:
+        hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
+    for row in page_rows:
+        _enrich_board_row(row, profiles, votes, hash6_index)
+
+    own_profile = profiles.get(own_addr)
+    own_icon_idx = own_profile["icon"] if own_profile else None
     ctx = dict(title="Board", rows=page_rows,
                post_count=len(all_rows), own_addr=own_addr,
+               own_icon=ICON_PALETTE[own_icon_idx] if own_icon_idx is not None else ICON_GHOST,
+               own_icon_idx=own_icon_idx or 0,
+               own_nick=own_profile.get("nick") if own_profile else None,
+               icon_palette=ICON_PALETTE,
                tag_len=len(BOARD_MEMO_TAG),
                page=page, total_pages=total_pages,
                page_window=_pagination_window(page, total_pages),
@@ -1851,10 +2018,18 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         can move between keystrokes too.
         """
         msg_bytes = min(max(0, request.args.get("bytes", 0, type=int) or 0), tx_mod.MAX_MEMO_BYTES)
+        # Profile/reply headers are opt-in and priced exactly like the rest
+        # of the memo (more bytes -> more fee), so the live estimate has to
+        # account for whichever of them this particular post will actually
+        # carry, not just the free-text part.
+        icon = request.args.get("icon", type=int)
+        nick = (request.args.get("nick") or "")[:16] or None
+        reply_ref = request.args.get("reply_ref") or None
+        header = build_board_body("", icon=icon, nick=nick, reply_ref=reply_ref)
         # An ASCII placeholder of the same byte length: close enough for an
         # estimate, and the real message never leaves the browser until
         # actually posted.
-        memo = BOARD_MEMO_TAG + ("x" * msg_bytes)
+        memo = BOARD_MEMO_TAG + header + ("x" * msg_bytes)
         floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
         outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
         fee = _auto_fee(node, outputs, memo=memo, floor=floor)
@@ -1877,6 +2052,14 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
         message    = request.form.get("message", "").strip()
         passphrase = request.form.get("passphrase", "").strip()
+        # icon/nick only ride along when the compose form's own "profile
+        # changed" checkbox says so (see board.html): otherwise this post
+        # costs exactly what it would with no profile feature at all.
+        icon = request.form.get("icon", type=int) if request.form.get("profile_changed") else None
+        nick = (request.form.get("nick") or "").strip()[:16] or None if request.form.get("profile_changed") else None
+        if request.form.get("profile_changed") and icon is None:
+            icon = 0
+        reply_ref = request.form.get("reply_ref") or None
         extra = dict(csrf_token=csrf_token, fees=fee_estimate(node),
                      compose_err="", compose_ok="", board_fee_floor=floor,
                      message_value=message)
@@ -1889,7 +2072,8 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
             return fail("Session expired; reload the page and try again.")
         if not message:
             return fail("Write something to post.")
-        memo = BOARD_MEMO_TAG + message
+        body = build_board_body(message, icon=icon, nick=nick, reply_ref=reply_ref)
+        memo = BOARD_MEMO_TAG + body
         over = len(memo.encode("utf-8")) - tx_mod.MAX_MEMO_BYTES
         if over > 0:
             return fail(f"{over} byte{'s' if over != 1 else ''} too long.")
@@ -1907,6 +2091,42 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         # separate "waiting to be mined" banner needed, the row is one.
         extra["message_value"] = ""
         return render_template("board.html", **_board_ctx(node, 1, node.addr, extra))
+
+    @app.route("/board/vote", methods=["POST"], endpoint="board_vote")
+    def board_vote():
+        """A vote is an ordinary, non-board-tagged transaction (see
+        VOTE_UP_TAG/VOTE_DOWN_TAG): tx.is_board_post never matches it, so
+        it never advances state.total_board_posts and never pays the
+        board fee floor, only the same congestion fee any other send
+        would, plus the same 1-tick burn a board post makes. No memo
+        length or profile handling needed here, a vote carries nothing
+        but the 6-hex reference to what it's voting on.
+        """
+        page = request.args.get("page", 1, type=int) or 1
+        ref  = (request.form.get("ref") or "")[:REPLY_REF_LEN]
+        direction  = request.form.get("dir")
+        passphrase = request.form.get("passphrase", "").strip()
+        extra = dict(csrf_token=csrf_token, fees=fee_estimate(node),
+                     compose_err="", compose_ok="", message_value="",
+                     board_fee_floor=tx_mod.board_fee_floor(node.view.state.total_board_posts))
+
+        def fail(msg):
+            extra["compose_err"] = msg
+            return render_template("board.html", **_board_ctx(node, page, node.addr, extra))
+
+        if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
+            return fail("Session expired; reload the page and try again.")
+        if direction not in ("+", "-") or len(ref) != REPLY_REF_LEN:
+            return fail("Bad vote request.")
+
+        tag = VOTE_UP_TAG if direction == "+" else VOTE_DOWN_TAG
+        memo = tag + ref
+        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
+        alert_ctx = {}
+        _submit_and_alert(node, outputs, passphrase, alert_ctx, memo=memo)
+        if alert_ctx.get("alert_err"):
+            return fail(alert_ctx["alert_err"])
+        return render_template("board.html", **_board_ctx(node, page, node.addr, extra))
 
     # Market and Trades live in their own module: this file is already long
     # and a node with swaps off never reaches any of it.

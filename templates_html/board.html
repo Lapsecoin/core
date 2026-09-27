@@ -3,7 +3,10 @@
 <p class="stat-sub" style="margin:.2rem 0 .6rem">
   Public, permanent, on-chain. Posting burns {{ BOARD_POST_AMOUNT }} tick,
   plus a separate network fee, currently {{ board_fee_floor }}+ ticks and rising
-  as the board fills up or with congestion.
+  as the board fills up or with congestion. Voting is an ordinary transaction
+  (still burns {{ BOARD_POST_AMOUNT }} tick) and never raises that floor.
+  Icon and nickname ride along on a post you were already sending, never a
+  post of their own.
 </p>
 
 <div class="card">
@@ -12,19 +15,52 @@
     {% if rows %}
       {% for row in rows %}
       {% set mine = row.tx.from == own_addr %}
-      <div class="board-row {{ 'mine' if mine }} {{ 'pending' if row.pending }}">
-        <div class="board-bubble">
-          <div class="board-meta">
-            <a href="/address?addr={{ row.tx.from }}" class="hash-short board-addr">{{ row.tx.from }}</a>
-          </div>
-          <div class="board-text">{{ render_board_text(row.tx.memo[tag_len:]) }}</div>
-          <div class="board-ts">
+      <div class="board-row {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}">
+        <div class="board-head">
+          <span class="board-icon" aria-hidden="true">{{ row.icon }}</span>
+          <a href="/address?addr={{ row.tx.from }}" class="board-name {{ 'hash-short' if not row.nick }}">{{ row.nick or row.tx.from }}</a>
+          <span class="board-ts">
             {% if row.pending %}
               <span title="Submitted, not yet in a block">pending&hellip;</span>
             {% else %}
               <a href="/explorer/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
             {% endif %}
-          </div>
+          </span>
+        </div>
+        {% if row.reply_ref %}
+        <a class="board-reply-quote" href="#post-{{ row.reply_ref }}">
+          {% if row.reply_from %}replying to {{ row.reply_from[:14] }}&hellip;: &ldquo;{{ row.reply_snippet }}&rdquo;
+          {% else %}replying to an earlier post{% endif %}
+        </a>
+        {% endif %}
+        <div class="board-text">{{ render_board_text(row.text) }}</div>
+        <div class="board-foot">
+          <span class="board-votes">
+            {% if is_private %}
+            <form method="POST" action="/board/vote?page={{ page }}" class="board-vote-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="ref" value="{{ row.ref6 }}">
+              <input type="hidden" name="dir" value="+">
+              <input type="hidden" name="passphrase" class="board-vote-pass">
+              <button type="submit" class="board-vote-btn" title="Upvote">&#9650;</button>
+            </form>
+            {% endif %}
+            <span class="board-vote-count">{{ row.up - row.down }}</span>
+            {% if is_private %}
+            <form method="POST" action="/board/vote?page={{ page }}" class="board-vote-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="ref" value="{{ row.ref6 }}">
+              <input type="hidden" name="dir" value="-">
+              <input type="hidden" name="passphrase" class="board-vote-pass">
+              <button type="submit" class="board-vote-btn" title="Downvote">&#9660;</button>
+            </form>
+            {% endif %}
+          </span>
+          {% if is_private and not row.pending %}
+          <button type="button" class="board-reply-btn"
+                  data-ref="{{ row.ref6 }}" data-addr="{{ row.tx.from }}"
+                  data-snippet="{{ row.text[:60] }}">Reply</button>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
@@ -32,17 +68,39 @@
       <p style="color:var(--muted);text-align:center">Nothing posted yet.</p>
     {% endif %}
     {% if is_private %}
-    <form method="POST" action="/board?page={{ page }}" class="board-compose">
+    <form method="POST" action="/board?page={{ page }}" class="board-compose" id="board-compose"
+          data-own-nick="{{ own_nick or '' }}" data-own-icon-idx="{{ own_icon_idx }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="passphrase" id="board-passphrase">
+      <input type="hidden" name="profile_changed" id="board-profile-changed" value="">
+      <input type="hidden" name="icon" id="board-icon-value" value="{{ own_icon_idx }}">
+      <input type="hidden" name="reply_ref" id="board-reply-ref" value="">
       {% if compose_err %}<div class="alert alert-err" style="margin:0 0 .4rem">{{ compose_err }}</div>{% endif %}
+
+      <div class="board-compose-row board-reply-banner" id="board-reply-banner" hidden>
+        <span id="board-reply-text"></span>
+        <button type="button" id="board-reply-cancel" title="Cancel reply">&times;</button>
+      </div>
+
+      <div class="board-compose-row board-profile-row">
+        <button type="button" id="board-icon-btn" class="board-icon-btn" title="Change icon (folds into your next post)">{{ own_icon }}</button>
+        <input type="text" name="nick" id="board-nick" maxlength="16" placeholder="nickname (optional)"
+               value="{{ own_nick or '' }}" autocomplete="off" style="width:8rem">
+        <span class="stat-sub" id="board-profile-note" style="margin:0"></span>
+      </div>
+      <div class="board-icon-palette" id="board-icon-palette" hidden>
+        {% for ic in icon_palette %}
+        <button type="button" class="board-icon-choice" data-idx="{{ loop.index0 }}">{{ ic }}</button>
+        {% endfor %}
+      </div>
+
       <div class="board-compose-row">
         <input type="text" name="message" id="board-message" value="{{ message_value }}"
                placeholder="Say something" autocomplete="off" style="flex:1">
         <button type="submit" id="board-send">Send</button>
       </div>
       <div class="board-compose-row board-compose-sub">
-        <span class="stat-sub" id="board-fee-live" style="margin:0" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post costs more.">
+        <span class="stat-sub" id="board-fee-live" style="margin:0" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post (and any icon/nickname/reply riding along) costs more.">
           fee: {{ board_fee_floor }}+ ticks
         </span>
         <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
@@ -66,44 +124,75 @@
 {% endif %}
 
 <style>
-  .board { display: flex; flex-direction: column; gap: .5rem; padding-top: .2rem; }
-  .board-row { display: flex; }
-  .board-row.mine { justify-content: flex-end; }
-  .board-bubble {
-    max-width: min(32rem, 80%);
-    border: 1px solid var(--rule-lt); background: var(--paper-2);
-    padding: .45rem .7rem; border-radius: .6rem .6rem .6rem 0;
+  /* Compact row layout (one thin header line, full-width text below it)
+     rather than a half-width chat bubble: on a board that's a flat public
+     feed, not a two-party conversation, the bubble metaphor mostly bought
+     wasted margin, not clarity. */
+  .board { display: flex; flex-direction: column; padding-top: .2rem; }
+  .board-row {
+    padding: .5rem 0; border-bottom: 1px solid var(--rule-lt);
   }
-  .board-row.mine .board-bubble {
-    background: rgba(179,90,12,.08); border-color: var(--accent);
-    border-radius: .6rem .6rem 0 .6rem;
+  .board-row.mine { background: rgba(179,90,12,.05); }
+  .board-row.pending { opacity: .6; }
+  .board-head { display: flex; align-items: center; gap: .35rem; font-size: .8rem; flex-wrap: wrap; }
+  .board-icon { font-size: 1.1rem; line-height: 1; }
+  .board-name { font-weight: 700; text-decoration: none; }
+  .board-name.hash-short { font-family: var(--mono); font-weight: 400; word-break: break-word; overflow-wrap: anywhere; }
+  .board-ts { margin-left: auto; font-size: .68rem; color: var(--muted); }
+  .board-reply-quote {
+    display: block; font-size: .75rem; color: var(--muted); text-decoration: none;
+    margin: .15rem 0; padding-left: .5rem; border-left: 2px solid var(--rule-lt);
   }
-  /* Not-yet-mined: same bubble, visibly provisional rather than a
-     separate banner elsewhere on the page saying the same thing. */
-  .board-row.pending .board-bubble { opacity: .6; border-style: dashed; }
-  .board-meta { font-size: .72rem; margin-bottom: .15rem; }
-  /* Wallet addresses are one long dot-joined word with no whitespace to
-     wrap on; without this the bubble's max-width is powerless (a flex
-     item's default min-width is its content's unbroken size) and the
-     address forces the whole row wider than the card, exactly like
-     board-text needed word-break to avoid the same thing. */
-  .board-addr { font-family: var(--mono); word-break: break-word; overflow-wrap: anywhere; }
-  .board-text { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
-  .board-ts { font-size: .68rem; color: var(--muted); text-align: right; margin-top: .2rem; }
+  .board-reply-quote:hover { color: var(--accent); }
+  .board-text { white-space: pre-wrap; word-break: break-word; line-height: 1.4; margin-top: .15rem; }
+  .board-foot { display: flex; align-items: center; gap: .6rem; margin-top: .25rem; }
+  .board-votes { display: flex; align-items: center; gap: .25rem; font-size: .75rem; }
+  .board-vote-form { display: inline; }
+  .board-vote-btn {
+    background: none; border: none; cursor: pointer; padding: 0 .2rem;
+    font-size: .7rem; color: var(--muted);
+  }
+  .board-vote-btn:hover { color: var(--accent); }
+  .board-vote-count { min-width: 1.2rem; text-align: center; color: var(--muted); }
+  .board-reply-btn {
+    background: none; border: none; cursor: pointer; padding: 0;
+    font-size: .75rem; color: var(--muted); text-decoration: underline;
+  }
+  .board-reply-btn:hover { color: var(--accent); }
 
   .board-compose {
     border: 1px solid var(--rule-lt); background: var(--paper-2);
-    padding: .5rem .6rem; margin-top: .3rem; border-radius: .5rem;
+    padding: .5rem .6rem; margin-top: .5rem; border-radius: .5rem;
   }
   .board-compose-row { display: flex; gap: .5rem; align-items: center; }
   .board-compose-row + .board-compose-row { margin-top: .4rem; }
   .board-compose-sub { font-size: .82rem; }
   .board-compose input[type="text"] { padding: .35rem .5rem; }
   #board-send { flex: 0 0 auto; padding: .35rem 1rem; }
+  .board-icon-btn {
+    font-size: 1.2rem; line-height: 1; background: none; border: 1px solid var(--rule-lt);
+    border-radius: .4rem; padding: .15rem .4rem; cursor: pointer;
+  }
+  .board-icon-palette {
+    display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .3rem;
+    padding: .3rem; border: 1px solid var(--rule-lt); border-radius: .4rem;
+  }
+  .board-icon-choice {
+    font-size: 1.1rem; background: none; border: none; cursor: pointer;
+    padding: .1rem .25rem; border-radius: .3rem;
+  }
+  .board-icon-choice:hover { background: var(--rule-lt); }
+  .board-reply-banner {
+    justify-content: space-between; font-size: .78rem; color: var(--muted);
+    background: var(--rule-lt); border-radius: .3rem; padding: .25rem .4rem;
+  }
+  #board-reply-cancel { background: none; border: none; cursor: pointer; color: var(--muted); }
 </style>
 <script>
 (function () {
   const PAGE = {{ page }};
+  const TAG_LEN = {{ tag_len }};
+  const MAX_MEMO_BYTES = {{ MAX_MEMO_BYTES }};
 
   function fmtTs(ts) {
     if (!ts) return "";
@@ -121,39 +210,107 @@
     if (ts) el.textContent = fmtTs(ts);
   });
 
-  // Asked for at submit time instead of sitting in the form as a field:
-  // it's only ever needed once, right before signing, so there's nothing
-  // for a visible input to do between page load and clicking Send except
-  // sit there inviting a glance or an autofill.
-  const composeForm = document.querySelector(".board-compose");
-  if (composeForm) {
-    const passInput = document.getElementById("board-passphrase");
-    composeForm.addEventListener("submit", (e) => {
+  // Same "ask right before signing" trick used by every form on this page
+  // that moves coins: nothing sits in a visible passphrase field between
+  // load and click.
+  function wirePassphrasePrompt(form, passInput) {
+    form.addEventListener("submit", (e) => {
       e.preventDefault();
       const passphrase = window.prompt("Passphrase:");
       if (passphrase === null) return;  // cancelled, nothing sent
       passInput.value = passphrase;
-      HTMLFormElement.prototype.submit.call(composeForm);  // bypasses this same listener
+      HTMLFormElement.prototype.submit.call(form);  // bypasses this same listener
     });
   }
 
-  // Compose box: bytes, not characters, matching the server's own UTF-8
-  // byte-length check (tx.MAX_MEMO_BYTES minus the tag it prepends), and
-  // disabled rather than silently truncated once over, so what's typed
-  // is always exactly what gets sent.
-  const msgInput = document.getElementById("board-message");
-  if (msgInput) {
-    const maxBytes = {{ MAX_MEMO_BYTES - tag_len }};
-    const counter = document.getElementById("board-msg-counter");
-    const sendBtn = document.getElementById("board-send");
-    const feeEl = document.getElementById("board-fee-live");
+  document.querySelectorAll(".board-vote-form").forEach(form => {
+    wirePassphrasePrompt(form, form.querySelector(".board-vote-pass"));
+  });
+
+  const composeForm = document.getElementById("board-compose");
+  if (composeForm) {
+    wirePassphrasePrompt(composeForm, document.getElementById("board-passphrase"));
+
+    const ownNick    = composeForm.dataset.ownNick || "";
+    const ownIconIdx = parseInt(composeForm.dataset.ownIconIdx, 10) || 0;
+
+    const msgInput      = document.getElementById("board-message");
+    const nickInput     = document.getElementById("board-nick");
+    const iconBtn       = document.getElementById("board-icon-btn");
+    const iconPalette   = document.getElementById("board-icon-palette");
+    const iconValue     = document.getElementById("board-icon-value");
+    const profileChanged = document.getElementById("board-profile-changed");
+    const profileNote   = document.getElementById("board-profile-note");
+    const replyRefInput = document.getElementById("board-reply-ref");
+    const replyBanner   = document.getElementById("board-reply-banner");
+    const replyText     = document.getElementById("board-reply-text");
+    const replyCancel   = document.getElementById("board-reply-cancel");
+    const counter        = document.getElementById("board-msg-counter");
+    const sendBtn         = document.getElementById("board-send");
+    const feeEl           = document.getElementById("board-fee-live");
     let feeTimer = null;
     let feeSeq = 0;
 
-    // Disabled with the reason on hover, rather than left clickable to
-    // fail after signing: the two common ways a post can't go through
-    // (too long, balance too low) are both known before anything is
-    // signed, so there's nothing to gain by waiting for a submit to say so.
+    function currentIconIdx() {
+      return parseInt(iconValue.value, 10) || 0;
+    }
+
+    // Only the fields that actually differ from what's already on chain
+    // for this address ride along -- an unchanged icon/nickname costs
+    // nothing extra, exactly the point of folding this into a post
+    // instead of giving it a post of its own.
+    function markProfileDirty() {
+      const dirty = currentIconIdx() !== ownIconIdx || nickInput.value.trim() !== ownNick;
+      profileChanged.value = dirty ? "1" : "";
+      profileNote.textContent = dirty ? "icon/nickname will update with this post" : "";
+      refreshCounter();
+    }
+
+    iconBtn.addEventListener("click", () => {
+      iconPalette.hidden = !iconPalette.hidden;
+    });
+    iconPalette.querySelectorAll(".board-icon-choice").forEach(btn => {
+      btn.addEventListener("click", () => {
+        iconValue.value = btn.dataset.idx;
+        iconBtn.textContent = btn.textContent;
+        iconPalette.hidden = true;
+        markProfileDirty();
+      });
+    });
+    nickInput.addEventListener("input", markProfileDirty);
+
+    document.querySelectorAll(".board-reply-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        replyRefInput.value = btn.dataset.ref;
+        replyText.textContent = "replying to " + btn.dataset.addr.slice(0, 14) + "…: “" + btn.dataset.snippet + "”";
+        replyBanner.hidden = false;
+        msgInput.focus();
+        refreshCounter();
+      });
+    });
+    replyCancel.addEventListener("click", () => {
+      replyRefInput.value = "";
+      replyBanner.hidden = true;
+      refreshCounter();
+    });
+
+    // Mirrors build_board_body's header exactly (see api.py) so the byte
+    // budget shown here is the real one, not an approximation.
+    function cleanNick() {
+      return nickInput.value.trim().slice(0, 16).replace(/]/g, "").replace(/\n/g, "");
+    }
+
+    function headerBytes() {
+      let header = "";
+      if (profileChanged.value) {
+        header += "[p:" + currentIconIdx() + ":" + cleanNick() + "]";
+      }
+      if (replyRefInput.value) {
+        header += "[r:" + replyRefInput.value + "]";
+      }
+      return new TextEncoder().encode(header).length;
+    }
+
     function setSendState(disabled, reason) {
       if (!sendBtn) return;
       sendBtn.disabled = disabled;
@@ -165,7 +322,13 @@
       feeTimer = setTimeout(async () => {
         const seq = ++feeSeq;
         try {
-          const res = await fetch("/api/board/fee?bytes=" + bytes, {cache: "no-store"});
+          const params = new URLSearchParams({bytes: String(bytes)});
+          if (profileChanged.value) {
+            params.set("icon", String(currentIconIdx()));
+            params.set("nick", cleanNick());
+          }
+          if (replyRefInput.value) params.set("reply_ref", replyRefInput.value);
+          const res = await fetch("/api/board/fee?" + params.toString(), {cache: "no-store"});
           if (!res.ok) throw new Error("bad status " + res.status);
           const data = await res.json();
           if (seq !== feeSeq) return;  // a newer keystroke already superseded this one
@@ -179,6 +342,7 @@
     }
 
     function refreshCounter() {
+      const maxBytes = MAX_MEMO_BYTES - TAG_LEN - headerBytes();
       const bytes = new TextEncoder().encode(msgInput.value).length;
       const empty = msgInput.value.trim() === "";
       const over = bytes > maxBytes;
@@ -203,7 +367,6 @@
   if (PAGE !== 1) return;
 
   let knownFirstHash = null;
-  const first = document.querySelector(".board-row");
   const statusEl = document.getElementById("live-status");
 
   async function poll() {
