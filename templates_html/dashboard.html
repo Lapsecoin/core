@@ -54,10 +54,12 @@
     <div class="stat-sub">per block</div>
   </div>
 </div>
+{% if info.address %}
 <div class="card">
   <div class="card-title">Address</div>
   <div class="hash">{{ info.address }}</div>
 </div>
+{% endif %}
 <div class="card" data-tx-page="{{ tx_page }}">
   <div class="card-title">Recent transactions</div>
   <div class="table-wrap">

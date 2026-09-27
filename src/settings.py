@@ -252,8 +252,31 @@ MINING_ENABLED = Setting(
          "This node fully validates and syncs every block either way.",
 )
 
+# Dandelion-style relay exists to keep the IP that sends a transaction
+# separate from the wallet address behind it. This node's own public,
+# externally-reachable dashboard can undo that for itself regardless of
+# what the relay does: the homepage, the board, and their JSON equivalents
+# all showed this node's own address in plain sight, so anyone who knows
+# this node's IP could read its address straight off the page. On by
+# default: hides this node's own address (and which board post or
+# transaction is its own) from the public app only. The local dashboard
+# here (127.0.0.1) always shows the real thing either way -- there's no
+# privacy gained by hiding an operator's own address from themselves.
+HIDE_ADDRESS_PUBLICLY = Setting(
+    "hide_address_publicly", True, bool,
+    label="Hide this node's address on the public dashboard",
+    help="Dandelion-style relay keeps the IP that sends a transaction "
+         "separate from the wallet address behind it. On by default, "
+         "this closes the other way that link could still leak: this "
+         "node's own address is hidden from anyone viewing the public, "
+         "externally-reachable dashboard, including which board post or "
+         "recent transaction is its own. The dashboard you're looking at "
+         "right now (127.0.0.1) always shows it regardless of this "
+         "setting. Turn off to go back to showing it publicly too.",
+)
+
 ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH, SWAP_AUTO_ACCEPT_MIN_TRUST,
-       SHOW_HARDWARE_DETAILS, MINING_ENABLED]
+       SHOW_HARDWARE_DETAILS, MINING_ENABLED, HIDE_ADDRESS_PUBLICLY]
 
 
 # How long a value read from storage is reused before going back to the

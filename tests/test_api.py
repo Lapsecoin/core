@@ -592,13 +592,13 @@ class TestSettingsValidation:
         assert "review every" in html
 
     def test_slider_metadata_reaches_the_page(self):
-        """The three numeric settings render a slider (a range input);
-        the bool settings (show_hardware_details, mining_enabled) render a
-        switch each, not a slider."""
+        """The three numeric settings render a slider (a range input); the
+        bool settings (show_hardware_details, mining_enabled,
+        hide_address_publicly) render a switch each, not a slider."""
         client, _ = self._client()
         html = client.get("/settings").get_data(as_text=True)
         assert html.count('type="range"') == 3
-        assert html.count('class="switch"') == 2
+        assert html.count('class="switch"') == 3
 
 
 class TestAddressLookupBurnAlias:
@@ -797,6 +797,108 @@ class TestPeerListPublishesNoAddresses:
     def test_no_announced_count_is_reported_any_more(self):
         data = self._client().get("/api/peers").get_json()
         assert "alive_count" not in data
+
+
+class _InfoNode(_FakeNode):
+    """_FakeNode plus enough of get_info() for the dashboard and /api/info
+    routes exercised below. Shape matches TestDashboardTxPaging's
+    _DashNode; this one additionally carries .settings (real _FakeNode
+    behavior) so HIDE_ADDRESS_PUBLICLY actually has something to read."""
+
+    def get_info(self):
+        return {"height": self.view.height, "sync_percent": 100,
+                "sync_target": self.view.height, "tip_hash": self.view.tip["hash"],
+                "genesis_hash": self.view.genesis_hash,
+                "mempool_size": self.mempool.size(), "address": self.addr,
+                "peer_count": 0, "total_minted": 0, "burned": 0,
+                "circulating": 0, "can_mint": 0, "block_reward": 0,
+                "block_time_ratio": None, "network_age_seconds": 0,
+                "status": "ok"}
+
+
+class TestAddressHiddenPublicly:
+    """settings.HIDE_ADDRESS_PUBLICLY (default True): the public app must
+    not reveal this node's own address, or which board post/recent
+    transaction is its own, the way the private (127.0.0.1) app always
+    does regardless of the setting. See api.py's _own_addr_or_hidden."""
+
+    def _node(self, hide=None):
+        cs = ChainState.from_genesis()
+        seed_balance(cs.state, 0, 1000.0)
+        import tx as tx_mod
+        TAG = tx_mod.BOARD_MEMO_TAG
+        t = {"from": address(0), "nonce": 1, "fee": 100,
+             "outputs": [{"to": "1" * 40, "amount": 1}], "memo": TAG + "hello"}
+        cs.chain.append({"height": len(cs.chain), "timestamp": 1000,
+                         "transactions": [t], "hash": "h0"})
+        cs.state.total_board_posts = 1
+        node = _InfoNode(cs)
+        if hide is not None:
+            node.settings.set(settings_mod.HIDE_ADDRESS_PUBLICLY, hide)
+        return node
+
+    def test_dashboard_hides_address_on_public_app_by_default(self):
+        node = self._node()
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/").get_data(as_text=True)
+        assert node.addr not in html
+        assert "card-title\">Address" not in html
+
+    def test_dashboard_shows_address_on_public_app_when_setting_off(self):
+        node = self._node(hide=False)
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/").get_data(as_text=True)
+        assert node.addr in html
+
+    def test_dashboard_always_shows_address_on_private_app(self):
+        """Regardless of the setting: there's nothing to protect by
+        hiding an operator's own address from themselves, locally."""
+        for hide in (True, False):
+            node = self._node(hide=hide)
+            client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+            html = client.get("/").get_data(as_text=True)
+            assert node.addr in html
+
+    def test_api_info_omits_address_on_public_app_by_default(self):
+        node = self._node()
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        data = client.get("/api/info").get_json()
+        assert data["address"] is None
+
+    def test_api_info_carries_address_on_private_app(self):
+        node = self._node()
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        data = client.get("/api/info").get_json()
+        assert data["address"] == node.addr
+
+    def test_board_hides_which_post_is_own_on_public_app_by_default(self):
+        # Board posts are public, on-chain data; every poster's address
+        # still shows (that's the point of a public board). What must
+        # not show is which one is *this node's own* -- the "mine" class
+        # -- even though this fixture's one post happens to be from the
+        # same address as the node itself.
+        node = self._node()
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/board").get_data(as_text=True)
+        assert 'class="board-row mine' not in html
+
+    def test_board_shows_which_post_is_own_on_public_app_when_setting_off(self):
+        node = self._node(hide=False)
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/board").get_data(as_text=True)
+        assert 'class="board-row mine' in html
+
+    def test_api_board_omits_own_addr_on_public_app_by_default(self):
+        node = self._node()
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        data = client.get("/api/board").get_json()
+        assert data["own_addr"] is None
+
+    def test_api_board_carries_own_addr_on_private_app(self):
+        node = self._node()
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        data = client.get("/api/board").get_json()
+        assert data["own_addr"] == node.addr
 
 
 # ---------------------------------------------------------------------------

@@ -846,11 +846,17 @@ def _board_pending(mempool):
     return rows
 
 
-def _board_ctx(node, page_arg, extra=None):
+def _board_ctx(node, page_arg, own_addr, extra=None):
     """Board page context: pagination plus the post list. Shared between
     the GET route (read-only, both apps) and the private app's POST
     handler (which re-renders the same page with an alert after posting),
     so the two never drift into computing pagination differently.
+
+    own_addr is the caller's call, not this function's: node.addr on the
+    private app always, and on the public app whatever the Dandelion
+    privacy setting (settings.HIDE_ADDRESS_PUBLICLY) says -- possibly
+    None, which never matches a real row.tx.from and so quietly drops the
+    "mine" styling in board.html rather than needing its own branch here.
 
     rows renders oldest-first within the page (chat order: the newest
     confirmed post, and then anything still pending, sit right above the
@@ -871,7 +877,7 @@ def _board_ctx(node, page_arg, extra=None):
     if page == 1:
         page_rows += _board_pending(node.mempool)
     ctx = dict(title="Board", rows=page_rows,
-               post_count=len(all_rows), own_addr=node.addr,
+               post_count=len(all_rows), own_addr=own_addr,
                tag_len=len(BOARD_MEMO_TAG),
                page=page, total_pages=total_pages,
                page_window=_pagination_window(page, total_pages),
@@ -888,6 +894,15 @@ def _shared_read_only_routes(app, node, pool, limiter,
     """Register all read-only UI and API routes on app."""
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
+
+    def _own_addr_or_hidden():
+        # The private app always sees the real address -- there's nothing
+        # to gain by hiding an operator's own address from themselves.
+        # The public app hides it too, unless the operator explicitly
+        # turned that off (see settings.HIDE_ADDRESS_PUBLICLY).
+        if is_private or not node.settings.get(settings_mod.HIDE_ADDRESS_PUBLICLY):
+            return node.addr
+        return None
 
     @app.context_processor
     def inject_ctx():
@@ -984,7 +999,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/", endpoint=pfx+"dashboard")
     def dashboard():
-        info  = node.get_info()
+        info = dict(node.get_info())
+        info["address"] = _own_addr_or_hidden()
         chain = node.view.chain
         total = _committed_tx_count(chain)
         total_pages = max(-(-total // DASHBOARD_TXS_PER_PAGE), 1)
@@ -1235,7 +1251,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         if csrf_token:   # private app only: composing needs a fee suggestion
             extra["fees"] = fee_estimate(node)
         page = request.args.get("page", 1, type=int) or 1
-        return render_template("board.html", **_board_ctx(node, page, extra))
+        return render_template("board.html",
+                               **_board_ctx(node, page, _own_addr_or_hidden(), extra))
 
     @app.route("/api/board", endpoint=pfx+"api_board")
     def api_board():
@@ -1247,7 +1264,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         end   = start + BOARD_PER_PAGE
         return jsonify({
             "post_count": len(all_rows),
-            "own_addr": node.addr,
+            "own_addr": _own_addr_or_hidden(),
             "posts": [
                 {"height": h, "timestamp": ts, "hash": hsh,
                  "from": t.get("from", ""),
@@ -1377,6 +1394,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/api/info", endpoint=pfx+"api_info")
     def api_info():
         info = dict(node.get_info())
+        info["address"] = _own_addr_or_hidden()
         chain = node.view.chain
         info["recent_txs"] = [
             {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount}
@@ -1865,7 +1883,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
         def fail(msg):
             extra["compose_err"] = msg
-            return render_template("board.html", **_board_ctx(node, page, extra))
+            return render_template("board.html", **_board_ctx(node, page, node.addr, extra))
 
         if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
             return fail("Session expired; reload the page and try again.")
@@ -1888,7 +1906,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         # above the compose box, so posting is its own confirmation. No
         # separate "waiting to be mined" banner needed, the row is one.
         extra["message_value"] = ""
-        return render_template("board.html", **_board_ctx(node, 1, extra))
+        return render_template("board.html", **_board_ctx(node, 1, node.addr, extra))
 
     # Market and Trades live in their own module: this file is already long
     # and a node with swaps off never reaches any of it.
