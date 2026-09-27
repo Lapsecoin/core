@@ -37,3 +37,7 @@ lapsecoin.lock
 
 # Keys
 *.key
+
+
+# VSCode
+.history/
