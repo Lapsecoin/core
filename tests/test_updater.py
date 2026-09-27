@@ -60,12 +60,18 @@ class TestWindowsHelperBreaksAwayFromJob:
                              open(dest, "wb").write(b"MZ" + b"\0" * 2_000_000))
         monkeypatch.setattr(os, "access", lambda path, mode: True)
 
+        # Inject fake environment variables to verify case-insensitive scrubbing
+        monkeypatch.setenv("_meipass2", "fake_path")
+        monkeypatch.setenv("_PYI_PROGNAME", "fake_prog")
+
         seen = {}
 
-        def fake_popen(args, creationflags=0, close_fds=True):
+        def fake_popen(args, creationflags=0, close_fds=True, env=None, cwd=None):
             seen["args"] = args
             seen["creationflags"] = creationflags
             seen["close_fds"] = close_fds
+            seen["env"] = env
+            seen["cwd"] = cwd
             return None
 
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -84,9 +90,19 @@ class TestWindowsHelperBreaksAwayFromJob:
         assert "for /L %%N in (1,1,120)" in helper
         assert "move /Y" in helper
         assert "goto moved" in helper
-        assert "start \"\"" in helper
+        assert "timeout /T 2 /NOBREAK >nul" in helper
         assert 'start "" "' + str(exe_path) + '" --no-gui --port 9000' in helper
+        assert '(goto) 2>nul & del "%~f0"' in helper
+
         breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         detached = getattr(subprocess, "DETACHED_PROCESS", 0)
         new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         assert seen["creationflags"] == detached | new_group | breakaway
+
+        # Verify rigorous case-insensitive environment scrubbing
+        env_dict = seen.get("env") or {}
+        for key in env_dict.keys():
+            assert not key.upper().startswith(("_MEI", "_PYI", "PYINSTALLER", "TCL", "TK"))
+
+        # Verify execution isolation
+        assert seen["cwd"] == str(exe_path.parent)
