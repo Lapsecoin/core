@@ -1166,7 +1166,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 # is fine: the one thing this token guards, the self-update
                 # trigger button, is only ever rendered when is_private.
                 "csrf_token": csrf_token,
-                "nav_active": nav_active}
+                "nav_active": nav_active,
+                "local_version": LOCAL_VERSION}
 
     @app.route("/api/update/status", endpoint=pfx+"api_update_status")
     def api_update_status():
