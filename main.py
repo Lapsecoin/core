@@ -359,9 +359,8 @@ def main():
     )
     parser.add_argument(
         "--no-gui", action="store_true",
-        help="Always use the console (passphrase prompt, Ctrl+C to stop) "
-             "instead of the desktop status window. Implied automatically "
-             "when LAPSECOIN_PASSPHRASE is set (headless/server runs).",
+           help="Always use the console (passphrase prompt, Ctrl+C to stop) "
+               "instead of the desktop status window.",
     )
     parser.add_argument(
         "--update", action="store_true",
@@ -429,7 +428,7 @@ def main():
             instance_lock.release()
         sys.exit(0)
 
-    use_gui = not args.no_gui and not os.environ.get("LAPSECOIN_PASSPHRASE")
+    use_gui = not args.no_gui
     gui = None
     if use_gui:
         try:
@@ -475,7 +474,9 @@ def main():
                 print("Not installing. Re-run with --no-gui to start headless.")
                 sys.exit(1)
     if use_gui:
-        pk, kek, passphrase = gui.load_or_create_key_gui(args.keyfile)
+        env_passphrase = os.environ.get("LAPSECOIN_PASSPHRASE") or None
+        pk, kek, passphrase = gui.load_or_create_key_gui(
+            args.keyfile, env_passphrase)
     else:
         pk, kek, passphrase = _load_or_create_key(args.keyfile)
     genesis  = block_mod.create_genesis()
