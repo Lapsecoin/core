@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LapseCoin API</title>
+<link rel="icon" type="image/svg+xml" href="../lapsecoin.svg">
+<style>
+:root {
+  --paper: #f6f3ea;
+  --paper-2: #efeadb;
+  --ink: #1c1a14;
+  --ink-dim: #4a4638;
+  --rule: #1c1a14;
+  --rule-lt: #b9b29b;
+  --accent: #b35a0c;
+  --link: var(--accent);
+  --gain: #2f5c33;
+  --loss: #7a2222;
+  --mono: "Courier New", Courier, "Liberation Mono", monospace;
+  --serif: "Times New Roman", Times, Georgia, "Liberation Serif", serif;
+  --container: 900px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+a { color: var(--link); text-decoration: underline; }
+h1, h2, h3, h4, p, ul, li { margin: 0; }
+.masthead {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--paper);
+  border-bottom: 3px double var(--rule);
+  padding: 0.4rem 1.25rem 0.3rem;
+}
+.masthead-inner {
+  max-width: var(--container);
+  margin: 0 auto;
+  position: relative;
+}
+.masthead-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  font-size: 1.3rem;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  text-align: center;
+  margin-bottom: 0.25rem;
+}
+nav.mainnav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 1.1rem;
+  row-gap: 0.3rem;
+  font-size: 0.92rem;
+}
+nav.mainnav a {
+  color: var(--ink);
+  text-decoration: none;
+  padding-bottom: 0.2rem;
+  border-bottom: 2px solid transparent;
+}
+nav.mainnav a:hover { text-decoration: underline; }
+nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
+main {
+  flex: 1;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem;
+  width: 100%;
+}
+.card {
+  background: var(--paper-2);
+  border: 1px solid var(--rule-lt);
+  border-radius: 0;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+.card-title {
+  font-weight: bold;
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+}
+.endpoint {
+  margin-bottom: 1.5rem;
+}
+.endpoint-title {
+  font-weight: bold;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  margin-bottom: 0.5rem;
+  color: var(--ink);
+}
+.endpoint-desc {
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+  color: var(--ink-dim);
+}
+.endpoint-method {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--paper);
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+  font-weight: bold;
+  font-family: var(--mono);
+  margin-right: 0.5rem;
+}
+.endpoint-path {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  background: var(--paper);
+  padding: 0.3rem 0.5rem;
+  border-radius: 0;
+  border: 1px solid var(--rule-lt);
+  display: inline-block;
+}
+.params-section, .response-section, .example-section {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--rule-lt);
+}
+.section-label {
+  font-weight: bold;
+  font-size: 0.9rem;
+  color: var(--ink-dim);
+  margin-bottom: 0.5rem;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+th, td {
+  text-align: left;
+  padding: 0.5rem;
+  border: 1px solid var(--rule-lt);
+}
+th {
+  background: var(--paper);
+  font-weight: bold;
+}
+td { background: var(--paper); }
+code {
+  font-family: var(--mono);
+  background: var(--paper);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.9rem;
+}
+pre {
+  background: var(--paper);
+  padding: 0.75rem;
+  border-radius: 0;
+  border: 1px solid var(--rule-lt);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0.75rem 0;
+}
+@media (max-width: 640px) {
+  .masthead { padding: 0.35rem 1rem 0.25rem; }
+  .masthead-title { font-size: 1.25rem; }
+  nav.mainnav { font-size: 0.82rem; column-gap: 0.8rem; }
+  main { padding: 1rem; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+<div class="masthead-inner">
+<div class="masthead-title">LapseCoin API</div>
+<nav class="mainnav">
+<a href="index.html">Home</a>
+<span class="sep">|</span>
+<a href="api.html" class="active">API</a>
+<span class="sep">|</span>
+<a href="exchange.html">Exchange</a>
+<span class="sep">|</span>
+<a href="tx.html">Transactions</a>
+</nav>
+</div>
+</header>
+
+<main>
+<div class="card">
+<div class="card-title">Public API Endpoints</div>
+<p>Base URL: <code>http://lapsenode.vicnas.me:8333</code> (or your node address)</p>
+</div>
+
+<div class="card">
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/info</span>
+</div>
+<div class="endpoint-desc">Network and node statistics</div>
+<div class="params-section">
+<div class="section-label">Response</div>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td>height</td><td>integer</td><td>Current block height</td></tr>
+<tr><td>mempool_size</td><td>integer</td><td>Pending transactions in mempool</td></tr>
+<tr><td>peer_count</td><td>integer</td><td>Connected peers</td></tr>
+<tr><td>sync_percent</td><td>float</td><td>Sync progress (0-100)</td></tr>
+<tr><td>sync_target</td><td>integer</td><td>Target height during sync</td></tr>
+<tr><td>circulating</td><td>integer</td><td>Total circulating ticks</td></tr>
+<tr><td>block_reward</td><td>integer</td><td>Current block reward in ticks</td></tr>
+<tr><td>network_age_seconds</td><td>integer</td><td>Seconds since genesis</td></tr>
+<tr><td>total_minted</td><td>integer</td><td>Total ticks minted (cap: 21M LAPSE)</td></tr>
+<tr><td>burned</td><td>integer</td><td>Total ticks burned (fee destruction)</td></tr>
+</table>
+</div>
+<div class="example-section">
+<div class="section-label">Example</div>
+<pre>curl http://lapsenode.vicnas.me:8333/api/info
+{
+  "height": 12345,
+  "mempool_size": 42,
+  "peer_count": 8,
+  "sync_percent": 100,
+  "circulating": 5000000000000,
+  "block_reward": 500000000,
+  "network_age_seconds": 31536000
+}</pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/block/{height}</span>
+</div>
+<div class="endpoint-desc">Get block by height</div>
+<div class="params-section">
+<div class="section-label">Parameters</div>
+<table>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+<tr><td>height</td><td>integer</td><td>Block height</td></tr>
+</table>
+</div>
+<div class="example-section">
+<div class="section-label">Example</div>
+<pre>curl http://lapsenode.vicnas.me:8333/api/block/12345</pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/tx/{hash}</span>
+</div>
+<div class="endpoint-desc">Get transaction by hash</div>
+<div class="params-section">
+<div class="section-label">Parameters</div>
+<table>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+<tr><td>hash</td><td>string</td><td>Transaction hash (hex)</td></tr>
+</table>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/address/{addr}/valid</span>
+</div>
+<div class="endpoint-desc">Check if address is valid</div>
+<div class="params-section">
+<div class="section-label">Response</div>
+<table>
+<tr><th>Field</th><th>Type</th></tr>
+<tr><td>valid</td><td>boolean</td></tr>
+</table>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/address/{addr}/balance</span>
+</div>
+<div class="endpoint-desc">Get address balance</div>
+<div class="params-section">
+<div class="section-label">Response</div>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td>balance</td><td>integer</td><td>Balance in ticks</td></tr>
+<tr><td>confirmed</td><td>integer</td><td>Confirmed balance in ticks</td></tr>
+<tr><td>pending</td><td>integer</td><td>Pending balance in ticks</td></tr>
+</table>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/address/{addr}/history</span>
+</div>
+<div class="endpoint-desc">Get address transaction history</div>
+<div class="params-section">
+<div class="section-label">Response</div>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td>sent</td><td>array</td><td>Sent transactions (includes pending)</td></tr>
+<tr><td>received</td><td>array</td><td>Received transactions</td></tr>
+</table>
+</div>
+<div class="example-section">
+<div class="section-label">Nonce Lookup</div>
+<p>No <code>/api/address/{addr}/nonce</code> endpoint exists. To find the next nonce for sending:</p>
+<ol style="margin-left: 1.5rem; margin-top: 0.5rem;">
+<li>Call <code>/api/address/{addr}/history</code></li>
+<li>Count entries in the <code>sent</code> array</li>
+<li>Next nonce = count (zero-indexed: first tx uses nonce 1)</li>
+</ol>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/mempool</span>
+</div>
+<div class="endpoint-desc">Get current mempool transactions</div>
+<div class="params-section">
+<div class="section-label">Response</div>
+<table>
+<tr><th>Field</th><th>Type</th></tr>
+<tr><td>transactions</td><td>array</td></tr>
+</table>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">POST</span>
+<span class="endpoint-path">/api/tx/send</span>
+</div>
+<div class="endpoint-desc">Broadcast a signed transaction</div>
+<div class="params-section">
+<div class="section-label">Request Body (JSON)</div>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td>tx_data</td><td>string</td><td>Serialized transaction (hex)</td></tr>
+<tr><td>signature</td><td>string</td><td>Transaction signature (hex)</td></tr>
+</table>
+</div>
+<div class="example-section">
+<div class="section-label">Response</div>
+<pre>{
+  "status": "accepted" or "rejected",
+  "message": "reason if rejected",
+  "tx_hash": "transaction hash if accepted"
+}</pre>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/fees</span>
+</div>
+<div class="endpoint-desc">Get fee estimates</div>
+<div class="params-section">
+<div class="section-label">Response</div>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td>slow</td><td>integer</td><td>Ticks per byte (slower confirmation)</td></tr>
+<tr><td>standard</td><td>integer</td><td>Ticks per byte (normal)</td></tr>
+<tr><td>fast</td><td>integer</td><td>Ticks per byte (faster)</td></tr>
+</table>
+</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title">
+<span class="endpoint-method">GET</span>
+<span class="endpoint-path">/api/peers</span>
+</div>
+<div class="endpoint-desc">Get known peer addresses for P2P connection</div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-title">Notes</div>
+<ul style="margin-left: 1.5rem; margin-top: 0.5rem;">
+<li>No CORS headers. Call API from a server, not the browser.</li>
+<li>All amounts in ticks (1 LAPSE = 10000 ticks).</li>
+<li>Addresses are one per node instance (stateful).</li>
+<li>Memo field acts as a deposit tag for exchange routing.</li>
+</ul>
+</div>
+</main>
+</body>
+</html>

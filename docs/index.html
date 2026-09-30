@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LapseCoin</title>
+<link rel="icon" type="image/svg+xml" href="../lapsecoin.svg">
+<style>
+:root {
+  --paper: #f6f3ea;
+  --paper-2: #efeadb;
+  --ink: #1c1a14;
+  --ink-dim: #4a4638;
+  --rule: #1c1a14;
+  --rule-lt: #b9b29b;
+  --accent: #b35a0c;
+  --link: var(--accent);
+  --gain: #2f5c33;
+  --loss: #7a2222;
+  --serif: "Times New Roman", Times, Georgia, "Liberation Serif", serif;
+  --container: 900px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+a { color: var(--link); text-decoration: underline; }
+h1, h2, h3, p, ul, li { margin: 0; }
+.masthead {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--paper);
+  border-bottom: 3px double var(--rule);
+  padding: 0.4rem 1.25rem 0.3rem;
+}
+.masthead-inner {
+  max-width: var(--container);
+  margin: 0 auto;
+  position: relative;
+}
+.masthead-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  font-size: 1.3rem;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  text-align: center;
+  margin-bottom: 0.25rem;
+}
+nav.mainnav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 1.1rem;
+  row-gap: 0.3rem;
+  font-size: 0.92rem;
+}
+nav.mainnav a {
+  color: var(--ink);
+  text-decoration: none;
+  padding-bottom: 0.2rem;
+  border-bottom: 2px solid transparent;
+}
+nav.mainnav a:hover { text-decoration: underline; }
+nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
+main {
+  flex: 1;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem;
+  width: 100%;
+}
+.card {
+  background: var(--paper-2);
+  border: 1px solid var(--rule-lt);
+  border-radius: 0;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+.card-title {
+  font-weight: bold;
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+}
+ul { margin-left: 1.5rem; margin-top: 0.5rem; }
+@media (max-width: 640px) {
+  .masthead { padding: 0.35rem 1rem 0.25rem; }
+  .masthead-title { font-size: 1.25rem; }
+  nav.mainnav { font-size: 0.82rem; column-gap: 0.8rem; }
+  main { padding: 1rem; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+<div class="masthead-inner">
+<div class="masthead-title">LapseCoin</div>
+<nav class="mainnav">
+<a href="index.html" class="active">Home</a>
+<span class="sep">|</span>
+<a href="api.html">API</a>
+<span class="sep">|</span>
+<a href="exchange.html">Exchange</a>
+<span class="sep">|</span>
+<a href="tx.html">Transactions</a>
+</nav>
+</div>
+</header>
+
+<main>
+<div class="card">
+<div class="card-title">Overview</div>
+<p>LapseCoin is a peer-to-peer network for decentralized exchanges and trading. Nodes run markets, match orders, and settle trades on-chain.</p>
+<ul>
+<li><strong>Node network:</strong> P2P gossip protocol, no central server</li>
+<li><strong>Markets:</strong> Each node runs order books and automatic matching</li>
+<li><strong>Settlement:</strong> Atomic transactions on the blockchain</li>
+<li><strong>Open source:</strong> <a href="https://github.com/Lapsecoin/core">github.com/Lapsecoin/core</a></li>
+</ul>
+</div>
+
+<div class="card">
+<div class="card-title">Documentation</div>
+<ul>
+<li><a href="api.html">API Reference</a> - Node endpoints, info, address queries, transaction broadcast</li>
+<li><a href="exchange.html">Exchange Integration</a> - Bitcoin Core RPC mapping, deposit handling, cold storage</li>
+<li><a href="tx.html">Transactions</a> - Signing spec, address derivation, Python examples, deposit detection</li>
+</ul>
+</div>
+
+<div class="card">
+<div class="card-title">Running a Node</div>
+<pre>git clone https://github.com/Lapsecoin/core
+cd core
+python -m pip install -r requirements.txt
+python main.py</pre>
+
+<p>Node serves:</p>
+<ul>
+<li>HTTP API on port 8333 (public, no auth)</li>
+<li>P2P gossip on port 15234 (UDP, peer discovery)</li>
+<li>GUI on localhost:8334 (local only)</li>
+</ul>
+</div>
+
+<div class="card">
+<div class="card-title">Links</div>
+<ul>
+<li><a href="https://lapsenode.vicnas.me">Live node</a></li>
+<li><a href="https://lapsenode.vicnas.me/whitepaper">Whitepaper</a></li>
+<li><a href="https://github.com/Lapsecoin/core">GitHub</a></li>
+<li><a href="https://discord.gg/lapsecoin">Discord</a></li>
+<li><a href="https://reddit.com/r/lapsecoin">Reddit</a></li>
+</ul>
+</div>
+</main>
+</body>
+</html>

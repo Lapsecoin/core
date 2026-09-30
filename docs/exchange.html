@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LapseCoin Exchange Integration</title>
+<link rel="icon" type="image/svg+xml" href="../lapsecoin.svg">
+<style>
+:root {
+  --paper: #f6f3ea;
+  --paper-2: #efeadb;
+  --ink: #1c1a14;
+  --ink-dim: #4a4638;
+  --rule: #1c1a14;
+  --rule-lt: #b9b29b;
+  --accent: #b35a0c;
+  --link: var(--accent);
+  --gain: #2f5c33;
+  --loss: #7a2222;
+  --mono: "Courier New", Courier, "Liberation Mono", monospace;
+  --serif: "Times New Roman", Times, Georgia, "Liberation Serif", serif;
+  --container: 900px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+a { color: var(--link); text-decoration: underline; }
+h1, h2, h3, h4, p, ul, li { margin: 0; }
+.masthead {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--paper);
+  border-bottom: 3px double var(--rule);
+  padding: 0.4rem 1.25rem 0.3rem;
+}
+.masthead-inner {
+  max-width: var(--container);
+  margin: 0 auto;
+  position: relative;
+}
+.masthead-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  font-size: 1.3rem;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  text-align: center;
+  margin-bottom: 0.25rem;
+}
+nav.mainnav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 1.1rem;
+  row-gap: 0.3rem;
+  font-size: 0.92rem;
+}
+nav.mainnav a {
+  color: var(--ink);
+  text-decoration: none;
+  padding-bottom: 0.2rem;
+  border-bottom: 2px solid transparent;
+}
+nav.mainnav a:hover { text-decoration: underline; }
+nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
+main {
+  flex: 1;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem;
+  width: 100%;
+}
+.card {
+  background: var(--paper-2);
+  border: 1px solid var(--rule-lt);
+  border-radius: 0;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+.card-title {
+  font-weight: bold;
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+th, td {
+  text-align: left;
+  padding: 0.5rem;
+  border: 1px solid var(--rule-lt);
+}
+th {
+  background: var(--paper);
+  font-weight: bold;
+}
+td { background: var(--paper); }
+code {
+  font-family: var(--mono);
+  background: var(--paper);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.9rem;
+}
+ul { margin-left: 1.5rem; margin-top: 0.5rem; }
+@media (max-width: 640px) {
+  .masthead { padding: 0.35rem 1rem 0.25rem; }
+  .masthead-title { font-size: 1.25rem; }
+  nav.mainnav { font-size: 0.82rem; column-gap: 0.8rem; }
+  main { padding: 1rem; }
+  table { font-size: 0.85rem; }
+  th, td { padding: 0.4rem; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+<div class="masthead-inner">
+<div class="masthead-title">LapseCoin Exchange Integration</div>
+<nav class="mainnav">
+<a href="index.html">Home</a>
+<span class="sep">|</span>
+<a href="api.html">API</a>
+<span class="sep">|</span>
+<a href="exchange.html" class="active">Exchange</a>
+<span class="sep">|</span>
+<a href="tx.html">Transactions</a>
+</nav>
+</div>
+</header>
+
+<main>
+<div class="card">
+<div class="card-title">Bitcoin Core RPC Mapping</div>
+<table>
+<tr><th>Bitcoin Core Call</th><th>LapseCoin Equivalent</th><th>Differences</th></tr>
+<tr>
+<td><code>getnewaddress</code></td>
+<td>Node creates one address on startup</td>
+<td>Not callable; one address per node instance</td>
+</tr>
+<tr>
+<td><code>getbalance</code></td>
+<td><code>GET /api/address/{addr}/balance</code></td>
+<td>No label/account grouping; returns confirmed, pending, total</td>
+</tr>
+<tr>
+<td><code>getreceivedbyaddress</code></td>
+<td><code>GET /api/address/{addr}/history</code> then sum <code>received</code></td>
+<td>Query-based, no RPC</td>
+</tr>
+<tr>
+<td><code>listtransactions</code></td>
+<td><code>GET /api/address/{addr}/history</code></td>
+<td>Returns separate <code>sent</code> and <code>received</code> arrays</td>
+</tr>
+<tr>
+<td><code>sendtoaddress</code></td>
+<td><code>POST /api/tx/send</code> with signed tx</td>
+<td>No RPC password; requires pre-signed transaction</td>
+</tr>
+<tr>
+<td><code>gettransaction</code></td>
+<td><code>GET /api/tx/{hash}</code></td>
+<td>Query-based</td>
+</tr>
+<tr>
+<td><code>validateaddress</code></td>
+<td><code>GET /api/address/{addr}/valid</code></td>
+<td>Boolean response only</td>
+</tr>
+<tr>
+<td><code>estimatefee</code></td>
+<td><code>GET /api/fees</code></td>
+<td>Returns slow/standard/fast tier estimates</td>
+</tr>
+</table>
+</div>
+
+<div class="card">
+<div class="card-title">Key Differences</div>
+<ul>
+<li><strong>One address per node:</strong> Each running instance manages exactly one address. Cannot generate new addresses at will. Use separate node instances for separate exchange accounts.</li>
+<li><strong>Memo as deposit tag:</strong> Transactions carry a memo field. Use it to route deposits to exchange user accounts (like Bitcoin's label system, but in-transaction).</li>
+<li><strong>Integer ticks, not decimals:</strong> Amounts are in ticks (1 LAPSE = 10000 ticks). Avoid floating-point math; work in integers only.</li>
+<li><strong>Offline signing required:</strong> No RPC password authentication. Build, sign, and submit transactions from a separate offline process. Keep keys offline.</li>
+<li><strong>No nonce endpoint:</strong> Must count prior sent transactions to derive next nonce. See <a href="api.html">API docs</a> for details.</li>
+</ul>
+</div>
+
+<div class="card">
+<div class="card-title">Implementation Checklist</div>
+<ul>
+<li>Run separate LapseCoin node for each exchange account</li>
+<li>Store the node's address and keep the node online to receive deposits</li>
+<li>Query <code>/api/address/{addr}/balance</code> periodically for deposit detection</li>
+<li>Extract <code>memo</code> from received transactions to route deposits to users</li>
+<li>For withdrawals:
+<ul style="margin-left: 1.5rem; margin-top: 0.25rem;">
+<li>Build transaction with outputs (recipients)</li>
+<li>Sign offline with node's private key</li>
+<li>POST signed tx to <code>/api/tx/send</code></li>
+</ul>
+</li>
+<li>Use <code>/api/fees</code> for fee estimation (ticks per byte)</li>
+<li>Track nonce by counting <code>sent</code> entries in address history</li>
+<li>Call API from your server, not the browser (no CORS)</li>
+</ul>
+</div>
+
+<div class="card">
+<div class="card-title">Cold Storage</div>
+<p>For security:</p>
+<ul>
+<li>Generate and sign transactions on an offline machine</li>
+<li>Keep the node's private key offline, only load it for signing</li>
+<li>Submit pre-signed transactions from a separate online service</li>
+<li>Use <code>/api/tx/send</code> (no authentication required, just broadcast)</li>
+</ul>
+</div>
+</main>
+</body>
+</html>
