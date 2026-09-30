@@ -19,12 +19,22 @@ PEERS_URL="${LAPSECOIN_PEERS_URL:-https://lapsenode.vicnas.me/api/peers/download
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# liboqs builds against OpenSSL by default on Linux (it is only off by default
+# on Windows), and the CI workflow installs libssl-dev for that reason, so the
+# headers count as a required build tool here. macOS is not covered by the
+# workflow, so it is not checked for them.
+have_openssl_headers() {
+  [ -f /usr/include/openssl/ssl.h ] || [ -f /usr/local/include/openssl/ssl.h ] \
+    || { have pkg-config && pkg-config --exists openssl; }
+}
+
 # --- 1. build tools: liboqs-python needs these to build liboqs itself
 #        automatically on first run; nothing else to set up beyond this. ---
-if have cmake && have git && (have cc || have gcc || have clang); then
-  echo "cmake, git, and a C compiler already present."
+if have cmake && have git && (have cc || have gcc || have clang) \
+   && { [ "$(uname)" = "Darwin" ] || have_openssl_headers; }; then
+  echo "cmake, git, a C compiler, and OpenSSL headers already present."
 else
-  echo "Installing build tools (cmake, git, a C compiler)..."
+  echo "Installing build tools (cmake, git, a C compiler, OpenSSL headers)..."
   if [ "$(uname)" = "Darwin" ]; then
     if ! have brew; then
       echo "Homebrew not found. Install it from https://brew.sh, then re-run this script." >&2
@@ -34,11 +44,11 @@ else
     (have cc || have clang) || xcode-select --install
   elif have apt-get; then
     sudo apt-get update -qq
-    sudo apt-get install -y cmake git build-essential
+    sudo apt-get install -y cmake git build-essential libssl-dev
   elif have dnf; then
-    sudo dnf install -y cmake git gcc gcc-c++
+    sudo dnf install -y cmake git gcc gcc-c++ openssl-devel
   elif have pacman; then
-    sudo pacman -Sy --noconfirm cmake git base-devel
+    sudo pacman -Sy --noconfirm cmake git base-devel openssl
   else
     echo "Unrecognized package manager. Install cmake, git, and a C compiler yourself, then re-run." >&2
     exit 1
