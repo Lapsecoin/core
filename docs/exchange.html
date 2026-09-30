@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LapseCoin Exchange Integration</title>
-<link rel="icon" type="image/svg+xml" href="../lapsecoin.svg">
+<link rel="icon" type="image/svg+xml" href="https://lapsenode.vicnas.me/favicon.svg">
 <style>
 :root {
   --paper: #f6f3ea;
@@ -125,6 +125,31 @@ ul { margin-left: 1.5rem; margin-top: 0.5rem; }
   table { font-size: 0.85rem; }
   th, td { padding: 0.4rem; }
 }
+/* docs-extra */
+pre {
+  background: var(--paper);
+  border: 1px solid var(--rule-lt);
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0.5rem 0;
+}
+code {
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  background: var(--paper);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.9rem;
+}
+pre code { padding: 0; background: none; }
+table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin-top: 0.5rem; }
+th, td { text-align: left; padding: 0.5rem; border: 1px solid var(--rule-lt); vertical-align: top; }
+th { background: var(--paper); }
+td { background: var(--paper); }
+p + p, p + ul, p + pre, pre + p, ul + p { margin-top: 0.6rem; }
+.section-title { font-weight: bold; margin: 1rem 0 0.4rem; }
+ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -145,91 +170,55 @@ ul { margin-left: 1.5rem; margin-top: 0.5rem; }
 
 <main>
 <div class="card">
-<div class="card-title">Bitcoin Core RPC Mapping</div>
+<div class="card-title">Mapping common wallet RPC calls</div>
+<p>LapseCoin nodes expose an HTTP API, not a JSON-RPC wallet. This table maps familiar Bitcoin Core calls to the closest equivalent. There is no account or label system. Details are on the <a href="api.html">API</a> and <a href="tx.html">Transactions</a> pages.</p>
 <table>
-<tr><th>Bitcoin Core Call</th><th>LapseCoin Equivalent</th><th>Differences</th></tr>
-<tr>
-<td><code>getnewaddress</code></td>
-<td>Node creates one address on startup</td>
-<td>Not callable; one address per node instance</td>
-</tr>
-<tr>
-<td><code>getbalance</code></td>
-<td><code>GET /api/address/{addr}/balance</code></td>
-<td>No label/account grouping; returns confirmed, pending, total</td>
-</tr>
-<tr>
-<td><code>getreceivedbyaddress</code></td>
-<td><code>GET /api/address/{addr}/history</code> then sum <code>received</code></td>
-<td>Query-based, no RPC</td>
-</tr>
-<tr>
-<td><code>listtransactions</code></td>
-<td><code>GET /api/address/{addr}/history</code></td>
-<td>Returns separate <code>sent</code> and <code>received</code> arrays</td>
-</tr>
-<tr>
-<td><code>sendtoaddress</code></td>
-<td><code>POST /api/tx/send</code> with signed tx</td>
-<td>No RPC password; requires pre-signed transaction</td>
-</tr>
-<tr>
-<td><code>gettransaction</code></td>
-<td><code>GET /api/tx/{hash}</code></td>
-<td>Query-based</td>
-</tr>
-<tr>
-<td><code>validateaddress</code></td>
-<td><code>GET /api/address/{addr}/valid</code></td>
-<td>Boolean response only</td>
-</tr>
-<tr>
-<td><code>estimatefee</code></td>
-<td><code>GET /api/fees</code></td>
-<td>Returns slow/standard/fast tier estimates</td>
-</tr>
+<tr><th>Bitcoin Core call</th><th>LapseCoin equivalent</th><th>Differences</th></tr>
+<tr><td><code>getnewaddress</code></td><td>Generate a FALCON-512 keypair yourself and derive the address</td><td>No node call. An address is derived purely from the public key, so no node is needed to create one.</td></tr>
+<tr><td><code>getbalance</code></td><td><code>GET /api/address/{addr}/balance</code></td><td>Returns <code>balance_ticks</code> and <code>balance_lapse</code> from chain state</td></tr>
+<tr><td><code>listtransactions</code>, <code>getreceivedbyaddress</code></td><td><code>GET /api/address/{addr}/history</code></td><td>Flat array with a <code>direction</code> of <code>sent</code> or <code>received</code>. Confirmed transactions only. Sum the outputs yourself.</td></tr>
+<tr><td><code>sendtoaddress</code></td><td>Sign locally, then <code>POST /api/tx/send</code></td><td>No RPC password. The transaction must be fully signed and carry a correct nonce.</td></tr>
+<tr><td><code>gettransaction</code></td><td><code>GET /api/tx/{hash}</code></td><td>Includes <code>confirmations</code> (0 means in the mempool)</td></tr>
+<tr><td><code>validateaddress</code></td><td><code>GET /api/address/{addr}/valid</code></td><td>Format check only</td></tr>
+<tr><td><code>estimatesmartfee</code></td><td><code>GET /api/fees</code></td><td>Returns <code>next_block</code>, <code>min</code>, <code>median</code>, <code>max</code> in ticks per byte</td></tr>
+<tr><td><code>getmempoolinfo</code></td><td><code>GET /api/mempool</code></td><td>Size and a summary of each pending transaction</td></tr>
+<tr><td><code>getblockcount</code>, <code>getblock</code></td><td><code>GET /api/info</code> (<code>height</code>), <code>GET /api/block/{height}</code></td><td>Blocks are addressed by height</td></tr>
 </table>
 </div>
 
 <div class="card">
-<div class="card-title">Key Differences</div>
+<div class="card-title">Key differences</div>
 <ul>
-<li><strong>One address per node:</strong> Each running instance manages exactly one address. Cannot generate new addresses at will. Use separate node instances for separate exchange accounts.</li>
-<li><strong>Memo as deposit tag:</strong> Transactions carry a memo field. Use it to route deposits to exchange user accounts (like Bitcoin's label system, but in-transaction).</li>
-<li><strong>Integer ticks, not decimals:</strong> Amounts are in ticks (1 LAPSE = 10000 ticks). Avoid floating-point math; work in integers only.</li>
-<li><strong>Offline signing required:</strong> No RPC password authentication. Build, sign, and submit transactions from a separate offline process. Keep keys offline.</li>
-<li><strong>No nonce endpoint:</strong> Must count prior sent transactions to derive next nonce. See <a href="api.html">API docs</a> for details.</li>
+<li><strong>Integer ticks:</strong> 1 LAPSE = 100,000,000 ticks, the same precision as BTC and satoshis. Keep all amounts as integers.</li>
+<li><strong>Addresses:</strong> twelve dot-separated BIP39 words. Creating one costs nothing, so you can give each customer a unique deposit address instead of relying on memos.</li>
+<li><strong>Memo:</strong> transactions can carry an optional plaintext memo of up to 200 bytes, visible to everyone forever. It can serve as a deposit tag, but senders may omit it, so a unique address per customer is more robust.</li>
+<li><strong>Signatures:</strong> FALCON-512 (quantum-resistant), not ECDSA or Ed25519. Use liboqs.</li>
+<li><strong>Nonces:</strong> strictly sequential per sender, starting at 1. There is no nonce endpoint.</li>
+<li><strong>Fees:</strong> chosen by the sender and priced per byte. Block time targets about 120 seconds, and blocks are capped at 2 MB.</li>
+<li><strong>Output limits:</strong> up to 500 outputs per transaction, and a sender cannot pay its own address.</li>
+<li><strong>No CORS and rate limits:</strong> call the API from your backend, and expect per-IP limits on public nodes. Run your own node for production use.</li>
 </ul>
 </div>
 
 <div class="card">
-<div class="card-title">Implementation Checklist</div>
+<div class="card-title">Implementation checklist</div>
 <ul>
-<li>Run separate LapseCoin node for each exchange account</li>
-<li>Store the node's address and keep the node online to receive deposits</li>
-<li>Query <code>/api/address/{addr}/balance</code> periodically for deposit detection</li>
-<li>Extract <code>memo</code> from received transactions to route deposits to users</li>
-<li>For withdrawals:
-<ul style="margin-left: 1.5rem; margin-top: 0.25rem;">
-<li>Build transaction with outputs (recipients)</li>
-<li>Sign offline with node's private key</li>
-<li>POST signed tx to <code>/api/tx/send</code></li>
-</ul>
-</li>
-<li>Use <code>/api/fees</code> for fee estimation (ticks per byte)</li>
-<li>Track nonce by counting <code>sent</code> entries in address history</li>
-<li>Call API from your server, not the browser (no CORS)</li>
+<li>Run your own node so your integration does not depend on a third-party API.</li>
+<li>Generate deposit addresses from keypairs you control and store the secret keys securely.</li>
+<li>Poll <code>/api/address/{addr}/history</code> for <code>received</code> entries, deduplicate by <code>tx_hash</code>, and sum all outputs to your address.</li>
+<li>Check <code>/api/tx/{hash}</code> for <code>confirmations</code> and choose a confirmation depth before crediting. Chain reorganizations are possible as in any longest-chain system.</li>
+<li>For withdrawals: derive the next nonce, pick a fee using <code>/api/fees</code>, sign with FALCON-512, and POST to <code>/api/tx/send</code>. Serialize withdrawals per sending address so nonces do not collide.</li>
+<li>Check the <code>ok</code> field of the broadcast response, and confirm the transaction later by hash.</li>
 </ul>
 </div>
 
 <div class="card">
-<div class="card-title">Cold Storage</div>
-<p>For security:</p>
+<div class="card-title">Cold storage</div>
+<p>Because addresses are derived from public keys and <code>/api/tx/send</code> only accepts fully signed transactions, signing can happen entirely offline.</p>
 <ul>
-<li>Generate and sign transactions on an offline machine</li>
-<li>Keep the node's private key offline, only load it for signing</li>
-<li>Submit pre-signed transactions from a separate online service</li>
-<li>Use <code>/api/tx/send</code> (no authentication required, just broadcast)</li>
+<li>Keep secret keys on an offline machine.</li>
+<li>Carry the nonce and fee you determined online to the offline signer, sign the transaction there, and transfer the signed JSON back.</li>
+<li>Broadcast from the online machine. The broadcast endpoint needs no authentication.</li>
 </ul>
 </div>
 </main>

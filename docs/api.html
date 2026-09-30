@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LapseCoin API</title>
-<link rel="icon" type="image/svg+xml" href="../lapsecoin.svg">
+<link rel="icon" type="image/svg+xml" href="https://lapsenode.vicnas.me/favicon.svg">
 <style>
 :root {
   --paper: #f6f3ea;
@@ -178,6 +178,31 @@ pre {
   nav.mainnav { font-size: 0.82rem; column-gap: 0.8rem; }
   main { padding: 1rem; }
 }
+/* docs-extra */
+pre {
+  background: var(--paper);
+  border: 1px solid var(--rule-lt);
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0.5rem 0;
+}
+code {
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  background: var(--paper);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.9rem;
+}
+pre code { padding: 0; background: none; }
+table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin-top: 0.5rem; }
+th, td { text-align: left; padding: 0.5rem; border: 1px solid var(--rule-lt); vertical-align: top; }
+th { background: var(--paper); }
+td { background: var(--paper); }
+p + p, p + ul, p + pre, pre + p, ul + p { margin-top: 0.6rem; }
+.section-title { font-weight: bold; margin: 1rem 0 0.4rem; }
+ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -198,212 +223,122 @@ pre {
 
 <main>
 <div class="card">
-<div class="card-title">Public API Endpoints</div>
-<p>Base URL: <code>http://lapsenode.vicnas.me:8333</code> (or your node address)</p>
-</div>
-
-<div class="card">
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/info</span>
-</div>
-<div class="endpoint-desc">Network and node statistics</div>
-<div class="params-section">
-<div class="section-label">Response</div>
-<table>
-<tr><th>Field</th><th>Type</th><th>Description</th></tr>
-<tr><td>height</td><td>integer</td><td>Current block height</td></tr>
-<tr><td>mempool_size</td><td>integer</td><td>Pending transactions in mempool</td></tr>
-<tr><td>peer_count</td><td>integer</td><td>Connected peers</td></tr>
-<tr><td>sync_percent</td><td>float</td><td>Sync progress (0-100)</td></tr>
-<tr><td>sync_target</td><td>integer</td><td>Target height during sync</td></tr>
-<tr><td>circulating</td><td>integer</td><td>Total circulating ticks</td></tr>
-<tr><td>block_reward</td><td>integer</td><td>Current block reward in ticks</td></tr>
-<tr><td>network_age_seconds</td><td>integer</td><td>Seconds since genesis</td></tr>
-<tr><td>total_minted</td><td>integer</td><td>Total ticks minted (cap: 21M LAPSE)</td></tr>
-<tr><td>burned</td><td>integer</td><td>Total ticks burned (fee destruction)</td></tr>
-</table>
-</div>
-<div class="example-section">
-<div class="section-label">Example</div>
-<pre>curl http://lapsenode.vicnas.me:8333/api/info
-{
-  "height": 12345,
-  "mempool_size": 42,
-  "peer_count": 8,
-  "sync_percent": 100,
-  "circulating": 5000000000000,
-  "block_reward": 500000000,
-  "network_age_seconds": 31536000
-}</pre>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/block/{height}</span>
-</div>
-<div class="endpoint-desc">Get block by height</div>
-<div class="params-section">
-<div class="section-label">Parameters</div>
-<table>
-<tr><th>Name</th><th>Type</th><th>Description</th></tr>
-<tr><td>height</td><td>integer</td><td>Block height</td></tr>
-</table>
-</div>
-<div class="example-section">
-<div class="section-label">Example</div>
-<pre>curl http://lapsenode.vicnas.me:8333/api/block/12345</pre>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/tx/{hash}</span>
-</div>
-<div class="endpoint-desc">Get transaction by hash</div>
-<div class="params-section">
-<div class="section-label">Parameters</div>
-<table>
-<tr><th>Name</th><th>Type</th><th>Description</th></tr>
-<tr><td>hash</td><td>string</td><td>Transaction hash (hex)</td></tr>
-</table>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/address/{addr}/valid</span>
-</div>
-<div class="endpoint-desc">Check if address is valid</div>
-<div class="params-section">
-<div class="section-label">Response</div>
-<table>
-<tr><th>Field</th><th>Type</th></tr>
-<tr><td>valid</td><td>boolean</td></tr>
-</table>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/address/{addr}/balance</span>
-</div>
-<div class="endpoint-desc">Get address balance</div>
-<div class="params-section">
-<div class="section-label">Response</div>
-<table>
-<tr><th>Field</th><th>Type</th><th>Description</th></tr>
-<tr><td>balance</td><td>integer</td><td>Balance in ticks</td></tr>
-<tr><td>confirmed</td><td>integer</td><td>Confirmed balance in ticks</td></tr>
-<tr><td>pending</td><td>integer</td><td>Pending balance in ticks</td></tr>
-</table>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/address/{addr}/history</span>
-</div>
-<div class="endpoint-desc">Get address transaction history</div>
-<div class="params-section">
-<div class="section-label">Response</div>
-<table>
-<tr><th>Field</th><th>Type</th><th>Description</th></tr>
-<tr><td>sent</td><td>array</td><td>Sent transactions (includes pending)</td></tr>
-<tr><td>received</td><td>array</td><td>Received transactions</td></tr>
-</table>
-</div>
-<div class="example-section">
-<div class="section-label">Nonce Lookup</div>
-<p>No <code>/api/address/{addr}/nonce</code> endpoint exists. To find the next nonce for sending:</p>
-<ol style="margin-left: 1.5rem; margin-top: 0.5rem;">
-<li>Call <code>/api/address/{addr}/history</code></li>
-<li>Count entries in the <code>sent</code> array</li>
-<li>Next nonce = count (zero-indexed: first tx uses nonce 1)</li>
-</ol>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/mempool</span>
-</div>
-<div class="endpoint-desc">Get current mempool transactions</div>
-<div class="params-section">
-<div class="section-label">Response</div>
-<table>
-<tr><th>Field</th><th>Type</th></tr>
-<tr><td>transactions</td><td>array</td></tr>
-</table>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">POST</span>
-<span class="endpoint-path">/api/tx/send</span>
-</div>
-<div class="endpoint-desc">Broadcast a signed transaction</div>
-<div class="params-section">
-<div class="section-label">Request Body (JSON)</div>
-<table>
-<tr><th>Field</th><th>Type</th><th>Description</th></tr>
-<tr><td>tx_data</td><td>string</td><td>Serialized transaction (hex)</td></tr>
-<tr><td>signature</td><td>string</td><td>Transaction signature (hex)</td></tr>
-</table>
-</div>
-<div class="example-section">
-<div class="section-label">Response</div>
-<pre>{
-  "status": "accepted" or "rejected",
-  "message": "reason if rejected",
-  "tx_hash": "transaction hash if accepted"
-}</pre>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/fees</span>
-</div>
-<div class="endpoint-desc">Get fee estimates</div>
-<div class="params-section">
-<div class="section-label">Response</div>
-<table>
-<tr><th>Field</th><th>Type</th><th>Description</th></tr>
-<tr><td>slow</td><td>integer</td><td>Ticks per byte (slower confirmation)</td></tr>
-<tr><td>standard</td><td>integer</td><td>Ticks per byte (normal)</td></tr>
-<tr><td>fast</td><td>integer</td><td>Ticks per byte (faster)</td></tr>
-</table>
-</div>
-</div>
-
-<div class="endpoint">
-<div class="endpoint-title">
-<span class="endpoint-method">GET</span>
-<span class="endpoint-path">/api/peers</span>
-</div>
-<div class="endpoint-desc">Get known peer addresses for P2P connection</div>
-</div>
-</div>
-
-<div class="card">
-<div class="card-title">Notes</div>
-<ul style="margin-left: 1.5rem; margin-top: 0.5rem;">
-<li>No CORS headers. Call API from a server, not the browser.</li>
-<li>All amounts in ticks (1 LAPSE = 10000 ticks).</li>
-<li>Addresses are one per node instance (stateful).</li>
-<li>Memo field acts as a deposit tag for exchange routing.</li>
+<div class="card-title">Public API</div>
+<p>Every node serves a public, read-only HTTP API on its public port (default <code>8333</code>). Example base URL: <code>https://lapsenode.vicnas.me</code>, or your own node at <code>http://host:8333</code>.</p>
+<ul>
+<li>All amounts are integers in <strong>ticks</strong>. 1 LAPSE = 100,000,000 ticks.</li>
+<li>Responses are JSON. Errors return a non-2xx status with an <code>error</code> field.</li>
+<li>Requests are rate limited per client IP (default 60 per minute; <code>POST /api/tx/send</code> allows 20 per second).</li>
+<li>The API sends no CORS headers, so call it from a server rather than from browser JavaScript on another origin.</li>
+<li>No authentication. The wallet's Send feature is only on the private local port, but broadcasting an already-signed transaction is public.</li>
 </ul>
+</div>
+
+<div class="card">
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/info</span></div>
+<div class="endpoint-desc">Chain and node status.</div>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td>height</td><td>Current chain height</td></tr>
+<tr><td>sync_percent, sync_target</td><td>Sync progress (capped at 99 until within 3 blocks of the observed tip) and the height being synced toward</td></tr>
+<tr><td>tip_hash, genesis_hash</td><td>Hash of the newest block and of block 0</td></tr>
+<tr><td>mempool_size</td><td>Pending transactions</td></tr>
+<tr><td>peer_count</td><td>Known peers</td></tr>
+<tr><td>address</td><td>The node's own address, or <code>null</code> when the operator hides it publicly (the default)</td></tr>
+<tr><td>total_minted</td><td>Ticks minted so far (cap: 21,000,000 LAPSE)</td></tr>
+<tr><td>burned</td><td>Ticks held by the burn address</td></tr>
+<tr><td>circulating</td><td>total_minted minus burned</td></tr>
+<tr><td>can_mint</td><td>Ticks still mintable before the cap</td></tr>
+<tr><td>block_reward</td><td>Reward in ticks for the next block</td></tr>
+<tr><td>block_time_ratio</td><td>This node's median VDF build time relative to the chain's recent median block time, or <code>null</code></td></tr>
+<tr><td>network_age_seconds</td><td>Seconds since the genesis block's timestamp</td></tr>
+<tr><td>status</td><td>Human-readable node status</td></tr>
+<tr><td>nick</td><td>Board nickname of the node's address, if any</td></tr>
+<tr><td>recent_txs</td><td>Recent confirmed transactions: <code>{height, hash, from, amount}</code></td></tr>
+</table>
+<pre>curl https://lapsenode.vicnas.me/api/info</pre>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/block/{height}</span></div>
+<div class="endpoint-desc">The block at that height, as stored on chain (including its <code>transactions</code> list). Returns 404 with <code>{"error": "not found"}</code> for an unknown height.</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/tx/{hash}</span></div>
+<div class="endpoint-desc">A transaction by hash, from the mempool or a block, with a <code>confirmations</code> field added. Mempool transactions have <code>confirmations: 0</code>. Returns 404 if unknown.</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/address/{addr}/valid</span></div>
+<div class="endpoint-desc">Returns <code>{"address": "...", "valid": true|false}</code>. This checks format only: exactly twelve dot-separated words from the BIP39 English list. It cannot tell whether anyone holds the key.</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/address/{addr}/balance</span></div>
+<div class="endpoint-desc">Balance from the node's chain state. Returns 400 for a malformed address.</div>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td>address</td><td>The address queried</td></tr>
+<tr><td>balance_ticks</td><td>Integer balance in ticks</td></tr>
+<tr><td>balance_lapse</td><td>The same balance divided by 100,000,000 (a float, for display only)</td></tr>
+</table>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/address/{addr}/history</span></div>
+<div class="endpoint-desc">Confirmed transactions touching the address, newest first, as a bare JSON array. Pending mempool transactions are not included.</div>
+<table>
+<tr><th>Element field</th><th>Description</th></tr>
+<tr><td>height</td><td>Block height containing the transaction</td></tr>
+<tr><td>tx_hash</td><td>Transaction hash</td></tr>
+<tr><td>direction</td><td><code>"sent"</code> if the address is the sender, otherwise <code>"received"</code></td></tr>
+<tr><td>tx</td><td>The full transaction object</td></tr>
+</table>
+<p>Optional query parameters: <code>limit</code> and <code>offset</code> select a slice. With no <code>limit</code> the full history is returned. The total count is in the <code>X-Total-Count</code> response header.</p>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/mempool</span></div>
+<div class="endpoint-desc">Returns <code>{"size": n, "transactions": [...]}</code>. Each entry is <code>{hash, from, outputs, fee}</code>.</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">POST</span> <span class="endpoint-path">/api/tx/send</span></div>
+<div class="endpoint-desc">Broadcast a fully signed transaction. The JSON body is the transaction object itself; see <a href="tx.html">Transactions</a> for the format and how to sign it.</div>
+<pre>{
+  "from": "word.word. ... (12 words)",
+  "pubkey": "hex FALCON-512 public key",
+  "outputs": [{"to": "word.word. ... (12 words)", "amount": 100000000}],
+  "nonce": 1,
+  "fee": 500,
+  "memo": "optional, up to 200 bytes",
+  "signature": "hex FALCON-512 signature"
+}</pre>
+<p>Success: <code>{"ok": true, "tx_hash": "..."}</code>. Failure (HTTP 400): <code>{"ok": false, "error": "reason"}</code>, for example a bad nonce, insufficient balance or an invalid signature. The node may also answer "node busy" if its inbound queue is full.</p>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/fees</span></div>
+<div class="endpoint-desc">Current fee-per-byte picture of the mempool. All rates are ticks per byte, where size is the transaction's canonical JSON excluding the signature.</div>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td>pending</td><td>Number of pending transactions</td></tr>
+<tr><td>min, median, max</td><td>Fee rates across pending transactions (0 when the mempool is empty)</td></tr>
+<tr><td>next_block</td><td>Suggested rate to be included in the next block. It is the lowest rate that still fit when the block is full, otherwise the relay floor of 1 tick per byte.</td></tr>
+</table>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/peers</span></div>
+<div class="endpoint-desc">The node's peer graph: <code>self</code>, <code>peer_count</code>, <code>graph_peers</code>, <code>claims</code> and <code>attempting</code>. For a plain list of <code>ip:port</code> strings that can seed a new node, use <code>GET /api/peers/download</code>, which returns a <code>lapsecoin_peers.json</code> file.</div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-title">Finding the next nonce</div>
+<p>There is no nonce endpoint. A transaction's nonce must be exactly one more than the sender's last used nonce, starting from 0, so the first transaction uses nonce 1. Count the address's confirmed <code>"sent"</code> entries in its history, add any pending transactions from that address in <code>/api/mempool</code>, then add one.</p>
 </div>
 </main>
 </body>

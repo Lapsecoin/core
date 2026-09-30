@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LapseCoin</title>
-<link rel="icon" type="image/svg+xml" href="../lapsecoin.svg">
+<link rel="icon" type="image/svg+xml" href="https://lapsenode.vicnas.me/favicon.svg">
 <style>
 :root {
   --paper: #f6f3ea;
@@ -101,6 +101,31 @@ ul { margin-left: 1.5rem; margin-top: 0.5rem; }
   nav.mainnav { font-size: 0.82rem; column-gap: 0.8rem; }
   main { padding: 1rem; }
 }
+/* docs-extra */
+pre {
+  background: var(--paper);
+  border: 1px solid var(--rule-lt);
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0.5rem 0;
+}
+code {
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  background: var(--paper);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.9rem;
+}
+pre code { padding: 0; background: none; }
+table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin-top: 0.5rem; }
+th, td { text-align: left; padding: 0.5rem; border: 1px solid var(--rule-lt); vertical-align: top; }
+th { background: var(--paper); }
+td { background: var(--paper); }
+p + p, p + ul, p + pre, pre + p, ul + p { margin-top: 0.6rem; }
+.section-title { font-weight: bold; margin: 1rem 0 0.4rem; }
+ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -122,48 +147,54 @@ ul { margin-left: 1.5rem; margin-top: 0.5rem; }
 <main>
 <div class="card">
 <div class="card-title">Overview</div>
-<p>LapseCoin is a peer-to-peer network for decentralized exchanges and trading. Nodes run markets, match orders, and settle trades on-chain.</p>
+<p>LapseCoin is peer-to-peer electronic cash. Block production is secured by a Verifiable Delay Function (VDF) instead of proof-of-work mining, and transactions are signed with FALCON-512, a quantum-resistant signature scheme.</p>
 <ul>
-<li><strong>Node network:</strong> P2P gossip protocol, no central server</li>
-<li><strong>Markets:</strong> Each node runs order books and automatic matching</li>
-<li><strong>Settlement:</strong> Atomic transactions on the blockchain</li>
+<li><strong>Consensus:</strong> the chain with the most cumulative proven VDF work wins, Bitcoin-style. Each block takes about 120 seconds of sequential computation.</li>
+<li><strong>Transactions:</strong> ordinary, plaintext transfers with sender-bid fees and an optional short public memo.</li>
+<li><strong>Supply:</strong> capped at 21 million LAPSE with smooth exponential decay (about a 20-year half-life) and no halvings.</li>
+<li><strong>Addresses:</strong> twelve-word phrases derived from the public key.</li>
 <li><strong>Open source:</strong> <a href="https://github.com/Lapsecoin/core">github.com/Lapsecoin/core</a></li>
 </ul>
+<p>Nodes also include an in-app Market (beta) for peer-to-peer swaps. See the <a href="https://github.com/Lapsecoin/core#readme">README</a> for details.</p>
 </div>
 
 <div class="card">
 <div class="card-title">Documentation</div>
 <ul>
-<li><a href="api.html">API Reference</a> - Node endpoints, info, address queries, transaction broadcast</li>
-<li><a href="exchange.html">Exchange Integration</a> - Bitcoin Core RPC mapping, deposit handling, cold storage</li>
-<li><a href="tx.html">Transactions</a> - Signing spec, address derivation, Python examples, deposit detection</li>
+<li><a href="api.html">API Reference</a>: public node endpoints for chain info, blocks, transactions, addresses, fees and broadcast</li>
+<li><a href="exchange.html">Exchange Integration</a>: mapping common wallet RPC calls to LapseCoin, deposit detection, withdrawals, cold storage</li>
+<li><a href="tx.html">Transactions</a>: transaction format, FALCON-512 signing, address derivation, Python examples</li>
+<li><a href="https://github.com/Lapsecoin/core/blob/main/docs/whitepaper.md">Whitepaper</a>: the full protocol specification</li>
 </ul>
 </div>
 
 <div class="card">
 <div class="card-title">Running a Node</div>
-<pre>git clone https://github.com/Lapsecoin/core
-cd core
-python -m pip install -r requirements.txt
-python main.py</pre>
-
-<p>Node serves:</p>
-<ul>
-<li>HTTP API on port 8333 (public, no auth)</li>
-<li>P2P gossip on port 15234 (UDP, peer discovery)</li>
-<li>GUI on localhost:8334 (local only)</li>
-</ul>
+<p>The recommended way is a pre-built binary from the <a href="https://github.com/Lapsecoin/core/releases">releases page</a>. Building from source needs native libraries (liboqs, chiavdf) that can be awkward to compile on some platforms.</p>
+<pre>./lapsecoin            # Linux
+lapsecoin.exe          # Windows</pre>
+<p>You are prompted for a signing passphrase. The wallet UI is then at <code>http://localhost:8335</code>. For headless setups, set <code>LAPSECOIN_PASSPHRASE</code> and pass <code>--no-gui</code>.</p>
+<table>
+<tr><th>Port</th><th>Interface</th><th>Purpose</th></tr>
+<tr><td><code>8333</code> (<code>--port</code>)</td><td>0.0.0.0</td><td>Peer traffic (UDP) and the public read-only node UI and API (TCP). Safe to expose.</td></tr>
+<tr><td><code>8335</code> (<code>port+2</code>)</td><td>127.0.0.1</td><td>Private wallet UI, including Send. Never expose.</td></tr>
+<tr><td><code>8336</code> (<code>port+3</code>)</td><td>0.0.0.0</td><td>Reserved for the DHT subsystem (libtorrent).</td></tr>
+<tr><td><code>18334</code></td><td>LAN</td><td>Fixed port for same-network peer discovery.</td></tr>
+</table>
+<p>Full CLI options and environment variables are in the <a href="https://github.com/Lapsecoin/core#readme">README</a>.</p>
 </div>
 
 <div class="card">
 <div class="card-title">Links</div>
 <ul>
-<li><a href="https://lapsenode.vicnas.me">Live node</a></li>
-<li><a href="https://lapsenode.vicnas.me/whitepaper">Whitepaper</a></li>
+<li><a href="https://lapsenode.vicnas.me/">Live node</a></li>
+<li><a href="https://lapsenode.vicnas.me/whitepaper">Whitepaper (on the live node)</a></li>
 <li><a href="https://github.com/Lapsecoin/core">GitHub</a></li>
-<li><a href="https://discord.gg/lapsecoin">Discord</a></li>
-<li><a href="https://reddit.com/r/lapsecoin">Reddit</a></li>
+<li><a href="https://github.com/Lapsecoin/core/releases">Releases</a></li>
+<li><a href="https://discord.gg/FP2d8JmK6r">Discord</a></li>
+<li><a href="https://reddit.com/r/Lapsecoin">Reddit</a></li>
 </ul>
+<p>There are no exchange listings for LAPSE yet. The Discord allows direct trades, and nodes include the in-app Market (beta).</p>
 </div>
 </main>
 </body>

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LapseCoin Transactions</title>
-<link rel="icon" type="image/svg+xml" href="../lapsecoin.svg">
+<link rel="icon" type="image/svg+xml" href="https://lapsenode.vicnas.me/favicon.svg">
 <style>
 :root {
   --paper: #f6f3ea;
@@ -143,6 +143,31 @@ td { background: var(--paper); }
   table { font-size: 0.85rem; }
   th, td { padding: 0.4rem; }
 }
+/* docs-extra */
+pre {
+  background: var(--paper);
+  border: 1px solid var(--rule-lt);
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0.5rem 0;
+}
+code {
+  font-family: "Courier New", Courier, "Liberation Mono", monospace;
+  background: var(--paper);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.9rem;
+}
+pre code { padding: 0; background: none; }
+table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin-top: 0.5rem; }
+th, td { text-align: left; padding: 0.5rem; border: 1px solid var(--rule-lt); vertical-align: top; }
+th { background: var(--paper); }
+td { background: var(--paper); }
+p + p, p + ul, p + pre, pre + p, ul + p { margin-top: 0.6rem; }
+.section-title { font-weight: bold; margin: 1rem 0 0.4rem; }
+ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -163,154 +188,120 @@ td { background: var(--paper); }
 
 <main>
 <div class="card">
-<div class="card-title">Transaction Signing</div>
-
-<div class="section-title">Format</div>
-<p>Transactions are built as CSV (comma-separated) and signed with EdDSA (Ed25519).</p>
-
-<div class="section-title">CSV Structure</div>
-<pre>to_addr_1, amount_1, memo_1
-to_addr_2, amount_2, memo_2
-...</pre>
-
-<p>Each line represents one output (recipient). Amounts are in ticks (integers only).</p>
-
-<div class="section-title">Signing Process</div>
-<ol style="margin-left: 1.5rem; margin-top: 0.5rem;">
-<li>Build outputs CSV (each line is <code>address,amount_ticks,memo</code>)</li>
-<li>Concatenate: <code>nonce|outputs_csv</code> (pipe-separated)</li>
-<li>Sign the concatenated string with node's private key (Ed25519)</li>
-<li>Encode both as hex</li>
-<li>POST to <code>/api/tx/send</code> with fields: <code>tx_data</code> (hex of outputs) and <code>signature</code> (hex of signature)</li>
-</ol>
-
-<div class="section-title">Nonce</div>
-<p>Each transaction uses a sequential nonce starting at 1 (not 0). Nonce must be sender's last confirmed nonce plus one. To find it:</p>
-<ol style="margin-left: 1.5rem; margin-top: 0.5rem;">
-<li>Call <code>GET /api/address/{addr}/history</code></li>
-<li>Count the number of transactions in the <code>sent</code> array</li>
-<li>Next nonce = count + 1 (first tx uses nonce 1)</li>
-</ol>
+<div class="card-title">Transaction format</div>
+<p>A transaction is a plain, visible JSON object. Nothing in it is encrypted, the memo included.</p>
+<table>
+<tr><th>Field</th><th>Required</th><th>Description</th></tr>
+<tr><td><code>from</code></td><td>yes</td><td>Sender address (twelve dot-separated words)</td></tr>
+<tr><td><code>pubkey</code></td><td>yes</td><td>Sender's FALCON-512 public key, hex. Its derived address must equal <code>from</code>.</td></tr>
+<tr><td><code>outputs</code></td><td>yes</td><td>Non-empty list of <code>{"to": address, "amount": ticks}</code>, at most 500. Amounts are positive integers. You cannot pay your own address.</td></tr>
+<tr><td><code>nonce</code></td><td>yes</td><td>Integer, exactly the sender's last used nonce plus one (the first transaction uses 1)</td></tr>
+<tr><td><code>fee</code></td><td>yes</td><td>Non-negative integer in ticks, chosen by the sender</td></tr>
+<tr><td><code>memo</code></td><td>no</td><td>Plaintext string, at most 200 bytes, no null bytes. Omit the key entirely when there is no memo.</td></tr>
+<tr><td><code>signature</code></td><td>yes</td><td>FALCON-512 signature over the canonical JSON of every other field, hex</td></tr>
+</table>
+<p>Unknown fields are rejected. The sender's balance must cover the sum of all outputs plus the fee. 1 LAPSE = 100,000,000 ticks.</p>
 </div>
 
 <div class="card">
-<div class="card-title">Address Derivation</div>
+<div class="card-title">Signing</div>
+<ol>
+<li>Build the transaction object without <code>signature</code>.</li>
+<li>Serialize it as canonical JSON: keys sorted, no whitespace. The node uses <code>orjson</code> with sorted keys. For integers and strings, Python's <code>json.dumps(tx, sort_keys=True, separators=(",", ":"), ensure_ascii=False)</code> produces the same bytes.</li>
+<li>Sign those bytes with FALCON-512 (liboqs, algorithm name <code>"Falcon-512"</code>).</li>
+<li>Add the signature as a hex string in <code>signature</code>.</li>
+<li>POST the whole object to <code>/api/tx/send</code>.</li>
+</ol>
+<p>FALCON signing uses fresh randomness, so re-signing the same content gives a different valid signature. The transaction hash excludes the signature, so the hash stays the same.</p>
+</div>
+
+<div class="card">
+<div class="card-title">Fees</div>
+<p>The fee is an absolute amount in ticks. Builders prefer higher fee per byte, where the size is the canonical JSON length of the transaction excluding the signature (and including the fee field itself). <code>GET /api/fees</code> reports the current <code>next_block</code> rate. Board posts (memo starting with <code>[board] </code>) have an additional protocol-enforced fee floor.</p>
+</div>
+
+<div class="card">
+<div class="card-title">Nonce</div>
+<p>Nonces are sequential per sender, starting from 0 for an address that has never sent. A transaction is valid only if its nonce is exactly the last used nonce plus one, counting the sender's pending mempool transactions. See <a href="api.html">the API page</a> for how to derive it from <code>/api/address/{addr}/history</code> and <code>/api/mempool</code>.</p>
+</div>
+
+<div class="card">
+<div class="card-title">Address derivation</div>
 <ul>
-<li><strong>Scheme:</strong> Ed25519 public key, encoded in Bech32</li>
-<li><strong>Format:</strong> <code>lapse1...</code> prefix</li>
-<li>Derived from the node's private key on startup</li>
-<li>One address per node instance (persistent, non-fungible per instance)</li>
+<li>Take the SHA-256 of the raw FALCON-512 public key bytes.</li>
+<li>Keep the first 132 bits and split them into twelve 11-bit indices, most significant first.</li>
+<li>Look each index up in the BIP39 English wordlist (2048 words, shipped as <code>src/bip39_english.txt</code>) and join with dots.</li>
 </ul>
+<p>Addresses are a one-way hash of the public key, so any syntactically valid word sequence passes validation. Validity does not prove that anyone holds the key.</p>
 </div>
 
 <div class="card">
-<div class="card-title">Python Reference Implementation</div>
+<div class="card-title">Python example</div>
+<p>Requires <code>liboqs-python</code> (module <code>oqs</code>) and <code>requests</code>. Keys come from <code>oqs.Signature("Falcon-512").generate_keypair()</code> and <code>export_secret_key()</code>.</p>
+<pre>import hashlib, json, requests, oqs
 
-<div class="section-title">Building and Signing</div>
-<pre>import nacl.signing
-import nacl.encoding
+NODE = "https://lapsenode.vicnas.me"
+WORDLIST = open("bip39_english.txt").read().split()   # src/bip39_english.txt in the repo
 
-# Load your private key (32 bytes, hex)
-private_key_hex = "..."
-private_key = nacl.signing.SigningKey(
-    bytes.fromhex(private_key_hex)
-)
-public_key = private_key.verify_key
+def address_from_pubkey(pk: bytes) -> str:
+    bits = int.from_bytes(hashlib.sha256(pk).digest()[:17], "big") &gt;&gt; 4   # top 132 bits
+    return ".".join(WORDLIST[(bits &gt;&gt; (11 * i)) &amp; 0x7FF] for i in range(11, -1, -1))
 
-# Build transaction
-nonce = 1
-outputs = [
-    ("lapse1abcd...", 1000000, "user123"),
-    ("lapse1efgh...", 2000000, "user456")
-]
+def canonical(obj) -&gt; bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False).encode()
 
-# CSV format outputs
-outputs_csv = "\n".join(
-    f"{addr},{amount},{memo}"
-    for addr, amount, memo in outputs
-)
+def next_nonce(addr: str) -&gt; int:
+    hist = requests.get(f"{NODE}/api/address/{addr}/history").json()
+    sent = sum(1 for r in hist if r["direction"] == "sent")
+    pool = requests.get(f"{NODE}/api/mempool").json()["transactions"]
+    pending = sum(1 for t in pool if t["from"] == addr)
+    return sent + pending + 1
 
-# Sign: nonce|outputs_csv
-message = f"{nonce}|{outputs_csv}"
-signature = private_key.sign(message.encode()).signature
-
-# Send
-tx_data_hex = outputs_csv.encode().hex()
-signature_hex = signature.hex()
-
-import requests
-resp = requests.post(
-    "http://lapsenode.vicnas.me:8333/api/tx/send",
-    json={
-        "tx_data": tx_data_hex,
-        "signature": signature_hex
+def send(secret_key: bytes, public_key: bytes, to_addr: str,
+         amount_ticks: int, fee_ticks: int, memo: str = ""):
+    addr = address_from_pubkey(public_key)
+    tx = {
+        "from": addr,
+        "pubkey": public_key.hex(),
+        "outputs": [{"to": to_addr, "amount": amount_ticks}],
+        "nonce": next_nonce(addr),
+        "fee": fee_ticks,
     }
-)
-print(resp.json())</pre>
-
-<div class="section-title">Address Derivation</div>
-<pre>import nacl.signing
-import bech32
-
-# Private key to address
-private_key_hex = "..."
-signing_key = nacl.signing.SigningKey(
-    bytes.fromhex(private_key_hex)
-)
-public_key_bytes = signing_key.verify_key.encode()
-
-# Encode as Bech32 with "lapse" prefix
-address = bech32.bech32_encode("lapse", bech32.convertbits(
-    public_key_bytes, 8, 5
-))
-print(address)  # lapse1...</pre>
+    if memo:
+        tx["memo"] = memo
+    signature = oqs.Signature("Falcon-512", secret_key).sign(canonical(tx))
+    tx["signature"] = signature.hex()
+    return requests.post(f"{NODE}/api/tx/send", json=tx).json()
+    # {"ok": true, "tx_hash": "..."} or {"ok": false, "error": "..."}</pre>
 </div>
 
 <div class="card">
-<div class="card-title">Deposit Detection Sketch</div>
+<div class="card-title">Deposit detection</div>
+<pre>import requests
 
-<pre>import time
+def confirmed_deposits(node, addr):
+    rows = requests.get(f"{node}/api/address/{addr}/history").json()
+    for r in rows:
+        if r["direction"] != "received":
+            continue
+        tx = r["tx"]
+        ticks = sum(o["amount"] for o in tx["outputs"] if o["to"] == addr)
+        yield r["tx_hash"], r["height"], ticks, tx.get("memo", "")
 
-address = "lapse1..."  # Your node's address
-node_url = "http://lapsenode.vicnas.me:8333"
-last_tx_count = 0
-
-def check_deposits():
-    global last_tx_count
-    
-    # Get address history
-    resp = requests.get(f"{node_url}/api/address/{address}/history")
-    history = resp.json()
-    
-    received = history.get("received", [])
-    
-    if len(received) > last_tx_count:
-        # New deposits
-        new_txs = received[last_tx_count:]
-        for tx in new_txs:
-            memo = tx.get("memo", "")
-            amount_ticks = tx.get("amount", 0)
-            amount_lapse = amount_ticks / 10000
-            
-            print(f"Deposit: {amount_lapse} LAPSE (memo: {memo})")
-            # Route to user based on memo
-            route_to_user(memo, amount_lapse)
-        
-        last_tx_count = len(received)
-
-while True:
-    check_deposits()
-    time.sleep(30)  # Check every 30 seconds</pre>
+def confirmations(node, tx_hash):
+    t = requests.get(f"{node}/api/tx/{tx_hash}").json()
+    return t.get("confirmations", 0)</pre>
+<p>Deduplicate by <code>tx_hash</code>, sum every output paying your address (one transaction can pay you more than once), and wait for the confirmation depth you are comfortable with before crediting.</p>
 </div>
 
 <div class="card">
 <div class="card-title">Notes</div>
 <ul>
-<li>All amounts in ticks (integers). 1 LAPSE = 10000 ticks.</li>
-<li>Memo field is required but can be empty ("").</li>
-<li>Use memo to route deposits to exchange user accounts.</li>
-<li>Nonce increments with each transaction. Reusing nonce is a double-spend error.</li>
-<li>Signature is Ed25519 (not ECDSA). Ensure your signing library uses the correct scheme.</li>
+<li>Amounts are integer ticks. Never use floating point for balances.</li>
+<li>The memo is optional, public and permanent.</li>
+<li>The burn address (the first twelve words of the BIP39 list) can never be a sender.</li>
+<li>Wallet keys held by a node are stored encrypted with Argon2id and a mandatory passphrase.</li>
 </ul>
 </div>
 </main>
