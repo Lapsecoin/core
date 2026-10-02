@@ -82,6 +82,13 @@ class PeerPool:
         # diversity cap is a lookup rather than a scan. See add().
         self._subnets   = {}          # subnet key -> count
         self._lock      = threading.Lock()
+        # Random per-process id this node stamps on its PING/PONG/INFO and
+        # /api/info replies. A reply carrying our own id means the address
+        # we just contacted is this very process (loopback, LAN ip, public
+        # ip, any port that forwards to us), which no address comparison
+        # can establish. See mark_self().
+        self.instance_id = secrets.token_hex(8)
+        self._self_addrs = set()
         # addr -> monotonic time an in-progress connection attempt began.
         # Display-only, like _learned_from: nothing here reads it back to
         # decide anything, it exists so the network graph can show a
@@ -139,6 +146,8 @@ class PeerPool:
         whether addr is admitted, only what snapshot() can later say
         about where it came from."""
         if not allow_private and not is_routable_peer_addr(addr):
+            return False
+        if addr in self._self_addrs:
             return False
         now_mono = time.monotonic()
         with self._lock:
@@ -279,6 +288,17 @@ class PeerPool:
     def remove(self, addr):
         with self._lock:
             self._forget(addr)
+
+    def mark_self(self, addr):
+        """addr answered with our own instance id: it is this node under
+        another address. Drop it and refuse it from now on."""
+        with self._lock:
+            self._self_addrs.add(addr)
+            self._forget(addr)
+        log.info("[peer] %s is this node itself, not a peer", addr)
+
+    def is_self(self, addr):
+        return addr in self._self_addrs
 
     def evict_stale(self):
         """Remove peers not seen within STALE_SECONDS."""

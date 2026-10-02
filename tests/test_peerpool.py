@@ -418,3 +418,12 @@ class TestNoteRelayedBuilder:
         p.remove(peer)
         p.add(peer)
         assert p.snapshot()[0][7] == ""
+
+
+def test_mark_self_removes_and_refuses_readd():
+    pool = PeerPool()
+    assert pool.add("127.0.0.1:8335", allow_private=True)
+    pool.mark_self("127.0.0.1:8335")
+    assert not pool.is_known("127.0.0.1:8335")
+    assert pool.is_self("127.0.0.1:8335")
+    assert not pool.add("127.0.0.1:8335", allow_private=True)

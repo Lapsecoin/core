@@ -103,6 +103,7 @@ import block as block_mod
 import crypto as crypto_mod
 import state as state_mod
 import hardware_info
+import http_probe
 import settings as settings_mod
 import storage as storage_mod
 import tx as tx_mod
@@ -1690,6 +1691,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/api/info", endpoint=pfx+"api_info")
     def api_info():
         info = dict(node.get_info())
+        info["iid"] = pool.instance_id
         info["address"] = _own_addr_or_hidden()
         info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
@@ -2316,6 +2318,15 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     import market_routes
     market_routes.register(app, node, csrf_token)
 
+    def _check_not_self(addr):
+        if http_probe._probe_one(addr, 2.5, pool.instance_id) is None:
+            pool.mark_self(addr)
+            return
+        try:
+            node.gossip.udp.get_info(addr, timeout=3.0)  # a self reply marks itself
+        except Exception:
+            pass
+
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
         data = request.get_json(silent=True)
@@ -2323,7 +2334,13 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         port = data.get("port") if data else None
         if (isinstance(host, str) and host
                 and isinstance(port, int) and 0 < port <= 65535):
-            pool.add(f"{host}:{port}", allow_private=True)
+            addr = f"{host}:{port}"
+            if not pool.add(addr, allow_private=True) and pool.is_self(addr):
+                return jsonify({"ok": False,
+                                "error": "that address is this node itself"}), 400
+            # Don't wait for the next probe round to find out it is us.
+            threading.Thread(target=_check_not_self, args=(addr,),
+                             daemon=True).start()
             return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "need valid host and port"}), 400
 

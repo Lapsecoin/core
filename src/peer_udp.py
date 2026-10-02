@@ -1126,7 +1126,8 @@ class UDPTransport:
         ev = threading.Event()
         with self._pong_lock:
             self._pong_events[msg_id] = ev
-        payload = {"genesis": self.genesis_hash, "proto": PROTOCOL_VERSION}
+        payload = {"genesis": self.genesis_hash, "proto": PROTOCOL_VERSION,
+                   "iid": self._pool.instance_id}
         if self.our_external_addr:
             payload["from"] = self.our_external_addr
         self._send_one(MT_PING, msg_id, payload, target)
@@ -1399,7 +1400,8 @@ class UDPTransport:
         punch_direct, the one copy that happened to include the field,
         worked.
         """
-        payload = {"genesis": self.genesis_hash, "proto": PROTOCOL_VERSION}
+        payload = {"genesis": self.genesis_hash, "proto": PROTOCOL_VERSION,
+                   "iid": self._pool.instance_id}
         if self.our_external_addr:
             payload["from"] = self.our_external_addr
         return payload
@@ -1570,11 +1572,17 @@ class UDPTransport:
                     log.debug("[udp] refused %s: protocol %s below floor %d",
                               sender_addr, data.get("proto", 0), MIN_PROTOCOL_VERSION)
                     return
+                if data.get("iid") == self._pool.instance_id:
+                    # Our own PING looped back to us (a self-added
+                    # address, or a broadcast). Not a peer.
+                    self._pool.mark_self(sender_addr)
+                    return
                 self._pool.touch(sender_addr)
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash,
-                                "proto": PROTOCOL_VERSION},
+                                "proto": PROTOCOL_VERSION,
+                                "iid": self._pool.instance_id},
                                sender)
                 announced = data.get("from", "")
                 if announced and self._on_peer_hint:
@@ -1608,6 +1616,9 @@ class UDPTransport:
             if not _protocol_ok(data):
                 log.debug("[udp] ignoring PONG from %s: protocol %s below floor %d",
                           sender_addr, data.get("proto", 0), MIN_PROTOCOL_VERSION)
+                return
+            if data.get("iid") == self._pool.instance_id:
+                self._pool.mark_self(sender_addr)
                 return
             observed = data.get("observed", "")
             with self._pong_lock:
@@ -1707,6 +1718,7 @@ class UDPTransport:
                 height, tip_hash, version, work = self._get_tip_fn()
                 self._send_one(MT_INFO, msg_id,
                                {"genesis": self.genesis_hash,
+                                "iid":      self._pool.instance_id,
                                 "height":   height,
                                 "tip_hash": tip_hash,
                                 "version":  version,
@@ -1719,6 +1731,9 @@ class UDPTransport:
                                sender)
 
         elif msg_type == MT_INFO:
+            if data.get("iid") == self._pool.instance_id:
+                self._pool.mark_self(sender_addr)
+                return
             self._pool.touch(sender_addr)
             with self._info_lock:
                 if msg_id in self._info_events:

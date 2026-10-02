@@ -18,6 +18,7 @@ External interface (called from main.py):
 
 import logging
 import time
+import json
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -30,11 +31,21 @@ PROBE_PATH = "/api/info"
 MAX_WORKERS = 20
 
 
-def _probe_one(addr, timeout):
+def _probe_one(addr, timeout, own_iid=None):
+    """True if addr answers. Returns None when the answer carries our own
+    instance id, i.e. addr is this node under another address."""
     url = f"http://{addr}{PROBE_PATH}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return 200 <= resp.status < 300
+            if not 200 <= resp.status < 300:
+                return False
+            if own_iid:
+                try:
+                    if json.loads(resp.read(1 << 20)).get("iid") == own_iid:
+                        return None
+                except Exception:
+                    pass
+            return True
     except Exception:
         return False
 
@@ -54,13 +65,16 @@ def run(pool, interval=120, timeout=2.5):
         while True:
             addrs = pool.all_addrs()
             if addrs:
-                futures = {pool_exec.submit(_probe_one, addr, timeout): addr
+                futures = {pool_exec.submit(_probe_one, addr, timeout, pool.instance_id): addr
                            for addr in addrs}
                 for future in as_completed(futures):
                     try:
                         ok = future.result()
                     except Exception:
                         ok = False
+                    if ok is None:
+                        pool.mark_self(futures[future])
+                        continue
                     pool.set_http_reachable(futures[future], ok)
                 log.debug("[http_probe] checked %d peers", len(addrs))
             time.sleep(interval)
