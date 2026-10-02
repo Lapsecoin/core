@@ -310,18 +310,47 @@ def _rival_tip(base, ours_tip, clock):
     raise AssertionError("no lower-output rival found")
 
 
-def test_late_equal_work_sibling_with_lower_output_is_taken_via_sync(node_env, clock):
-    """Characterisation, not a defence: through the sync path an equal-work
-    rival at our tip height replaces us if its output is lower, whenever it
-    arrives, as long as nobody has built on top yet. The draw window gates
-    the gossip path (_reorg_to_sibling), not this one."""
+def test_late_sibling_via_sync_is_refused_once_the_draw_window_has_closed(node_env, clock):
+    """A same-height rival with a lower output, delivered by sync instead of
+    gossip, is treated like the gossiped block it is: only while that
+    height's draw is open."""
     node = node_env[0]
     four = grow([node.cs.chain[0]], HONEST, clock, 4)
     ours5 = build_on(four, HONEST, clock)
     adopt(node, four + [ours5])
     rival5 = _rival_tip(four, ours5, clock)
+    node._draw_height, node._draw_closes = 5, 0.0                  # window long closed
+    adopted, _ = run_sync(node, Liar(lambda: four + [rival5]))
+    assert not adopted and node.cs.tip["hash"] == ours5["hash"]
+
+
+def test_sibling_via_sync_is_taken_while_the_draw_window_is_open(node_env, clock):
+    import time as _time
+    node = node_env[0]
+    four = grow([node.cs.chain[0]], HONEST, clock, 4)
+    ours5 = build_on(four, HONEST, clock)
+    adopt(node, four + [ours5])
+    rival5 = _rival_tip(four, ours5, clock)
+    node.open_draw(5)
+    assert node._draw_is_open(5)
     adopted, _ = run_sync(node, Liar(lambda: four + [rival5]))
     assert adopted and node.cs.tip["hash"] == rival5["hash"]
+
+
+def test_sibling_via_sync_with_a_higher_output_never_wins_even_in_the_window(node_env, clock):
+    node = node_env[0]
+    four = grow([node.cs.chain[0]], HONEST, clock, 4)
+    ours5 = build_on(four, HONEST, clock)
+    adopt(node, four + [ours5])
+    worse = None
+    for i in range(10, 400):
+        cand = build_on(four, address(i), clock)
+        if block_mod.tie_break_key(cand) > block_mod.tie_break_key(ours5):
+            worse = cand
+            break
+    node.open_draw(5)
+    adopted, _ = run_sync(node, Liar(lambda: four + [worse]))
+    assert not adopted and node.cs.tip["hash"] == ours5["hash"]
 
 
 def test_that_late_sibling_loses_once_anyone_has_built_on_ours(node_env, clock):

@@ -2197,6 +2197,18 @@ class Node:
         real proven work, the same cost the rest of fork choice already
         assumes an attacker must pay.
         """
+        cs = self.cs
+        if (len(chain) == len(cs.chain) and len(chain) > 2
+                and chain[-1].get("hash") != cs.tip["hash"]
+                and chain[-2].get("hash") == cs.chain[-2]["hash"]):
+            # The peer's chain differs from ours only at our own tip height:
+            # a sibling of our tip, which is exactly what a gossiped block
+            # at that height would be. A late arrival is a late arrival
+            # whichever way it reached us, so it goes through the one place
+            # that knows about the draw window (_reorg_to_sibling) instead
+            # of this path having its own, looser, rule. Not an invalid
+            # chain either way, so a refusal is "not better", never False.
+            return True if self._reorg_to_sibling(chain[-1], cs) else None
         ok, err = self.apply_better_chain(chain)
         if ok:
             return True
