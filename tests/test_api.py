@@ -689,10 +689,9 @@ class TestAddressLookupNicknameRedirect:
 
 
 class TestBoardPage:
-    """Chat-style layout: oldest post at the top, newest (and anything
-    still pending in the mempool) at the bottom right above the compose
-    box, rather than the old top-down "newest first, compose above
-    everything" arrangement. See api.py's _board_ctx/_board_pending."""
+    """One continuous feed: compose box on top, then newest thread first
+    (anything still pending in the mempool above the newest confirmed
+    post). See api.py's _board_ctx/_board_pending."""
 
     def _client(self, pending_msgs=()):
         import tx as tx_mod
@@ -716,46 +715,35 @@ class TestBoardPage:
         app = api.create_private_app(node, pool)
         return app.test_client()
 
-    def test_confirmed_posts_render_oldest_first(self):
+    def test_confirmed_posts_render_newest_first(self):
         html = self._client().get("/board").get_data(as_text=True)
-        assert (html.index("oldest confirmed post")
+        assert (html.index("newest confirmed post")
                 < html.index("middle confirmed post")
-                < html.index("newest confirmed post"))
+                < html.index("oldest confirmed post"))
 
-    def test_pending_posts_render_after_confirmed_on_page_one(self):
+    def test_pending_posts_render_before_confirmed(self):
         html = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
-        assert html.index("newest confirmed post") < html.index("still pending")
+        assert html.index("still pending") < html.index("newest confirmed post")
         assert "pending" in html
 
-    def test_pending_posts_do_not_appear_on_page_two(self):
+    def test_long_board_loads_in_chunks_with_a_sentinel(self):
         import tx as tx_mod
         TAG = tx_mod.BOARD_MEMO_TAG
         cs = ChainState.from_genesis()
         for i in range(3):
             seed_balance(cs.state, i, 1000.0)
-        # BOARD_PER_PAGE is 20: 21 confirmed posts makes page 2 a real,
-        # distinct (older) page rather than one the router clamps back to
-        # page 1 (which is what a "page 2" that doesn't actually exist
-        # yet would do, and is not what this test means to check).
-        for i in range(21):
+        n = api.BOARD_THREADS_PER_CHUNK + 1
+        for i in range(n):
             t = {"from": address(i % 3), "nonce": i + 1, "fee": 100,
                  "outputs": [{"to": "1" * 40, "amount": 1}], "memo": TAG + f"post {i}"}
             cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
                              "transactions": [t], "hash": f"h{i}"})
-        cs.state.total_board_posts = 21
-        node = _FakeNode(cs)
-        t = make_tx(0, 1, 1, cs.state, fee=100, memo=TAG + "still pending")
-        node.mempool.add(t)
-        pool = peerpool_mod.PeerPool()
-        client = api.create_private_app(node, pool).test_client()
-
-        resp = client.get("/board?page=2")
-        html = resp.get_data(as_text=True)
-        assert "still pending" not in html
-        # Sanity: this really is a distinct older page, not a silent
-        # clamp-back to page 1 (which would make the assertion above
-        # meaningless).
-        assert 'class="pager-current">2<' in html
+        cs.state.total_board_posts = n
+        client = api.create_private_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
+        first = client.get("/api/board/fragment?page=1").get_data(as_text=True)
+        assert 'id="board-more"' in first and "post 0" not in first
+        both = client.get("/api/board/fragment?page=2").get_data(as_text=True)
+        assert 'id="board-more"' not in both and "post 0" in both
 
     def test_no_leftover_waiting_to_be_mined_banner(self):
         """The old compose_ok text this replaced must not still be
@@ -769,9 +757,9 @@ class TestBoardPage:
         assert 'type="hidden" name="passphrase"' in html
         assert 'type="password"' not in html
 
-    def test_compose_form_is_the_last_thing_in_the_feed(self):
+    def test_compose_form_is_the_first_thing_in_the_feed(self):
         html = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
-        assert html.index("still pending") < html.index('class="board-compose"')
+        assert html.index('class="board-compose"') < html.index("still pending")
 
 
 class TestBoardMemoParsing:
@@ -1494,13 +1482,18 @@ class TestSubmitXlmAndAlert:
 
 
 
-def test_thread_board_rows_nests_replies_under_parent():
+def test_thread_board_rows_newest_thread_first_replies_by_score():
     import api
-    rows = [{"ref6": "a", "reply_ref": None},
-            {"ref6": "b", "reply_ref": None},
-            {"ref6": "c", "reply_ref": "a"},
-            {"ref6": "d", "reply_ref": "c"},
-            {"ref6": "e", "reply_ref": "zzzzzz"}]  # parent not on this page
-    out = api._thread_board_rows(rows)
+    entries = [{"ref6": "a", "reply_ref": None},
+               {"ref6": "c", "reply_ref": "a"},
+               {"ref6": "d", "reply_ref": "a"},
+               {"ref6": "e", "reply_ref": "c"},
+               {"ref6": "b", "reply_ref": None},
+               {"ref6": "z", "reply_ref": "zzzzzz"}]  # unknown parent: own thread
+    score = {"c": 1, "d": 5}.get
+    out, total = api._thread_board_rows(entries, lambda r: score(r["ref6"], 0))
+    assert total == 3
     assert [(r["ref6"], r["depth"]) for r in out] == [
-        ("a", 0), ("c", 1), ("d", 2), ("b", 0), ("e", 0)]
+        ("z", 0), ("b", 0), ("a", 0), ("d", 1), ("c", 1), ("e", 2)]
+    out, _ = api._thread_board_rows(entries, lambda r: 0, limit=1)
+    assert [r["ref6"] for r in out] == ["z"]

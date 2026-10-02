@@ -10,9 +10,6 @@
 </p>
 
 <div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
-    <div id="board-rows">
-      {% include "board_rows.html" %}
-    </div>
     {% if is_private %}
     <form method="POST" action="/board?page={{ page }}" class="board-compose" id="board-compose"
           data-own-nick="{{ own_nick or '' }}" data-own-icon-idx="{{ own_icon_idx }}">
@@ -75,20 +72,12 @@
     </form>
     <script type="module" src="/vendor/markdown-toolbar-element.js"></script>
     {% endif %}
+    <div id="board-rows">
+      {% include "board_rows.html" %}
+    </div>
 </div>
 
-{% if total_pages > 1 %}
-<nav class="pager" aria-label="Pagination">
-  {% if has_prev %}<a href="/board?page={{ page - 1 }}">Prev</a>{% endif %}
-  {% for p in page_window %}
-    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
-    {% elif p == page %}<span class="pager-current">{{ p }}</span>
-    {% else %}<a href="/board?page={{ p }}">{{ p }}</a>
-    {% endif %}
-  {% endfor %}
-  {% if has_next %}<a href="/board?page={{ page + 1 }}">Next</a>{% endif %}
-</nav>
-{% endif %}
+
 
 <style>
   /* Remark42's structure/markup/spacing stays exactly as ported; only
@@ -204,7 +193,7 @@
      card, per the same "container gets the real identity too" fix as
      #board-feed above. */
   .board-compose {
-    border: 6px solid var(--color5); border-radius: 2px; padding: 8px; margin-top: .5rem;
+    border: 6px solid var(--color5); border-radius: 2px; padding: 8px; margin: .5rem 0 1rem;
   }
   .board-compose-row { display: flex; gap: .5rem; align-items: center; }
   .board-compose-row + .board-compose-row { margin-top: .4rem; }
@@ -318,7 +307,7 @@
       if (passphrase === null) return;  // cancelled, nothing sent
       const body = new URLSearchParams({csrf_token: CSRF, ref, dir, passphrase});
       await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
-      if (PAGE === 1) pollBoard();
+      pollBoard();
     } finally {
       btn.disabled = false;
     }
@@ -505,10 +494,10 @@
     autoGrow();
   }
 
-  // Only page 1 polls for new posts landing; older pages are history,
-  // not a live view, so they stay exactly what was rendered.
-  if (PAGE !== 1) return;
-
+  // One continuous feed: `loaded` chunks of threads are on screen, more
+  // are appended as the sentinel scrolls into view, and the poll re-renders
+  // exactly what is loaded so new posts and votes show up in place.
+  let loaded = PAGE;
   let pollInFlight = false;
   const statusEl = document.getElementById("live-status");
 
@@ -516,7 +505,7 @@
     if (pollInFlight) return;
     pollInFlight = true;
     try {
-      const res = await fetch("/api/board/fragment?page=1", {cache: "no-store"});
+      const res = await fetch("/api/board/fragment?page=" + loaded, {cache: "no-store"});
       if (!res.ok) throw new Error("bad status " + res.status);
       const html = await res.text();
       const next = document.createElement("template");
@@ -527,11 +516,26 @@
       updateTimes(rows);
       wireVoteButtons(rows);
       statusEl.textContent = "";
+      watchSentinel();
     } catch (e) {
       // Keep the current feed usable when a poll is temporarily offline.
     } finally {
       pollInFlight = false;
     }
+  }
+
+  let observer = null;
+  function watchSentinel() {
+    if (observer) observer.disconnect();
+    const more = document.getElementById("board-more");
+    if (!more || !("IntersectionObserver" in window)) return;
+    observer = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting) && !pollInFlight) {
+        loaded += 1;
+        pollBoard();
+      }
+    }, {rootMargin: "400px"});
+    observer.observe(more);
   }
 
   pollBoard();
