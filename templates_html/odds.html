@@ -391,6 +391,14 @@
     }).join("");
   }
 
+  // Tile subtitles are clipped to one line with an ellipsis, so mirror the
+  // full text into a hover title.
+  function titleStatSubs() {
+    document.querySelectorAll(".stat .stat-sub").forEach(el => {
+      el.title = el.textContent.trim();
+    });
+  }
+
   async function refresh() {
     try {
       const res = await fetch("/api/odds", {cache: "no-store"});
@@ -432,6 +440,7 @@
       document.getElementById("reorg-count").textContent = r.count
         ? r.count + " seen, one-block ties not counted"
         : "nothing deeper than a tie so far";
+      titleStatSubs();
 
       // A drag in progress owns the chart until it is released, so a
       // refresh landing mid-drag doesn't yank the grip out from under it.
@@ -446,6 +455,7 @@
   // is applied immediately rather than after the first fetch comes back.
   try {
     const seed = document.getElementById("odds-initial");
+    titleStatSubs();
     if (seed) { const d = JSON.parse(seed.textContent); paint(d.chart, d.median); }
   } catch (e) { /* the fetch below covers it */ }
   refresh();
