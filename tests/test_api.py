@@ -1527,10 +1527,10 @@ def test_board_reply_memos_round_trip_into_nested_render():
     client = api.create_private_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
     html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
     margins = {}
-    for m in re.finditer(r'<div class="rc-root[^"]*"[^>]*?(?:margin-left: ([\d.]+)rem)?">'
+    for m in re.finditer(r'<div class="rc-root[^"]*"[^>]*?(?:--depth: (\d+))?">'
                          r'.*?<div class="rc-text">(.*?)</div>', html, re.S):
         margins[m.group(2).strip()] = float(m.group(1) or 0)
-    assert margins == {"root B": 0, "root A": 0, "reply A1": 1.5, "reply to A1": 3.0}
+    assert margins == {"root B": 0, "root A": 0, "reply A1": 1, "reply to A1": 2}
     assert (html.index("root B") < html.index("root A")
             < html.index("reply A1") < html.index("reply to A1"))
 
@@ -1586,4 +1586,47 @@ def test_board_post_form_encodes_reply_ref_and_renders_nested(tmp_path):
     pending = list(node.mempool.all_txs())
     assert [t["memo"] for t in pending] == [tx_mod.BOARD_MEMO_TAG + f"[r:{ref}]the reply"]
     assert html.index("the root") < html.index("the reply")
-    assert "margin-left: 1.5rem" in html
+    assert "--depth: 1" in html
+
+
+class TestBoardCachingAndQuotes:
+    def _setup(self):
+        import tx as tx_mod
+        cs = ChainState.from_genesis()
+        t = {"from": address(0), "nonce": 1, "fee": 100,
+             "outputs": [{"to": "1" * 40, "amount": 1}],
+             "memo": tx_mod.BOARD_MEMO_TAG + "first post"}
+        cs.chain.append({"height": 1, "timestamp": 1000, "transactions": [t], "hash": "h1"})
+        node = _FakeNode(cs)
+        return cs, node, api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+
+    def test_unchanged_poll_gets_304_and_new_block_busts_the_cache(self):
+        import tx as tx_mod
+        cs, node, client = self._setup()
+        first = client.get("/api/board/fragment?page=1")
+        assert first.status_code == 200 and "first post" in first.get_data(as_text=True)
+        etag = first.headers["ETag"]
+        assert client.get("/api/board/fragment?page=1",
+                          headers={"If-None-Match": etag}).status_code == 304
+        t = {"from": address(1), "nonce": 1, "fee": 100,
+             "outputs": [{"to": "1" * 40, "amount": 1}],
+             "memo": tx_mod.BOARD_MEMO_TAG + "second post"}
+        cs.chain.append({"height": 2, "timestamp": 1001, "transactions": [t], "hash": "h2"})
+        again = client.get("/api/board/fragment?page=1", headers={"If-None-Match": etag})
+        assert again.status_code == 200 and "second post" in again.get_data(as_text=True)
+
+    def test_quote_only_when_parent_is_not_in_the_feed(self):
+        import tx as tx_mod
+        cs, node, client = self._setup()
+        parent_ref = tx_mod.tx_hash(cs.chain[1]["transactions"][0])[:api.REPLY_REF_LEN]
+        nested = {"from": address(1), "nonce": 1, "fee": 100,
+                  "outputs": [{"to": "1" * 40, "amount": 1}],
+                  "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("nested one", reply_ref=parent_ref)}
+        orphan = {"from": address(2), "nonce": 1, "fee": 100,
+                  "outputs": [{"to": "1" * 40, "amount": 1}],
+                  "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("orphan one", reply_ref="abcdef")}
+        for i, t in enumerate((nested, orphan)):
+            cs.chain.append({"height": 2 + i, "timestamp": 1001 + i, "transactions": [t], "hash": f"h{2+i}"})
+        html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
+        assert html.count('class="rc-replyQuote"') == 1
+        assert "replying to an earlier post" in html
