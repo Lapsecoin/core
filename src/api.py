@@ -1075,82 +1075,91 @@ def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_
 
 
 BOARD_MAX_DEPTH = 4
+BOARD_THREADS_PER_CHUNK = 10
 
 
-def _thread_board_rows(rows):
-    """Order a page so each reply sits right under its parent, and set
-    row["depth"] (0 = top level, capped at BOARD_MAX_DEPTH) for indenting.
-    A reply whose parent is not on this page stays top level and keeps its
-    quote preview. Rows arrive oldest-first and keep that order among
-    siblings."""
-    by_ref = {r["ref6"]: r for r in rows}
-    children = {}
-    roots = []
-    for r in rows:
-        parent = by_ref.get(r["reply_ref"]) if r["reply_ref"] else None
-        if parent is None or parent is r:
-            roots.append(r)
+def _thread_board_rows(entries, score_of, limit=None):
+    """Whole threads, newest thread first. entries are oldest-first dicts
+    carrying ref6 and reply_ref (plus anything else the caller wants kept).
+    A post whose parent is unknown is its own thread root. Inside a thread
+    replies are ordered by score then recency, nested under their parent;
+    row["depth"] is set (0 = root, capped at BOARD_MAX_DEPTH) for
+    indenting. Returns (flattened rows of the first `limit` threads, total
+    thread count)."""
+    by_ref = {e["ref6"]: e for e in entries}
+    for i, e in enumerate(entries):
+        e["_seq"] = i
+    children, roots = {}, []
+    for e in entries:
+        parent = by_ref.get(e["reply_ref"]) if e["reply_ref"] else None
+        if parent is None or parent is e:
+            roots.append(e)
         else:
-            children.setdefault(parent["ref6"], []).append(r)
+            children.setdefault(parent["ref6"], []).append(e)
+    roots.sort(key=lambda e: -e["_seq"])
+    total = len(roots)
+    if limit is not None:
+        roots = roots[:limit]
     out, seen = [], set()
 
-    def walk(r, depth):
-        if r["ref6"] in seen:
+    def walk(e, depth):
+        if e["ref6"] in seen:
             return
-        seen.add(r["ref6"])
-        r["depth"] = min(depth, BOARD_MAX_DEPTH)
-        out.append(r)
-        for c in children.get(r["ref6"], []):
+        seen.add(e["ref6"])
+        e["depth"] = min(depth, BOARD_MAX_DEPTH)
+        out.append(e)
+        kids = children.get(e["ref6"], [])
+        kids.sort(key=lambda c: (-score_of(c), -c["_seq"]))
+        for c in kids:
             walk(c, depth + 1)
 
     for r in roots:
         walk(r, 0)
-    for r in rows:  # reply cycles can't happen on chain, but never drop a row
-        walk(r, 0)
-    return out
+    return out, total
 
 
 def _board_ctx(node, page_arg, own_addr, extra=None):
-    """Board page context: pagination plus the post list. Shared between
-    the GET route (read-only, both apps) and the private app's POST
-    handler (which re-renders the same page with an alert after posting),
-    so the two never drift into computing pagination differently.
+    """Board page context. The board is one continuous feed (no page
+    cuts): newest thread first, each thread kept whole with replies nested
+    under their parent. `page_arg` is how many chunks of
+    BOARD_THREADS_PER_CHUNK threads to render, so the page can keep
+    appending as the reader scrolls. Shared between the GET route
+    (read-only, both apps) and the private app's POST handler, so the two
+    never drift apart.
 
     own_addr is the caller's call, not this function's: node.addr on the
     private app always, and on the public app whatever the Dandelion
     privacy setting (settings.HIDE_ADDRESS_PUBLICLY) says -- possibly
     None, which never matches a real row.tx.from and so quietly drops the
     "mine" styling in board.html rather than needing its own branch here.
-
-    rows renders oldest-first within the page (chat order: the newest
-    confirmed post, and then anything still pending, sit right above the
-    compose box at the bottom) rather than _board_posts' own tip-first
-    order, which /api/board still uses unchanged (it only needs to know
-    what the latest post is, not display order).
     """
-    all_rows = _board_posts(node.view.chain)
-    total_pages = max(-(-len(all_rows) // BOARD_PER_PAGE), 1)
-    page  = min(max(page_arg, 1), total_pages)
-    start = (page - 1) * BOARD_PER_PAGE
-    end   = start + BOARD_PER_PAGE
-    page_rows = [{"height": h, "ts": ts, "hash": hsh, "tx": t, "pending": False}
-                 for h, ts, hsh, t in reversed(all_rows[start:end])]
-    # Pending posts are always newer than anything confirmed, so they only
-    # belong on page 1 (the most recent page, the one actually being
-    # composed into), appended last so they sit at the bottom of the feed.
-    pending_rows = _board_pending(node.mempool) if page == 1 else []
-    page_rows += pending_rows
+    all_rows = _board_posts(node.view.chain)          # tip-first
+    entries = [{"height": h, "ts": ts, "hash": hsh, "tx": t, "pending": False}
+               for h, ts, hsh, t in reversed(all_rows)]
+    pending_rows = _board_pending(node.mempool)
+    entries += pending_rows                            # always newest
 
     profiles, votes, pending_vote_refs = _board_profiles_and_votes(
         node.view.chain, node.view.state.nicknames, node.mempool)
-    # Every row on chain, not just this page, so a reply on page 3 can
-    # still preview a parent that landed on page 1.
     hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
     for row in pending_rows:
         hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
+    for row in entries:
+        row["ref6"] = row["hash"][:REPLY_REF_LEN]
+        row["reply_ref"] = parse_board_body(
+            (row["tx"].get("memo") or "")[len(BOARD_MEMO_TAG):])[2]
+
+    def score_of(row):
+        tally = votes.get(row["ref6"])
+        return (tally["up"] - tally["down"]) if tally else 0
+
+    chunks = max(page_arg, 1)
+    page_rows, total_threads = _thread_board_rows(
+        entries, score_of, limit=chunks * BOARD_THREADS_PER_CHUNK)
     for row in page_rows:
         _enrich_board_row(row, profiles, votes, hash6_index, own_addr, pending_vote_refs)
-    page_rows = _thread_board_rows(page_rows)
+    has_more = total_threads > chunks * BOARD_THREADS_PER_CHUNK
+    page = chunks
 
     own_profile = profiles.get(own_addr)
     own_icon_idx = own_profile["icon"] if own_profile else None
@@ -1161,9 +1170,7 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
                own_nick=own_profile.get("nick") if own_profile else None,
                icon_palette=ICON_PALETTE,
                tag_len=len(BOARD_MEMO_TAG),
-               page=page, total_pages=total_pages,
-               page_window=_pagination_window(page, total_pages),
-               has_prev=page > 1, has_next=end < len(all_rows))
+               page=page, has_more=has_more)
     if extra:
         ctx.update(extra)
     return ctx
