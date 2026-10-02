@@ -231,3 +231,105 @@ def test_equal_work_claim_costs_a_bounded_fetch_and_changes_nothing_if_not_bette
     run_sync(node, liar)
     assert node.cs.cumulative_iterations == ITERS * 4
     assert len(liar.sync_calls) < 20
+
+
+# ---- we are at 5, the peer claims 6, and builds its 6th while we fetch ----
+
+def _lazy_builder(chain, builder, clock):
+    """Serves `chain` but computes the next block only once it is first
+    asked for, i.e. while the victim is already fetching."""
+    state = {"chain": chain, "built": 0}
+
+    def serve():
+        return state["chain"]
+
+    def on_ask(from_h, to_h):
+        if to_h >= len(state["chain"]) and state["built"] == 0:
+            state["chain"] = grow(state["chain"], builder, clock, 1)
+            state["built"] += 1
+    return state, serve, on_ask
+
+
+class _LazyLiar(Liar):
+    def __init__(self, serve, on_ask, **kw):
+        super().__init__(serve, **kw)
+        self.on_ask = on_ask
+
+    def request_sync(self, peer, from_h, to_h, timeout=None):
+        self.on_ask(from_h, to_h)
+        return super().request_sync(peer, from_h, to_h, timeout)
+
+
+def test_claims_6_on_our_own_5_and_builds_the_6th_while_we_fetch(node_env, clock):
+    """Same history as ours, so the 6th is simply the next block, computed
+    for real after the claim. Adopting it is correct: it is a valid block
+    on our tip."""
+    node = node_env[0]
+    five = grow([node.cs.chain[0]], HONEST, clock, 5)
+    adopt(node, five)
+    state, serve, on_ask = _lazy_builder(list(five), ATTACKER, clock)
+    liar = _LazyLiar(serve, on_ask, claim_height=6, claim_work=ITERS * 6)
+    adopted, _ = run_sync(node, liar)
+    assert adopted and node.cs.height == 6
+    assert node.cs.tip["builder"] == ATTACKER and node.cs.chain[:6] == five
+
+
+def test_claims_6_but_cannot_deliver_it_changes_nothing(node_env, clock):
+    node = node_env[0]
+    five = grow([node.cs.chain[0]], HONEST, clock, 5)
+    adopt(node, five)
+    liar = Liar(lambda: five, claim_height=6, claim_work=ITERS * 6)   # never builds it
+    adopted, _ = run_sync(node, liar)
+    assert not adopted and node.cs.chain == five
+
+
+def test_claims_6_on_a_different_5_then_builds_6_is_a_real_heavier_chain(node_env, clock):
+    """The peer's first five blocks are NOT ours (a rival fork), and it
+    builds block 6 during our fetch. At that point it genuinely holds more
+    proven work than we do, so taking it is right: it paid for 6 blocks to
+    our 5. Nothing was faked; it only had to be real by the time we looked."""
+    node = node_env[0]
+    ours = grow([node.cs.chain[0]], HONEST, clock, 5)
+    adopt(node, ours)
+    rival5 = grow([node.cs.chain[0]], ATTACKER, clock, 5)
+    state, serve, on_ask = _lazy_builder(list(rival5), ATTACKER, clock)
+    liar = _LazyLiar(serve, on_ask, claim_height=6, claim_work=ITERS * 6)
+    adopted, _ = run_sync(node, liar)
+    assert adopted and node.cs.height == 6
+    assert node.cs.cumulative_iterations == ITERS * 6
+    assert node.cs.chain[1]["hash"] == rival5[1]["hash"]
+
+
+def _rival_tip(base, ours_tip, clock):
+    """Another valid block at the same height as ours_tip, from some other
+    builder, whose vdf_output sorts LOWER (it would win the draw)."""
+    for i in range(10, 400):
+        cand = build_on(base, address(i), clock)
+        if block_mod.tie_break_key(cand) < block_mod.tie_break_key(ours_tip):
+            return cand
+    raise AssertionError("no lower-output rival found")
+
+
+def test_late_equal_work_sibling_with_lower_output_is_taken_via_sync(node_env, clock):
+    """Characterisation, not a defence: through the sync path an equal-work
+    rival at our tip height replaces us if its output is lower, whenever it
+    arrives, as long as nobody has built on top yet. The draw window gates
+    the gossip path (_reorg_to_sibling), not this one."""
+    node = node_env[0]
+    four = grow([node.cs.chain[0]], HONEST, clock, 4)
+    ours5 = build_on(four, HONEST, clock)
+    adopt(node, four + [ours5])
+    rival5 = _rival_tip(four, ours5, clock)
+    adopted, _ = run_sync(node, Liar(lambda: four + [rival5]))
+    assert adopted and node.cs.tip["hash"] == rival5["hash"]
+
+
+def test_that_late_sibling_loses_once_anyone_has_built_on_ours(node_env, clock):
+    node = node_env[0]
+    four = grow([node.cs.chain[0]], HONEST, clock, 4)
+    ours5 = build_on(four, HONEST, clock)
+    ours6 = build_on(four + [ours5], HONEST, clock)
+    adopt(node, four + [ours5, ours6])
+    rival5 = _rival_tip(four, ours5, clock)
+    adopted, _ = run_sync(node, Liar(lambda: four + [rival5], claim_work=ITERS * 5))
+    assert not adopted and node.cs.tip["hash"] == ours6["hash"]
