@@ -1497,3 +1497,39 @@ def test_thread_board_rows_newest_thread_first_replies_by_score():
         ("z", 0), ("b", 0), ("a", 0), ("d", 1), ("c", 1), ("e", 2)]
     out, _ = api._thread_board_rows(entries, lambda r: 0, limit=1)
     assert [r["ref6"] for r in out] == ["z"]
+
+
+def test_board_reply_memos_round_trip_into_nested_render():
+    """Replies built the way the compose path builds them (build_board_body
+    with the parent's tx-hash prefix) come back nested under that parent."""
+    import re
+    import tx as tx_mod
+    TAG = tx_mod.BOARD_MEMO_TAG
+    cs = ChainState.from_genesis()
+    for i in range(3):
+        seed_balance(cs.state, i, 1000.0)
+    posts = {}
+
+    def post(name, msg, parent=None, who=0):
+        ref = tx_mod.tx_hash(posts[parent])[:tx_mod.REPLY_REF_LEN] if parent else None
+        t = {"from": address(who), "nonce": len(posts) + 1, "fee": 100,
+             "outputs": [{"to": "1" * 40, "amount": 1}],
+             "memo": TAG + api.build_board_body(msg, reply_ref=ref)}
+        posts[name] = t
+        cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + len(posts),
+                         "transactions": [t], "hash": f"h{len(cs.chain)}"})
+
+    post("A", "root A")
+    post("B", "root B")
+    post("A1", "reply A1", "A", 1)
+    post("A1a", "reply to A1", "A1", 2)
+    cs.state.total_board_posts = len(posts)
+    client = api.create_private_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
+    html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
+    margins = {}
+    for m in re.finditer(r'<div class="rc-root[^"]*"[^>]*?(?:margin-left: ([\d.]+)rem)?">'
+                         r'.*?<div class="rc-text">(.*?)</div>', html, re.S):
+        margins[m.group(2).strip()] = float(m.group(1) or 0)
+    assert margins == {"root B": 0, "root A": 0, "reply A1": 1.5, "reply to A1": 3.0}
+    assert (html.index("root B") < html.index("root A")
+            < html.index("reply A1") < html.index("reply to A1"))
