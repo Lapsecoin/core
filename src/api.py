@@ -89,6 +89,7 @@ import math
 import os
 import re
 import secrets
+import socket
 import sys
 import threading
 from urllib.parse import urlencode
@@ -103,7 +104,6 @@ import block as block_mod
 import crypto as crypto_mod
 import state as state_mod
 import hardware_info
-import http_probe
 import settings as settings_mod
 import storage as storage_mod
 import tx as tx_mod
@@ -1074,6 +1074,42 @@ def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_
     return row
 
 
+BOARD_MAX_DEPTH = 4
+
+
+def _thread_board_rows(rows):
+    """Order a page so each reply sits right under its parent, and set
+    row["depth"] (0 = top level, capped at BOARD_MAX_DEPTH) for indenting.
+    A reply whose parent is not on this page stays top level and keeps its
+    quote preview. Rows arrive oldest-first and keep that order among
+    siblings."""
+    by_ref = {r["ref6"]: r for r in rows}
+    children = {}
+    roots = []
+    for r in rows:
+        parent = by_ref.get(r["reply_ref"]) if r["reply_ref"] else None
+        if parent is None or parent is r:
+            roots.append(r)
+        else:
+            children.setdefault(parent["ref6"], []).append(r)
+    out, seen = [], set()
+
+    def walk(r, depth):
+        if r["ref6"] in seen:
+            return
+        seen.add(r["ref6"])
+        r["depth"] = min(depth, BOARD_MAX_DEPTH)
+        out.append(r)
+        for c in children.get(r["ref6"], []):
+            walk(c, depth + 1)
+
+    for r in roots:
+        walk(r, 0)
+    for r in rows:  # reply cycles can't happen on chain, but never drop a row
+        walk(r, 0)
+    return out
+
+
 def _board_ctx(node, page_arg, own_addr, extra=None):
     """Board page context: pagination plus the post list. Shared between
     the GET route (read-only, both apps) and the private app's POST
@@ -1114,6 +1150,7 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
         hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
     for row in page_rows:
         _enrich_board_row(row, profiles, votes, hash6_index, own_addr, pending_vote_refs)
+    page_rows = _thread_board_rows(page_rows)
 
     own_profile = profiles.get(own_addr)
     own_icon_idx = own_profile["icon"] if own_profile else None
@@ -2318,30 +2355,42 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     import market_routes
     market_routes.register(app, node, csrf_token)
 
-    def _check_not_self(addr):
-        if http_probe._probe_one(addr, 2.5, pool.instance_id) is None:
-            pool.mark_self(addr)
-            return
-        try:
-            node.gossip.udp.get_info(addr, timeout=3.0)  # a self reply marks itself
-        except Exception:
-            pass
-
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
         data = request.get_json(silent=True)
         host = data.get("host") if data else None
         port = data.get("port") if data else None
-        if (isinstance(host, str) and host
+        if not (isinstance(host, str) and host.strip()
                 and isinstance(port, int) and 0 < port <= 65535):
-            addr = f"{host}:{port}"
-            if not pool.add(addr, allow_private=True) and pool.is_self(addr):
+            return jsonify({"ok": False, "error": "need valid host and port"}), 400
+        host = host.strip()
+        try:
+            ip = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                                    socket.SOCK_DGRAM)[0][4][0]
+        except (socket.gaierror, UnicodeError, OSError):
+            return jsonify({"ok": False, "error": f"cannot resolve {host}"}), 400
+        addr = f"{ip}:{port}"
+        # Contact it first, like any other source: nothing is admitted on
+        # the operator's say-so alone. A PONG proves a live node of this
+        # chain is there; a reply carrying our own instance id (whatever
+        # port or IP got us back here) marks it as this very process.
+        try:
+            udp = node.gossip.udp
+        except AttributeError:
+            udp = None
+        if udp is not None:
+            try:
+                answered = udp.ping(addr) is not None
+            except Exception:
+                answered = False
+            if pool.is_self(addr):
                 return jsonify({"ok": False,
                                 "error": "that address is this node itself"}), 400
-            # Don't wait for the next probe round to find out it is us.
-            threading.Thread(target=_check_not_self, args=(addr,),
-                             daemon=True).start()
-            return jsonify({"ok": True})
-        return jsonify({"ok": False, "error": "need valid host and port"}), 400
+            if not answered:
+                return jsonify({"ok": False,
+                                "error": "no answer: not reachable, or not a "
+                                         "node on this chain"}), 400
+        pool.add(addr, allow_private=True)
+        return jsonify({"ok": True})
 
     return app

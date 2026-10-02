@@ -2,7 +2,7 @@
   {% for row in rows %}
   {% set mine = row.tx.from == own_addr %}
   {% set score = row.up - row.down %}
-  <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}">
+  <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}"{% if row.depth %} style="margin-left: {{ row.depth * 1.5 }}rem"{% endif %}>
     <div class="rc-info">
       <span class="rc-avatar" aria-hidden="true">{{ row.icon }}</span>
       <a href="/address?addr={{ row.tx.from }}" class="rc-username {{ 'hash-short' if not row.nick }}"

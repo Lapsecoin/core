@@ -1492,3 +1492,15 @@ class TestSubmitXlmAndAlert:
         assert "tx_bad_seq" in ctx["alert_err"]
         assert ctx["alert_ok_tx"] == ""
 
+
+
+def test_thread_board_rows_nests_replies_under_parent():
+    import api
+    rows = [{"ref6": "a", "reply_ref": None},
+            {"ref6": "b", "reply_ref": None},
+            {"ref6": "c", "reply_ref": "a"},
+            {"ref6": "d", "reply_ref": "c"},
+            {"ref6": "e", "reply_ref": "zzzzzz"}]  # parent not on this page
+    out = api._thread_board_rows(rows)
+    assert [(r["ref6"], r["depth"]) for r in out] == [
+        ("a", 0), ("c", 1), ("d", 2), ("b", 0), ("e", 0)]
