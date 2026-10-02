@@ -1533,3 +1533,57 @@ def test_board_reply_memos_round_trip_into_nested_render():
     assert margins == {"root B": 0, "root A": 0, "reply A1": 1.5, "reply to A1": 3.0}
     assert (html.index("root B") < html.index("root A")
             < html.index("reply A1") < html.index("reply to A1"))
+
+
+def test_board_post_form_encodes_reply_ref_and_renders_nested(tmp_path):
+    """The real compose path: POST /board with a reply_ref, signed by a
+    real keyfile, lands in the mempool as a reply and renders nested."""
+    import re
+    import time
+    import crypto as crypto_mod
+    import tx as tx_mod
+    from params import TICKS_PER_LAPSE
+    PASS = "correct horse battery staple"
+    sk, pk = crypto_mod.generate_keypair()
+    keyfile = str(tmp_path / "node.key")
+    crypto_mod.save_key(keyfile, sk, pk, PASS)
+    addr = crypto_mod.public_key_to_address(pk)
+    cs = ChainState.from_genesis()
+    cs.state.credit(addr, 1000 * TICKS_PER_LAPSE)
+
+    class SigningNode(_FakeNode):
+        pk_hex = pk.hex()
+
+        def __init__(self):
+            super().__init__(cs, addr=addr)
+            self.keyfile = keyfile
+
+        def build_and_sign_tx(self, outs, fee=0, passphrase=None, memo=""):
+            kek = crypto_mod.derive_kek(self.keyfile, passphrase)
+            nonce = max(cs.state.get_nonce(addr), self.mempool.pending_nonce(addr)) + 1
+            s = crypto_mod.decrypt_secret_key(self.keyfile, kek=kek)
+            return tx_mod.create(addr, self.pk_hex, outs, nonce, fee, s, memo=memo), fee
+
+        def submit_tx_from_api(self, t, timeout=5):
+            ok, why = self.mempool.add(t)
+            return ok, (tx_mod.tx_hash(t) if ok else why)
+
+    node = SigningNode()
+    root = {"from": addr, "pubkey": pk.hex(), "nonce": 1, "fee": 100,
+            "outputs": [{"to": "1" * 40, "amount": 1}],
+            "memo": tx_mod.BOARD_MEMO_TAG + "the root"}
+    cs.chain.append({"height": 1, "timestamp": int(time.time()),
+                     "transactions": [root], "hash": "h1"})
+    cs.state.apply_tx(root)
+    app = api.create_private_app(node, peerpool_mod.PeerPool())
+    client = app.test_client()
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"',
+                     client.get("/board").get_data(as_text=True)).group(1)
+    ref = tx_mod.tx_hash(root)[:tx_mod.REPLY_REF_LEN]
+    html = client.post("/board", data={"csrf_token": csrf, "message": "the reply",
+                                       "passphrase": PASS, "reply_ref": ref}
+                       ).get_data(as_text=True)
+    pending = list(node.mempool.all_txs())
+    assert [t["memo"] for t in pending] == [tx_mod.BOARD_MEMO_TAG + f"[r:{ref}]the reply"]
+    assert html.index("the root") < html.index("the reply")
+    assert "margin-left: 1.5rem" in html
