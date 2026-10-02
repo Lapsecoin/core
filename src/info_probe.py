@@ -79,6 +79,8 @@ def _probe_with(pool, udp, addrs, timeout, executor):
             info = None
         if not isinstance(info, dict):
             continue
+        if pool.is_self(futures[future]):
+            continue
         answered += 1
         pool.update_info(futures[future],
                          height=info.get("height"),

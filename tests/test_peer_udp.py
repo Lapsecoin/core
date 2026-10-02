@@ -78,9 +78,25 @@ def test_getinfo_response_includes_version():
     msg_type, data, target = sent[0]
     assert msg_type == MT_INFO
     assert data == {"genesis": udp.genesis_hash, "height": 42, "work": 4242,
-                    "tip_hash": "deadbeef", "version": "0.1.1"}
+                    "tip_hash": "deadbeef", "version": "0.1.1",
+                    "iid": udp._pool.instance_id}
     assert "wallet" not in data, \
         "a payout address must not be answerable from an IP; see MT_ALIVE"
+
+
+def test_info_reply_carrying_our_instance_id_marks_self():
+    """A peer that answers with our own instance id is this node under
+    another address, however it was reached."""
+    udp = _make_transport(MagicMock())
+    pool = udp._pool
+    pool.instance_id = "me"
+    ev = threading.Event()
+    udp._info_events[7] = ev
+
+    udp._dispatch(MT_INFO, 7, {"iid": "me", "height": 1}, ("127.0.0.1", 8335))
+
+    pool.mark_self.assert_called_once_with("127.0.0.1:8335")
+    assert not ev.is_set()
 
 
 def test_info_reply_captures_version():
