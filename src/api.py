@@ -84,6 +84,7 @@ Exchange / third-party integration:
 """
 
 import collections
+import hashlib
 import logging
 import math
 import os
@@ -96,7 +97,7 @@ from urllib.parse import urlencode
 
 import markdown
 from markupsafe import Markup, escape
-from flask import Flask, jsonify, redirect, render_template, request, send_file
+from flask import Flask, jsonify, make_response, redirect, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -1086,9 +1087,17 @@ def _thread_board_rows(entries, score_of, limit=None):
     row["depth"] is set (0 = root, capped at BOARD_MAX_DEPTH) for
     indenting. Returns (flattened rows of the first `limit` threads, total
     thread count)."""
+    flat, starts = _flatten_threads(entries, score_of)
+    if limit is not None and limit < len(starts):
+        flat = flat[:starts[limit]]
+    return [dict(e, depth=d) for e, d in flat], len(starts)
+
+
+def _flatten_threads(entries, score_of):
+    """All threads in display order as [(entry, depth)], plus the index in
+    that list where each thread starts. Does not mutate entries."""
     by_ref = {e["ref6"]: e for e in entries}
-    for i, e in enumerate(entries):
-        e["_seq"] = i
+    seq = {id(e): i for i, e in enumerate(entries)}
     children, roots = {}, []
     for e in entries:
         parent = by_ref.get(e["reply_ref"]) if e["reply_ref"] else None
@@ -1096,26 +1105,71 @@ def _thread_board_rows(entries, score_of, limit=None):
             roots.append(e)
         else:
             children.setdefault(parent["ref6"], []).append(e)
-    roots.sort(key=lambda e: -e["_seq"])
-    total = len(roots)
-    if limit is not None:
-        roots = roots[:limit]
-    out, seen = [], set()
+    roots.reverse()                       # newest thread first
+    flat, starts, seen = [], [], set()
 
     def walk(e, depth):
         if e["ref6"] in seen:
             return
         seen.add(e["ref6"])
-        e["depth"] = min(depth, BOARD_MAX_DEPTH)
-        out.append(e)
+        flat.append((e, min(depth, BOARD_MAX_DEPTH)))
         kids = children.get(e["ref6"], [])
-        kids.sort(key=lambda c: (-score_of(c), -c["_seq"]))
+        kids.sort(key=lambda c: (-score_of(c), -seq[id(c)]))
         for c in kids:
             walk(c, depth + 1)
 
     for r in roots:
+        starts.append(len(flat))
         walk(r, 0)
-    return out, total
+    return flat, starts
+
+
+# The heavy part of the board (a scan of the whole chain plus the vote and
+# profile pass) only changes when a block lands or a board/vote tx enters or
+# leaves the mempool, so it is computed once per such state and every viewer,
+# poll and scroll chunk reuses it. One slot is enough: only the latest state
+# is ever asked for. Stored as a single tuple so a concurrent reader never
+# sees half of an update.
+_board_cache = {"key": None, "value": None}
+
+
+def _board_state_key(node):
+    chain = node.view.chain
+    mem = tuple(sorted(
+        tx_mod.tx_hash(t) for t in node.mempool.all_txs()
+        if (t.get("memo") or "").startswith((BOARD_MEMO_TAG, VOTE_UP_TAG, VOTE_DOWN_TAG))))
+    return (id(node), len(chain), chain[-1].get("hash") if chain else None, mem)
+
+
+def _board_snapshot(node):
+    key = _board_state_key(node)
+    cached = _board_cache["value"]
+    if cached is not None and _board_cache["key"] == key:
+        return key, cached
+    all_rows = _board_posts(node.view.chain)          # tip-first
+    entries = [{"height": h, "ts": ts, "hash": hsh, "tx": t, "pending": False}
+               for h, ts, hsh, t in reversed(all_rows)]
+    pending_rows = _board_pending(node.mempool)
+    entries += pending_rows                            # always newest
+    profiles, votes, pending_vote_refs = _board_profiles_and_votes(
+        node.view.chain, node.view.state.nicknames, node.mempool)
+    hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
+    for row in pending_rows:
+        hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
+    for row in entries:
+        row["ref6"] = row["hash"][:REPLY_REF_LEN]
+        row["reply_ref"] = parse_board_body(
+            (row["tx"].get("memo") or "")[len(BOARD_MEMO_TAG):])[2]
+
+    def score_of(row):
+        tally = votes.get(row["ref6"])
+        return (tally["up"] - tally["down"]) if tally else 0
+
+    flat, starts = _flatten_threads(entries, score_of)
+    value = (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
+             len(all_rows))
+    _board_cache["key"], _board_cache["value"] = key, value
+    return key, value
 
 
 def _board_ctx(node, page_arg, own_addr, extra=None):
@@ -1133,38 +1187,23 @@ def _board_ctx(node, page_arg, own_addr, extra=None):
     None, which never matches a real row.tx.from and so quietly drops the
     "mine" styling in board.html rather than needing its own branch here.
     """
-    all_rows = _board_posts(node.view.chain)          # tip-first
-    entries = [{"height": h, "ts": ts, "hash": hsh, "tx": t, "pending": False}
-               for h, ts, hsh, t in reversed(all_rows)]
-    pending_rows = _board_pending(node.mempool)
-    entries += pending_rows                            # always newest
-
-    profiles, votes, pending_vote_refs = _board_profiles_and_votes(
-        node.view.chain, node.view.state.nicknames, node.mempool)
-    hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
-    for row in pending_rows:
-        hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
-    for row in entries:
-        row["ref6"] = row["hash"][:REPLY_REF_LEN]
-        row["reply_ref"] = parse_board_body(
-            (row["tx"].get("memo") or "")[len(BOARD_MEMO_TAG):])[2]
-
-    def score_of(row):
-        tally = votes.get(row["ref6"])
-        return (tally["up"] - tally["down"]) if tally else 0
-
+    _key, (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
+           post_count) = _board_snapshot(node)
     chunks = max(page_arg, 1)
-    page_rows, total_threads = _thread_board_rows(
-        entries, score_of, limit=chunks * BOARD_THREADS_PER_CHUNK)
+    limit = chunks * BOARD_THREADS_PER_CHUNK
+    cut = starts[limit] if limit < len(starts) else len(flat)
+    # Copies: the cached entries are shared across requests and viewers,
+    # while enrichment (own_addr-dependent "mine", etc.) is per request.
+    page_rows = [dict(e, depth=d) for e, d in flat[:cut]]
     for row in page_rows:
         _enrich_board_row(row, profiles, votes, hash6_index, own_addr, pending_vote_refs)
-    has_more = total_threads > chunks * BOARD_THREADS_PER_CHUNK
+    has_more = limit < len(starts)
     page = chunks
 
     own_profile = profiles.get(own_addr)
     own_icon_idx = own_profile["icon"] if own_profile else None
     ctx = dict(title="Board", rows=page_rows,
-               post_count=len(all_rows), own_addr=own_addr,
+               post_count=post_count, own_addr=own_addr,
                own_icon=_icon_emoji(own_icon_idx),
                own_icon_idx=own_icon_idx or 0,
                own_nick=own_profile.get("nick") if own_profile else None,
@@ -1594,8 +1633,19 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def api_board_fragment():
         """Return live board rows without replacing the compose box."""
         page = request.args.get("page", 1, type=int) or 1
-        ctx = _board_ctx(node, page, _own_addr_or_hidden())
-        return render_template("board_rows.html", **ctx)
+        own = _own_addr_or_hidden()
+        # Unchanged since the viewer's last poll: answer 304 without
+        # rendering anything. Validators are the board state itself plus the
+        # window size and viewer, the only inputs the fragment depends on.
+        key, _ = _board_snapshot(node)
+        etag = '"' + hashlib.sha1(repr((key, max(page, 1), own)).encode()).hexdigest() + '"'
+        if request.headers.get("If-None-Match") == etag:
+            resp = make_response("", 304)
+        else:
+            resp = make_response(render_template("board_rows.html", **_board_ctx(node, page, own)))
+        resp.headers["ETag"] = etag
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     # Race-odds data for the current tip, computed once per tip and held
     # here rather than in a module global: one cache per app, keyed by
