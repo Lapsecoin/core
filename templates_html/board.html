@@ -133,8 +133,7 @@
   #board-feed {
     background: rgb(var(--primary-background-color)); color: rgb(var(--primary-text-color));
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 14px; display: flex; flex-direction: column; padding: .5rem;
-    border: 1px solid var(--color16); border-radius: 4px;
+    font-size: 14px; display: flex; flex-direction: column; padding: .5rem 0;
   }
   /* Elements meant to be hidden by the `hidden` attribute must actually
      stay hidden: a bare class selector below (e.g. `.board-icon-palette
@@ -155,6 +154,7 @@
      text shape because the board is a flat public feed, not a two-party
      conversation -- the bubble mostly bought wasted margin, not clarity. */
   .rc-root { display: block; padding: 12px 0 8px; font-size: 16px; line-height: 1.4; border-bottom: 1px solid var(--color16); }
+  .rc-root[style*="margin-left"] { border-left: 2px solid var(--color16); padding-left: .6rem; }
   .rc-root.mine { background: rgba(179,90,12,.05); }
   .rc-root.pending { opacity: .6; }
   .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 14px; position: relative; }
