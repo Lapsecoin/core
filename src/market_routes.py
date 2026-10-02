@@ -502,7 +502,7 @@ def register(app, node, csrf_token):
                 alert_err = "That page was stale. Reload and try again."
             else:
                 try:
-                    session_id = _start_trade(node, row, height, xlm_keyfile())
+                    _start_trade(node, row, height, xlm_keyfile())
                     return redirect("/trades")
                 except swap_mod.TradeTooLarge as e:
                     alert_err = (

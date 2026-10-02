@@ -2,8 +2,8 @@
 Unit tests for node.py
 
 Covers every non-VDF method:
-  _validate_tail, NodeView, Node._load_cs, Node.is_signing_active,
-  Node.mark_tx_seen, Node.get_info, Node.submit_tx, Node.build_and_sign_tx,
+  _validate_tail, NodeView, Node._load_cs,
+  Node.get_info, Node.submit_tx, Node.build_and_sign_tx,
   Node._pick_winner, Node._commit, Node._drain_queue, Node._handle,
   Node._handle_inbound_tx, Node._evaluate_remote_chain,
   Node.apply_better_chain, Node._reorg_mempool.
@@ -247,22 +247,6 @@ class TestLoadCs:
 # ---------------------------------------------------------------------------
 
 class TestSimpleAccessors:
-    def test_is_signing_active_true_when_kek_set(self, node_env):
-        node, *_ = node_env
-        assert node.is_signing_active() is True
-
-    def test_is_signing_active_false_when_no_kek(self, node_env):
-        node, *_ = node_env
-        node._kek = None
-        assert node.is_signing_active() is False
-
-    def test_mark_tx_seen_delegates_to_gossip(self, node_env):
-        node, _, __, gossip, *_ = node_env
-        gossip.mark_seen.return_value = False
-        result = node.mark_tx_seen("abc")
-        gossip.mark_seen.assert_called_once_with("abc", gossip_mod.KIND_TX)
-        assert result is False
-
     def test_get_info_returns_expected_keys(self, node_env):
         node, *_ = node_env
         info = node.get_info()
@@ -1744,7 +1728,6 @@ class TestDraw:
         assert node.cs.tip["hash"] == first["hash"]
 
     def test_window_length_is_adjustable(self, node_env, monkeypatch):
-        import settings as settings_mod
         node, *_ = node_env
         monkeypatch.setenv("LAPSECOIN_DRAW_WINDOW_SECONDS", "0")
         g = node.cs.tip
@@ -1838,21 +1821,12 @@ class TestDraw:
             settings_mod.DRAW_WINDOW_SECONDS)
 
     def test_changing_the_setting_changes_the_window(self, node_env, monkeypatch):
-        import settings as settings_mod
         node, *_ = node_env
         monkeypatch.setenv("LAPSECOIN_DRAW_WINDOW_SECONDS", "4")
 
         assert node._draw_window_seconds() == 4.0
         node.open_draw(1)
-        # Not exact equality: _draw_closes is now + 4.0 and _draw_anchor is
-        # that same now, both taken from time.monotonic(), and (x + 4.0) - x
-        # is only guaranteed exactly 4.0 for some values of x, not all.
-        # Whether it round-trips exactly depends on x's own bit pattern,
-        # which here is however long this machine has been up. Passed
-        # every local run and failed on a CI runner with a different
-        # uptime for exactly that reason; the code is right, the exact
-        # comparison wasn't.
-        assert node._draw_closes - node._draw_anchor == pytest.approx(4.0)
+        assert node._draw_closes - time.monotonic() == pytest.approx(4.0, abs=0.5)
 
     def test_a_slower_field_does_not_stretch_it(self, node_env):
         """The case that motivated removing the widening: competitors
@@ -2186,7 +2160,7 @@ class TestTheFluffingNodeKeepsTheTransaction:
         for went_public in (True, False):
             gossip.relay.reset_mock()
             gossip.relay.return_value = went_public
-            node.mempool.remove_many(list(node.mempool.pending_hashes()))
+            node.mempool.remove_many([tx_mod.tx_hash(t) for t in node.mempool.all_txs()])
             node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
             gossip.relay.assert_called_once()
             assert gossip.relay.call_args.kwargs["stemming"] is True

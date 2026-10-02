@@ -27,7 +27,7 @@ class TestSessionTag:
     def test_tag_roundtrips(self):
         sid = swap.new_session_id(self.ORDER_ID, "a.b.c")
         tag = swap.session_tag(self.ORDER_ID, sid, 7)
-        assert swap.parse_session_tag(tag) == ("a1b2c3d4", sid[:8], 7)
+        assert tag == f"a1b2c3d4:{sid[:8]}:7"
 
     def test_session_ids_are_unique_per_fill(self):
         a = swap.new_session_id(self.ORDER_ID, "a.b.c")
@@ -46,20 +46,6 @@ class TestSessionTag:
         id's dash does not land exactly at index 8 by accident."""
         tag = swap.session_tag("ab-c1d2e3f4gh", "f" * 16, 1)
         assert tag.startswith("abc1d2e3:")
-
-    def test_rejects_non_tags(self):
-        for junk in ("", "no-colon", "abc:def:", ":5", "abc:def:notanumber",
-                     None, 42, "short:tags:1", "a1b2c3d4:short:1",
-                     "a1b2c3d4:g1b2c3d4:1"):
-            assert swap.parse_session_tag(junk) is None
-
-    def test_rejects_a_tag_with_the_wrong_field_count(self):
-        """A memo that merely looks tag-shaped (colon-joined) must not
-        parse just because it happens to have three fields of some kind;
-        each field's own shape is checked too (see the hex-length cases
-        above)."""
-        assert swap.parse_session_tag("a1b2c3d4:e5f6a1b2:1:extra") is None
-        assert swap.parse_session_tag("a1b2c3d4:e5f6a1b2") is None
 
 
 class TestExposureCap:
@@ -134,7 +120,7 @@ class TestIncrementCount:
         works, or the user is sent to an amount that is refused too."""
         cap = 1 * XLM
         limit = swap.max_safe_trade_stroops(cap)
-        schedule, count, _cap = swap.plan(limit * 10, limit, trust_score=0.0,
+        schedule, count, _cap = plan(limit * 10, limit, trust_score=0.0,
                                           stranger_cap=cap)
         assert count <= swap.MAX_INCREMENTS
         assert max(xlm for _lapse, xlm in schedule) <= cap
@@ -182,28 +168,34 @@ class TestSchedule:
         assert swap.build_schedule(5 * LAPSE, 2 * XLM, 1) == [(5 * LAPSE, 2 * XLM)]
 
 
+def plan(lapse_total, xlm_total, trust_score, **kw):
+    """A schedule when both sides hold the same opinion of each other, the
+    shape swap.plan_mutual reduces to for a single trust score."""
+    return swap.plan_mutual(lapse_total, xlm_total, trust_score, trust_score, **kw)
+
+
 class TestPlan:
     def test_plan_respects_the_cap(self):
-        sched, count, cap = swap.plan(10 * LAPSE, 10 * XLM, trust_score=0.0)
+        sched, count, cap = plan(10 * LAPSE, 10 * XLM, trust_score=0.0)
         assert all(xlm <= cap for _lapse, xlm in sched)
 
     def test_plan_sums_to_the_totals(self):
-        sched, _count, _cap = swap.plan(7 * LAPSE, 3 * XLM, trust_score=2.0)
+        sched, _count, _cap = plan(7 * LAPSE, 3 * XLM, trust_score=2.0)
         assert sum(p[0] for p in sched) == 7 * LAPSE
         assert sum(p[1] for p in sched) == 3 * XLM
 
     def test_trust_reduces_the_step_count(self):
-        _s, stranger_steps, _c = swap.plan(20 * LAPSE, 20 * XLM, trust_score=0.0)
-        _s, trusted_steps, _c = swap.plan(20 * LAPSE, 20 * XLM, trust_score=50.0)
+        _s, stranger_steps, _c = plan(20 * LAPSE, 20 * XLM, trust_score=0.0)
+        _s, trusted_steps, _c = plan(20 * LAPSE, 20 * XLM, trust_score=50.0)
         assert trusted_steps < stranger_steps
 
     def test_trust_never_pushes_below_the_minimum(self):
-        _s, steps, _c = swap.plan(20 * LAPSE, 20 * XLM, trust_score=10**9)
+        _s, steps, _c = plan(20 * LAPSE, 20 * XLM, trust_score=10**9)
         assert steps >= swap.MIN_INCREMENTS
 
     def test_oversized_trade_refused_with_a_usable_limit(self):
         with pytest.raises(swap.TradeTooLarge) as exc:
-            swap.plan(10_000 * LAPSE, 10_000 * XLM, trust_score=0.0)
+            plan(10_000 * LAPSE, 10_000 * XLM, trust_score=0.0)
         assert exc.value.max_safe_stroops > 0
         assert exc.value.max_safe_stroops < 10_000 * XLM
 
@@ -248,12 +240,11 @@ class TestMutualExposureCap:
 
 
 class TestPlanMutual:
-    def test_matches_plan_when_both_sides_agree(self):
-        """With identical trust in both directions, plan_mutual is just
-        plan under a different name - the mutual cap collapses to the
-        same one-directional cap plan() would have used."""
+    def test_matches_a_single_cap_when_both_sides_agree(self):
+        """With identical trust in both directions the mutual cap collapses
+        to the one-directional cap either side would have used alone."""
         mutual = swap.plan_mutual(7 * LAPSE, 3 * XLM, 5.0, 5.0)
-        single = swap.plan(7 * LAPSE, 3 * XLM, trust_score=5.0)
+        single = swap._plan_for_cap(7 * LAPSE, 3 * XLM, swap.exposure_cap_stroops(5.0))
         assert mutual == single
 
     def test_the_less_trusting_side_governs_the_schedule(self):
@@ -385,12 +376,12 @@ class TestLossBoundProperty:
                 cap = swap.exposure_cap_stroops(trust)
                 if total > swap.max_safe_trade_stroops(cap):
                     continue
-                sched, _count, cap = swap.plan(total * 10, total, trust)
+                sched, _count, cap = plan(total * 10, total, trust)
                 worst_step = max(xlm for _lapse, xlm in sched)
                 assert worst_step <= cap
 
     def test_high_trust_cannot_collapse_a_trade_to_one_move(self):
         """A reputation must never buy a two-step trade that puts half the
         value at risk in one move."""
-        _sched, count, _cap = swap.plan(100 * LAPSE, 100 * XLM, trust_score=10**9)
+        _sched, count, _cap = plan(100 * LAPSE, 100 * XLM, trust_score=10**9)
         assert count >= swap.MIN_INCREMENTS

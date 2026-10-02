@@ -1079,20 +1079,6 @@ BOARD_MAX_DEPTH = 4
 BOARD_THREADS_PER_CHUNK = 10
 
 
-def _thread_board_rows(entries, score_of, limit=None):
-    """Whole threads, newest thread first. entries are oldest-first dicts
-    carrying ref6 and reply_ref (plus anything else the caller wants kept).
-    A post whose parent is unknown is its own thread root. Inside a thread
-    replies are ordered by score then recency, nested under their parent;
-    row["depth"] is set (0 = root, capped at BOARD_MAX_DEPTH) for
-    indenting. Returns (flattened rows of the first `limit` threads, total
-    thread count)."""
-    flat, starts = _flatten_threads(entries, score_of)
-    if limit is not None and limit < len(starts):
-        flat = flat[:starts[limit]]
-    return [dict(e, depth=d) for e, d in flat], len(starts)
-
-
 def _flatten_threads(entries, score_of):
     """All threads in display order as [(entry, depth)], plus the index in
     that list where each thread starts. Does not mutate entries."""

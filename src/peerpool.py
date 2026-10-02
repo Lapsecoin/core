@@ -238,9 +238,7 @@ class PeerPool:
 
         No wallet. A peer's payout address used to be carried here, which
         made this a directory of IP to wallet and, through /api/peers, a
-        public one. Where to pay a node now arrives as a relayed liveness
-        note that says nothing about where it came from (see
-        Node._handle_inbound_alive)."""
+        public one. Nothing tells peers where to pay a node any more."""
         with self._lock:
             if addr not in self._peers:
                 return
@@ -361,8 +359,7 @@ class PeerPool:
         update_info), or (None, "") if none has completed yet.
 
         No wallet, by design and no longer by omission. A peer's payout
-        address is not this node's business to know or to publish: it
-        arrives as a relayed liveness note whose sender is not its author.
+        address is not this node's business to know or to publish.
         http_reachable is
         True/False from the most recent HTTP probe (see set_http_reachable)
         if one completed within the last HTTP_REACHABLE_TTL seconds,

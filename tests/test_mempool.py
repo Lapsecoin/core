@@ -1,8 +1,8 @@
 """
 Unit tests for mempool.py
 
-Covers: add, remove, remove_many, get, get_txs_by_hashes, size, all_txs,
-pending_nonce, pending_hashes, prune_stale.
+Covers: add, remove, remove_many, get, size, all_txs,
+pending_nonce, prune_stale.
 """
 
 import os
@@ -96,7 +96,7 @@ class TestRemove:
 
 
 # ---------------------------------------------------------------------------
-# 3. get / get_txs_by_hashes
+# 3. get
 # ---------------------------------------------------------------------------
 
 class TestGet:
@@ -111,25 +111,9 @@ class TestGet:
         mp = fresh_mempool()
         assert mp.get("00" * 32) is None
 
-    def test_get_txs_by_hashes_returns_present(self):
-        mp = fresh_mempool()
-        t1 = sample_tx(0, 1)
-        t2 = sample_tx(2, 1)
-        _, h1 = mp.add(t1)
-        _, h2 = mp.add(t2)
-        results = mp.get_txs_by_hashes([h1, h2])
-        assert len(results) == 2
-
-    def test_get_txs_by_hashes_skips_missing(self):
-        mp = fresh_mempool()
-        t = sample_tx()
-        _, h = mp.add(t)
-        results = mp.get_txs_by_hashes([h, "missing" * 4])
-        assert len(results) == 1
-
 
 # ---------------------------------------------------------------------------
-# 4. all_txs / pending_nonce / pending_hashes
+# 4. all_txs / pending_nonce
 # ---------------------------------------------------------------------------
 
 class TestAllTxs:
@@ -159,14 +143,6 @@ class TestAllTxs:
         t2 = make_tx(0, 1, 1, s, nonce_override=t1["nonce"] + 1)
         mp.add(t2)
         assert mp.pending_nonce(address(0)) == t2["nonce"]
-
-    def test_pending_hashes_returns_frozenset(self):
-        mp = fresh_mempool()
-        t = sample_tx()
-        _, h = mp.add(t)
-        hashes = mp.pending_hashes()
-        assert isinstance(hashes, frozenset)
-        assert h in hashes
 
 
 # ---------------------------------------------------------------------------

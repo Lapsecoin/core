@@ -26,7 +26,6 @@ import market_routes
 import storage as storage_mod
 import swap as swap_mod
 import trade_storage
-import trust as trust_mod
 import xlm as xlm_mod
 from trade_storage import Increment, Order, Trade
 
@@ -331,7 +330,7 @@ class TestStartTrade:
         xlm_total = swap_mod.xlm_for_lapse(1 * LAPSE, 1000)
         monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: xlm_total)
         node = TakerNode(tmp_path)
-        session_id = self._call(node, order, {"amount_lapse": "1"})
+        self._call(node, order, {"amount_lapse": "1"})
         assert market_mod.get_fill_request(
             node.publish_fill_request_calls[0]["request_id"]) is not None
 
@@ -632,7 +631,7 @@ class TestMyOrders:
         assert rows[0]["pct_received"] == 0
 
     def test_a_settled_step_shows_as_delivered_percentage(self):
-        order = make_maker_order(order_id="o1", maker_lapse="me.lapse",
+        make_maker_order(order_id="o1", maker_lapse="me.lapse",
                                  lapse_total=10 * LAPSE)
         Trade.create(
             session_id="s" * 16, order_id="o1", role="maker",

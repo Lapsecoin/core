@@ -2,10 +2,8 @@
 
 The peers page shows each peer's height and version. Both come from one
 place, PeerPool.update_info, fed by a GETINFO/INFO exchange, and a peer's
-height is a claim it has to make itself. Where to pay a node is no longer
-among them: that arrives as a relayed liveness note instead, which is what
-keeps a payout address from being tied to an IP (see
-Node._handle_inbound_alive).
+height is a claim it has to make itself. Where to pay a node is not among
+them: no payout address is ever tied to an IP.
 
 Until this module existed, that exchange only ever happened as a side
 effect of syncing, so the columns filled at whatever rate syncing happened

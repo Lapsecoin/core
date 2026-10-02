@@ -363,7 +363,7 @@ def run_status_window(node, udp, private_port, log_file):
     root.title(f"LapseCoin v{LOCAL_VERSION}")
     root.minsize(440, 300)
     _apply_icon(root)
-    style = _style_dark(root)
+    _style_dark(root)
 
     outer = ttk.Frame(root, style="Dark.TFrame", padding=16)
     outer.pack(fill="both", expand=True)

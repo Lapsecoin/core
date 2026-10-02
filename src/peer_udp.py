@@ -108,18 +108,17 @@ MT_BLOCK     = 0x0D
 # and touches no consensus state: an order is an offer to trade, and the
 # trade itself happens in ordinary transactions on two chains.
 #
-# Relayed exactly like a liveness note, and for the same reason: the peer
-# handing you an order is not necessarily its author, so posting one does
-# not announce which IP wants the trade. It also inherits that type's
-# compatibility story, falling through _dispatch on a node too old to
-# know it, so no protocol floor bump is needed and a node that never
-# trades is unaffected by any of this.
+# Relayed by whoever receives it: the peer handing you an order is not
+# necessarily its author, so posting one does not announce which IP wants
+# the trade. It falls through _dispatch on a node too old to know it, so no
+# protocol floor bump is needed and a node that never trades is unaffected
+# by any of this.
 MT_ORDER     = 0x0F
 
 # The handshake pair (see market.py's fill-request/response section):
 # a taker's proposal to fill part of an order, and the maker's signed
 # accept-or-reject answer. Same shape and same reasoning as MT_ORDER:
-# carries no funds, relayed unconditionally like a liveness note so the
+# carries no funds, relayed unconditionally so the
 # peer handing it to you is not necessarily its author, and falls through
 # _dispatch on an older node with no protocol floor bump needed. 0x10 was
 # an earlier claim message this handshake replaced outright rather than
@@ -2068,7 +2067,7 @@ class UDPTransport:
         software version, so peers can flag when we're outdated.
 
         No wallet. Answering "which address does this IP pay to" on demand
-        is precisely the link a relayed liveness note avoids making."""
+        would tie an address to an IP."""
         self._get_tip_fn = fn
 
     def set_punch_go_callback(self, fn):

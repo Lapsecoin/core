@@ -18,7 +18,6 @@ import crypto
 import market
 import storage as storage_mod
 import swap
-import swap_engine
 import trade_storage
 import xlm as xlm_mod
 from trade_storage import Increment, LEG_SETTLED, Order, Trade
@@ -1729,7 +1728,7 @@ class TestTicker:
         # establishing it is just another one of those.
         _completed_trade("trusted-history", trusted, 50 * LAPSE, 50 * 100_000 * XLM)
 
-        low_price = 100 * XLM * 100_000_000 // (1 * LAPSE)
+        100 * XLM * 100_000_000 // (1 * LAPSE)
         high_price = 100_000 * XLM * 100_000_000 // (1 * LAPSE)
         _completed_trade("trusted1", trusted, 1 * LAPSE, 100_000 * XLM)
         for i in range(5):

@@ -36,19 +36,14 @@ class _MemoryMeta:
 
 class _FakeNode:
     """Just enough of Node's public surface for the routes under test:
-    .mempool, .view (chain/tip), .addr, the liveness notes the peers and
-    send pages read, and the settings the private settings page reads and
-    writes."""
+    .mempool, .view (chain/tip), .addr, and the settings the private
+    settings page reads and writes."""
 
-    def __init__(self, cs, addr=None, alive=()):
+    def __init__(self, cs, addr=None):
         self.mempool = mempool_mod.Mempool()
         self.view = NodeView(cs)
         self.addr = addr or address(0)
         self.settings = settings_mod.Settings(_MemoryMeta())
-        self._alive = set(alive)
-
-    def active_addresses(self, window_seconds):
-        return set(self._alive)
 
 
 def fresh():
@@ -378,7 +373,7 @@ class TestPeersPage:
     correctly, and the JSON is where the real data-shape and privacy
     assertions belong. There is deliberately no wallet field anywhere: a
     payout address is not something a peer tells us, and not something
-    this node publishes (see Node._handle_inbound_alive)."""
+    this node publishes."""
 
     def _client(self):
         node, cs = fresh()
@@ -1482,7 +1477,7 @@ class TestSubmitXlmAndAlert:
 
 
 
-def test_thread_board_rows_newest_thread_first_replies_by_score():
+def test_flatten_threads_newest_thread_first_replies_by_score():
     import api
     entries = [{"ref6": "a", "reply_ref": None},
                {"ref6": "c", "reply_ref": "a"},
@@ -1491,12 +1486,11 @@ def test_thread_board_rows_newest_thread_first_replies_by_score():
                {"ref6": "b", "reply_ref": None},
                {"ref6": "z", "reply_ref": "zzzzzz"}]  # unknown parent: own thread
     score = {"c": 1, "d": 5}.get
-    out, total = api._thread_board_rows(entries, lambda r: score(r["ref6"], 0))
-    assert total == 3
-    assert [(r["ref6"], r["depth"]) for r in out] == [
+    flat, starts = api._flatten_threads(entries, lambda r: score(r["ref6"], 0))
+    assert len(starts) == 3
+    assert [(e["ref6"], d) for e, d in flat] == [
         ("z", 0), ("b", 0), ("a", 0), ("d", 1), ("c", 1), ("e", 2)]
-    out, _ = api._thread_board_rows(entries, lambda r: 0, limit=1)
-    assert [r["ref6"] for r in out] == ["z"]
+    assert [flat[i][0]["ref6"] for i in starts] == ["z", "b", "a"]
 
 
 def test_board_reply_memos_round_trip_into_nested_render():
