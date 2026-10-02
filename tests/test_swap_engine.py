@@ -965,7 +965,7 @@ class TestBlame:
         second = Increment.get(Increment.id == f"{trade.session_id}:2")
         settle_peer_leg(trade, second, engine)  # they move first on step 2
         engine.advance(trade)                   # we reciprocate
-        third = Increment.get(Increment.id == f"{trade.session_id}:3")
+        Increment.get(Increment.id == f"{trade.session_id}:3")
         engine.advance(trade)                   # we pay step 3, they vanish
 
         # Steps 1 and 2 completing pushed step 3's deadline_height forward
@@ -975,15 +975,6 @@ class TestBlame:
         lapse.current_height += 10**6
         assert swap_engine.is_delinquent(self._stall(trade), lapse.current_height) is True
         assert trust.local_tally("peer.lapse", lapse.current_height)["abandoned_count"] == 1
-
-    def test_acceptance_cannot_be_forged_by_the_accuser(self):
-        """Only an inbound leg counts. Our own payments, however many,
-        never amount to the counterparty having agreed."""
-        engine, _l, _x = make_engine()
-        trade = make_trade()
-        for _ in range(5):
-            engine.advance(trade)
-        assert engine._peer_ever_reciprocated(trade) is False
 
 
 class TestRedemption:
@@ -1086,7 +1077,7 @@ class TestReconcile:
 
 import crypto
 import market as market_mod
-from trade_storage import FillRequest, FillResponse, Order
+from trade_storage import FillRequest, Order
 
 
 class _FakeState:
@@ -1591,7 +1582,7 @@ class TestAutoAcceptTrustFloor:
         lapse_total = 2000 * LAPSE
         price = 1_000_000
         make_order(lapse_total=lapse_total, price=price, maker_lapse=node.addr)
-        req = make_request(lapse_total=lapse_total)
+        make_request(lapse_total=lapse_total)
         engine, _lapse, _xlm = make_maker_engine(node)
         engine.lapse.balances[node.addr] = lapse_total
 
@@ -1773,8 +1764,8 @@ class TestCheckFillResponses:
         # What the maker's one-sided generosity alone would have signed,
         # were nothing here checking the taker's own (much lower) trust
         # of the maker too - the exact schedule this test crafts below.
-        _sched, generous_count, generous_cap = swap.plan(
-            lapse_total, xlm_total, trust_score=10**6)
+        _sched, generous_count, generous_cap = swap.plan_mutual(
+            lapse_total, xlm_total, 10**6, 10**6)
         stranger_cap = swap.exposure_cap_stroops(0.0)
         assert generous_cap > stranger_cap   # sanity: the scenario is real
 
@@ -1973,7 +1964,6 @@ class TestAutoMatchOrders:
 # Step receipts: emission and chain verification
 # ---------------------------------------------------------------------------
 
-import market as market_mod2  # noqa: E402  (mirrors the market_mod import above)
 
 
 class _FakeFillRequest:

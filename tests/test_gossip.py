@@ -12,7 +12,7 @@ UDP calls are mocked via the udp object. No network.
 import os
 import random
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

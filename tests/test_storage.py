@@ -441,7 +441,6 @@ class TestSchemaMigration:
         # put some rows back the way they were, and clear the version, as
         # an interrupted run would have left them
         import json as _json
-        import zlib as _zlib
         reopened = Storage(str(path))
         for h in (3, 4, 5):
             storage_mod.Block.update(

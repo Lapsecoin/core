@@ -37,9 +37,6 @@ import requests
 from stellar_sdk import (
     Account, Asset, Keypair, Network, TransactionBuilder, TransactionEnvelope,
 )
-from stellar_sdk.exceptions import (
-    BadRequestError, BadResponseError, NotFoundError, ConnectionError as SdkConnectionError,
-)
 
 log = logging.getLogger("ec.xlm")
 

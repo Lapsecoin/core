@@ -142,42 +142,6 @@ def session_tag(order_id, session_id, n):
     return tag
 
 
-def parse_session_tag(memo):
-    """Split a memo back into (order8, session8, step), or None if it is
-    not one.
-
-    Used when reading either chain, so it has to be strict: anything that
-    is merely memo-shaped must not be mistaken for a payment in a trade.
-    Both prefixes are validated as lowercase hex of the exact expected
-    length, since a memo that merely looks tag-shaped (three colon-joined
-    fields) must not be treated as a real reference to an order or
-    session it was never signed against.
-    """
-    if not isinstance(memo, str):
-        return None
-    parts = memo.split(":")
-    if len(parts) != 3:
-        return None
-    order8, session8, step = parts
-    if not _is_hex_of_length(order8, ORDER_TAG_LEN):
-        return None
-    if not _is_hex_of_length(session8, SESSION_TAG_LEN):
-        return None
-    if not step.isdigit():
-        return None
-    return order8, session8, int(step)
-
-
-def _is_hex_of_length(s, length):
-    if len(s) != length:
-        return False
-    try:
-        int(s, 16)
-    except ValueError:
-        return False
-    return True
-
-
 # ---------------------------------------------------------------------------
 # Exposure cap
 # ---------------------------------------------------------------------------
@@ -320,32 +284,6 @@ def _plan_for_cap(lapse_total, xlm_total, cap):
     raise TradeTooLarge(xlm_total, max_safe_trade_stroops(cap), cap)
 
 
-def plan(lapse_total, xlm_total, trust_score,
-         stranger_cap=DEFAULT_STRANGER_CAP_STROOPS, peer_stake_stroops=None):
-    """Everything about how a trade will be executed, decided up front from
-    a single one-directional trust score. Returns (schedule, count, cap).
-
-    Raising TradeTooLarge here, before a trade exists, is what keeps the
-    refusal cheap and legible: the user is told the limit while they are
-    still choosing an amount.
-
-    This sizes a step from only one side's opinion of the other, which is
-    the shape that used to let a maker unilaterally hand a taker a
-    schedule the taker's own risk policy would never have picked (see
-    plan_mutual, which is what an actual trade between two parties must
-    use instead: nobody but the side actually at risk on a step gets to
-    decide how large it is, and neither side may pick a smaller one to
-    weaken the other's protection). Kept for callers that only ever
-    reason about their own exposure to someone else's already-fixed
-    resting order (market_routes.pending_maker_requests' own "would this
-    fit" preview; auto_match_orders' initial sizing of how much to even
-    ask for, before the resting order's own maker independently applies
-    plan_mutual when it decides).
-    """
-    cap = exposure_cap_stroops(trust_score, stranger_cap, peer_stake_stroops)
-    return _plan_for_cap(lapse_total, xlm_total, cap)
-
-
 def mutual_exposure_cap_stroops(my_trust_of_peer, peer_trust_of_me,
                                 stranger_cap=DEFAULT_STRANGER_CAP_STROOPS,
                                 peer_stake_stroops=None, my_stake_stroops=None):
@@ -372,8 +310,9 @@ def mutual_exposure_cap_stroops(my_trust_of_peer, peer_trust_of_me,
 def plan_mutual(lapse_total, xlm_total, my_trust_of_peer, peer_trust_of_me,
                 stranger_cap=DEFAULT_STRANGER_CAP_STROOPS,
                 peer_stake_stroops=None, my_stake_stroops=None):
-    """plan(), but sized from both parties' trust of each other rather
-    than one side's opinion alone (see mutual_exposure_cap_stroops).
+    """Everything about how a trade will be executed, decided up front from
+    both parties' trust of each other rather than one side's opinion alone
+    (see mutual_exposure_cap_stroops).
 
     This is the one schedule a trade between two specific addresses has:
     computed the same way by the maker deciding whether to accept and by

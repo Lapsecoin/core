@@ -154,9 +154,6 @@ class Mempool:
         entry = self._pool.get(tx_hash)
         return entry.tx if entry else None
 
-    def get_txs_by_hashes(self, tx_hashes):
-        return [self._pool[h].tx for h in tx_hashes if h in self._pool]
-
     def size(self):
         return len(self._pool)
 
@@ -201,9 +198,6 @@ class Mempool:
         for t in pending:
             probe.apply_tx(t)
         return probe
-
-    def pending_hashes(self):
-        return frozenset(self._pool.keys())
 
     def prune_stale(self, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
         """Evict txs that can never become valid: a nonce already superseded

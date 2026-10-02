@@ -73,7 +73,6 @@ log = logging.getLogger("ec.swap_engine")
 # needs it (to validate a signed confirm_depth) and cannot import this
 # module without a cycle.
 MIN_CONFIRM_DEPTH = swap.MIN_CONFIRM_DEPTH_FLOOR
-DEFAULT_CONFIRM_DEPTH = swap.MIN_CONFIRM_DEPTH_FLOOR
 
 # How long one step may take before the trade is marked stalled. Built
 # from the chain's own pace rather than a fixed number of seconds, so it
@@ -223,9 +222,7 @@ class LapseAdapter:
         Goes through node._build_and_sign_tx_with_kek rather than the
         public build_and_sign_tx: this already holds a kek (handed down
         from whatever unlocked the wallet to run the swap worker at
-        all), not a plaintext passphrase to re-derive one from, exactly
-        the same distinction build_and_sign_tx_internal draws for other
-        node-internal callers.
+        all), not a plaintext passphrase to re-derive one from.
         """
         fee = self._suggested_fee(to_addr, amount, memo)
         tx_dict, _fee = self.node._build_and_sign_tx_with_kek(
@@ -947,29 +944,6 @@ class Engine:
         # save is the entire effect on this peer's standing.
         log.info("[swap] %s completed: %d steps delivered",
                  trade.session_id, trade.increment_count)
-
-    @staticmethod
-    def _peer_ever_reciprocated(trade):
-        """Whether the counterparty has settled a leg of their own here.
-
-        Not consulted by is_delinquent (a peer's very first owed step can
-        be judged with nothing else to go on, see that function's
-        docstring); kept because it is still a true, useful fact for a
-        reader to compute, e.g. the Trades page distinguishing a peer who
-        has never sent anything at all from one mid-trade who has already
-        reciprocated earlier steps. A settled inbound leg is a transaction
-        the counterparty signed, carrying this trade's session tag, which
-        nobody else could have produced.
-
-        Reading agreement off the chain rather than off a protocol message
-        also means it survives everything a message would not: a restart,
-        a lost database, a peer this node has never exchanged a datagram
-        with. The evidence is public and permanent.
-        """
-        return (Increment.select()
-                .where(Increment.session_id == trade.session_id,
-                       Increment.in_state == LEG_SETTLED)
-                .exists())
 
 
 # ---------------------------------------------------------------------------

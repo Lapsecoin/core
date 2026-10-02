@@ -5,7 +5,6 @@ injecting a fake Horizon response rather than hitting mainnet, so the
 suite stays deterministic and runnable without connectivity.
 """
 
-import json
 import os
 import sys
 

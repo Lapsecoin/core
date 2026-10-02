@@ -62,12 +62,10 @@ Whether a stall currently counts against a peer is computed fresh from
 that trade's own rows every pass (see swap_engine.is_delinquent), not
 decided once and stored; see trust.py's module docstring for why.
 
-What this no longer consults is whether the peer looked "alive". That
-signal came from the liveness notes the uptime rewarder gossiped, and it
-was wrong twice over: those notes said a node was powered on, not that
-its swap worker had seen the trade and declined to pay, and broadcasting
-them published a payable address network-wide, which is exactly the link
-a trading identity must not have. They are gone.
+Whether the peer looked "alive" is deliberately not consulted: a node
+being powered on says nothing about whether its swap worker saw the trade
+and declined to pay, and advertising a payable address network-wide is
+exactly the link a trading identity must not have.
 
 What replaces it is stronger and comes from the chain: a peer is only
 blamed once they have themselves reciprocated an earlier step. Their own

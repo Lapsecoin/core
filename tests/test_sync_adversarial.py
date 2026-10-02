@@ -325,7 +325,6 @@ def test_late_sibling_via_sync_is_refused_once_the_draw_window_has_closed(node_e
 
 
 def test_sibling_via_sync_is_taken_while_the_draw_window_is_open(node_env, clock):
-    import time as _time
     node = node_env[0]
     four = grow([node.cs.chain[0]], HONEST, clock, 4)
     ours5 = build_on(four, HONEST, clock)

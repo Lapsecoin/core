@@ -81,7 +81,7 @@ def test_getinfo_response_includes_version():
                     "tip_hash": "deadbeef", "version": "0.1.1",
                     "iid": udp._pool.instance_id}
     assert "wallet" not in data, \
-        "a payout address must not be answerable from an IP; see MT_ALIVE"
+        "a payout address must not be answerable from an IP"
 
 
 def test_info_reply_carrying_our_instance_id_marks_self():

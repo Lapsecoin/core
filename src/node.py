@@ -42,7 +42,6 @@ import time
 
 import block as block_mod
 import crypto
-from crypto import canonical_json
 import gossip as gossip_mod
 import market as market_mod
 import mempool as mempool_mod
@@ -264,14 +263,9 @@ class Node:
         # a moment to resolve. See _reorg_to_sibling.
         self._draw_height = None
         self._draw_closes = 0.0
-        # When the open draw was anchored. Nothing in the cycle reads this;
-        # it is what says how long a running window actually is, which is
-        # otherwise unobservable from outside (only its end is stored).
-        self._draw_anchor = 0.0
         self.running      = False
         self._kek         = None
         self._loop_thread = None
-        self._cycle_count = 0
         # Set by _handle_inbound_block when a peer shows evidence of a
         # higher chain: the address to sync from next. Evidence, not proof
         #, see that method. Consumed and cleared by _run_cycle.
@@ -441,12 +435,6 @@ class Node:
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
-
-    def is_signing_active(self):
-        return self._kek is not None
-
-    def mark_tx_seen(self, tx_hash):
-        return self.gossip.mark_seen(tx_hash, gossip_mod.KIND_TX)
 
     def own_vdf_median(self):
         """How long a full evaluation takes on this machine, in seconds.
@@ -747,19 +735,6 @@ class Node:
         finally:
             del kek
 
-    def build_and_sign_tx_internal(self, to_outputs, fee=0, memo=""):
-        """Same as build_and_sign_tx, but for background node-internal
-        callers (e.g. the uptime rewarder) that run inside this same
-        process while the node is up, reuses the kek already resident in
-        memory from start() instead of asking for the passphrase again,
-        since re-deriving it would need the plaintext passphrase this node
-        never retains past startup. Raises if the node isn't running
-        (is_signing_active() false), same failure mode as a missing
-        passphrase would give the passphrase-based path."""
-        if self._kek is None:
-            raise ValueError("node is not running (no signing key resident)")
-        return self._build_and_sign_tx_with_kek(to_outputs, fee, self._kek, memo)
-
     def _build_and_sign_tx_with_kek(self, to_outputs, fee, kek, memo=""):
         v         = self.view
         committed = v.state.get_nonce(self.addr)
@@ -775,7 +750,6 @@ class Node:
     # ------------------------------------------------------------------
 
     def _run_cycle(self):
-        self._cycle_count += 1
         # Captured, not discarded: a peer's candidate for the height we're
         # about to build can legitimately arrive in this brief window too
         # (right at cycle start, before the wait loop below even begins),
@@ -1120,7 +1094,6 @@ class Node:
         if self._draw_height == height and now < self._draw_closes:
             return
         self._draw_height = height
-        self._draw_anchor = now
         self._draw_closes = now + self._draw_window_seconds()
 
     def _draw_window_seconds(self):

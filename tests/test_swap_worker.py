@@ -25,7 +25,7 @@ import swap_worker
 import trade_storage
 import xlm as xlm_mod
 from test_swap_engine import FakeChain, make_trade, settle_peer_leg
-from trade_storage import Increment, Trade, TRADE_ACTIVE, TRADE_STALLED
+from trade_storage import Increment, Trade, TRADE_STALLED
 
 
 @pytest.fixture(autouse=True)

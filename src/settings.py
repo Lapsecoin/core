@@ -205,10 +205,9 @@ SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
 # a separate address instead of this node's own, and an env-only override
 # naming any address at all. Both existed because a node had to tell its
 # peers where to pay it, which tied an address to an IP and published the
-# pairing. Nothing tells peers that any more (see
-# Node._handle_inbound_alive), so neither has anything left to do: there
-# is no advertised address to make private, and no second key to hold the
-# proceeds.
+# pairing. Nothing tells peers that any more, so neither has anything left
+# to do: there is no advertised address to make private, and no second key
+# to hold the proceeds.
 
 # Whether the odds page's hardware cell (CPU, cores, RAM, OS, see
 # hardware_info.describe) is shown at all. On by default: it's this
