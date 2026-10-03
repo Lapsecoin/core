@@ -38,7 +38,7 @@ export LAPSECOIN_PASSPHRASE="your passphrase"
 
 ## Light client (lapsecoin-dumb)
 
-A wallet and the board with no chain of its own, for a small data allowance, a small disk, or a machine that cannot keep a node running. It holds your key and signs on your machine, and asks another node's public API for everything else. A session of looking at the board, sending, and posting costs a few kilobytes.
+A wallet and the board with no chain of its own, for a small data allowance, a small disk, or a machine that cannot keep a node running. It holds your key and signs on your machine, and asks another node's public API for everything else. A session of looking at the board, sending, and posting costs a few kilobytes. It has the full node's Balance, Send and Board pages, including editing and deleting your own posts.
 
 ```
 ./lapsecoin-dumb          # or lapsecoin-dumb.exe on Windows

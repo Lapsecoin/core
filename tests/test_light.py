@@ -194,15 +194,18 @@ class TestReadersAgree:
         remote = world.reader.board_page(1)
         local = json.loads(json.dumps(world.local.board_page(1)))
         assert remote == local
-        assert [r["tx"]["memo"] for r in remote["rows"]] == [
-            tx_mod.BOARD_MEMO_TAG + "the root post"]
+        assert [r["text"] for r in remote["rows"]] == ["the root post"]
 
     def test_fee_estimate(self, world):
         assert world.reader.fee_estimate() == world.local.fee_estimate()
 
-    def test_a_board_row_carries_no_key_or_signature(self, world):
+    def test_a_board_row_carries_no_transaction(self, world):
+        """A transaction is a public key and a signature, over two kilobytes
+        of hex the page never shows. A row is its text and who wrote it."""
         row = world.reader.board_page(1)["rows"][0]
-        assert set(row["tx"]) == {"from", "memo"}
+        assert "tx" not in row and "signature" not in json.dumps(row)
+        assert set(row) == {"height", "ts", "hash", "pending", "depth", "from", "text",
+                            "reply_ref", "edited", "deleted"}
 
     def test_a_bad_address_is_refused(self, world):
         r = world.app.test_client().get("/api/state?addr=nonsense")

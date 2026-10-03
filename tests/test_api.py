@@ -686,7 +686,7 @@ class TestAddressLookupNicknameRedirect:
 class TestBoardPage:
     """One continuous feed: compose box on top, then newest thread first
     (anything still pending in the mempool above the newest confirmed
-    post). See api.py's _board_ctx/_board_pending."""
+    post). See board_view.board_ctx and board_view._board_events."""
 
     def _client(self, pending_msgs=()):
         import tx as tx_mod
