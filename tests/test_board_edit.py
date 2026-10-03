@@ -31,7 +31,7 @@ from params import TICKS_PER_LAPSE
 from remote_reader import RemoteReader
 from state import State
 from tests.fixtures import address, make_tx, seed_balance
-from tests.browser import submit
+from tests.browser import submit, tokens
 from tests.test_light import PASS, _FullNode, _Session
 from wallet import Wallet
 
@@ -351,7 +351,7 @@ class TestPages:
         assert tx_mod.is_board_post(pending)
         html = resp.get_data(as_text=True)
         assert "my first post" in html and "my frist post" not in html
-        assert "(edited)" in html
+        assert "edited" in html
 
     def test_an_edit_costs_less_than_the_post_it_fixes(self, world):
         long_text = "word " * 36
@@ -390,26 +390,24 @@ class TestPages:
         (pending,) = world.node.mempool.all_txs()
         assert pending["memo"] == DELETE_TAG + world.mine_ref
         assert not tx_mod.is_board_post(pending)
-        html = resp.get_data(as_text=True)
-        assert "my frist post" not in html and "Deleted by its author." in html
+        assert resp.get_json() == {"ok": True, "error": ""}
+        html = world.client.get("/api/board/fragment?page=1").get_data(as_text=True)
+        assert "my frist post" not in html and "Deleted by its author." not in html
         assert "bob was here" in html
 
     def test_the_board_tab_stays_lit_after_posting_deleting_or_voting(self, world):
         for path, data in (("/board", {"message": "hi"}),
                            ("/board/delete", {"ref": world.mine_ref}),
                            ("/board/vote", {"ref": world.their_ref, "dir": "+"})):
-            html = submit(world.client, path, page="/board", passphrase=PASS,
-                          **data).get_data(as_text=True)
-            assert '<a href="/board" class="active">' in html, path
+            submit(world.client, path, page="/board", passphrase=PASS, **data)
+        assert '<a href="/board" class="active">' in world.client.get(
+            "/board").get_data(as_text=True)
 
     def test_a_deleted_post_offers_no_buttons(self, world):
         world.client.post("/board/delete", data={
             "csrf_token": _csrf(world), "passphrase": PASS, "ref": world.mine_ref})
         html = world.client.get("/api/board/fragment?page=1").get_data(as_text=True)
-        own = [b for b in html.split('class="rc-root') if "Deleted by its author." in b][0]
-        for button in ("rc-editBtn", "rc-deleteBtn", "rc-replyBtn", "rc-voteButton",
-                       "rc-votes "):
-            assert button not in own
+        assert world.mine_ref not in html and "rc-deleted" not in html
 
     def test_delete_is_priced_like_a_vote_not_like_a_post(self, world):
         quote = world.client.get("/api/board/delete_fee",
@@ -471,10 +469,11 @@ class TestFullNodeToo:
         token = re.search(r'name="csrf_token" value="([^"]+)"',
                           client.get("/board").get_data(as_text=True)).group(1)
         ref = tx_mod.tx_hash(mine)[:6]
-        html = client.post("/board/delete", data={"csrf_token": token, "passphrase": PASS,
+        client.post("/board/delete", data={"csrf_token": token, "passphrase": PASS,
                                                   "ref": ref}).get_data(as_text=True)
         assert [t["memo"] for t in node.mempool.all_txs()] == [DELETE_TAG + ref]
-        assert "Deleted by its author." in html and "full node post" not in html
+        assert "full node post" not in client.get(
+            "/api/board/fragment?page=1").get_data(as_text=True)
 
     def test_public_app_shows_the_result_but_no_buttons(self):
         cs = ChainState.from_genesis()
@@ -485,5 +484,43 @@ class TestFullNodeToo:
                      {"height": 2, "timestamp": 2, "transactions": [fix], "hash": "h2"}]
         client = api.create_app(_FullNode(cs), peerpool_mod.PeerPool()).test_client()
         html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
-        assert "hello" in html and "(edited)" in html
+        assert "hello" in html and "edited" in html
         assert "rc-editBtn" not in html and "rc-deleteBtn" not in html
+
+
+class TestTighterBoard:
+    def test_a_deleted_post_only_shows_when_something_replies_to_it(self):
+        from board_view import worth_showing
+
+        def row(ref, reply=None, deleted=False):
+            return {"ref6": ref, "reply_ref": reply, "deleted": deleted}
+        lone = row("a", deleted=True)
+        parent = row("b", deleted=True)
+        child = row("c", reply="b")
+        live = row("d")
+        kept = worth_showing([lone, parent, child, live])
+        assert lone not in kept and parent in kept and child in kept and live in kept
+
+    def test_a_tombstone_is_a_thin_line(self, world):
+        html = open("templates_html/board_rows.html").read()
+        assert "Deleted by its author" not in html and "rc-deleted" in html
+
+    def test_the_explanatory_paragraph_is_gone(self, world):
+        html = world.client.get("/board").get_data(as_text=True)
+        assert "ride along on a post" not in html
+
+    def test_the_board_page_asks_no_node_for_the_account(self, world):
+        html = world.client.get("/board").get_data(as_text=True)
+        assert "fee " in html
+
+    def test_posting_in_place_answers_json_and_rotates_the_token(self, world):
+        csrf, form = tokens(world.client, "/board")
+        r = world.client.post("/board", data={"csrf_token": csrf, "form_token": form,
+                              "passphrase": PASS, "message": "hi"},
+                              headers={"X-Requested-With": "fetch"})
+        j = r.get_json()
+        assert j["ok"] and j["form_token"] and j["form_token"] != form
+        bad = world.client.post("/board", data={"csrf_token": csrf, "form_token": j["form_token"],
+                                "passphrase": "wrong", "message": "x"},
+                                headers={"X-Requested-With": "fetch"}).get_json()
+        assert not bad["ok"] and bad["error"] and bad["form_token"]

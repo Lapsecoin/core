@@ -411,6 +411,24 @@ def resolve_board(events):
     return posts
 
 
+def worth_showing(entries):
+    """The posts to put on the page: every one that was not deleted, and a
+    deleted one only if something still standing sits under it, where the
+    gap it leaves would otherwise break the thread. A deleted post with no
+    live replies has nothing to say to anyone, so it is not shown at all."""
+    by_ref = {e["ref6"]: e for e in entries}
+    kept = set()
+    for e in entries:
+        if e["deleted"]:
+            continue
+        node, seen = e, set()
+        while node is not None and id(node) not in seen:
+            seen.add(id(node))
+            kept.add(id(node))
+            node = by_ref.get(node["reply_ref"]) if node["reply_ref"] else None
+    return [e for e in entries if id(e) in kept]
+
+
 def build_board_snapshot(chain, nicknames, mempool):
     """The whole board, resolved: everything board_page_data slices from.
 
@@ -429,7 +447,7 @@ def build_board_snapshot(chain, nicknames, mempool):
         tally = votes.get(row["ref6"])
         return (tally["up"] - tally["down"]) if tally else 0
 
-    flat, starts = _flatten_threads(entries, score_of)
+    flat, starts = _flatten_threads(worth_showing(entries), score_of)
     return (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
             post_count)
 

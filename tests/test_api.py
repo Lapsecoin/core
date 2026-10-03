@@ -1069,7 +1069,7 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
         client, _node = self._client()
         html = client.get("/board").get_data(as_text=True)
         assert ">Al<" in html
-        assert 'title="Change icon' in html  # own compose box picked up the same profile
+        assert 'id="board-icon-btn"' in html  # own compose box picked up the same profile
 
     def test_reply_preview_quotes_the_parent_post(self):
         _client, node = self._client()
@@ -1621,4 +1621,4 @@ class TestBoardCachingAndQuotes:
             cs.chain.append({"height": 2 + i, "timestamp": 1001 + i, "transactions": [t], "hash": f"h{2+i}"})
         html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
         assert html.count('class="rc-replyQuote"') == 1
-        assert "replying to an earlier post" in html
+        assert "&#8627; an earlier post" in html

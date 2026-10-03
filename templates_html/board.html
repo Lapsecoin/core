@@ -1,16 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-<p style="margin:.2rem 0 .6rem; font-size:.78rem; color:var(--muted); line-height:1.5">
-  Public, permanent, on-chain. Posting burns {{ BOARD_POST_AMOUNT }} tick,
-  plus a separate network fee, currently {{ board_fee_floor }}+ ticks and rising
-  as the board fills up or with congestion. Voting is an ordinary transaction
-  (still burns {{ BOARD_POST_AMOUNT }} tick) and never raises that floor.
-  Icon and nickname ride along on a post you were already sending, never a
-  post of their own. You can edit or delete your own posts: an edit costs
-  what a post costs, and a delete only hides the post from readers. The
-  chain is permanent, so the original text stays in its block either way.
-</p>
-
 <div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
     {% if is_private %}
     <form method="POST" action="/board?page={{ page }}" class="board-compose" id="board-compose"
@@ -23,38 +12,30 @@
       <input type="hidden" name="reply_ref" id="board-reply-ref" value="">
       <input type="hidden" name="edit_ref" id="board-edit-ref" value="">
       <input type="hidden" name="edit_orig" id="board-edit-orig" value="">
-      {% if compose_err %}<div class="alert alert-err" style="margin:0 0 .4rem">{{ compose_err }}</div>{% endif %}
+      <div class="board-error" id="board-compose-error" role="alert"{% if not compose_err %} hidden{% endif %}>{{ compose_err }}</div>
 
-      <div class="board-compose-row board-reply-banner" id="board-reply-banner" hidden>
+      <div class="board-compose-row board-banner" id="board-reply-banner" hidden>
         <span id="board-reply-text"></span>
         <button type="button" id="board-reply-cancel" title="Cancel reply">&times;</button>
       </div>
 
-      <div class="board-compose-row board-reply-banner" id="board-edit-banner" hidden>
+      <div class="board-compose-row board-banner" id="board-edit-banner" hidden>
         <span>editing your post: only what you change is sent</span>
         <button type="button" id="board-edit-cancel" title="Cancel edit">&times;</button>
       </div>
 
-      <div class="board-compose-row board-profile-row">
-        <button type="button" id="board-icon-btn" class="board-icon-btn" title="Change icon (folds into your next post)">{{ own_icon }}</button>
-        <input type="text" name="nick" id="board-nick" maxlength="16" placeholder="nickname (optional)"
-               value="{{ own_nick or '' }}" autocomplete="off" style="width:8rem">
-        <span class="stat-sub" id="board-profile-note" style="margin:0"></span>
+      <div class="rc-text" id="board-preview" hidden></div>
+      <div class="board-compose-row board-main">
+        <button type="button" id="board-icon-btn" class="board-icon-btn" title="Your icon and nickname (they ride along with your next post)">{{ own_icon }}</button>
+        <textarea name="message" id="board-message" rows="1"
+               placeholder="Say something" autocomplete="off">{{ message_value }}</textarea>
+        <button type="submit" id="board-send">Send</button>
       </div>
-      <div class="board-icon-palette" id="board-icon-palette" hidden>
-        {% for ic in icon_palette %}
-        <button type="button" class="board-icon-choice" data-idx="{{ loop.index0 }}">{{ ic }}</button>
-        {% endfor %}
-      </div>
-
-      {# Toolbar ported unmodified from GitHub's own markdown-toolbar-element
-         (github/markdown-toolbar-element, MIT -- see vendor/README.md),
-         the exact same custom element Remark42's own compose box wires up
-         to its textarea. Header/list/image are still left out: this
-         board's own render_board_text has no support for those, so a
-         button for markdown this page can't render would be wiring a
-         lie. Bold, italic, code, quote and link all now have a matching
-         render_board_text rule (see api.py), so all five get a button. #}
+      <div class="board-compose-row board-compose-sub">
+        <span id="board-fee-live" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post (and any icon/nickname/reply riding along) costs more.">fee {{ board_fee_floor }}+</span>
+        <span id="board-msg-counter"></span>
+        <button type="button" id="board-preview-btn" class="board-link">Preview</button>
+        <span id="board-sent" hidden>sent</span>
       <markdown-toolbar for="board-message" class="rc-toolbar" id="board-toolbar">
         <div class="rc-toolbar-group">
           <md-bold class="rc-toolbar-item" title="Bold"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M1 2h3.83c2.48 0 4.3.75 4.3 2.95 0 1.14-.63 2.23-1.67 2.61v.06c1.33.3 2.3 1.23 2.3 2.86 0 2.39-1.97 3.52-4.61 3.52H1V2zm3.66 4.95c1.67 0 2.38-.66 2.38-1.69 0-1.17-.78-1.61-2.34-1.61H3.13v3.3h1.53zm.27 5.39c1.77 0 2.75-.64 2.75-1.98 0-1.27-.95-1.81-2.75-1.81h-1.8v3.8h1.8v-.01z"/></svg></md-bold>
@@ -66,18 +47,17 @@
           <md-link class="rc-toolbar-item" title="Link"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"/></svg></md-link>
         </div>
       </markdown-toolbar>
-      <div class="rc-text" id="board-preview" hidden></div>
-      <div class="board-compose-row">
-        <textarea name="message" id="board-message" rows="1"
-               placeholder="Say something" autocomplete="off" style="flex:1">{{ message_value }}</textarea>
-        <button type="button" id="board-preview-btn">Preview</button>
-        <button type="submit" id="board-send">Send</button>
       </div>
-      <div class="board-compose-row board-compose-sub">
-        <span class="stat-sub" id="board-fee-live" style="margin:0" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post (and any icon/nickname/reply riding along) costs more.">
-          fee: {{ board_fee_floor }}+ ticks
-        </span>
-        <span class="stat-sub" id="board-msg-counter" style="margin:0"></span>
+
+      <div class="board-profile-panel" id="board-profile-panel" hidden>
+        <input type="text" name="nick" id="board-nick" maxlength="16" placeholder="nickname (optional)"
+               value="{{ own_nick or '' }}" autocomplete="off">
+        <span id="board-profile-note"></span>
+        <div class="board-icon-palette" id="board-icon-palette">
+          {% for ic in icon_palette %}
+          <button type="button" class="board-icon-choice" data-idx="{{ loop.index0 }}">{{ ic }}</button>
+          {% endfor %}
+        </div>
       </div>
     </form>
     <script type="module" src="/vendor/markdown-toolbar-element.js"></script>
@@ -132,7 +112,7 @@
   #board-feed {
     background: rgb(var(--primary-background-color)); color: rgb(var(--primary-text-color));
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 14px; display: flex; flex-direction: column; padding: .5rem 0;
+    font-size: 14px; display: flex; flex-direction: column; padding: .1rem 0;
   }
   /* Elements meant to be hidden by the `hidden` attribute must actually
      stay hidden: a bare class selector below (e.g. `.board-icon-palette
@@ -147,108 +127,117 @@
      friends) and the compose toolbar (.rc-toolbar*) are ported from
      Remark42's own comment.module.css, comment-votes.module.css and
      markdown-toolbar.module.css (github.com/umputun/remark42, MIT):
-     same class shape, same property values, same color tokens, "rc-"
-     prefixed only to stay out of this project's own class namespace.
-     A chat bubble is gone in favor of this thin-header-line-plus-full-width-
-     text shape because the board is a flat public feed, not a two-party
-     conversation -- the bubble mostly bought wasted margin, not clarity. */
-  .rc-root { display: block; padding: 12px 0 8px; font-size: 16px; line-height: 1.4; border-bottom: 1px solid var(--color16); }
+     same class shape, same color tokens, "rc-" prefixed only to stay out of
+     this project's own class namespace, and spaced much tighter than there:
+     a flat public feed wants to show many posts, not a few roomy ones. */
+  .rc-root { display: block; padding: 5px 0 4px; font-size: 15px; line-height: 1.3; border-bottom: 1px solid var(--color16); }
   /* Indent per reply level; a phone has no width to spare, so there it is
      narrower per level (depth is capped server-side either way). */
-  #board-feed { --indent: 1.5rem; }
-  @media (max-width: 600px) { #board-feed { --indent: .6rem; } }
+  #board-feed { --indent: 1.25rem; }
+  @media (max-width: 600px) { #board-feed { --indent: .5rem; } }
   .rc-root[style*="--depth"] {
     margin-left: calc(var(--depth) * var(--indent));
-    border-left: 2px solid var(--color16); padding-left: .6rem;
+    border-left: 2px solid var(--color16); padding-left: .5rem;
   }
   .rc-root.mine { background: rgba(179,90,12,.05); }
   .rc-root.pending { opacity: .6; }
-  .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 14px; position: relative; }
-  .rc-avatar { width: 20px; margin-right: 6px; font-size: 1.1rem; line-height: 1; }
+  /* A deleted post that still has replies under it: a line, not a post. */
+  .rc-deleted { padding: 1px 0 1px; font-size: .7rem; font-style: italic; color: var(--color11); border-bottom: 0; }
+  .rc-empty { color: var(--muted); text-align: center; margin: .8rem 0; }
+  .rc-more { text-align: center; color: var(--muted); font-size: .75rem; padding: .5rem 0; }
+  .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 1px; font-size: 13px; position: relative; }
+  .rc-avatar { width: 18px; margin-right: 4px; font-size: 1rem; line-height: 1; }
   .rc-username { font-weight: 700; vertical-align: middle; text-decoration: none; color: var(--color10); }
   .rc-username:hover { opacity: .75; }
-  .rc-username.hash-short { font-family: var(--mono); font-weight: 400; word-break: break-word; overflow-wrap: anywhere; }
-  .rc-time { margin-left: auto; font-size: .68rem; color: var(--color11); text-decoration: none; }
+  .rc-username.hash-short { font-family: var(--mono); font-weight: 400; font-size: .78rem; word-break: break-word; overflow-wrap: anywhere; }
+  .rc-time { margin-left: auto; font-size: .66rem; color: var(--color11); text-decoration: none; }
+  .rc-actions + .rc-time, .rc-time + .rc-time { margin-left: .5rem; }
   .rc-time:hover { color: var(--color10); text-decoration: underline; }
-  .rc-body { padding-left: 26px; }
+  .rc-edited { font-style: italic; }
+  .rc-edited:hover { text-decoration: none; }
+  .rc-body { padding-left: 22px; }
   .rc-replyQuote {
-    display: block; font-size: .75rem; color: var(--color11); text-decoration: none;
-    margin: .15rem 0; padding-left: .5rem; border-left: 2px solid var(--color16);
+    display: block; font-size: .7rem; color: var(--color11); text-decoration: none;
+    margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .rc-replyQuote:hover { color: var(--color9); }
-  .rc-text { white-space: pre-wrap; word-break: break-word; margin-bottom: 4px; }
-  .rc-text blockquote { margin: .3rem 0; padding: .2rem .2rem .2rem .6rem; border-left: 2px solid var(--rule-lt); }
-  .rc-text code { font-family: var(--mono); background: var(--rule-lt); padding: .05rem .3rem; border-radius: 3px; }
+  .rc-text { white-space: pre-wrap; word-break: break-word; margin: 0; }
+  .rc-text blockquote { margin: .2rem 0; padding: .1rem .2rem .1rem .5rem; border-left: 2px solid var(--rule-lt); }
+  .rc-text code { font-family: var(--mono); background: var(--rule-lt); padding: .05rem .25rem; border-radius: 3px; }
   .rc-replyBtn {
-    font-size: .75rem; font-weight: 600; color: var(--color9); text-decoration: none;
+    font-size: .7rem; font-weight: 600; color: var(--color9); text-decoration: none;
   }
   .rc-replyBtn:hover { color: var(--color33); }
+  /* Reply, Edit, Delete live in the header line and show when the post is
+     pointed at, so a post is its text and nothing else until it is wanted.
+     Where there is no pointer (a phone) they are always there. */
+  .rc-actions { display: flex; gap: .6rem; margin-left: auto; opacity: 0; transition: opacity .12s; }
+  .rc-root:hover .rc-actions, .rc-root:focus-within .rc-actions { opacity: 1; }
+  @media (hover: none) { .rc-actions { opacity: 1; } }
 
-  .rc-vote-root { display: flex; flex: 0 0 auto; align-items: center; margin-left: .5rem; font-weight: 700; line-height: 16px; white-space: nowrap; user-select: none; }
-  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .4; color: var(--color13); transition: opacity .15s, color .15s; }
+  .rc-vote-root { display: flex; flex: 0 0 auto; align-items: center; margin-left: .4rem; font-weight: 700; line-height: 14px; white-space: nowrap; user-select: none; }
+  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .35; color: var(--color13); transition: opacity .15s, color .15s; }
   .rc-voteButton:disabled { cursor: default; }
   .rc-root:hover .rc-voteButton { opacity: 1; }
   .rc-upVoteButton:hover, .rc-upVoteButtonActive { color: rgb(var(--color12)); opacity: 1; }
   .rc-downVoteButton:hover, .rc-downVoteButtonActive { color: rgb(var(--color30)); opacity: 1; }
-  .rc-votes { display: inline-block; flex: 0 0 auto; margin: 0 4px; padding: 2px 6px; font-weight: 700; border-radius: 3px; min-width: 16px; text-align: center; color: var(--color11); }
+  .rc-votes { display: inline-block; flex: 0 0 auto; margin: 0 2px; padding: 1px 5px; font-size: .78rem; font-weight: 700; border-radius: 3px; min-width: 14px; text-align: center; color: var(--color11); }
   .rc-votesNegative { color: rgb(var(--color30)); background-color: rgba(var(--color30), .1); }
   .rc-votesPositive { color: rgb(var(--color12)); background-color: rgba(var(--color12), .1); }
   .rc-votesPending { opacity: .6; }
   .rc-upVoteIcon .rc-voteIcon { transform: rotate(180deg); }
 
-  .rc-toolbar { display: block; text-align: right; margin-bottom: .25rem; }
+  /* The formatting buttons appear while you are writing and not before. */
+  .rc-toolbar { display: inline-flex; margin-left: auto; }
+  .board-compose:not(:focus-within) .rc-toolbar { display: none; }
   .rc-toolbar-group { display: inline-block; }
   .rc-toolbar-item {
     color: var(--color37); display: inline-flex;
-    height: 24px; width: 24px; justify-content: center; align-items: center;
+    height: 20px; width: 20px; justify-content: center; align-items: center;
   }
   .rc-toolbar-item:hover { color: var(--color9); }
-  .rc-toolbar-item svg { fill: currentColor; }
+  .rc-toolbar-item svg { fill: currentColor; width: 12px; height: 12px; }
 
-  /* Compose box: Remark42's own comment-form.root shape (light gray
-     border, no filled card background) instead of this site's tan/paper
-     card, per the same "container gets the real identity too" fix as
-     #board-feed above. */
+  /* Compose box: one line to write in, and one small line under it. The
+     icon opens the nickname and icon choices; nothing else is on show
+     until it is needed. */
   .board-compose {
-    border: 6px solid var(--color5); border-radius: 2px; padding: 8px; margin: .5rem 0 1rem;
+    border: 1px solid var(--color5); border-radius: 6px; padding: 5px 6px; margin: .15rem 0 .35rem;
   }
-  .board-compose-row { display: flex; gap: .5rem; align-items: center; }
-  .board-compose-row + .board-compose-row { margin-top: .4rem; }
-  .board-compose-sub { font-size: .82rem; color: var(--color11); }
+  .board-compose:focus-within { border-color: var(--color16); }
+  .board-compose-row { display: flex; gap: .4rem; align-items: center; }
+  .board-compose-row + .board-compose-row { margin-top: .2rem; }
+  .board-main { align-items: flex-start; }
+  .board-compose-sub { font-size: .7rem; color: var(--color11); min-height: 20px; }
   #board-message {
-    width: 100%; padding: 10px 12px; font-size: 16px; line-height: 1.4;
-    resize: none; overflow: hidden; max-height: 8rem; overflow-y: auto;
+    flex: 1; min-width: 0; padding: 3px 4px; font-size: 15px; line-height: 1.35;
+    resize: none; overflow: hidden; max-height: 8rem; overflow-y: auto; outline: none;
   }
-  /* Remark42's own primary-button look (kindPrimary/sizeMiddle in its
-     button.module.css): filled teal, not this site's bold dark-ink
-     button chrome. */
   #board-send {
-    flex: 0 0 auto; height: 2rem; padding: 0 12px; border-radius: 4px;
-    background: var(--color15); color: var(--color6); font-weight: 600;
+    flex: 0 0 auto; height: 1.65rem; padding: 0 12px; border-radius: 4px;
+    background: var(--color15); color: var(--color6); font-weight: 600; font-size: .85rem;
   }
   #board-send:hover:not(:disabled) { background: var(--color33); }
-  /* Remark42's own kindSecondary button look, for the same "Preview"
-     button next to Send its own compose box has. */
-  #board-preview-btn {
-    flex: 0 0 auto; height: 2rem; padding: 0 12px; border-radius: 4px;
-    background: var(--color6);
-  }
-  #board-preview-btn:hover { box-shadow: inset 0 0 0 2px var(--color33); }
-  #board-preview { min-height: 2rem; padding: .35rem .5rem; }
-  .board-icon-btn { font-size: 1.2rem; line-height: 1; padding: .1rem .3rem; border-radius: 4px; }
+  .board-link { font-size: .7rem; color: var(--color11); }
+  .board-link:hover { color: var(--color9); text-decoration: underline; }
+  #board-sent { color: rgb(var(--color12)); font-weight: 600; }
+  #board-preview { min-height: 1.5rem; padding: .2rem .4rem; }
+  .board-icon-btn { flex: 0 0 auto; font-size: 1.05rem; line-height: 1; padding: .2rem .25rem; border-radius: 4px; }
   .board-icon-btn:hover { background: var(--color5); }
-  #board-nick { border-bottom: 1px solid var(--color16); padding: .2rem 0; }
-  .board-icon-palette {
-    display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .3rem;
-    padding: .3rem; border: 1px solid var(--color16); border-radius: 4px;
-  }
-  .board-icon-choice { font-size: 1.1rem; padding: .1rem .25rem; border-radius: 4px; }
+  .board-profile-panel { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .3rem; padding-top: .3rem; border-top: 1px solid var(--color16); font-size: .75rem; color: var(--color11); }
+  #board-nick { border-bottom: 1px solid var(--color16); padding: .15rem 0; width: 8rem; }
+  .board-icon-palette { display: flex; flex-wrap: wrap; gap: .1rem; }
+  .board-icon-choice { font-size: 1rem; padding: .1rem .2rem; border-radius: 4px; }
   .board-icon-choice:hover { background: var(--color5); }
-  .board-reply-banner {
-    justify-content: space-between; font-size: .78rem; color: var(--color11);
-    background: var(--color5); border-radius: 4px; padding: .25rem .4rem;
+  .board-banner {
+    justify-content: space-between; font-size: .72rem; color: var(--color11);
+    background: var(--color5); border-radius: 4px; padding: .15rem .4rem;
   }
-  #board-reply-cancel { color: var(--color11); }
+  #board-reply-cancel, #board-edit-cancel { color: var(--color11); }
+  .board-error {
+    margin: 0 0 .25rem; padding: .2rem .5rem; font-size: .78rem; border-radius: 4px;
+    color: rgb(var(--color30)); background: rgba(var(--color30), .08);
+  }
 </style>
 <script>
 (function () {
@@ -274,19 +263,6 @@
     });
   }
   updateTimes(document);
-
-  // Same "ask right before signing" trick used by every form on this page
-  // that moves coins: nothing sits in a visible passphrase field between
-  // load and click.
-  function wirePassphrasePrompt(form, passInput) {
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const passphrase = window.prompt("Passphrase:");
-      if (passphrase === null) return;  // cancelled, nothing sent
-      passInput.value = passphrase;
-      HTMLFormElement.prototype.submit.call(form);  // bypasses this same listener
-    });
-  }
 
   // A vote spends real coins (the same 1-tick burn a post makes, plus a
   // congestion fee), so it gets the exact cost quoted right in the same
@@ -323,7 +299,9 @@
       const passphrase = window.prompt(label);
       if (passphrase === null) return;  // cancelled, nothing sent
       const body = new URLSearchParams({csrf_token: CSRF, ref, dir, passphrase});
-      await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
+      const res = await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
+      const data = await res.json().catch(() => ({ok: false, error: "The app did not answer."}));
+      if (!data.ok) window.alert(data.error || "That did not go through.");
       pollBoard();
     } finally {
       btn.disabled = false;
@@ -351,7 +329,9 @@
         cost + " Passphrase:");
       if (passphrase === null) return;  // cancelled, nothing sent
       const body = new URLSearchParams({csrf_token: CSRF, ref, passphrase});
-      await fetch(`/board/delete?page=${PAGE}`, {method: "POST", body});
+      const res = await fetch(`/board/delete?page=${PAGE}`, {method: "POST", body});
+      const data = await res.json().catch(() => ({ok: false, error: "The app did not answer."}));
+      if (!data.ok) window.alert(data.error || "That did not go through.");
       pollBoard();
     } finally {
       btn.disabled = false;
@@ -372,15 +352,14 @@
 
   const composeForm = document.getElementById("board-compose");
   if (composeForm) {
-    wirePassphrasePrompt(composeForm, document.getElementById("board-passphrase"));
-
-    const ownNick    = composeForm.dataset.ownNick || "";
-    const ownIconIdx = parseInt(composeForm.dataset.ownIconIdx, 10) || 0;
+    let ownNick    = composeForm.dataset.ownNick || "";
+    let ownIconIdx = parseInt(composeForm.dataset.ownIconIdx, 10) || 0;
 
     const msgInput      = document.getElementById("board-message");
     const nickInput     = document.getElementById("board-nick");
     const iconBtn       = document.getElementById("board-icon-btn");
     const iconPalette   = document.getElementById("board-icon-palette");
+    const profilePanel  = document.getElementById("board-profile-panel");
     const iconValue     = document.getElementById("board-icon-value");
     const profileChanged = document.getElementById("board-profile-changed");
     const profileNote   = document.getElementById("board-profile-note");
@@ -446,13 +425,12 @@
     }
 
     iconBtn.addEventListener("click", () => {
-      iconPalette.hidden = !iconPalette.hidden;
+      profilePanel.hidden = !profilePanel.hidden;
     });
     iconPalette.querySelectorAll(".board-icon-choice").forEach(btn => {
       btn.addEventListener("click", () => {
         iconValue.value = btn.dataset.idx;
         iconBtn.textContent = btn.textContent;
-        iconPalette.hidden = true;
         markProfileDirty();
       });
     });
@@ -590,6 +568,68 @@
     msgInput.addEventListener("input", () => { refreshCounter(); autoGrow(); });
     refreshCounter();
     autoGrow();
+
+    // Sending happens in the background. The page stays where it is, the
+    // button says what it is doing, and the new post turns up in the feed
+    // through the same poll that brings everyone else's. What comes back is
+    // a verdict and the next one-time token, so there is nothing to reload.
+    // Without scripts the form still posts and redirects (see forms.py).
+    const errorEl   = document.getElementById("board-compose-error");
+    const sentEl    = document.getElementById("board-sent");
+    const passInput = document.getElementById("board-passphrase");
+    const tokenInput = composeForm.querySelector("input[name=form_token]");
+    let sending = false;
+
+    function showError(text) {
+      errorEl.textContent = text || "";
+      errorEl.hidden = !text;
+    }
+
+    composeForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (sending) return;
+      // Asked right before signing, so nothing sits in a visible passphrase
+      // field, and gone from the page again the moment it is read.
+      const passphrase = window.prompt("Passphrase:");
+      if (passphrase === null) return;  // cancelled, nothing sent
+      passInput.value = passphrase;
+      const body = new FormData(composeForm);
+      passInput.value = "";
+      sending = true;
+      sendBtn.disabled = true;
+      sendBtn.textContent = "Sending…";
+      showError("");
+      try {
+        const res = await fetch(composeForm.action, {
+          method: "POST", body, headers: {"X-Requested-With": "fetch"}});
+        const data = await res.json();
+        if (data.form_token) tokenInput.value = data.form_token;
+        if (data.ok) {
+          if (profileChanged.value) {      // now on the chain: stop sending it
+            ownNick = nickInput.value.trim();
+            ownIconIdx = currentIconIdx();
+            markProfileDirty();
+          }
+          msgInput.value = "";
+          replyRefInput.value = "";
+          replyBanner.hidden = true;
+          leaveEditMode();
+          autoGrow();
+          sentEl.hidden = false;
+          setTimeout(() => { sentEl.hidden = true; }, 2500);
+          pollBoard();
+        } else {
+          showError(data.error);
+        }
+      } catch (err) {
+        showError("The app did not answer, so it is not known whether that went out. " +
+                  "Look at the feed before trying again.");
+      } finally {
+        sending = false;
+        sendBtn.textContent = "Send";
+        refreshCounter();
+      }
+    });
   }
 
   // One continuous feed: `loaded` chunks of threads are on screen, more
