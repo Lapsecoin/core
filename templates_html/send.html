@@ -5,10 +5,12 @@
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 {% if alert_err_lines %}<div class="alert alert-err">{% for line in alert_err_lines %}{{ line }}<br>{% endfor %}</div>{% endif %}
 
+{% if xlm_enabled %}
 <div class="form-group" style="display:flex;gap:1rem;margin-bottom:.5rem">
   <label><input type="radio" name="asset-picker" value="lapse" {% if asset != 'xlm' %}checked{% endif %}> LAPSE</label>
   <label><input type="radio" name="asset-picker" value="xlm" {% if asset == 'xlm' %}checked{% endif %}> XLM</label>
 </div>
+{% endif %}
 
 <div id="lapse-panel">
 <div class="stats">
@@ -62,6 +64,7 @@
 </div>
 </div>
 
+{% if xlm_enabled %}
 <div id="xlm-panel">
 {% if not xlm_addr %}
 <div class="card">
@@ -111,6 +114,8 @@
 </div>
 {% endif %}
 </div>
+
+{% endif %}
 
 <script>
 (function () {
@@ -197,6 +202,7 @@
   setInterval(refresh, 8000);
 })();
 
+{% if xlm_enabled %}
 (function () {
   // Which panel shows is purely a display choice; the server decides which
   // form was actually submitted from the "asset" hidden field each panel
@@ -211,5 +217,6 @@
   radios.forEach(r => r.addEventListener("change", refresh));
   refresh();
 })();
+{% endif %}
 </script>
 {% endblock %}

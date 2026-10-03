@@ -195,3 +195,9 @@ def _base_dir():
         return sys._MEIPASS
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
+
+
+def _tx_amount(t):
+    """Total transfer amount for display."""
+    return sum(o["amount"] for o in t.get("outputs", []))
+

@@ -278,3 +278,119 @@ def _flatten_threads(entries, score_of):
         walk(r, 0)
     return flat, starts
 
+
+
+# Memo tags a board's state depends on: posts themselves, and the votes that
+# score them. Anything else in the mempool cannot change what the board shows.
+BOARD_TAGS = (BOARD_MEMO_TAG, VOTE_UP_TAG, VOTE_DOWN_TAG)
+
+
+def build_board_snapshot(chain, nicknames, mempool):
+    """The whole board, resolved: everything board_page_data slices from.
+
+    Returns (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
+    post_count). Reads the whole chain once; callers cache it per chain
+    and mempool state, see LocalReader."""
+    all_rows = _board_posts(chain)                    # tip-first
+    entries = [{"height": h, "ts": ts, "hash": hsh, "tx": t, "pending": False}
+               for h, ts, hsh, t in reversed(all_rows)]
+    pending_rows = _board_pending(mempool)
+    entries += pending_rows                            # always newest
+    profiles, votes, pending_vote_refs = _board_profiles_and_votes(
+        chain, nicknames, mempool)
+    hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
+    for row in pending_rows:
+        hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
+    for row in entries:
+        row["ref6"] = row["hash"][:REPLY_REF_LEN]
+        row["reply_ref"] = parse_board_body(
+            (row["tx"].get("memo") or "")[len(BOARD_MEMO_TAG):])[2]
+
+    def score_of(row):
+        tally = votes.get(row["ref6"])
+        return (tally["up"] - tally["down"]) if tally else 0
+
+    flat, starts = _flatten_threads(entries, score_of)
+    return (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
+            len(all_rows))
+
+
+def _lean_tx(t):
+    """The two fields a board row is rendered from. A full transaction
+    carries a public key and a signature, over two kilobytes of hex that
+    nothing on the page shows."""
+    return {"from": t.get("from"), "memo": t.get("memo") or ""}
+
+
+def board_page_data(snapshot, chunks):
+    """The first `chunks` chunks of the board, as plain JSON-able data and
+    nothing beyond what those rows need: the posters' profiles, the vote
+    tallies of the rows shown, and the posts those rows reply to.
+
+    This is the one shape the board is exchanged in. A full node builds it
+    from its own snapshot, and serves it as /api/board/page, and a light
+    client reads that same dict from a remote node, so both feed the same
+    rendering code."""
+    flat, starts, profiles, votes, pending_vote_refs, hash6_index, post_count = snapshot
+    limit = max(chunks, 1) * BOARD_THREADS_PER_CHUNK
+    cut = starts[limit] if limit < len(starts) else len(flat)
+    rows, refs, posters, targets = [], set(), set(), {}
+    for entry, depth in flat[:cut]:
+        t = entry["tx"]
+        rows.append({"height": entry["height"], "ts": entry["ts"],
+                     "hash": entry["hash"], "pending": entry["pending"],
+                     "depth": depth, "tx": _lean_tx(t)})
+        refs.add(entry["ref6"])
+        posters.add(t.get("from"))
+        if entry["reply_ref"]:
+            target = hash6_index.get(entry["reply_ref"])
+            if target is not None:
+                targets[entry["reply_ref"]] = {"tx": _lean_tx(target["tx"])}
+    return {"rows": rows,
+            "profiles": {a: profiles[a] for a in posters if a in profiles},
+            "votes": {r: votes[r] for r in refs if r in votes},
+            "pending_vote_refs": sorted(refs & set(pending_vote_refs)),
+            "targets": targets,
+            "post_count": post_count,
+            "has_more": limit < len(starts)}
+
+
+def board_ctx(reader, page_arg, own_addr, extra=None, own_profile=None):
+    """Board page context. The board is one continuous feed (no page
+    cuts): newest thread first, each thread kept whole with replies nested
+    under their parent. `page_arg` is how many chunks of
+    BOARD_THREADS_PER_CHUNK threads to render, so the page can keep
+    appending as the reader scrolls. Shared between the GET route
+    (read-only, both apps), the private app's POST handlers, and the light
+    client, so none of them can drift apart.
+
+    own_addr is the caller's call, not this function's: the wallet's own
+    address on the private app and the light client, and on the public app
+    whatever the Dandelion privacy setting (settings.HIDE_ADDRESS_PUBLICLY)
+    says, possibly None, which never matches a real row.tx.from and so
+    quietly drops the "mine" styling in board.html rather than needing
+    its own branch here.
+
+    own_profile is the viewer's current {"icon", "nick"}, if any: it is
+    about the viewer, not the page, so it is not part of the page data.
+    """
+    chunks = max(page_arg, 1)
+    data = reader.board_page(chunks)
+    pending_vote_refs = frozenset(data["pending_vote_refs"])
+    # Copies: enrichment (own_addr-dependent "mine", etc.) is per request.
+    page_rows = [dict(r) for r in data["rows"]]
+    for row in page_rows:
+        _enrich_board_row(row, data["profiles"], data["votes"], data["targets"],
+                          own_addr, pending_vote_refs)
+    own_icon_idx = own_profile["icon"] if own_profile else None
+    ctx = dict(title="Board", rows=page_rows,
+               post_count=data["post_count"], own_addr=own_addr,
+               own_icon=_icon_emoji(own_icon_idx),
+               own_icon_idx=own_icon_idx or 0,
+               own_nick=own_profile.get("nick") if own_profile else None,
+               icon_palette=ICON_PALETTE,
+               tag_len=len(BOARD_MEMO_TAG),
+               page=chunks, has_more=data["has_more"])
+    if extra:
+        ctx.update(extra)
+    return ctx
