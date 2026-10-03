@@ -2,13 +2,16 @@
 and the light client. Light-safe: imports nothing that pulls in the VDF,
 the chain database, or the swap code, and a test keeps it that way."""
 
+import logging
 import os
 import re
 import sys
 
+from flask import Flask, send_file
 from markupsafe import Markup, escape
 
 import crypto as crypto_mod
+import tx as tx_mod
 from params import TICKS_PER_LAPSE
 
 
@@ -201,3 +204,39 @@ def _tx_amount(t):
     """Total transfer amount for display."""
     return sum(o["amount"] for o in t.get("outputs", []))
 
+
+
+def make_flask_app(import_name):
+    """A Flask app set up the way every app here is: templates from the
+    bundle, and the formatting helpers the templates call."""
+    app = Flask(import_name,
+                template_folder=os.path.join(_base_dir(), "templates_html"))
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
+                                 fmt_duration=fmt_duration,
+                                 fmt_lapse_dp=fmt_lapse_dp,
+                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE,
+                                 BURN_ADDRESS=crypto_mod.burn_address(),
+                                 BOARD_POST_AMOUNT=tx_mod.BOARD_POST_AMOUNT,
+                                 render_board_text=render_board_text,
+                                 MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
+    app.logger.setLevel(logging.WARNING)
+    return app
+
+
+def register_static_routes(app, pfx=""):
+    """The favicon and the markdown toolbar script every page loads,
+    served from the bundle rather than a CDN: a wallet's own UI shouldn't
+    depend on a third-party host being reachable. See vendor/README.md."""
+
+    @app.route("/favicon.svg", endpoint=pfx + "favicon")
+    def favicon():
+        # Served straight from the repo's actual lapsecoin.svg (rather than a
+        # copy baked into the HTML) so the browser tab icon always matches
+        # whatever the file on disk currently looks like.
+        return send_file(os.path.join(_base_dir(), "lapsecoin.svg"),
+                         mimetype="image/svg+xml", max_age=3600)
+
+    @app.route("/vendor/markdown-toolbar-element.js", endpoint=pfx + "vendor_markdown_toolbar")
+    def vendor_markdown_toolbar():
+        return send_file(os.path.join(_base_dir(), "vendor", "markdown-toolbar-element.js"),
+                         mimetype="application/javascript", max_age=86400)

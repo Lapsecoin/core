@@ -30,8 +30,9 @@ import json
 import logging
 import math
 import secrets
+from urllib.parse import urlencode
 
-from flask import jsonify, make_response, render_template, request
+from flask import jsonify, make_response, redirect, render_template, request
 
 import crypto as crypto_mod
 import tx as tx_mod
@@ -75,7 +76,9 @@ def submit_and_alert(reader, signer, outputs, passphrase, ctx, memo="", floor=0)
         ctx["alert_err"] = "Passphrase required."
         return
     try:
-        acct = reader.account(signer.addr, fees=True)
+        # fresh: the nonce and fee rate go into a signature, so they come
+        # from the node now, not from an answer held a few seconds ago.
+        acct = reader.account(signer.addr, fees=True, fresh=True)
         fee = auto_fee(acct, signer.addr, signer.pk_hex, outputs, memo=memo, floor=floor)
         t = signer.sign(outputs, fee, memo, passphrase, acct["nonce"] + 1)
         ok, result = reader.submit(t)
@@ -196,6 +199,61 @@ def address_ctx(reader, addr, page):
                 page_window=_pagination_window(page, total_pages),
                 history=[tuple(r) for r in d["rows"]],
                 has_prev=page > 1, has_next=page < total_pages)
+
+
+def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
+    """GET /address: look up any address, or a board nickname.
+
+    `histogram`, when given, returns (holder_count, rows, max_count) for
+    the wealth distribution shown before a lookup runs; only a full node
+    has the balances to compute it. `default_addr`, when given, supplies
+    the address to show when none was asked for: the light client's own.
+    """
+
+    @app.route("/address", methods=["GET", "POST"], endpoint=pfx + "address_lookup")
+    def address_lookup():
+        addr = request.args.get("addr", "").strip()
+        if not addr and default_addr is not None:
+            addr = default_addr()
+        # "burn" is a lot easier to type than the real twelve-word address,
+        # and the real one isn't a secret, it's the wordlist's own first
+        # ADDRESS_WORD_COUNT entries (see crypto.burn_address). Redirecting
+        # to it rather than silently substituting it keeps the URL itself
+        # the actual address, bookmarkable and shareable like any other
+        # lookup, not a special case that only works when typed as "burn".
+        if addr.lower() == "burn":
+            query = request.args.to_dict(flat=True)
+            query["addr"] = crypto_mod.burn_address()
+            return redirect(f"/address?{urlencode(query)}")
+        # Same redirect-to-the-real-address pattern as "burn" above: a
+        # board nickname is looked up the same deterministic way every
+        # node already resolves one for display (see _nickname_owned_by),
+        # so typing a name here lands on exactly the address that name
+        # actually belongs to, not a second, separate notion of identity.
+        # A nickname is at most 16 characters, so anything longer is not
+        # worth asking a node about.
+        if addr and not crypto_mod.is_valid_address(addr) and len(addr) <= 16:
+            owner = reader.account(None, nick=addr).get("nick_owner")
+            if owner is not None:
+                query = request.args.to_dict(flat=True)
+                query["addr"] = owner
+                return redirect(f"/address?{urlencode(query)}")
+        page = max(request.args.get("page", 1, type=int) or 1, 1)
+        # The distribution histogram is only shown before a lookup runs, so
+        # skip computing it once an address has actually been submitted.
+        holder_count, rows, histogram_max = 0, [], 0
+        if not addr and histogram is not None:
+            holder_count, rows, histogram_max = histogram()
+        ctx = dict(title="Balance", addr=addr, alert_err="", page=page,
+                   history=None, balance=0, tx_count=0, has_prev=False, has_next=False,
+                   holder_count=holder_count,
+                   histogram=rows, histogram_max=histogram_max)
+        if addr and not crypto_mod.is_valid_address(addr):
+            ctx["alert_err"] = "Invalid address format."
+            ctx["addr"] = ""
+        elif addr:
+            ctx.update(address_ctx(reader, addr, page))
+        return render_template("address.html", **ctx)
 
 
 def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
@@ -374,7 +432,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
     def api_board_preview():
         """Renders exactly what board_post's own memo will render as, via
         the same render_board_text() every already-posted row goes
-        through -- a client-side reimplementation of that regex subset
+        through. A client-side reimplementation of that regex subset
         would drift from it eventually, this way "Preview" is never able
         to show something the real post won't.
         """
