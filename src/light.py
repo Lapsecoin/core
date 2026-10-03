@@ -15,7 +15,7 @@ import sys
 import threading
 import webbrowser
 
-from remote_reader import DEFAULT_SEEDS, RemoteReader, default_cache_file
+from remote_reader import DEFAULT_SEEDS, RemoteError, RemoteReader, default_cache_file
 from version import LOCAL_VERSION
 from wallet import Wallet, load_or_create_key
 
@@ -37,7 +37,9 @@ def build_parser():
                    help="A node to ask (repeatable). Default: " + ", ".join(DEFAULT_SEEDS))
     p.add_argument("--port", type=int, default=8335, help="Local port for the wallet.")
     p.add_argument("--proxy", default=None, metavar="URL",
-                   help="Proxy for every request, e.g. socks5h://127.0.0.1:9050 for Tor.")
+                   help="Send every request through a proxy so the node does not see your IP. "
+                        "'tor' uses Tor's local port (the daemon or Tor Browser); or give a URL, "
+                        "e.g. socks5h://127.0.0.1:9050.")
     p.add_argument("--refresh", type=int, default=15, metavar="SECONDS",
                    help="How long an answer is reused before the node is asked "
                         "again. Raise it to use less data.")
@@ -52,11 +54,19 @@ def main(argv=None):
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     pk, _kek, _passphrase = load_or_create_key(args.keyfile)
     wallet = Wallet(args.keyfile, pk)
-    reader = RemoteReader(args.node or None, proxy=args.proxy, refresh=args.refresh,
-                          cache_file=default_cache_file())
+    try:
+        reader = RemoteReader(args.node or None, proxy=args.proxy, refresh=args.refresh,
+                              cache_file=default_cache_file())
+    except RemoteError as e:
+        sys.exit(str(e))
     from light_app import create_light_app
     app = create_light_app(reader, wallet, port=args.port)
     url = f"http://127.0.0.1:{args.port}/"
+    if not args.proxy:
+        print("Note: the node you ask sees your IP address together with your wallet "
+              "address, whenever you open Balance or Send or post. Reading the board "
+              "does not name you.\nUse --proxy tor to hide your IP, or --node with a "
+              "node you run yourself.\n")
     print(f"Your address: {wallet.addr}")
     print(f"Wallet: {url}   (Ctrl+C to stop)")
     if not args.no_browser:

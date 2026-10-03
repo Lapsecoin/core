@@ -51,12 +51,11 @@ Public app  (default port 8333, externally reachable):
          {"pending", "min", "median", "max", "next_block"}: the fee market,
          in ticks per byte. next_block is what clears the next block.
 
-    GET  /api/state[?addr=<addr>&nick=<n>&profile=1&fees=1]
+    GET  /api/state[?addr=<addr>&nick=<n>&fees=1]
          What a wallet needs about one address in a
          single answer. Always "board_floor". With addr: "balance" and
          "nonce" (highest confirmed or pending; send nonce + 1). With nick:
-         "nick_owner". With profile: "profile" ({"icon","nick"} or null).
-         With fees: "fees", as /api/fees.
+         "nick_owner". With fees: "fees", as /api/fees.
 
     GET  /api/address/<addr>/page[?page=<n>]
          One page of an address's history with its totals, as the Balance

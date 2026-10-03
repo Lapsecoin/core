@@ -38,7 +38,7 @@ export LAPSECOIN_PASSPHRASE="your passphrase"
 
 ## Light client (lapsecoin-dumb)
 
-A wallet and the board with no chain of its own, for a small data allowance, a small disk, or a machine that cannot keep a node running. It holds your key and signs on your machine, and asks another node's public API for everything else. A session of looking at the board, sending, and posting costs a few kilobytes. It has the full node's Balance, Send and Board pages, including editing and deleting your own posts.
+A wallet and the board with no chain of its own, for a small data allowance, a small disk, or a machine that cannot keep a node running. It holds your key and signs on your machine, and asks another node's public API for everything else. A session of looking at the board, sending, and posting costs a few kilobytes. It has the full node's Board, Balance and Send pages, including editing and deleting your own posts.
 
 ```
 ./lapsecoin-dumb          # or lapsecoin-dumb.exe on Windows
@@ -46,11 +46,21 @@ A wallet and the board with no chain of its own, for a small data allowance, a s
 
 It asks for the key's passphrase, then opens the wallet at `http://127.0.0.1:8335/`. A key from the full node works as is, so one key can be used in both. Options:
 
-- `--node URL` picks the node to ask (repeatable). It finds more by itself, preferring nodes that answer HTTP, and moves to another if one fails.
+- `--proxy tor` sends every request through Tor (the daemon or Tor Browser must be running), or give any proxy URL, for example `socks5h://127.0.0.1:9050`. It refuses to start if Tor is not there, rather than quietly connecting directly.
+- `--node URL` picks the node to ask (repeatable). Point it at a node you run yourself and no one else learns anything. Otherwise it finds more by itself, preferring nodes that answer HTTP, and moves to another if one fails.
 - `--refresh SECONDS` sets how long an answer is reused before the node is asked again. A higher number uses less data.
-- `--proxy URL` sends every request through a proxy, for example `socks5h://127.0.0.1:9050` for Tor.
 
-Two things to know. The node you ask is trusted for what the chain says: it can show a wrong balance or hide a transaction, but it can never spend your coins, because signing happens only on your machine. And that node sees your address when you look at it, along with your IP, so use `--proxy` if that matters to you. The page header shows how many bytes this session has used.
+### What the node you ask can learn
+
+The node is trusted for what the chain says: it can show a wrong balance or hide a transaction, but it can never spend your coins, because signing happens only on your machine. It can also see who is asking.
+
+| You do | The node sees |
+| --- | --- |
+| Open the app, read the board | Your IP, and nothing about which address is yours |
+| Open Balance or Send | Your IP together with your address, because the question is about it |
+| Post, vote, edit, delete, send | Your IP together with your address, because the transaction carries it |
+
+So the link between your IP and your address exists whenever you use Balance or Send, on the node you asked. It cannot be removed by the client alone, only moved: `--proxy tor` hides your IP from the node, and `--node` with a node you run means the one who sees it is you. Without a proxy, the page header says whether the node is reached over an encrypted connection, since a plain HTTP node (most found by discovery) also lets anyone on the path see your address.
 
 <details>
 <summary>How consensus works</summary>

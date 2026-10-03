@@ -349,9 +349,9 @@
     <div class="masthead-title"><img src="/favicon.svg" alt="" width="24" height="24">LapseCoin v{{ local_version }}</div>
     <nav class="mainnav">
       {% if light %}
+      <a href="/board" class="{{ 'active' if nav_active == 'board' }}">Board</a><span class="sep">&middot;</span>
       <a href="/address" class="{{ 'active' if nav_active == 'address' }}">Balance</a><span class="sep">&middot;</span>
-      <a href="/send" class="{{ 'active' if nav_active == 'send' }}">Send</a><span class="sep">&middot;</span>
-      <a href="/board" class="{{ 'active' if nav_active == 'board' }}">Board</a>
+      <a href="/send" class="{{ 'active' if nav_active == 'send' }}">Send</a>
       {% else %}
       <a href="/" class="{{ 'active' if nav_active == 'dashboard' }}">Dashboard</a><span class="sep">&middot;</span>
       {% if is_private %}

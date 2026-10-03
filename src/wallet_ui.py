@@ -8,8 +8,9 @@ handlers. They differ only in what they are handed:
           another node over HTTP. Both answer the same methods:
 
             fee_estimate()                    -> fee market dict
-            account(addr, nick=, profile=, fees=)
+            account(addr, nick=, fees=)
                                               -> balance, nonce, board_floor, ...
+            profile(addr)                     -> board icon and nickname, or None
             submit(tx)                        -> (ok, tx_hash | error)
             address_page(addr, page)          -> one page of history
             board_etag(chunks), board_page(chunks)
@@ -177,15 +178,13 @@ def register_data_api(app, reader, pfx, full=True):
     @app.route("/api/state", endpoint=pfx + "api_state")
     def api_state():
         """reader.account() over HTTP: balance, nonce, the board fee floor,
-        and optionally the fee market, a nickname's owner and an address's
-        board profile, in one answer."""
+        and optionally the fee market and a nickname's owner, in one
+        answer."""
         addr = request.args.get("addr") or None
         if addr is not None and not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
         nick = (request.args.get("nick") or "")[:16] or None
-        return _json(reader.account(
-            addr, nick=nick, profile=bool(request.args.get("profile")),
-            fees=bool(request.args.get("fees"))))
+        return _json(reader.account(addr, nick=nick, fees=bool(request.args.get("fees"))))
 
     @app.route("/api/address/<addr>/page", endpoint=pfx + "api_address_page")
     def api_address_page(addr):
@@ -288,14 +287,15 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
     @app.route("/board", endpoint=pfx + "board")
     def board():
         own = own_addr_fn()
-        acct = reader.account(own, profile=True, fees=bool(csrf_token))
+        # Nothing here names the viewer: a node asked for the board learns
+        # no address. The compose box's own icon comes from the board itself.
+        acct = reader.account(None, fees=bool(csrf_token))
         extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
                      message_value="", board_fee_floor=acct["board_floor"])
         if csrf_token:   # private app only: composing needs a fee suggestion
             extra["fees"] = acct["fees"]
         page = request.args.get("page", 1, type=int) or 1
-        return render_template("board.html", **board_ctx(
-            reader, page, own, extra, own_profile=acct.get("profile")))
+        return render_template("board.html", **board_ctx(reader, page, own, extra))
 
     @app.route("/api/board/fragment", endpoint=pfx + "api_board_fragment")
     def api_board_fragment():
@@ -477,7 +477,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         # same value tx.validate() will check the resulting tx against,
         # modulo a block landing in between, which is exactly the rare
         # "resubmit at the new floor" case that staircase is designed for.
-        acct = reader.account(signer.addr, nick=nick, profile=True, fees=True)
+        acct = reader.account(signer.addr, nick=nick, fees=True)
         floor = acct["board_floor"]
         extra = dict(csrf_token=csrf_token, fees=acct["fees"],
                      compose_err="", compose_ok="", board_fee_floor=floor,
@@ -485,7 +485,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
 
         def render(chunks):
             return render_template("board.html", **board_ctx(
-                reader, chunks, signer.addr, extra, own_profile=acct.get("profile")))
+                reader, chunks, signer.addr, extra))
 
         def fail(msg):
             extra["compose_err"] = msg
@@ -551,14 +551,14 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         memo to send, or None for a request that is not well formed."""
         page = request.args.get("page", 1, type=int) or 1
         passphrase = request.form.get("passphrase", "").strip()
-        acct = reader.account(signer.addr, profile=True, fees=True)
+        acct = reader.account(signer.addr, fees=True)
         extra = dict(csrf_token=csrf_token, fees=acct["fees"],
                      compose_err="", compose_ok="", message_value="",
                      board_fee_floor=acct["board_floor"])
 
         def render():
             return render_template("board.html", **board_ctx(
-                reader, page, signer.addr, extra, own_profile=acct.get("profile")))
+                reader, page, signer.addr, extra))
 
         def fail(msg):
             extra["compose_err"] = msg

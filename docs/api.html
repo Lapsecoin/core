@@ -332,14 +332,13 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 
 <div class="endpoint">
 <div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/state</span></div>
-<div class="endpoint-desc">What a wallet needs about one address, in a single answer. Query parameters: <code>addr</code>, <code>nick</code>, <code>profile=1</code>, <code>fees=1</code>.</div>
+<div class="endpoint-desc">What a wallet needs about one address, in a single answer. Query parameters: <code>addr</code>, <code>nick</code>, <code>fees=1</code>.</div>
 <table>
 <tr><th>Field</th><th>Description</th></tr>
 <tr><td>board_floor</td><td>Always present: the minimum fee a board post must pay right now</td></tr>
 <tr><td>balance</td><td>With <code>addr</code>: the address's balance in ticks</td></tr>
 <tr><td>nonce</td><td>With <code>addr</code>: the highest nonce the address has used, confirmed or pending. The next transaction uses this plus one.</td></tr>
 <tr><td>nick_owner</td><td>With <code>nick</code>: the address that owns that board nickname, or null</td></tr>
-<tr><td>profile</td><td>With <code>profile=1</code>: the address's current board icon and nickname, or null</td></tr>
 <tr><td>fees</td><td>With <code>fees=1</code>: the same object as <code>/api/fees</code></td></tr>
 </table>
 </div>
