@@ -16,6 +16,7 @@
     <form method="POST" action="/board?page={{ page }}" class="board-compose" id="board-compose"
           data-own-nick="{{ own_nick or '' }}" data-own-icon-idx="{{ own_icon_idx }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="form_token" value="{{ form_token }}">
       <input type="hidden" name="passphrase" id="board-passphrase">
       <input type="hidden" name="profile_changed" id="board-profile-changed" value="">
       <input type="hidden" name="icon" id="board-icon-value" value="{{ own_icon_idx }}">

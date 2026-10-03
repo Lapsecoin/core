@@ -47,6 +47,7 @@
     </p>
     <form method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="form_token" value="{{ form_token }}">
       <input type="hidden" name="action" value="create_xlm_wallet">
       <div class="form-row">
         <label for="wallet_pass">Passphrase</label>
@@ -99,6 +100,7 @@
 
   <form method="post" id="order-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
     <input type="hidden" name="action" value="place_order">
     <input type="hidden" name="direction" id="direction" value="buy">
 
@@ -235,6 +237,7 @@
       <td data-label="">
         <form method="post" style="display:flex; gap:.3rem; align-items:center; flex-wrap:wrap">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="form_token" value="{{ form_token }}">
           <input type="hidden" name="action" value="answer_fill_request">
           <input type="hidden" name="request_id" value="{{ r.request_id }}">
           <input type="password" name="passphrase" placeholder="passphrase"
@@ -306,6 +309,7 @@
       <td data-label="">
         <form method="post" style="display:inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="form_token" value="{{ form_token }}">
           <input type="hidden" name="action" value="cancel_order">
           <input type="hidden" name="order_id" value="{{ o.order_id }}">
           <input type="password" name="passphrase" placeholder="passphrase"

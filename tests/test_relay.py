@@ -30,6 +30,7 @@ from light_app import create_light_app
 from oblivious import ObliviousService, open_response, pad, parse_key, seal_request, unpad
 from params import TICKS_PER_LAPSE
 from remote_reader import RemoteReader
+from tests.browser import submit
 from tests.fixtures import address
 from tests.test_api import _InfoNode, _MemoryMeta
 from tests.test_light import PASS, _FullNode, _Resp, _Session
@@ -460,9 +461,7 @@ class TestClientUsesTheRelay:
     def test_a_transaction_is_submitted_through_it_too(self, net):
         r = net.reader()
         client = create_light_app(r, net.wallet).test_client()
-        token = re.search(r'name="csrf_token" value="([^"]+)"',
-                          client.get("/board").get_data(as_text=True)).group(1)
-        client.post("/board", data={"csrf_token": token, "passphrase": PASS, "message": "hi there"})
+        submit(client, "/board", passphrase=PASS, message="hi there")
         pending = [t for n in net.nodes.values() for t in n.mempool.all_txs()]
         assert [t["memo"] for t in pending] == [tx_mod.BOARD_MEMO_TAG + "hi there"]
         assert self._named(net.session.log, net.wallet.addr) == []
@@ -471,15 +470,14 @@ class TestClientUsesTheRelay:
     def test_every_wallet_feature_works_through_it(self, net):
         r = net.reader()
         client = create_light_app(r, net.wallet).test_client()
-        token = re.search(r'name="csrf_token" value="([^"]+)"',
-                          client.get("/board").get_data(as_text=True)).group(1)
         for path in ("/board", "/address", "/send"):
             assert client.get(path).status_code == 200
         n = 0
         for path, form in (("/board", {"message": "one"}), ("/send", {"outputs": f"{address(3)},1000"}),
                            ("/board/vote", {"ref": "abcdef", "dir": "+"}),
                            ("/board/delete", {"ref": "abcdef"})):
-            client.post(path, data={"csrf_token": token, "passphrase": PASS, **form})
+            submit(client, path, page="/board" if path.startswith("/board") else path,
+                   passphrase=PASS, **form)
             n += 1
             assert sum(len(x.mempool.all_txs()) for x in net.nodes.values()) == n, path
         assert self._named(net.session.log, net.wallet.addr) == []

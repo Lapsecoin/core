@@ -26,6 +26,7 @@ import swap_engine
 import trust as trust_mod
 import xlm as xlm_mod
 from flask import redirect, render_template, request
+from forms import ALREADY_SENT, forms_for
 from params import TICKS_PER_LAPSE
 from trade_storage import (
     Increment, Trade, ensure_tables,
@@ -305,6 +306,7 @@ def register(app, node, csrf_token):
 
     @app.route("/market", methods=["GET", "POST"])
     def market():
+        forms = forms_for(app)
         alert_ok = alert_err = ""
         height = node.view.height
         xlm_addr = xlm_mod.load_public_key(xlm_keyfile())
@@ -312,6 +314,8 @@ def register(app, node, csrf_token):
         if request.method == "POST":
             if not csrf_ok():
                 alert_err = "That page was stale. Reload and try again."
+            elif not forms.tokens.consume(request.form.get("form_token")):
+                alert_err = ALREADY_SENT
             else:
                 action = request.form.get("action", "")
                 try:
@@ -330,7 +334,13 @@ def register(app, node, csrf_token):
                 except Exception as e:
                     log.warning("[market] action %s failed", action, exc_info=True)
                     alert_err = f"That did not work: {e}"
+            # Answered with a redirect, never a page (see forms.py): this
+            # page reloads itself, and a reload of the answer to a POST
+            # would place the order again.
+            return forms.done("/market", {"alert_ok": alert_ok, "alert_err": alert_err})
 
+        note = forms.notes.take(request.args.get("note"))
+        alert_ok, alert_err = note.get("alert_ok", ""), note.get("alert_err", "")
         lapse_balance = node.view.state.get_balance(node.addr)
         xlm_spendable = _spendable(xlm_addr)
 
@@ -378,7 +388,7 @@ def register(app, node, csrf_token):
 
         return render_template(
             "market.html", title="Market",
-            alert_ok=alert_ok, alert_err=alert_err,
+            alert_ok=alert_ok, alert_err=alert_err, form_token=forms.tokens.issue(),
             depth=depth, best=best, ticker=ticker,
             lapse_addr=node.addr,
             lapse_balance=lapse_balance,
@@ -447,6 +457,7 @@ def register(app, node, csrf_token):
 
     @app.route("/market/take/<order_id>", methods=["GET", "POST"])
     def market_take(order_id):
+        forms = forms_for(app)
         row = market_mod.get_order(order_id)
         if row is None:
             return render_template("error.html", title="Gone",
@@ -500,6 +511,8 @@ def register(app, node, csrf_token):
         if request.method == "POST":
             if not csrf_ok():
                 alert_err = "That page was stale. Reload and try again."
+            elif not forms.tokens.consume(request.form.get("form_token")):
+                alert_err = ALREADY_SENT
             else:
                 try:
                     _start_trade(node, row, height, xlm_keyfile())
@@ -515,7 +528,11 @@ def register(app, node, csrf_token):
                 except Exception as e:
                     log.warning("[market] starting a trade failed", exc_info=True)
                     alert_err = f"That did not work: {e}"
+            # A failed attempt is answered with a redirect too, so a reload
+            # cannot quietly try again (see forms.py).
+            return forms.done(f"/market/take/{order_id}", {"alert_err": alert_err})
 
+        alert_err = forms.notes.take(request.args.get("note")).get("alert_err", "")
         planned_steps = _planned_steps(default_ticks, row, cap)
         return render_template(
             "market_take.html", title="Trade",
@@ -534,7 +551,8 @@ def register(app, node, csrf_token):
             maker_xlm_unfunded=maker_xlm_unfunded,
             maker_lapse_overcommitted=maker_lapse_overcommitted,
             account_min_xlm=fmt_xlm(xlm_mod.ACCOUNT_MIN_BALANCE_STROOPS),
-            alert_err=alert_err, csrf_token=csrf_token)
+            alert_err=alert_err, csrf_token=csrf_token,
+            form_token=forms.tokens.issue())
 
     # -- Trades --------------------------------------------------------
 

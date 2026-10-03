@@ -1571,12 +1571,10 @@ def test_board_post_form_encodes_reply_ref_and_renders_nested(tmp_path):
     cs.state.apply_tx(root)
     app = api.create_private_app(node, peerpool_mod.PeerPool())
     client = app.test_client()
-    csrf = re.search(r'name="csrf_token" value="([^"]+)"',
-                     client.get("/board").get_data(as_text=True)).group(1)
     ref = tx_mod.tx_hash(root)[:tx_mod.REPLY_REF_LEN]
-    html = client.post("/board", data={"csrf_token": csrf, "message": "the reply",
-                                       "passphrase": PASS, "reply_ref": ref}
-                       ).get_data(as_text=True)
+    from tests.browser import submit
+    html = submit(client, "/board", message="the reply", passphrase=PASS,
+                  reply_ref=ref).get_data(as_text=True)
     pending = list(node.mempool.all_txs())
     assert [t["memo"] for t in pending] == [tx_mod.BOARD_MEMO_TAG + f"[r:{ref}]the reply"]
     assert html.index("the root") < html.index("the reply")

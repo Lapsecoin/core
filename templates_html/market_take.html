@@ -138,6 +138,7 @@
   <div class="card-title">How much</div>
   <form method="post" id="take-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
 
     <div class="form-row">
       <label for="amount">Amount</label>

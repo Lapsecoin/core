@@ -31,6 +31,7 @@ from params import TICKS_PER_LAPSE
 from remote_reader import RemoteReader
 from state import State
 from tests.fixtures import address, make_tx, seed_balance
+from tests.browser import submit
 from tests.test_light import PASS, _FullNode, _Session
 from wallet import Wallet
 
@@ -342,10 +343,9 @@ class TestPages:
         assert "rc-editBtn" not in other and "rc-deleteBtn" not in other
 
     def test_editing_posts_a_splice_the_node_accepts(self, world):
-        resp = world.client.post("/board", data={
-            "csrf_token": _csrf(world), "passphrase": PASS,
-            "edit_ref": world.mine_ref, "edit_orig": "my frist post",
-            "message": "my first post"})
+        resp = submit(world.client, "/board", passphrase=PASS,
+                      edit_ref=world.mine_ref, edit_orig="my frist post",
+                      message="my first post")
         (pending,) = world.node.mempool.all_txs()
         assert pending["memo"] == BOARD_MEMO_TAG + f"[e:{world.mine_ref}:4:2]ir"
         assert tx_mod.is_board_post(pending)
@@ -366,24 +366,21 @@ class TestPages:
         ({"edit_orig": "my frist post", "message": "x" * 300}, "too long"),
     ])
     def test_a_bad_edit_is_refused_before_anything_is_signed(self, world, fields, why):
-        resp = world.client.post("/board", data={
-            "csrf_token": _csrf(world), "passphrase": PASS,
-            "edit_ref": world.mine_ref, **fields})
+        resp = submit(world.client, "/board", passphrase=PASS,
+                      edit_ref=world.mine_ref, **fields)
         assert why in resp.get_data(as_text=True)
         assert world.node.mempool.all_txs() == []
 
     def test_an_edit_with_a_bad_reference_is_refused(self, world):
-        resp = world.client.post("/board", data={
-            "csrf_token": _csrf(world), "passphrase": PASS, "edit_ref": "nope",
-            "edit_orig": "a", "message": "b"})
+        resp = submit(world.client, "/board", passphrase=PASS, edit_ref="nope",
+                      edit_orig="a", message="b")
         assert "Bad edit request" in resp.get_data(as_text=True)
         assert world.node.mempool.all_txs() == []
 
     def test_an_edit_cannot_also_be_a_reply(self, world):
-        world.client.post("/board", data={
-            "csrf_token": _csrf(world), "passphrase": PASS,
-            "edit_ref": world.mine_ref, "edit_orig": "my frist post",
-            "message": "my first post", "reply_ref": world.their_ref})
+        submit(world.client, "/board", passphrase=PASS,
+               edit_ref=world.mine_ref, edit_orig="my frist post",
+               message="my first post", reply_ref=world.their_ref)
         (pending,) = world.node.mempool.all_txs()
         assert "[r:" not in pending["memo"]
 
@@ -398,12 +395,11 @@ class TestPages:
         assert "bob was here" in html
 
     def test_the_board_tab_stays_lit_after_posting_deleting_or_voting(self, world):
-        token = _csrf(world)
         for path, data in (("/board", {"message": "hi"}),
                            ("/board/delete", {"ref": world.mine_ref}),
                            ("/board/vote", {"ref": world.their_ref, "dir": "+"})):
-            html = world.client.post(path, data={"csrf_token": token, "passphrase": PASS,
-                                                 **data}).get_data(as_text=True)
+            html = submit(world.client, path, page="/board", passphrase=PASS,
+                          **data).get_data(as_text=True)
             assert '<a href="/board" class="active">' in html, path
 
     def test_a_deleted_post_offers_no_buttons(self, world):
@@ -435,10 +431,9 @@ class TestPages:
         assert "bob was here" in html and "Deleted by its author." not in html
 
     def test_the_board_the_node_serves_has_the_edit_applied(self, world):
-        world.client.post("/board", data={
-            "csrf_token": _csrf(world), "passphrase": PASS,
-            "edit_ref": world.mine_ref, "edit_orig": "my frist post",
-            "message": "my first post"})
+        submit(world.client, "/board", passphrase=PASS,
+               edit_ref=world.mine_ref, edit_orig="my frist post",
+               message="my first post")
         data = world.reader.board_page(1)
         assert sorted(r["text"] for r in data["rows"]) == ["bob was here", "my first post"]
         assert [r["edited"] for r in data["rows"] if r["text"] == "my first post"] == [True]
