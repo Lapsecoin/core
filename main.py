@@ -6,7 +6,6 @@ _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 
 
 import argparse
 import collections
-import getpass
 import logging
 import logging.handlers
 import os
@@ -19,7 +18,6 @@ import argcomplete
 from argcomplete.completers import FilesCompleter
 
 import block as block_mod
-import crypto
 import http_probe
 import info_probe
 import params
@@ -38,9 +36,7 @@ from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from updater import Updater
 from version import LOCAL_VERSION
-from wallet import (load_or_create_key as _load_or_create_key,
-                    prompt_new_passphrase as _prompt_new_passphrase,
-                    resolve_passphrase as _resolve_passphrase)
+from wallet import load_or_create_key as _load_or_create_key
 
 LOG_FILE = "lapsecoin.log"
 LOCK_FILE = "lapsecoin.lock"
