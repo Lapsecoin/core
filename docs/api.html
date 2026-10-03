@@ -255,6 +255,7 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 <tr><td>network_age_seconds</td><td>Seconds since the genesis block's timestamp</td></tr>
 <tr><td>status</td><td>Human-readable node status</td></tr>
 <tr><td>nick</td><td>Board nickname of the node's address, if any</td></tr>
+<tr><td>public_url</td><td>The <code>https://</code> address the operator says the node can also be reached at, or <code>null</code> (see <code>--public-url</code>)</td></tr>
 <tr><td>recent_txs</td><td>Recent confirmed transactions: <code>{height, hash, from, amount}</code></td></tr>
 </table>
 <pre>curl https://lapsenode.vicnas.me/api/info</pre>
@@ -360,7 +361,7 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 
 <div class="endpoint">
 <div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/peers/http</span></div>
-<div class="endpoint-desc">Returns <code>{"nodes": ["ip:port", ...]}</code>: this node and the peers it has found answering HTTP on its own chain, best-connected first. A short list for light clients, which cannot afford <code>/api/peers</code>.</div>
+<div class="endpoint-desc">Returns <code>{"nodes": ["ip:port", ...], "https": ["https://name", ...]}</code>: this node and the peers it has found answering HTTP on its own chain, best-connected first, and the HTTPS addresses this node and those peers advertise (see <code>--public-url</code>). A short list for light clients, which cannot afford <code>/api/peers</code> and send a wallet address only to nodes reached over https.</div>
 </div>
 </div>
 

@@ -20,6 +20,7 @@ Light-safe: imports nothing that pulls in the VDF, the chain database, or
 the swap code, and a test keeps it that way.
 """
 
+import ipaddress
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
+from public_url import parse_public_url
 from version import LOCAL_VERSION
 
 log = logging.getLogger("ec.remote")
@@ -46,6 +48,13 @@ DISCOVER_INTERVAL    = 6 * 3600
 
 class RemoteError(Exception):
     """No node could answer. The message says why, in words fit to show."""
+
+
+NO_ENCRYPTED_NODE = (
+    "No encrypted node is known, and your wallet address is not sent over plain "
+    "http. Start with a node that answers https, run your own and name it with "
+    "--node, use --proxy tor, or pass --allow-plain-http to accept the risk. "
+    "The board can still be read.")
 
 
 # Where Tor listens: the daemon, then Tor Browser.
@@ -98,12 +107,17 @@ class NodeSet:
     """The nodes to ask, and which to ask next.
 
     Seeds (what the user named, or the built-in defaults) are preferred to
-    anything discovered, and within a tier the choice is random. Only
-    nodes that answer HTTP are ever here, discovery lists no others. The
-    current node is kept for as long as it works, so one session talks to
-    one node and its answers stay consistent with each other; a failure
-    strikes it and moves on, and a struck node sits out a growing
-    cooldown before it is tried again.
+    anything discovered, and within a tier an encrypted (https) node to a
+    plain one, then at random. Nodes found by discovery answer HTTP, or
+    advertise an https address of their own. The current node is kept for
+    as long as it works, so one session talks to one node and its answers
+    stay consistent with each other; a failure strikes it and moves on, and
+    a struck node sits out a growing cooldown before it is tried again.
+
+    Some requests name the wallet's address, and those may only go to a
+    node the address is safe with: one reached over https, or one the user
+    named themselves (a node they run, say, on this machine or their
+    network). Discovery cannot make a node one of those by listing it.
     """
 
     def __init__(self, seeds):
@@ -111,9 +125,12 @@ class NodeSet:
         self._tier = {}                  # url -> 0 seed, 1 discovered
         self._strikes = {}               # url -> consecutive failures
         self._until = {}                 # url -> monotonic time it may be tried again
-        self._current = None
+        self._current = {False: None, True: None}   # by whether it may see an address
         for s in seeds:
             self._tier[_norm(s)] = 0
+
+    def _may_see_address(self, url):
+        return url.startswith("https://") or self._tier[url] == 0
 
     def add(self, urls):
         with self._lock:
@@ -122,17 +139,29 @@ class NodeSet:
                 if u not in self._tier and len(self._tier) < MAX_NODES:
                     self._tier[u] = 1
 
-    def pick(self):
+    def pick(self, for_address=False):
+        """The node to ask next, or None if there is none to ask. With
+        for_address, only one the wallet's address may be sent to."""
         with self._lock:
             now = time.monotonic()
-            if self._current and self._until.get(self._current, 0) <= now:
-                return self._current
-            ready = [u for u in self._tier if self._until.get(u, 0) <= now]
+            healthy = lambda u: u and self._until.get(u, 0) <= now
+            # One node for everything where there is one that will do.
+            for slot in ((True,) if for_address else (True, False)):
+                if healthy(self._current[slot]):
+                    return self._current[slot]
+            ready = [u for u in self._tier if self._until.get(u, 0) <= now
+                     and (not for_address or self._may_see_address(u))]
             if not ready:
                 return None
-            best = min(self._tier[u] for u in ready)
-            self._current = random.choice([u for u in ready if self._tier[u] == best])
-            return self._current
+            rank = lambda u: (self._tier[u], 0 if u.startswith("https://") else 1)
+            best = min(rank(u) for u in ready)
+            choice = random.choice([u for u in ready if rank(u) == best])
+            self._current[self._may_see_address(choice)] = choice
+            return choice
+
+    def has_node_for_address(self):
+        with self._lock:
+            return any(self._may_see_address(u) for u in self._tier)
 
     def ok(self, url):
         with self._lock:
@@ -145,8 +174,9 @@ class NodeSet:
             self._strikes[url] = n
             self._until[url] = time.monotonic() + min(
                 COOLDOWN_SECONDS * n, COOLDOWN_MAX_SECONDS)
-            if self._current == url:
-                self._current = None
+            for slot, cur in self._current.items():
+                if cur == url:
+                    self._current[slot] = None
 
     def all(self):
         with self._lock:
@@ -154,14 +184,18 @@ class NodeSet:
 
     def current(self):
         with self._lock:
-            return self._current
+            return self._current[False] or self._current[True]
 
 
 class RemoteReader:
 
     def __init__(self, seeds=None, *, proxy=None, refresh=15, timeout=(5, 20),
-                 cache_file=None, session=None):
+                 cache_file=None, session=None, allow_plain_http=False):
         self.nodes = NodeSet(seeds or DEFAULT_SEEDS)
+        # Whether the wallet's address may go to a node over plain http. It
+        # may through a proxy, where what the node learns is not an IP, or
+        # when the user says so.
+        self.allow_plain_http = allow_plain_http
         self.refresh = refresh
         self.timeout = timeout
         self.cache_file = cache_file
@@ -174,6 +208,7 @@ class RemoteReader:
         self._cache = {}                 # key -> (fetched_at, value)
         self._board = {}                 # chunks -> {"etag", "data", "at"}
         self._discovered_at = 0.0
+        self._last_failure = None        # why the last node could not be used
         self.bytes_in = 0
         self.requests = 0
         self._load_known_nodes()
@@ -185,20 +220,58 @@ class RemoteReader:
             return
         try:
             with open(self.cache_file) as f:
-                self.nodes.add(json.load(f))
-        except (OSError, ValueError):
+                self.nodes.add(self._acceptable(json.load(f)))
+        except (OSError, ValueError, TypeError):
             pass
+
+    @staticmethod
+    def _plain_url(peer):
+        """http://host:port for a peer as peers are known ("ip:port"), or
+        None. Only a public IP address qualifies: a list some node handed
+        over must not be able to point this client at a machine on its own
+        network or at itself."""
+        try:
+            host, port = peer.rsplit(":", 1)
+            ip = ipaddress.ip_address(host.strip("[]"))
+            if not ip.is_global or not 0 < int(port) < 65536:
+                return None
+        except (ValueError, AttributeError):
+            return None
+        return f"http://[{ip}]:{int(port)}" if ip.version == 6 else f"http://{ip}:{int(port)}"
+
+    @classmethod
+    def _acceptable(cls, entries):
+        """Of what a file or another node says about nodes, the ones worth
+        trying: https addresses that pass public_url.parse_public_url, and
+        peers ("ip:port", or an http:// URL of one) at public IP addresses,
+        https first. Anything else is dropped, whatever it is."""
+        https, plain = [], []
+        for e in entries:
+            if not isinstance(e, str):
+                continue
+            if e.startswith("https://"):
+                try:
+                    https.append(parse_public_url(e))
+                except ValueError:
+                    pass
+            else:
+                url = cls._plain_url(e[len("http://"):] if e.startswith("http://") else e)
+                if url:
+                    plain.append(url)
+        return https + plain
 
     def _discover(self):
         """Learn more nodes from the one in use, at most every few hours:
-        only those that answer HTTP, which is all a light client can use."""
+        those that answer HTTP and the https addresses they advertise."""
         if time.time() - self._discovered_at < DISCOVER_INTERVAL:
             return
         self._discovered_at = time.time()
         try:
             resp = self._request("GET", "/api/peers/http", discover=False)
-            self.nodes.add(["http://" + a for a in resp.json().get("nodes", [])])
-        except (RemoteError, ValueError, AttributeError):
+            data = resp.json()
+            self.nodes.add(self._acceptable(
+                list(data.get("https", [])) + list(data.get("nodes", []))))
+        except (RemoteError, ValueError, AttributeError, TypeError):
             return
         if self.cache_file:
             try:
@@ -210,20 +283,31 @@ class RemoteReader:
     # Transport
 
     def _request(self, method, path, *, params=None, body=None, headers=None,
-                 discover=True):
+                 discover=True, names_wallet=False):
+        """names_wallet: the request carries the wallet's address. Unless a
+        proxy hides who is asking, or plain http was allowed, it goes only
+        to a node the address is safe with (see NodeSet), and failing that
+        it is not sent at all."""
         if discover:
             self._discover()
-        last = "no node to ask"
+        careful = names_wallet and not (self.proxy or self.allow_plain_http)
+        if careful and not self.nodes.has_node_for_address():
+            raise RemoteError(NO_ENCRYPTED_NODE)
+        # Nodes that failed a moment ago sit out a cooldown, so there may be
+        # none to ask by now: the reason they failed is still the answer.
+        last = self._last_failure or "no node to ask"
         for _ in range(len(self.nodes.all()) + 1):
-            base = self.nodes.pick()
+            base = self.nodes.pick(for_address=careful)
             if base is None:
+                if careful:
+                    last = "none of the encrypted nodes answered"
                 break
             try:
                 resp = self._http.request(method, base + path, params=params,
                                           json=body, headers=headers,
                                           timeout=self.timeout)
             except requests.RequestException as e:
-                last = f"{base}: {e.__class__.__name__}"
+                last = self._last_failure = f"{base}: {e.__class__.__name__}"
                 self.nodes.strike(base)
                 continue
             self.requests += 1
@@ -231,15 +315,15 @@ class RemoteReader:
             if resp.status_code == 429:
                 raise RemoteError("The node is rate limiting this client; wait a moment.")
             if resp.status_code >= 500:
-                last = f"{base}: HTTP {resp.status_code}"
+                last = self._last_failure = f"{base}: HTTP {resp.status_code}"
                 self.nodes.strike(base)
                 continue
             self.nodes.ok(base)
             return resp
-        raise RemoteError(f"No node could be reached ({last}).")
+        raise RemoteError(f"No {'encrypted ' if careful else ''}node could be reached ({last}).")
 
-    def _get_json(self, path, params=None):
-        resp = self._request("GET", path, params=params)
+    def _get_json(self, path, params=None, names_wallet=False):
+        resp = self._request("GET", path, params=params, names_wallet=names_wallet)
         if resp.status_code != 200:
             raise RemoteError(f"The node answered {resp.status_code} for {path}.")
         try:
@@ -283,11 +367,12 @@ class RemoteReader:
         if fees:
             params["fees"] = 1
         key = ("state", tuple(sorted(params.items())))
-        return self._cached(key, lambda: self._get_json("/api/state", params),
+        return self._cached(key, lambda: self._get_json("/api/state", params,
+                                                        names_wallet=bool(addr)),
                             fresh=fresh)
 
     def submit(self, tx_dict):
-        resp = self._request("POST", "/api/tx/send", body=tx_dict)
+        resp = self._request("POST", "/api/tx/send", body=tx_dict, names_wallet=True)
         self.invalidate()
         try:
             data = resp.json()
@@ -299,7 +384,7 @@ class RemoteReader:
 
     def address_page(self, addr, page):
         return self._cached(("addr", addr, page), lambda: self._get_json(
-            f"/api/address/{addr}/page", {"page": page}))
+            f"/api/address/{addr}/page", {"page": page}, names_wallet=True))
 
     def _board_entry(self, chunks):
         """The board for `chunks`, asking the node only if the held copy is
@@ -361,6 +446,8 @@ class RemoteReader:
             route = "direct"
         elif node.startswith("https://"):
             route = "direct, encrypted"
+        elif urlsplit(node).hostname in ("127.0.0.1", "localhost", "::1"):
+            route = "direct, this machine"
         else:
             route = "direct, not encrypted"
         return {"bytes": self.bytes_in, "requests": self.requests,

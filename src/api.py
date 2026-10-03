@@ -71,7 +71,10 @@ Public app  (default port 8333, externally reachable):
     GET  /api/peers/http
          {"nodes": ["ip:port", ...]}: this node and the peers it has found
          answering HTTP on its own chain. Short on purpose, for light
-         clients (see light.py) that cannot afford /api/peers.
+         clients (see light.py) that cannot afford /api/peers. Also
+         "https": this node's own HTTPS address (--public-url) and the ones
+         its peers advertise, the only nodes a light client sends a wallet
+         address to.
 
     POST /api/tx/send                 rate-limited: 20 requests/second
          Request body (JSON): a signed plaintext tx dict, see tx.py
@@ -656,7 +659,7 @@ def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
 def _shared_read_only_routes(app, node, pool, limiter,
                               private_port, public_port, is_private,
                               update_checker=None, csrf_token=None,
-                              updater=None):
+                              updater=None, public_url=None):
     """Register all read-only UI and API routes on app."""
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
@@ -1126,7 +1129,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
         me = _self_external_addr()
         if me and me not in nodes:
             nodes.insert(0, me)
-        return jsonify({"nodes": nodes})
+        # HTTPS addresses, this node's own first: the only ones a light
+        # client sends a wallet address to. Each peer's is what it says
+        # itself (see http_probe), and a client checks the certificate, so
+        # a false one only fails there.
+        known = pool.public_urls()
+        https = ([public_url] if public_url else []) + [
+            known[a] for a in nodes if a in known and known[a] != public_url]
+        return jsonify({"nodes": nodes, "https": https})
 
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")
     def api_peers_download():
@@ -1152,6 +1162,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def api_info():
         info = dict(node.get_info())
         info["iid"] = pool.instance_id
+        # The HTTPS address this node says it can also be reached at (see
+        # --public-url), so peers can tell light clients about it.
+        info["public_url"] = public_url
         info["address"] = _own_addr_or_hidden()
         info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
@@ -1333,9 +1346,30 @@ def _generate_icon(icon_path, width, height, ext):
 # Public app factory  (port 8333)
 # ---------------------------------------------------------------------------
 
+class _TrustLoopbackProxy:
+    """WSGI middleware: a request that reaches this app from the machine it
+    runs on came through a reverse proxy the operator put in front of it
+    (for HTTPS, see --public-url), so the client's address is the last one
+    in X-Forwarded-For, the one the proxy added. Without this every client
+    of a proxied node looks like 127.0.0.1 and shares one rate limit. A
+    request from anywhere else is left alone: the header is only believed
+    from the proxy, never from a client that could write anything in it."""
+
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        if environ.get("REMOTE_ADDR") in ("127.0.0.1", "::1"):
+            forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+            if forwarded:
+                environ["REMOTE_ADDR"] = forwarded.split(",")[-1].strip()
+        return self.app(environ, start_response)
+
+
 def create_app(node, pool, private_port=8335, public_port=8333,
-               update_checker=None, updater=None):
+               update_checker=None, updater=None, public_url=None):
     app = make_flask_app(__name__)
+    app.wsgi_app = _TrustLoopbackProxy(app.wsgi_app)
     # Deliberately not touching the werkzeug logger. main.py already sets it
     # to ERROR, and this line used to put it back to INFO, which is a
     # per-request access log: the dashboard polls /api/info on a timer and
@@ -1353,7 +1387,8 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=False,
-                             update_checker=update_checker, updater=updater)
+                             update_checker=update_checker, updater=updater,
+                             public_url=public_url)
 
     # Send disabled on public port; show locked page
     @app.route("/send")
@@ -1377,7 +1412,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 # ---------------------------------------------------------------------------
 
 def create_private_app(node, pool, private_port=8335, public_port=8333,
-                       update_checker=None, updater=None):
+                       update_checker=None, updater=None, public_url=None):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = make_flask_app(__name__)
     _close_db_after_request(app)
@@ -1398,7 +1433,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=True,
                              update_checker=update_checker, csrf_token=csrf_token,
-                             updater=updater)
+                             updater=updater, public_url=public_url)
 
     @app.route("/api/update/start", methods=["POST"])
     def api_update_start():

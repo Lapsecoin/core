@@ -30,6 +30,7 @@ from node import Node
 from params import DB_PATH, PEERS_PER_MESSAGE_LIMIT
 from peer_udp import LAN_DISCOVERY_PORT, PORT_BIND_RETRIES, UDPTransport, probe_lan_ports
 from peerpool import PeerPool
+from public_url import parse_public_url
 from swap_worker import SwapWorker
 from syncer import Syncer
 from singleton_lock import SingleInstanceLock
@@ -314,6 +315,14 @@ def main():
              "Point this at your own fork's VERSION file if you maintain one.",
     )
     parser.add_argument(
+        "--public-url", default=os.environ.get("LAPSECOIN_PUBLIC_URL"), metavar="URL",
+        help="The https:// address this node can also be reached at, when you "
+             "have put a TLS-terminating reverse proxy (Caddy, nginx) with a "
+             "domain in front of its web port. It is advertised so light "
+             "clients can send their wallet address over an encrypted "
+             "connection instead of plain http. Default: $LAPSECOIN_PUBLIC_URL.",
+    )
+    parser.add_argument(
         "--releases-url", default=DEFAULT_RELEASES_URL,
         help="Where the UI's 'new version available' link points.",
     )
@@ -336,6 +345,12 @@ def main():
     )
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
+    public_url = None
+    if args.public_url:
+        try:
+            public_url = parse_public_url(args.public_url)
+        except ValueError as e:
+            sys.exit(f"Error: --public-url: {e}")
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
     # The HTTP access log is one line per request, and requests arrive on a
     # timer: the dashboard polls /api/info, and so does every peer's
@@ -651,14 +666,14 @@ def main():
         # ------------------------------------------------------------------
         app = create_app(node, pool, private_port=private_port,
                          public_port=port, update_checker=update_checker,
-                         updater=updater)
+                         updater=updater, public_url=public_url)
         _serve(app, args.host, port)
         log.info("[startup] public API on http://%s:%d", args.host, port)
 
         private_app = create_private_app(node, pool, private_port=private_port,
                                          public_port=port,
                                          update_checker=update_checker,
-                                         updater=updater)
+                                         updater=updater, public_url=public_url)
         _serve(private_app, "127.0.0.1", private_port)
         log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
         log.info("[startup] genesis=%s", genesis["hash"][:12])

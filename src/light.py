@@ -14,6 +14,7 @@ import logging
 import sys
 import threading
 import webbrowser
+from urllib.parse import urlsplit
 
 from remote_reader import DEFAULT_SEEDS, RemoteError, RemoteReader, default_cache_file
 from version import LOCAL_VERSION
@@ -40,6 +41,10 @@ def build_parser():
                    help="Send every request through a proxy so the node does not see your IP. "
                         "'tor' uses Tor's local port (the daemon or Tor Browser); or give a URL, "
                         "e.g. socks5h://127.0.0.1:9050.")
+    p.add_argument("--allow-plain-http", action="store_true",
+                   help="Send your wallet address to nodes over plain http too. By default "
+                        "it goes only to nodes reached over https, and to ones you name with "
+                        "--node. Plain http lets anyone on the network path read it.")
     p.add_argument("--refresh", type=int, default=15, metavar="SECONDS",
                    help="How long an answer is reused before the node is asked "
                         "again. Raise it to use less data.")
@@ -56,7 +61,8 @@ def main(argv=None):
     wallet = Wallet(args.keyfile, pk)
     try:
         reader = RemoteReader(args.node or None, proxy=args.proxy, refresh=args.refresh,
-                              cache_file=default_cache_file())
+                              cache_file=default_cache_file(),
+                              allow_plain_http=args.allow_plain_http)
     except RemoteError as e:
         sys.exit(str(e))
     from light_app import create_light_app
@@ -67,6 +73,18 @@ def main(argv=None):
               "address, whenever you open Balance or Send or post. Reading the board "
               "does not name you.\nUse --proxy tor to hide your IP, or --node with a "
               "node you run yourself.\n")
+    if not args.proxy:
+        if args.allow_plain_http:
+            print("Warning: --allow-plain-http. Your wallet address may be sent to nodes "
+                  "unencrypted, where anyone on the network path can read it.\n")
+        else:
+            print("Your wallet address goes only to nodes reached over https, or ones you "
+                  "name with --node.\n")
+        loose = [n for n in args.node if n.startswith("http://")
+                 and not urlsplit(n).hostname in ("127.0.0.1", "localhost", "::1")]
+        for n in loose:
+            print(f"Warning: --node {n} is plain http, so your wallet address crosses "
+                  "the network unencrypted to reach it.\n")
     print(f"Your address: {wallet.addr}")
     print(f"Wallet: {url}   (Ctrl+C to stop)")
     if not args.no_browser:

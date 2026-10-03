@@ -46,6 +46,7 @@ A wallet and the board with no chain of its own, for a small data allowance, a s
 
 It asks for the key's passphrase, then opens the wallet at `http://127.0.0.1:8335/`. A key from the full node works as is, so one key can be used in both. Options:
 
+- `--allow-plain-http` lets your wallet address go to nodes over plain http as well. By default it goes only to nodes reached over https and to ones you name with `--node`; reading the board may use any node.
 - `--proxy tor` sends every request through Tor (the daemon or Tor Browser must be running), or give any proxy URL, for example `socks5h://127.0.0.1:9050`. It refuses to start if Tor is not there, rather than quietly connecting directly.
 - `--node URL` picks the node to ask (repeatable). Point it at a node you run yourself and no one else learns anything. Otherwise it finds more by itself, preferring nodes that answer HTTP, and moves to another if one fails.
 - `--refresh SECONDS` sets how long an answer is reused before the node is asked again. A higher number uses less data.
@@ -60,7 +61,31 @@ The node is trusted for what the chain says: it can show a wrong balance or hide
 | Open Balance or Send | Your IP together with your address, because the question is about it |
 | Post, vote, edit, delete, send | Your IP together with your address, because the transaction carries it |
 
-So the link between your IP and your address exists whenever you use Balance or Send, on the node you asked. It cannot be removed by the client alone, only moved: `--proxy tor` hides your IP from the node, and `--node` with a node you run means the one who sees it is you. Without a proxy, the page header says whether the node is reached over an encrypted connection, since a plain HTTP node (most found by discovery) also lets anyone on the path see your address.
+So the link between your IP and your address exists whenever you use Balance or Send, on the node you asked. It cannot be removed by the client alone, only moved: `--proxy tor` hides your IP from the node, and `--node` with a node you run means the one who sees it is you. Most nodes found by discovery speak plain HTTP, which would also let anyone on the network path read your address. So your address is not sent to those. It goes only to nodes reached over https, and to ones you name with `--node`; if none is reachable the app says so and still shows the board. A node becomes one of those when its operator puts HTTPS in front of it (below). The page header says how the node you are using is being reached.
+
+### How the board works without a chain
+
+The full node reads the whole chain once, resolves the board (threads, replies, votes, profiles, edits and deletes) and serves the result as a small JSON document. The light client fetches that and renders it with the same page code the full node uses. For ten threads it is about 1.2 KB compressed, and a board that has not changed since the last request costs a 304 with no body. The board is not checked against the chain, since the client has none, so a dishonest node could show a board that differs from it. It cannot make you sign anything, and your own posts, votes, edits and deletes are signed on your machine.
+
+<details>
+<summary>Serving your node over HTTPS</summary>
+
+A node speaks plain HTTP, and peers are bare `ip:port` addresses with no name for a certificate to be issued to. To offer an encrypted connection, put a reverse proxy with a domain in front of the node's web port and tell the node its address:
+
+```
+# Caddy: fetches and renews the certificate by itself
+mynode.example.org {
+    reverse_proxy 127.0.0.1:8333
+}
+```
+
+```
+lapsecoin --public-url https://mynode.example.org     # or LAPSECOIN_PUBLIC_URL
+```
+
+The node then advertises that address (`/api/info`), its peers pass it on to light clients, and light clients can send their wallet address to it. The proxy should add the client's address to `X-Forwarded-For` (Caddy does); the node believes that header only from the machine it runs on, so clients keep separate rate limits and no one else can choose theirs. The node's port stays open for peers as before. Only a domain name is accepted, never an IP address.
+
+</details>
 
 <details>
 <summary>How consensus works</summary>
