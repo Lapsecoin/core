@@ -76,14 +76,18 @@ def auto_fee(acct, addr, pk_hex, outputs, memo="", floor=0):
     return max(floor, math.ceil(rate * size))
 
 
-def submit_and_alert(reader, signer, outputs, passphrase, ctx, memo="", floor=0):
+def submit_and_alert(reader, signer, outputs, passphrase, ctx, memo="", floor=0, acct=None):
+    """Sign and send. `acct` is a reader.account(addr, fees=True, fresh=True)
+    the caller already asked for, to be used as it is: every question put to
+    a node is a round trip, and a caller that needed the answer to decide
+    whether to go on should not make the signing ask it again."""
     if not passphrase:
         ctx["alert_err"] = "Passphrase required."
         return
     try:
         # fresh: the nonce and fee rate go into a signature, so they come
         # from the node now, not from an answer held a few seconds ago.
-        acct = reader.account(signer.addr, fees=True, fresh=True)
+        acct = acct or reader.account(signer.addr, fees=True, fresh=True)
         fee = auto_fee(acct, signer.addr, signer.pk_hex, outputs, memo=memo, floor=floor)
         t = signer.sign(outputs, fee, memo, passphrase, acct["nonce"] + 1)
         ok, result = reader.submit(t)
@@ -290,19 +294,22 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
         own = own_addr_fn()
         # Nothing here names the viewer: a node asked for the board learns
         # no address. The compose box's own icon comes from the board itself.
-        acct = reader.account(None, fees=bool(csrf_token))
         extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
-                     message_value="", board_fee_floor=acct["board_floor"], form_token="")
-        if csrf_token:   # private app only: composing needs a fee suggestion
+                     message_value="", form_token="")
+        if csrf_token:   # private app only: there is a compose box
             forms = forms_for(app)
-            extra["fees"] = acct["fees"]
             # This page's compose form works once (see forms.py), and what
             # the post that brought us here has to say, shown once.
             extra["form_token"] = forms.tokens.issue()
             note = forms.notes.take(request.args.get("note"))
             extra.update({k: v for k, v in note.items() if k in ("compose_err", "message_value")})
         page = request.args.get("page", 1, type=int) or 1
-        return render_template("board.html", **board_ctx(reader, page, own, extra))
+        ctx = board_ctx(reader, page, own, extra)
+        # What a post must pay at least follows from how many there are, so
+        # it is worked out here rather than asked of a node: the page is one
+        # request, or none while it is held.
+        ctx["board_fee_floor"] = tx_mod.board_fee_floor(ctx["post_count"])
+        return render_template("board.html", **ctx)
 
     @app.route("/api/board/fragment", endpoint=pfx + "api_board_fragment")
     def api_board_fragment():
@@ -490,13 +497,25 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         page = request.args.get("page", 1, type=int) or 1
         message    = request.form.get("message", "").strip()
         passphrase = request.form.get("passphrase", "").strip()
+        in_place = request.headers.get("X-Requested-With") == "fetch"
 
-        def fail(msg, keep_text=True):
-            # Answered with a redirect, never a page (see forms.py): the
-            # text typed comes back in the compose box so it is not lost.
-            return forms.done("/board", {"compose_err": msg,
+        def reply(error=None, keep_text=True):
+            """The answer. To the page's own script, which sends in the
+            background and updates in place, just the verdict and the next
+            token: nothing to reload. To a browser without it, a redirect,
+            never a page (see forms.py), the text typed brought back into
+            the compose box so it is not lost."""
+            if in_place:
+                return jsonify(ok=error is None, error=error or "",
+                               form_token=forms.tokens.issue())
+            if error is None:
+                return forms.done("/board")
+            return forms.done("/board", {"compose_err": error,
                                          "message_value": message if keep_text else ""},
                               **({"page": page} if page != 1 else {}))
+
+        def fail(msg, keep_text=True):
+            return reply(msg, keep_text)
 
         if not _csrf_ok():
             return fail("Session expired; reload the page and try again.")
@@ -519,7 +538,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         # same value tx.validate() will check the resulting tx against,
         # modulo a block landing in between, which is exactly the rare
         # "resubmit at the new floor" case that staircase is designed for.
-        acct = reader.account(signer.addr, nick=nick, fees=True)
+        acct = reader.account(signer.addr, nick=nick, fees=True, fresh=True)
         floor = acct["board_floor"]
 
         if not message:
@@ -546,16 +565,17 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
 
         outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
         alert_ctx = {}
-        submit_and_alert(reader, signer, outputs, passphrase, alert_ctx, memo=memo, floor=floor)
+        submit_and_alert(reader, signer, outputs, passphrase, alert_ctx, memo=memo,
+                         floor=floor, acct=acct)
         if alert_ctx.get("alert_err"):
             return fail(alert_ctx["alert_err"])
 
-        # Back to page 1 regardless of which page the form was on: that's
-        # the page pending posts appear on (see board_ctx), and the one
-        # this post itself now shows up in, at the bottom, right above the
-        # compose box, so posting is its own confirmation. No separate
-        # "waiting to be mined" banner needed, the row is one.
-        return forms.done("/board")
+        # Page 1 regardless of which page the form was on: that's the page
+        # pending posts appear on (see board_ctx), and the one this post
+        # itself now shows up in, right above the compose box, so posting is
+        # its own confirmation. No separate "waiting to be mined" banner
+        # needed, the row is one.
+        return reply()
 
     def _quote(memo):
         """What sending `memo` as a plain 1-tick burn would cost right now:
@@ -576,33 +596,22 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         the same congestion fee any other send would, plus the same 1-tick
         burn a board post makes. It carries nothing but a tag and the 6-hex
         reference to the post it is about. make_memo(form) returns the
-        memo to send, or None for a request that is not well formed."""
-        page = request.args.get("page", 1, type=int) or 1
+        memo to send, or None for a request that is not well formed.
+
+        Answered with a verdict, {"ok": bool, "error": text}: the page's own
+        script sends these in the background and has no use for a page."""
         passphrase = request.form.get("passphrase", "").strip()
-        acct = reader.account(signer.addr, fees=True)
-        extra = dict(csrf_token=csrf_token, fees=acct["fees"],
-                     compose_err="", compose_ok="", message_value="",
-                     board_fee_floor=acct["board_floor"])
-
-        def render():
-            return render_template("board.html", **board_ctx(
-                reader, page, signer.addr, extra))
-
-        def fail(msg):
-            extra["compose_err"] = msg
-            return render()
-
         if not _csrf_ok():
-            return fail("Session expired; reload the page and try again.")
+            return jsonify(ok=False, error="Session expired; reload the page and try again.")
         memo = make_memo(request.form)
         if memo is None:
-            return fail("Bad request.")
+            return jsonify(ok=False, error="Bad request.")
         outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
         alert_ctx = {}
         submit_and_alert(reader, signer, outputs, passphrase, alert_ctx, memo=memo)
         if alert_ctx.get("alert_err"):
-            return fail(alert_ctx["alert_err"])
-        return render()
+            return jsonify(ok=False, error=alert_ctx["alert_err"])
+        return jsonify(ok=True, error="")
 
     def _ref(source):
         return (source.get("ref") or "")[:REPLY_REF_LEN]

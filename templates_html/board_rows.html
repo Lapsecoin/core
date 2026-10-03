@@ -1,35 +1,54 @@
 {% if rows %}
   {% for row in rows %}
+  {% if row.deleted %}
+  {# Only ever here because something still standing replies to it (see
+     board_view.worth_showing), so it is a line, not a post: just enough to
+     show what those replies are replying to. #}
+  <div class="rc-root rc-deleted" id="post-{{ row.ref6 }}"{% if row.depth %} style="--depth: {{ row.depth }}"{% endif %}>deleted</div>
+  {% else %}
   {% set mine = row.from == own_addr %}
   {% set score = row.up - row.down %}
   <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}"{% if row.depth %} style="--depth: {{ row.depth }}"{% endif %}>
     <div class="rc-info">
       <span class="rc-avatar" aria-hidden="true">{{ row.icon }}</span>
       <a href="/address?addr={{ row.from }}" class="rc-username {{ 'hash-short' if not row.nick }}"
-         title="{{ row.from }}{{ ' - nickname: ' + row.nick if row.nick else ' - no nickname set' }}">{{ row.nick or row.from }}</a>
+         title="{{ row.from }}{{ ' - nickname: ' + row.nick if row.nick else ' - no nickname set' }}">{{ row.nick or (row.from.split('.')[:3] | join('.')) ~ '…' }}</a>
+      {% if is_private and not row.pending %}
+      <span class="rc-actions">
+        <button type="button" class="rc-replyBtn"
+                data-ref="{{ row.ref6 }}" data-addr="{{ row.from }}"
+                data-snippet="{{ row.text[:60] }}">Reply</button>
+        {% if mine %}
+        <button type="button" class="rc-replyBtn rc-editBtn"
+                data-ref="{{ row.ref6 }}" data-text="{{ row.text }}"
+                title="Replace part of this post. Costs the same as a new post.">Edit</button>
+        <button type="button" class="rc-replyBtn rc-deleteBtn"
+                data-ref="{{ row.ref6 }}"
+                title="Hide this post from readers. The text stays on the chain.">Delete</button>
+        {% endif %}
+      </span>
+      {% endif %}
       {% if row.pending %}
         <span class="rc-time" title="Submitted, not yet in a block">pending&hellip;</span>
       {% else %}
         <a class="rc-time" href="/explorer/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
       {% endif %}
-      {% if row.edited and not row.deleted %}<span class="rc-time" title="Its author edited this post. The original is still on the chain.">(edited)</span>{% endif %}
+      {% if row.edited %}<span class="rc-time rc-edited" title="Its author edited this post. The original is still on the chain.">edited</span>{% endif %}
       <span class="rc-vote-root">
-        {% if is_private and not row.deleted %}
+        {% if is_private %}
         <button type="button" class="rc-voteButton rc-downVoteButton {{ 'rc-downVoteButtonActive' if row.my_vote == 'down' }}"
                 data-ref="{{ row.ref6 }}" data-dir="-" title="Vote down"
                 {{ 'disabled' if row.my_vote == 'down' }}>
-          <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg class="rc-voteIcon" width="10" height="10" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         {% endif %}
-        {% if not row.deleted %}
         <span class="rc-votes {{ 'rc-votesPositive' if score > 0 else ('rc-votesNegative' if score < 0 else '') }} {{ 'rc-votesPending' if row.vote_pending }}"
               title="{{ 'Includes a vote not yet in a block' if row.vote_pending else 'Votes score' }}">{{ score }}</span>
-        {% endif %}
-        {% if is_private and not row.deleted %}
+        {% if is_private %}
         <button type="button" class="rc-voteButton rc-upVoteButton rc-upVoteIcon {{ 'rc-upVoteButtonActive' if row.my_vote == 'up' }}"
                 data-ref="{{ row.ref6 }}" data-dir="+" title="Vote up"
                 {{ 'disabled' if row.my_vote == 'up' }}>
-          <svg class="rc-voteIcon" width="12" height="12" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg class="rc-voteIcon" width="10" height="10" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 11.5L14.5 19L22 11" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         {% endif %}
       </span>
@@ -37,33 +56,17 @@
     <div class="rc-body">
       {% if row.reply_ref and not row.depth %}
       <a class="rc-replyQuote" href="#post-{{ row.reply_ref }}">
-        {% if row.reply_deleted %}replying to a deleted post
-        {% elif row.reply_from %}replying to {{ row.reply_from[:14] }}&hellip;: &ldquo;{{ row.reply_snippet }}&rdquo;
-        {% else %}replying to an earlier post{% endif %}
+        {% if row.reply_deleted %}&#8627; a deleted post
+        {% elif row.reply_from %}&#8627; {{ row.reply_from.split('.')[:2] | join('.') }}&hellip; &ldquo;{{ row.reply_snippet }}&rdquo;
+        {% else %}&#8627; an earlier post{% endif %}
       </a>
       {% endif %}
-      {% if row.deleted %}
-      <div class="rc-text"><em style="color:var(--muted)">Deleted by its author.</em></div>
-      {% else %}
       <div class="rc-text">{{ render_board_text(row.text) }}</div>
-      {% endif %}
-      {% if is_private and not row.pending and not row.deleted %}
-      <button type="button" class="rc-replyBtn"
-              data-ref="{{ row.ref6 }}" data-addr="{{ row.from }}"
-              data-snippet="{{ row.text[:60] }}">Reply</button>
-      {% if mine %}
-      <button type="button" class="rc-replyBtn rc-editBtn"
-              data-ref="{{ row.ref6 }}" data-text="{{ row.text }}"
-              title="Replace part of this post. Costs the same as a new post.">Edit</button>
-      <button type="button" class="rc-replyBtn rc-deleteBtn"
-              data-ref="{{ row.ref6 }}"
-              title="Hide this post from readers. The text stays on the chain.">Delete</button>
-      {% endif %}
-      {% endif %}
     </div>
   </div>
+  {% endif %}
   {% endfor %}
 {% else %}
-  <p style="color:var(--muted);text-align:center">Nothing posted yet.</p>
+  <p class="rc-empty">Nothing posted yet.</p>
 {% endif %}
-{% if has_more %}<div id="board-more" style="text-align:center;color:var(--muted);font-size:.8rem;padding:.8rem 0">Loading more&hellip;</div>{% endif %}
+{% if has_more %}<div id="board-more" class="rc-more">Loading more&hellip;</div>{% endif %}

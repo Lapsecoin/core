@@ -176,7 +176,7 @@ def sent(world):
 def banner(html):
     """The text of the error banner on a page, or None. (The page's own
     script mentions the same words, so look at the banner, not the page.)"""
-    m = re.search(r'<div class="alert alert-err"[^>]*>(.*?)</div>', html, re.S)
+    m = re.search(r'<div class="board-error"[^>]*?(?<!hidden)>(.*?)</div>', html, re.S)
     return m.group(1).strip() if m else None
 
 
