@@ -16,10 +16,29 @@ The remote node is trusted for data only. It never sees a secret: signing
 happens here, and a node that lies can show a wrong balance or hide a
 transaction, but cannot spend anything.
 
+Who learns the wallet's address. Reading the board, the fee market and the
+node list names nobody. Looking up a balance or a nonce, or submitting a
+transaction, names the wallet's address to whoever answers, and that node
+also sees the IP that asked. Those requests take the most private route
+available, and none is ever refused for lack of one:
+
+  1. Through Tor, if Tor is running here. Used when it is found, dropped
+     when it is not, with nothing to configure.
+  2. Through a relay (oblivious.py): sealed to one node and handed over by
+     another, so the one that reads the request does not see the IP, and the
+     one that sees the IP cannot read the request. Needs two nodes that
+     advertise a key; a transaction is then, from the network's side, in
+     the same position as one a node submits for itself, whose origin
+     Dandelion already hides.
+  3. Directly, to the node in use, preferring one reached over https.
+
+The page header says which was used.
+
 Light-safe: imports nothing that pulls in the VDF, the chain database, or
 the swap code, and a test keeps it that way.
 """
 
+import base64
 import ipaddress
 import json
 import logging
@@ -29,10 +48,11 @@ import secrets
 import socket
 import threading
 import time
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import requests
 
+import oblivious
 from public_url import parse_public_url
 from version import LOCAL_VERSION
 
@@ -50,15 +70,11 @@ class RemoteError(Exception):
     """No node could answer. The message says why, in words fit to show."""
 
 
-NO_ENCRYPTED_NODE = (
-    "No encrypted node is known, and your wallet address is not sent over plain "
-    "http. Start with a node that answers https, run your own and name it with "
-    "--node, use --proxy tor, or pass --allow-plain-http to accept the risk. "
-    "The board can still be read.")
-
-
 # Where Tor listens: the daemon, then Tor Browser.
 TOR_PORTS = (9050, 9150)
+TOR_RECHECK_SECONDS = 30      # how often to look again for Tor
+TOR_BAD_SECONDS = 60          # how long to do without it after it fails us
+RELAY_ATTEMPTS = 3
 
 
 def _listening(port):
@@ -70,10 +86,9 @@ def _listening(port):
 
 
 def resolve_proxy(proxy):
-    """The proxy URL to give requests, or None for none.
+    """The proxy URL to give requests for one the user named, or None.
 
-    "tor" means Tor's local SOCKS port, whichever of the two is up. A
-    socks5 URL is made socks5h, so names are resolved by the proxy and not
+    A socks5 URL is made socks5h, so names are resolved by the proxy and not
     by this machine, which would announce every node asked for to whoever
     runs the resolver. And a socks proxy with no login of its own is given
     a random one: Tor reads a different login as a request for a circuit of
@@ -82,18 +97,37 @@ def resolve_proxy(proxy):
     """
     if not proxy:
         return None
-    if proxy.strip().lower() == "tor":
-        port = next((p for p in TOR_PORTS if _listening(p)), None)
-        if port is None:
-            raise RemoteError("--proxy tor: nothing is listening on 127.0.0.1:9050 "
-                              "or 9150. Start Tor, or Tor Browser, first.")
-        proxy = f"socks5h://127.0.0.1:{port}"
     parts = urlsplit(proxy)
     if parts.scheme == "socks5":
         parts = parts._replace(scheme="socks5h")
     if parts.scheme.startswith("socks5") and "@" not in parts.netloc:
         parts = parts._replace(netloc=f"lapse{secrets.token_hex(8)}:x@{parts.netloc}")
     return urlunsplit(parts)
+
+
+def _subnet(host):
+    """The /16 (IPv4) or /32 (IPv6) a host address falls in, or None if it is
+    a name or not an address. Two nodes in one are likely one operator."""
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return None
+    return ipaddress.ip_network(f"{ip}/{16 if ip.version == 4 else 32}", strict=False)
+
+
+class _Reply:
+    """A relayed answer, shaped like the response the callers expect."""
+
+    def __init__(self, status, body):
+        self.status_code = status
+        self._body = body
+        self.headers = {}
+        self.content = b""
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no body")
+        return self._body
 
 
 def _norm(url):
@@ -114,10 +148,9 @@ class NodeSet:
     stay consistent with each other; a failure strikes it and moves on, and
     a struck node sits out a growing cooldown before it is tried again.
 
-    Some requests name the wallet's address, and those may only go to a
-    node the address is safe with: one reached over https, or one the user
-    named themselves (a node they run, say, on this machine or their
-    network). Discovery cannot make a node one of those by listing it.
+    A request that names the wallet's address prefers a node it is safe
+    with, one reached over https or one the user named themselves, and goes
+    to any other only when none of those is up.
     """
 
     def __init__(self, seeds):
@@ -125,11 +158,11 @@ class NodeSet:
         self._tier = {}                  # url -> 0 seed, 1 discovered
         self._strikes = {}               # url -> consecutive failures
         self._until = {}                 # url -> monotonic time it may be tried again
-        self._current = {False: None, True: None}   # by whether it may see an address
+        self._current = {False: None, True: None}   # by whether it is safe for an address
         for s in seeds:
             self._tier[_norm(s)] = 0
 
-    def _may_see_address(self, url):
+    def _safe_for_address(self, url):
         return url.startswith("https://") or self._tier[url] == 0
 
     def add(self, urls):
@@ -140,8 +173,7 @@ class NodeSet:
                     self._tier[u] = 1
 
     def pick(self, for_address=False):
-        """The node to ask next, or None if there is none to ask. With
-        for_address, only one the wallet's address may be sent to."""
+        """The node to ask next, or None if there is none to ask."""
         with self._lock:
             now = time.monotonic()
             healthy = lambda u: u and self._until.get(u, 0) <= now
@@ -149,19 +181,15 @@ class NodeSet:
             for slot in ((True,) if for_address else (True, False)):
                 if healthy(self._current[slot]):
                     return self._current[slot]
-            ready = [u for u in self._tier if self._until.get(u, 0) <= now
-                     and (not for_address or self._may_see_address(u))]
+            ready = [u for u in self._tier if self._until.get(u, 0) <= now]
             if not ready:
                 return None
-            rank = lambda u: (self._tier[u], 0 if u.startswith("https://") else 1)
+            rank = lambda u: ((0 if self._safe_for_address(u) else 1) if for_address else 0,
+                              self._tier[u], 0 if u.startswith("https://") else 1)
             best = min(rank(u) for u in ready)
             choice = random.choice([u for u in ready if rank(u) == best])
-            self._current[self._may_see_address(choice)] = choice
+            self._current[self._safe_for_address(choice)] = choice
             return choice
-
-    def has_node_for_address(self):
-        with self._lock:
-            return any(self._may_see_address(u) for u in self._tier)
 
     def ok(self, url):
         with self._lock:
@@ -190,25 +218,31 @@ class NodeSet:
 class RemoteReader:
 
     def __init__(self, seeds=None, *, proxy=None, refresh=15, timeout=(5, 20),
-                 cache_file=None, session=None, allow_plain_http=False):
+                 cache_file=None, session=None):
+        """proxy: None for none, "auto" to use Tor when it is running (and
+        stop when it is not), or the URL of a proxy to use always."""
         self.nodes = NodeSet(seeds or DEFAULT_SEEDS)
-        # Whether the wallet's address may go to a node over plain http. It
-        # may through a proxy, where what the node learns is not an IP, or
-        # when the user says so.
-        self.allow_plain_http = allow_plain_http
         self.refresh = refresh
         self.timeout = timeout
         self.cache_file = cache_file
         self._http = session or requests.Session()
         self._http.headers["User-Agent"] = f"lapsecoin-dumb/{LOCAL_VERSION}"
-        self.proxy = resolve_proxy(proxy)
-        if self.proxy:
-            self._http.proxies = {"http": self.proxy, "https": self.proxy}
+        self._auto_tor = proxy == "auto"
+        self.proxy = None if self._auto_tor else resolve_proxy(proxy)
+        # One login for the session: Tor gives the client a circuit of its own.
+        self._tor_login = f"lapse{secrets.token_hex(8)}:x"
+        self._tor_url, self._tor_checked, self._tor_bad_until = None, 0.0, 0.0
         self._lock = threading.Lock()
         self._cache = {}                 # key -> (fetched_at, value)
         self._board = {}                 # chunks -> {"etag", "data", "at"}
         self._discovered_at = 0.0
         self._last_failure = None        # why the last node could not be used
+        self._last_base = None           # the node that answered last
+        # Nodes that take sealed requests (oblivious.py): relays are reached
+        # at a URL, targets are named to a relay as ip:port, each with its key.
+        self._relays, self._targets, self._pair = {}, {}, None
+        self._bad = {}                   # relay url or target addr -> usable again at
+        self._wallet_route = None        # how the last address-bearing request went
         self.bytes_in = 0
         self.requests = 0
         self._load_known_nodes()
@@ -260,9 +294,30 @@ class RemoteReader:
                     plain.append(url)
         return https + plain
 
+    def _learn_keys(self, keys, self_key):
+        """Take note of the nodes that advertise a key for sealed requests.
+        What a node says about its peers is a claim: a wrong key only makes
+        a request to that peer fail, and it is then dropped."""
+        if isinstance(keys, dict):
+            for addr, key in keys.items():
+                url = self._plain_url(addr) if isinstance(addr, str) else None
+                try:
+                    oblivious.parse_key(key)
+                except ValueError:
+                    continue
+                if url:
+                    self._relays[url] = key
+                    self._targets[addr] = key
+        try:
+            if self._last_base and oblivious.parse_key(self_key):
+                self._relays[self._last_base] = self_key
+        except ValueError:
+            pass
+
     def _discover(self):
         """Learn more nodes from the one in use, at most every few hours:
-        those that answer HTTP and the https addresses they advertise."""
+        those that answer HTTP, the https addresses they advertise, and which
+        of them take sealed requests."""
         if time.time() - self._discovered_at < DISCOVER_INTERVAL:
             return
         self._discovered_at = time.time()
@@ -271,6 +326,7 @@ class RemoteReader:
             data = resp.json()
             self.nodes.add(self._acceptable(
                 list(data.get("https", [])) + list(data.get("nodes", []))))
+            self._learn_keys(data.get("keys"), data.get("self_key"))
         except (RemoteError, ValueError, AttributeError, TypeError):
             return
         if self.cache_file:
@@ -280,32 +336,61 @@ class RemoteReader:
             except OSError:
                 pass
 
+    # Tor
+
+    def _tor_proxy(self):
+        """The Tor proxy URL if Tor is running here and has not just failed
+        us, else None. Looked for again every little while, so starting Tor
+        takes effect, and stopping it stops being used, with no setting."""
+        now = time.monotonic()
+        if now >= self._tor_checked:
+            port = next((p for p in TOR_PORTS if _listening(p)), None)
+            self._tor_url = f"socks5h://{self._tor_login}@127.0.0.1:{port}" if port else None
+            self._tor_checked = now + TOR_RECHECK_SECONDS
+        return None if now < self._tor_bad_until else self._tor_url
+
+    def _active_proxy(self):
+        return self._tor_proxy() if self._auto_tor else self.proxy
+
     # Transport
+
+    def _send(self, method, base, path, params, body, headers):
+        """One request to one node, through whatever proxy is in force. If
+        Tor was found automatically and fails, it is dropped for a while and
+        the request goes without it: Tor is a preference, never a condition."""
+        proxy = self._active_proxy()
+        self._http.proxies = {"http": proxy, "https": proxy} if proxy else {}
+        try:
+            return self._http.request(method, base + path, params=params, json=body,
+                                      headers=headers, timeout=self.timeout)
+        except requests.exceptions.ProxyError:
+            if not (self._auto_tor and proxy):
+                raise
+            self._tor_bad_until = time.monotonic() + TOR_BAD_SECONDS
+            self._http.proxies = {}
+            return self._http.request(method, base + path, params=params, json=body,
+                                      headers=headers, timeout=self.timeout)
 
     def _request(self, method, path, *, params=None, body=None, headers=None,
                  discover=True, names_wallet=False):
-        """names_wallet: the request carries the wallet's address. Unless a
-        proxy hides who is asking, or plain http was allowed, it goes only
-        to a node the address is safe with (see NodeSet), and failing that
-        it is not sent at all."""
+        """names_wallet: the request carries the wallet's address, so it
+        takes the most private route there is (see the module docstring)."""
         if discover:
             self._discover()
-        careful = names_wallet and not (self.proxy or self.allow_plain_http)
-        if careful and not self.nodes.has_node_for_address():
-            raise RemoteError(NO_ENCRYPTED_NODE)
+        if names_wallet and not self._active_proxy():
+            reply = self._via_relay(method, path, params, body)
+            if reply is not None:
+                self._wallet_route = "relay"
+                return reply
         # Nodes that failed a moment ago sit out a cooldown, so there may be
         # none to ask by now: the reason they failed is still the answer.
         last = self._last_failure or "no node to ask"
         for _ in range(len(self.nodes.all()) + 1):
-            base = self.nodes.pick(for_address=careful)
+            base = self.nodes.pick(for_address=names_wallet)
             if base is None:
-                if careful:
-                    last = "none of the encrypted nodes answered"
                 break
             try:
-                resp = self._http.request(method, base + path, params=params,
-                                          json=body, headers=headers,
-                                          timeout=self.timeout)
+                resp = self._send(method, base, path, params, body, headers)
             except requests.RequestException as e:
                 last = self._last_failure = f"{base}: {e.__class__.__name__}"
                 self.nodes.strike(base)
@@ -319,8 +404,73 @@ class RemoteReader:
                 self.nodes.strike(base)
                 continue
             self.nodes.ok(base)
+            self._last_base = base
+            if names_wallet:
+                self._wallet_route = "direct"
             return resp
-        raise RemoteError(f"No {'encrypted ' if careful else ''}node could be reached ({last}).")
+        raise RemoteError(f"No node could be reached ({last}).")
+
+    # Relay
+
+    def _usable(self, who, now):
+        return self._bad.get(who, 0) <= now
+
+    def _choose_pair(self):
+        """(relay, target) to send through: two different nodes, from
+        different networks where there is a choice, as likely to be different
+        operators as can be told. Kept for as long as it works, so a session
+        does not hand its requests to more nodes than it needs to."""
+        now = time.monotonic()
+        with self._lock:
+            if self._pair and all(self._usable(w, now) for w in (self._pair[0][0], self._pair[1][0])):
+                return self._pair
+            relays = [(u, k) for u, k in self._relays.items() if self._usable(u, now)]
+            targets = [(a, k) for a, k in self._targets.items() if self._usable(a, now)]
+            # A node is not its own relay.
+            pairs = [(r, t) for r in relays for t in targets if r[0] != self._plain_url(t[0])]
+
+            def apart(pair):
+                relay_net = _subnet(urlsplit(pair[0][0]).hostname or "")
+                return relay_net is None or relay_net != _subnet(pair[1][0].rsplit(":", 1)[0])
+            apart = [p for p in pairs if apart(p)]
+            choice = apart or pairs
+            self._pair = random.choice(choice) if choice else None
+            return self._pair
+
+    def _via_relay(self, method, path, params, body):
+        """The answer to a request sent sealed to one node through another,
+        or None if there is no pair to send through or none worked. A failed
+        pair is set aside for a while and the next tried."""
+        full = path + ("?" + urlencode(params) if params else "")
+        for _ in range(RELAY_ATTEMPTS):
+            pair = self._choose_pair()
+            if pair is None:
+                return None
+            (relay_url, _), (target, target_key) = pair
+            try:
+                blob, one_time = oblivious.seal_request(target_key, method, full, body)
+            except ValueError:               # too large to send sealed
+                return None
+            try:
+                resp = self._send("POST", relay_url, "/api/relay", None,
+                                  {"to": target, "blob": base64.b64encode(blob).decode()}, None)
+                self.requests += 1
+                self.bytes_in += len(resp.content)
+                if resp.status_code != 200 or not resp.content:
+                    raise ValueError("the relay did not pass it on")
+                status, answer = oblivious.open_response(one_time, resp.content)
+            except (requests.RequestException, ValueError):
+                # Either end may be at fault and the client cannot tell
+                # which, so neither is used again for a while.
+                with self._lock:
+                    now = time.monotonic()
+                    self._bad[relay_url] = self._bad[target] = now + COOLDOWN_SECONDS
+                    self._pair = None
+                continue
+            if status == 429:
+                raise RemoteError("The node is rate limiting this client; wait a moment.")
+            return _Reply(status, answer)
+        return None
 
     def _get_json(self, path, params=None, names_wallet=False):
         resp = self._request("GET", path, params=params, names_wallet=names_wallet)
@@ -378,9 +528,10 @@ class RemoteReader:
             data = resp.json()
         except ValueError:
             return False, f"The node answered {resp.status_code}."
-        if data.get("ok"):
+        if isinstance(data, dict) and data.get("ok"):
             return True, data.get("tx_hash", "")
-        return False, data.get("error") or f"The node answered {resp.status_code}."
+        error = data.get("error") if isinstance(data, dict) else None
+        return False, error or f"The node answered {resp.status_code}."
 
     def address_page(self, addr, page):
         return self._cached(("addr", addr, page), lambda: self._get_json(
@@ -437,11 +588,16 @@ class RemoteReader:
     # For display
 
     def usage(self):
-        """What this session has cost so far, and how it is reaching the
-        node, for the page to show."""
+        """What this session has cost so far, and how the wallet's address is
+        being reached for, so the page can say so."""
         node = self.nodes.current()
-        if self.proxy:
-            route = "via proxy"
+        proxy = self._active_proxy()
+        if proxy:
+            tor = (urlsplit(proxy).hostname in ("127.0.0.1", "localhost")
+                   and urlsplit(proxy).port in TOR_PORTS)
+            route = "via Tor" if tor else "via proxy"
+        elif self._wallet_route == "relay":
+            route = "via relay"
         elif node is None:
             route = "direct"
         elif node.startswith("https://"):
