@@ -38,30 +38,23 @@ export LAPSECOIN_PASSPHRASE="your passphrase"
 
 ## Light client (lapsecoin-dumb)
 
-A wallet and the board with no chain of its own, for a small data allowance, a small disk, or a machine that cannot keep a node running. It holds your key and signs on your machine, and asks another node's public API for everything else. A session of looking at the board, sending, and posting costs a few kilobytes. It has the full node's Board, Balance and Send pages, including editing and deleting your own posts.
+A wallet and the board with no chain of its own, for a small data allowance, a small disk, or a machine that cannot keep a node running. It holds your key and signs on your machine, and asks a node's public API for everything else. A session of looking at the board, sending, and posting costs a few kilobytes. It has the full node's Board, Balance and Send pages, including editing and deleting your own posts.
 
 ```
 ./lapsecoin-dumb          # or lapsecoin-dumb.exe on Windows
 ```
 
-It asks for the key's passphrase, then opens the wallet at `http://127.0.0.1:8335/`. A key from the full node works as is, so one key can be used in both. Options:
-
-- `--allow-plain-http` lets your wallet address go to nodes over plain http as well. By default it goes only to nodes reached over https and to ones you name with `--node`; reading the board may use any node.
-- `--proxy tor` sends every request through Tor (the daemon or Tor Browser must be running), or give any proxy URL, for example `socks5h://127.0.0.1:9050`. It refuses to start if Tor is not there, rather than quietly connecting directly.
-- `--node URL` picks the node to ask (repeatable). Point it at a node you run yourself and no one else learns anything. Otherwise it finds more by itself, preferring nodes that answer HTTP, and moves to another if one fails.
-- `--refresh SECONDS` sets how long an answer is reused before the node is asked again. A higher number uses less data.
+It asks for the key's passphrase, then opens the wallet at `http://127.0.0.1:8335/`. A key from the full node works as is. There is nothing to configure. Options, none needed: `--node URL` to ask a node you run (repeatable), `--refresh SECONDS` to reuse answers for longer and use less data, `--proxy auto|none|URL` (default `auto`, below).
 
 ### What the node you ask can learn
 
-The node is trusted for what the chain says: it can show a wrong balance or hide a transaction, but it can never spend your coins, because signing happens only on your machine. It can also see who is asking.
+The node is trusted for what the chain says: it can show a wrong balance or hide a transaction, but it can never spend your coins, because signing happens only on your machine. Reading the board names nobody. Looking up a balance, or sending, posting, voting, editing or deleting, names your wallet address, and a node answering also sees the IP that asked. So those go by the most private route there is, and the page header says which:
 
-| You do | The node sees |
-| --- | --- |
-| Open the app, read the board | Your IP, and nothing about which address is yours |
-| Open Balance or Send | Your IP together with your address, because the question is about it |
-| Post, vote, edit, delete, send | Your IP together with your address, because the transaction carries it |
+1. **Tor**, if it is running on your machine (the daemon or Tor Browser). It is used when found and dropped when not, with nothing to set up. The node never sees your IP.
+2. **A relay**, when two nodes support it. Your request is sealed to one node and handed over by another: the one that sees your IP gets only sealed bytes, and the one that reads the request sees only the relay. A transaction is then in the same position as one a node submits for itself, whose origin the network's Dandelion relay already hides. It costs about a kilobyte more per request. It protects you unless the two nodes are the same operator or compare notes.
+3. **Directly** to the node, the last resort, when neither is available. That node then sees your IP and your address together. A node you run yourself (`--node`) is the way to make that your own business.
 
-So the link between your IP and your address exists whenever you use Balance or Send, on the node you asked. It cannot be removed by the client alone, only moved: `--proxy tor` hides your IP from the node, and `--node` with a node you run means the one who sees it is you. Most nodes found by discovery speak plain HTTP, which would also let anyone on the network path read your address. So your address is not sent to those. It goes only to nodes reached over https, and to ones you name with `--node`; if none is reachable the app says so and still shows the board. A node becomes one of those when its operator puts HTTPS in front of it (below). The page header says how the node you are using is being reached.
+Nothing is ever refused for lack of a private route. `--proxy none` never uses a proxy, and a proxy URL always uses that one.
 
 ### How the board works without a chain
 
@@ -83,7 +76,9 @@ mynode.example.org {
 lapsecoin --public-url https://mynode.example.org     # or LAPSECOIN_PUBLIC_URL
 ```
 
-The node then advertises that address (`/api/info`), its peers pass it on to light clients, and light clients can send their wallet address to it. The proxy should add the client's address to `X-Forwarded-For` (Caddy does); the node believes that header only from the machine it runs on, so clients keep separate rate limits and no one else can choose theirs. The node's port stays open for peers as before. Only a domain name is accepted, never an IP address.
+The node then advertises that address (`/api/info`), its peers pass it on to light clients, and light clients prefer it when they send their wallet address directly. The proxy should add the client's address to `X-Forwarded-For` (Caddy does); the node believes that header only from the machine it runs on, so clients keep separate rate limits and no one else can choose theirs. The node's port stays open for peers as before. Only a domain name is accepted, never an IP address.
+
+A node also passes light clients' sealed requests on to its peers, and opens ones sealed to it, which is what lets a client keep its address from the node that sees its IP (above). It never sees what is inside a request it passes on, only forwards to peers it already knows, and rate-limits callers. `--no-relay` turns it off.
 
 </details>
 

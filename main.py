@@ -29,6 +29,7 @@ from gossip import Gossip
 from node import Node
 from params import DB_PATH, PEERS_PER_MESSAGE_LIMIT
 from peer_udp import LAN_DISCOVERY_PORT, PORT_BIND_RETRIES, UDPTransport, probe_lan_ports
+from oblivious import ObliviousService
 from peerpool import PeerPool
 from public_url import parse_public_url
 from swap_worker import SwapWorker
@@ -321,6 +322,12 @@ def main():
              "domain in front of its web port. It is advertised so light "
              "clients can send their wallet address over an encrypted "
              "connection instead of plain http. Default: $LAPSECOIN_PUBLIC_URL.",
+    )
+    parser.add_argument(
+        "--no-relay", action="store_true",
+        help="Do not pass light clients' sealed requests on to other nodes, or "
+             "answer ones sealed to this node. On by default: it is how a light "
+             "client keeps its wallet address from the node that sees its IP.",
     )
     parser.add_argument(
         "--releases-url", default=DEFAULT_RELEASES_URL,
@@ -664,16 +671,19 @@ def main():
         # ------------------------------------------------------------------
         # HTTP servers: browser UI only, no peer routes
         # ------------------------------------------------------------------
+        oblivious = None if args.no_relay else ObliviousService(node.storage)
         app = create_app(node, pool, private_port=private_port,
                          public_port=port, update_checker=update_checker,
-                         updater=updater, public_url=public_url)
+                         updater=updater, public_url=public_url,
+                         oblivious=oblivious)
         _serve(app, args.host, port)
         log.info("[startup] public API on http://%s:%d", args.host, port)
 
         private_app = create_private_app(node, pool, private_port=private_port,
                                          public_port=port,
                                          update_checker=update_checker,
-                                         updater=updater, public_url=public_url)
+                                         updater=updater, public_url=public_url,
+                                         oblivious=oblivious)
         _serve(private_app, "127.0.0.1", private_port)
         log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
         log.info("[startup] genesis=%s", genesis["hash"][:12])

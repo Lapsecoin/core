@@ -64,34 +64,46 @@ class TestProbeLearnsIt:
 
     def test_a_peers_https_address_is_read_from_the_probe_it_already_makes(self):
         with self._answer(b'{"iid": "x", "public_url": "https://peer.example.org"}'):
-            assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, "https://peer.example.org")
+            assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, "https://peer.example.org", None)
 
     def test_an_unacceptable_one_is_dropped_but_the_peer_still_answers(self):
         for bad in ("http://peer.example.org", "https://10.0.0.1", "https://localhost", 7, None):
             body = ('{"public_url": %s}' % ("null" if bad is None else
                                             f'"{bad}"' if isinstance(bad, str) else bad)).encode()
             with self._answer(body):
-                assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None), bad
+                assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None, None), bad
+
+    def test_a_peers_relay_key_is_read_too(self):
+        from oblivious import ObliviousService
+        from tests.test_api import _MemoryMeta
+        key = ObliviousService(_MemoryMeta()).public_b64
+        with self._answer(('{"oblivious_key": "%s"}' % key).encode()):
+            assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None, key)
+
+    def test_a_bad_key_is_dropped_but_the_peer_still_answers(self):
+        for bad in ('"nope"', '"AAAA"', "7", "null", '["x"]', '""'):
+            with self._answer(('{"oblivious_key": %s}' % bad).encode()):
+                assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None, None), bad
 
     def test_a_peer_with_none_still_answers(self):
         with self._answer(b'{"height": 5}'):
-            assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None)
+            assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None, None)
 
     def test_a_reply_that_is_not_json_still_counts_as_answering(self):
         with self._answer(b"<html>"):
-            assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None)
+            assert http_probe._probe_one("1.2.3.4:8333", 1) == (True, None, None)
 
     def test_our_own_instance_is_still_recognised(self):
         with self._answer(b'{"iid": "me", "public_url": "https://me.example.org"}'):
-            assert http_probe._probe_one("1.2.3.4:8333", 1, own_iid="me") == (None, None)
+            assert http_probe._probe_one("1.2.3.4:8333", 1, own_iid="me") == (None, None, None)
 
     def test_an_error_is_not_reachable(self):
         with mock.patch("urllib.request.urlopen", side_effect=OSError("down")):
-            assert http_probe._probe_one("1.2.3.4:8333", 1) == (False, None)
+            assert http_probe._probe_one("1.2.3.4:8333", 1) == (False, None, None)
 
     def test_a_bad_status_is_not_reachable(self):
         with self._answer(b"{}", status=503):
-            assert http_probe._probe_one("1.2.3.4:8333", 1) == (False, None)
+            assert http_probe._probe_one("1.2.3.4:8333", 1) == (False, None, None)
 
 
 class TestPoolHoldsIt:
@@ -119,6 +131,32 @@ class TestPoolHoldsIt:
         pool.set_public_url("8.8.8.8:8333", "https://a.example.org")
         pool.remove("8.8.8.8:8333")
         assert pool.public_urls() == {}
+
+
+class TestPoolHoldsRelayKeys:
+    KEY = "A" * 43 + "="
+
+    def test_recorded_and_listed(self):
+        pool = peerpool_mod.PeerPool()
+        pool.add("8.8.8.8:8333")
+        pool.set_oblivious_key("8.8.8.8:8333", self.KEY)
+        assert pool.oblivious_keys() == {"8.8.8.8:8333": self.KEY}
+
+    def test_cleared_with_none(self):
+        pool = peerpool_mod.PeerPool()
+        pool.add("8.8.8.8:8333")
+        pool.set_oblivious_key("8.8.8.8:8333", self.KEY)
+        pool.set_oblivious_key("8.8.8.8:8333", None)
+        assert pool.oblivious_keys() == {}
+
+    def test_ignored_for_a_peer_not_held_and_forgotten_with_it(self):
+        pool = peerpool_mod.PeerPool()
+        pool.set_oblivious_key("8.8.8.8:8333", self.KEY)
+        assert pool.oblivious_keys() == {}
+        pool.add("8.8.8.8:8333")
+        pool.set_oblivious_key("8.8.8.8:8333", self.KEY)
+        pool.remove("8.8.8.8:8333")
+        assert pool.oblivious_keys() == {}
 
 
 class TestNodeAdvertisesIt:
@@ -209,6 +247,11 @@ class TestBehindAReverseProxy:
 
 
 class TestFlag:
+    def test_a_node_can_decline_to_relay(self):
+        out = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "..", "main.py"),
+                              "--help"], capture_output=True, text=True, timeout=120)
+        assert "--no-relay" in out.stdout
+
     def _run(self, *args):
         main = os.path.join(os.path.dirname(__file__), "..", "main.py")
         return subprocess.run([sys.executable, main, "--no-gui", *args], capture_output=True,

@@ -271,6 +271,21 @@ class PeerPool:
                 return
             self._info.setdefault(addr, {})["public_url"] = url
 
+    def set_oblivious_key(self, addr, key):
+        """Record the public key addr advertises for oblivious requests (see
+        oblivious.py), or None. A claim, like the https address: a wrong key
+        only means a client's request to that node cannot be opened."""
+        with self._lock:
+            if addr not in self._peers:
+                return
+            self._info.setdefault(addr, {})["oblivious_key"] = key
+
+    def oblivious_keys(self):
+        """{addr: base64 public key} for every tracked peer that advertises one."""
+        with self._lock:
+            return {a: i["oblivious_key"] for a, i in self._info.items()
+                    if i.get("oblivious_key") and a in self._peers}
+
     def public_urls(self):
         """{addr: https url} for every tracked peer that has advertised one."""
         with self._lock:
