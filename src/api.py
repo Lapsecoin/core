@@ -111,46 +111,40 @@ Exchange / third-party integration:
 """
 
 import collections
-import hashlib
 import logging
-import math
 import os
 import re
 import secrets
 import socket
 import sys
 import threading
-from urllib.parse import urlencode
 
 import markdown
-from flask import Flask, jsonify, make_response, redirect, render_template, request, send_file
+from flask import jsonify, redirect, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 import block as block_mod
 import crypto as crypto_mod
-import state as state_mod
 import hardware_info
 import settings as settings_mod
 import storage as storage_mod
 import tx as tx_mod
-from params import TICKS_PER_LAPSE, SUPPLY_CAP, MIN_RELAY_FEE_RATE
+from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from version import LOCAL_VERSION
-from local_reader import (_get_address_history, _RewardSeries,  # noqa: F401
-                          _reward_series, _block_reward,
-                          _get_mined_blocks_for_addr, fee_estimate,
-                          LocalReader, HISTORY_PER_PAGE, local_reader_for)
+from local_reader import (_get_address_history, _block_reward,  # noqa: F401
+                          fee_estimate, local_reader_for)
+from ui_common import (make_flask_app, register_static_routes, _tx_amount,
+                       _pagination_window, _base_dir,  # noqa: F401
+                       fmt_duration, render_board_text)
+# The board names the tests and other modules still reach through api.
+from board_view import (BOARD_MEMO_TAG, parse_board_body, build_board_body,  # noqa: F401
+                        REPLY_REF_LEN, ICON_PALETTE, ICON_GHOST, _icon_emoji,
+                        VOTE_UP_TAG, VOTE_DOWN_TAG, _nickname_owned_by,
+                        _board_posts, _board_profiles_and_votes,
+                        BOARD_THREADS_PER_CHUNK, _flatten_threads)
 from wallet_ui import (register_address_page, register_board_pages,
                        register_data_api, register_wallet_routes)
-from ui_common import (make_flask_app, register_static_routes, _tx_amount, fmt_balance, fmt_lapse, fmt_lapse_dp, fmt_duration,  # noqa: F401
-                       _pagination_window, _base_dir, _parse_csv_outputs,
-                       _reword_insufficient_balance, render_board_text)
-from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, parse_board_body,  # noqa: F401
-                        build_board_body, REPLY_REF_LEN, ICON_PALETTE, ICON_GHOST,
-                        _icon_emoji, VOTE_UP_TAG, VOTE_DOWN_TAG, _nickname_owned_by,
-                        _board_posts, _board_profiles_and_votes,
-                        _enrich_board_row, BOARD_MAX_DEPTH, BOARD_THREADS_PER_CHUNK,
-                        _flatten_threads)
 
 log = logging.getLogger("ec.api")
 
