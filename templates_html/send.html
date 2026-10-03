@@ -35,6 +35,7 @@
   <div class="card-title">Outputs, paste CSV (address,amount) or upload file</div>
   <form method="POST" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
     <input type="hidden" name="asset" value="lapse">
     <div class="form-group">
       <label>CSV outputs (address,amount). Only lines changed to a nonzero amount get sent.
@@ -90,6 +91,7 @@
   <div class="card-title">Send XLM</div>
   <form method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
     <input type="hidden" name="asset" value="xlm">
     <div class="form-group">
       <label for="xlm-to">Destination Stellar address</label>

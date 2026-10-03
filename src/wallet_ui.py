@@ -38,6 +38,7 @@ from flask import jsonify, make_response, redirect, render_template, request
 
 import crypto as crypto_mod
 import tx as tx_mod
+from forms import ALREADY_SENT, forms_for
 from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, DELETE_TAG,
                         MAX_POST_TEXT_BYTES, REPLY_REF_LEN, VOTE_DOWN_TAG,
                         VOTE_UP_TAG, apply_splice, board_ctx, build_board_body,
@@ -291,9 +292,15 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
         # no address. The compose box's own icon comes from the board itself.
         acct = reader.account(None, fees=bool(csrf_token))
         extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
-                     message_value="", board_fee_floor=acct["board_floor"])
+                     message_value="", board_fee_floor=acct["board_floor"], form_token="")
         if csrf_token:   # private app only: composing needs a fee suggestion
+            forms = forms_for(app)
             extra["fees"] = acct["fees"]
+            # This page's compose form works once (see forms.py), and what
+            # the post that brought us here has to say, shown once.
+            extra["form_token"] = forms.tokens.issue()
+            note = forms.notes.take(request.args.get("note"))
+            extra.update({k: v for k, v in note.items() if k in ("compose_err", "message_value")})
         page = request.args.get("page", 1, type=int) or 1
         return render_template("board.html", **board_ctx(reader, page, own, extra))
 
@@ -325,50 +332,70 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
 
+    # What a send POST leaves for the page it redirects to (see forms.py).
+    send_note_keys = ("alert_ok_tx", "alert_ok_verb", "alert_err", "alert_err_lines",
+                      "outputs_value", "memo_value", "asset", "xlm_to_value",
+                      "xlm_amount_value")
+
+    def _send_post():
+        """Do what the send form asks, and answer with a redirect to the
+        page that shows how it went. Never with a page: a page that is the
+        answer to a POST sends the payment again when it is reloaded."""
+        forms = forms_for(app)
+        result = dict(alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[],
+                      outputs_value="", memo_value="", asset="lapse",
+                      xlm_to_value="", xlm_amount_value="")
+        if not _csrf_ok():
+            result["alert_err"] = "Session expired; reload the page and try again."
+            return forms.done("/send", result)
+        if not forms.tokens.consume(request.form.get("form_token")):
+            result["alert_err"] = ALREADY_SENT
+            return forms.done("/send", result)
+
+        asset = request.form.get("asset", "lapse")
+        passphrase = request.form.get("passphrase", "").strip()
+        if asset == "xlm" and xlm is not None:
+            result["asset"] = "xlm"
+            xlm.send(request.form, passphrase, result)
+        else:
+            outputs_raw = request.form.get("outputs", "").strip()
+            memo        = request.form.get("memo", "").strip()
+            csv_file    = request.files.get("csv_file")
+            if csv_file and csv_file.filename:
+                outputs_raw = csv_file.read().decode()
+            result["outputs_value"] = outputs_raw
+            result["memo_value"] = memo
+            outputs, errors = _parse_csv_outputs(outputs_raw)
+            if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
+                errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
+            if errors:
+                result["alert_err_lines"] = errors
+            elif not outputs:
+                result["alert_err"] = "No valid outputs."
+            else:
+                submit_and_alert(reader, signer, outputs, passphrase, result, memo=memo)
+                if result["alert_ok_tx"]:
+                    result["alert_ok_verb"] = "Sent."
+                    result["outputs_value"] = ""
+                    result["memo_value"] = ""
+        return forms.done("/send", {k: result[k] for k in send_note_keys if k in result})
+
     @app.route("/send", methods=["GET", "POST"], endpoint="send")
     def send():
+        if request.method == "POST":
+            return _send_post()
+        forms = forms_for(app)
         acct = reader.account(signer.addr, fees=True)
         ctx = dict(title="Send", from_addr=signer.addr,
                    balance=acct["balance"], fees=acct["fees"],
-                   csrf_token=csrf_token, outputs_value="",
-                   memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
+                   csrf_token=csrf_token, form_token=forms.tokens.issue(),
+                   outputs_value="", memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
                    asset="lapse", xlm_enabled=xlm is not None,
                    alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
         if xlm is not None:
             ctx.update(xlm.view())
-        if request.method == "POST":
-            if not _csrf_ok():
-                ctx["alert_err"] = "Session expired; reload the page and try again."
-                return render_template("send.html", **ctx)
-
-            asset = request.form.get("asset", "lapse")
-            ctx["asset"] = asset
-            passphrase = request.form.get("passphrase", "").strip()
-
-            if asset == "xlm" and xlm is not None:
-                xlm.send(request.form, passphrase, ctx)
-            else:
-                ctx["asset"] = "lapse"
-                outputs_raw = request.form.get("outputs", "").strip()
-                memo        = request.form.get("memo", "").strip()
-                csv_file    = request.files.get("csv_file")
-                if csv_file and csv_file.filename:
-                    outputs_raw = csv_file.read().decode()
-                ctx["outputs_value"] = outputs_raw
-                ctx["memo_value"] = memo
-                outputs, errors = _parse_csv_outputs(outputs_raw)
-                if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
-                    errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
-                if errors:
-                    ctx["alert_err_lines"] = errors
-                elif not outputs:
-                    ctx["alert_err"] = "No valid outputs."
-                else:
-                    submit_and_alert(reader, signer, outputs, passphrase, ctx, memo=memo)
-                    if ctx["alert_ok_tx"]:
-                        ctx["alert_ok_verb"] = "Sent."
-                        ctx["outputs_value"] = ""
-                        ctx["memo_value"] = ""
+        note = forms.notes.take(request.args.get("note"))
+        ctx.update({k: v for k, v in note.items() if k in send_note_keys})
         return render_template("send.html", **ctx)
 
     @app.route("/api/send/fee", endpoint="api_send_fee")
@@ -459,9 +486,24 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
 
     @app.route("/board", methods=["POST"], endpoint="board_post")
     def board_post():
+        forms = forms_for(app)
         page = request.args.get("page", 1, type=int) or 1
         message    = request.form.get("message", "").strip()
         passphrase = request.form.get("passphrase", "").strip()
+
+        def fail(msg, keep_text=True):
+            # Answered with a redirect, never a page (see forms.py): the
+            # text typed comes back in the compose box so it is not lost.
+            return forms.done("/board", {"compose_err": msg,
+                                         "message_value": message if keep_text else ""},
+                              **({"page": page} if page != 1 else {}))
+
+        if not _csrf_ok():
+            return fail("Session expired; reload the page and try again.")
+        if not forms.tokens.consume(request.form.get("form_token")):
+            # Not brought back into the box: it was sent already, or may
+            # have been, and putting it there invites sending it twice.
+            return fail(ALREADY_SENT, keep_text=False)
         # icon/nick only ride along when the compose form's own "profile
         # changed" checkbox says so (see board.html): otherwise this post
         # costs exactly what it would with no profile feature at all.
@@ -479,20 +521,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         # "resubmit at the new floor" case that staircase is designed for.
         acct = reader.account(signer.addr, nick=nick, fees=True)
         floor = acct["board_floor"]
-        extra = dict(csrf_token=csrf_token, fees=acct["fees"],
-                     compose_err="", compose_ok="", board_fee_floor=floor,
-                     message_value=message)
 
-        def render(chunks):
-            return render_template("board.html", **board_ctx(
-                reader, chunks, signer.addr, extra))
-
-        def fail(msg):
-            extra["compose_err"] = msg
-            return render(page)
-
-        if not _csrf_ok():
-            return fail("Session expired; reload the page and try again.")
         if not message:
             return fail("Write something to post.")
         # Refused outright, not just silently dropped at display time: a
@@ -521,13 +550,12 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         if alert_ctx.get("alert_err"):
             return fail(alert_ctx["alert_err"])
 
-        # Rendered as page 1 regardless of which page the form was on:
-        # that's the page pending posts appear on (see board_ctx), and
-        # the one this post itself now shows up in, at the bottom, right
-        # above the compose box, so posting is its own confirmation. No
-        # separate "waiting to be mined" banner needed, the row is one.
-        extra["message_value"] = ""
-        return render(1)
+        # Back to page 1 regardless of which page the form was on: that's
+        # the page pending posts appear on (see board_ctx), and the one
+        # this post itself now shows up in, at the bottom, right above the
+        # compose box, so posting is its own confirmation. No separate
+        # "waiting to be mined" banner needed, the row is one.
+        return forms.done("/board")
 
     def _quote(memo):
         """What sending `memo` as a plain 1-tick burn would cost right now:

@@ -32,6 +32,7 @@ from node import NodeView
 from params import TICKS_PER_LAPSE
 from remote_reader import NodeSet, RemoteError, RemoteReader
 from tests.fixtures import address
+from tests.browser import submit
 from tests.test_api import _MemoryMeta
 import mempool as mempool_mod
 from wallet import Wallet
@@ -276,9 +277,7 @@ class TestLightSpends:
 
     def _post(self, world, **form):
         client = create_light_app(world.reader, world.wallet).test_client()
-        token = _csrf(client, "/board")
-        return client, client.post("/board", data={"csrf_token": token,
-                                                   "passphrase": PASS, **form})
+        return client, submit(client, "/board", passphrase=PASS, **form)
 
     def test_a_board_post_reaches_the_node(self, world):
         client, resp = self._post(world, message="hello from light")
@@ -304,9 +303,7 @@ class TestLightSpends:
 
     def test_a_send_is_accepted(self, world):
         client = create_light_app(world.reader, world.wallet).test_client()
-        token = _csrf(client, "/send")
-        resp = client.post("/send", data={"csrf_token": token, "passphrase": PASS,
-                                          "outputs": f"{address(3)},1000"})
+        resp = submit(client, "/send", passphrase=PASS, outputs=f"{address(3)},1000")
         assert "Sent." in resp.get_data(as_text=True)
         assert [t["outputs"][0]["amount"] for t in world.node.mempool.all_txs()] == [1000]
 
@@ -315,18 +312,14 @@ class TestLightSpends:
         first: a stale one is rejected by the node."""
         world.reader.refresh = 3600           # would hold the first answer forever
         client = create_light_app(world.reader, world.wallet).test_client()
-        token = _csrf(client, "/send")
         for _ in range(2):
-            resp = client.post("/send", data={"csrf_token": token, "passphrase": PASS,
-                                              "outputs": f"{address(3)},1000"})
+            resp = submit(client, "/send", passphrase=PASS, outputs=f"{address(3)},1000")
             assert "Sent." in resp.get_data(as_text=True)
         assert sorted(t["nonce"] for t in world.node.mempool.all_txs()) == [1, 2]
 
     def test_a_wrong_passphrase_signs_nothing(self, world):
         client = create_light_app(world.reader, world.wallet).test_client()
-        token = _csrf(client, "/send")
-        resp = client.post("/send", data={"csrf_token": token, "passphrase": "wrong",
-                                          "outputs": f"{address(3)},1000"})
+        resp = submit(client, "/send", passphrase="wrong", outputs=f"{address(3)},1000")
         assert "Error" in resp.get_data(as_text=True)
         assert world.node.mempool.all_txs() == []
 
@@ -549,9 +542,8 @@ class TestWhatTheNodeLearns:
 
     def test_posting_does_name_it_because_the_transaction_carries_it(self, world):
         client = create_light_app(world.reader, world.wallet).test_client()
-        token = _csrf(client, "/board")
         world.session.log.clear()
-        client.post("/board", data={"csrf_token": token, "passphrase": PASS, "message": "hi"})
+        submit(client, "/board", passphrase=PASS, message="hi")
         assert world.wallet.addr in self._everything_sent(world)
 
 
@@ -687,7 +679,6 @@ class TestNothingIsRefused:
         session = _OnlyAnswers(world.app.test_client(), up={"9.9.9.9:8333"})
         r = self._reader(world, session, plain=[self.PLAIN])
         client = create_light_app(r, world.wallet).test_client()
-        token = _csrf(client, "/board")
         for path in ("/board", "/api/board/fragment?page=1", "/api/fees", "/address", "/send"):
             assert client.get(path).status_code == 200, path
         before = len(world.node.mempool.all_txs())
@@ -695,7 +686,8 @@ class TestNothingIsRefused:
                            ("/send", {"outputs": f"{address(3)},1000"}),
                            ("/board/vote", {"ref": "abcdef", "dir": "+"}),
                            ("/board/delete", {"ref": "abcdef"})):
-            client.post(path, data={"csrf_token": token, "passphrase": PASS, **form})
+            submit(client, path, page="/board" if path.startswith("/board") else path,
+                   passphrase=PASS, **form)
             assert len(world.node.mempool.all_txs()) == before + 1, path
             before += 1
 
