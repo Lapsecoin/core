@@ -109,7 +109,13 @@ import storage as storage_mod
 import tx as tx_mod
 from params import TICKS_PER_LAPSE, SUPPLY_CAP, MIN_RELAY_FEE_RATE
 from version import LOCAL_VERSION
-from ui_common import (fmt_balance, fmt_lapse, fmt_lapse_dp, fmt_duration,  # noqa: F401
+from local_reader import (_get_address_history, _RewardSeries,  # noqa: F401
+                          _reward_series, _block_reward,
+                          _get_mined_blocks_for_addr, fee_estimate,
+                          LocalReader, HISTORY_PER_PAGE, local_reader_for)
+from wallet_ui import (address_ctx, register_board_pages, register_data_api,
+                       register_wallet_routes)
+from ui_common import (_tx_amount, fmt_balance, fmt_lapse, fmt_lapse_dp, fmt_duration,  # noqa: F401
                        _pagination_window, _base_dir, _parse_csv_outputs,
                        _reword_insufficient_balance, render_board_text)
 from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, parse_board_body,  # noqa: F401
@@ -124,7 +130,6 @@ log = logging.getLogger("ec.api")
 # Nodes keep full history, so both the block list and an address's
 # transaction history are paginated rather than truncated to "recent N".
 BLOCKS_PER_PAGE  = 8
-HISTORY_PER_PAGE = 3
 DASHBOARD_TXS_PER_PAGE = 5
 BOARD_PER_PAGE = 20
 
@@ -209,9 +214,6 @@ def bucket_label(i):
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _tx_amount(t):
-    """Total transfer amount for display."""
-    return sum(o["amount"] for o in t.get("outputs", []))
 
 
 
@@ -260,145 +262,18 @@ def _committed_tx_count(chain):
     return sum(len(blk.get("transactions", ())) for blk in chain)
 
 
-def _get_address_history(addr, node):
-    """Every indexed transaction touching addr, newest first.
-
-    Rows are grouped by block and each block is hashed through once, rather
-    than re-hashing its whole transaction list per row. An address with
-    several transactions in one block used to walk that block once per row,
-    recomputing tx_hash (a full canonical serialization plus a digest) for
-    every transaction on every pass.
-    """
-    chain = node.view.chain
-    wanted = {}
-    for height, tx_h in node.storage.get_tx_heights_for_addr(addr):
-        if 0 <= height < len(chain):
-            wanted.setdefault(height, []).append(tx_h)
-
-    history = []
-    for height, hashes in wanted.items():
-        by_hash = {tx_mod.tx_hash(t): t for t in chain[height]["transactions"]}
-        for tx_h in hashes:
-            t = by_hash.get(tx_h)
-            if t is not None:
-                direction = "sent" if t.get("from") == addr else "received"
-                history.append((height, tx_h, direction, t))
-    history.sort(key=lambda row: row[0], reverse=True)
-    return history
-
-
-class _RewardSeries:
-    """The mint reward at each height, replayed from genesis once and
-    extended as the chain grows.
-
-    Two callers needed this and each replayed the whole emission curve from
-    genesis itself, one of them per page view: 45ms at height 100k on a
-    public, unauthenticated page, growing with the chain forever. The
-    series only ever gets longer at the end, so it is computed once and
-    appended to.
-
-    Read from Flask threads, which are many, and extended by whichever gets
-    there first, so extension holds a lock. The list is only ever appended
-    to under it, never rewritten, so a reader holding an index already
-    within range does not need one.
-    """
-
-    def __init__(self):
-        self._rewards = []       # reward minted by the block at each height
-        self._total_minted = 0   # running total after the last entry
-        self._lock = threading.Lock()
-
-    def _extend_to(self, height):
-        with self._lock:
-            while len(self._rewards) <= height:
-                reward = state_mod.compute_reward(self._total_minted)
-                self._rewards.append(reward)
-                if reward >= 1:
-                    self._total_minted += reward
-
-    def reward_at(self, height):
-        if height < 0:
-            return 0
-        if height >= len(self._rewards):
-            self._extend_to(height)
-        return self._rewards[height]
-
-    def prefix(self, count):
-        """Rewards for heights [0, count), for a single walk of the chain."""
-        if count <= 0:
-            return []
-        self.reward_at(count - 1)
-        return self._rewards[:count]
-
-
-_reward_series = _RewardSeries()
-
-
-def _block_reward(chain, height):
-    """Mint reward for the block at `height`. 0 for genesis (no builder,
-    nothing minted)."""
-    return _reward_series.reward_at(height)
-
-
-def _get_mined_blocks_for_addr(addr, node):
-    """Blocks built by addr, with the reward + fees paid to the builder.
-
-    Mining rewards never go through the mempool/AddrIndex (they're credited
-    directly in chainstate._apply_builder_reward), so they can't be pulled
-    from the same tx index as ordinary transfers. The chain is kept fully
-    in memory though, so we can just walk it once, reading each height's
-    reward off the shared series rather than re-deriving the emission curve
-    on every lookup.
-    """
-    chain   = node.view.chain
-    rewards = _reward_series.prefix(len(chain))
-    return [(height, blk["hash"], rewards[height] + block_mod.block_fees(blk))
-            for height, blk in enumerate(chain)
-            if blk.get("builder") == addr]
 
 
 
 
-def fee_estimate(node):
-    """Current mempool fee-per-byte picture for the send UI.
 
-    Reuses block.assemble() itself (rather than reimplementing its
-    fee-per-byte packing logic) to find the "next block" clearing rate, so
-    this can never quietly drift out of sync with what actually gets a
-    transaction included.
 
-    Returns {"pending": int, "min": float, "median": float, "max": float,
-    "next_block": float}. next_block never reads below params.MIN_RELAY_FEE_RATE:
-    that floor is enforced by the mempool regardless of congestion (see
-    mempool.Mempool.add), so an uncongested network never actually suggests 0,
-    the same reason no real network's fees are literally 0 when idle.
-    """
-    pending = node.mempool.all_txs()
-    if not pending:
-        return {"pending": 0, "min": 0, "median": 0, "max": 0,
-                "next_block": MIN_RELAY_FEE_RATE}
 
-    rates = sorted(tx_mod.fee_rate(t) for t in pending)
-    n = len(rates)
-    median = rates[n // 2] if n % 2 else (rates[n // 2 - 1] + rates[n // 2]) / 2
 
-    v = node.view
-    iterations = block_mod.get_vdf_iterations(v.chain)
-    board_floor = tx_mod.board_fee_floor(v.state.total_board_posts)
-    candidate = block_mod.assemble(v.tip, pending, v.tip.get("builder") or "",
-                                   iterations, board_fee_floor=board_floor)
-    included = candidate["transactions"]
-    # Full block: the going rate is the lowest fee-per-byte that still made
-    # it in, whatever that is, congestion sets its own price. Otherwise
-    # everything pending fits, so the relay floor is what's actually
-    # required to clear the next block, not 0.
-    if len(included) < n:
-        next_block = min(tx_mod.fee_rate(t) for t in included)
-    else:
-        next_block = MIN_RELAY_FEE_RATE
 
-    return {"pending": n, "min": rates[0], "median": median, "max": rates[-1],
-            "next_block": next_block}
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -601,62 +476,14 @@ def _peers_for_download(known_addrs, self_addr):
     return list(known_addrs)
 
 
-def _default_send_outputs(node):
-    """What the send form starts with: nothing.
-
-    This used to prefill a row per node seen announcing itself active, so
-    an operator could pay them. Those announcements are gone (they
-    published a payable address network-wide, which is the link a trading
-    identity must not have), and with them the only source of addresses
-    this could honestly suggest. A blank field is the truthful default:
-    the node does not know who you want to pay.
-    """
-    return ""
 
 
 
 
 
 
-def _auto_fee(node, outputs, memo="", floor=0):
-    """The fee this send will actually pay: whatever fee-per-byte clears
-    the next block right now (see fee_estimate), and no more. There is no
-    manual fee field for the same reason a real exchange doesn't ask you
-    to guess one: overpaying buys nothing, underpaying just delays the
-    transaction, and the node already knows the going rate live.
-
-    floor is a protocol-enforced minimum on top of that (board posts;
-    see tx.board_fee_floor), applied after the congestion-based fee so
-    it can only raise it, never lower it below what tx.validate requires.
-    """
-    nonce = max(node.view.state.get_nonce(node.addr),
-                node.mempool.pending_nonce(node.addr)) + 1
-    draft = {"from": node.addr, "pubkey": node.pk_hex, "outputs": outputs,
-             "nonce": nonce, "fee": 0}
-    if memo:
-        draft["memo"] = memo
-    size = tx_mod.tx_size(draft)
-    rate = fee_estimate(node)["next_block"]
-    return max(floor, math.ceil(rate * size))
 
 
-def _submit_and_alert(node, outputs, passphrase, ctx, memo="", floor=0):
-    if not passphrase:
-        ctx["alert_err"] = "Passphrase required."
-        return
-    try:
-        fee = _auto_fee(node, outputs, memo=memo, floor=floor)
-        t, _fee = node.build_and_sign_tx(outputs, fee=fee, passphrase=passphrase or None,
-                                          memo=memo)
-        ok, result = node.submit_tx_from_api(t)
-        if ok:
-            ctx["alert_ok_tx"]   = result
-            ctx["alert_ok_verb"] = "Submitted."
-        else:
-            ctx["alert_err"] = f"Error: {_reword_insufficient_balance(result)}"
-    except Exception as e:
-        log.warning("[api] tx build/submit failed  err=%s", e)
-        ctx["alert_err"] = f"Error: {e}"
 
 
 def _xlm_view(xlm_keyfile_path):
@@ -675,6 +502,69 @@ def _xlm_view(xlm_keyfile_path):
     except xlm_mod.XLMError:
         spendable = locked = 0
     return addr, spendable, locked
+
+
+class _NodeSigner:
+    """What the wallet routes sign through on a full node: the node itself
+    builds and signs, from its own chain state (see Node.build_and_sign_tx).
+    The light client has no node, so it signs with a bare Wallet instead
+    (wallet_ui.WalletSigner)."""
+
+    def __init__(self, node):
+        self.node = node
+
+    @property
+    def addr(self):
+        return self.node.addr
+
+    @property
+    def pk_hex(self):
+        return self.node.pk_hex
+
+    def sign(self, outputs, fee, memo, passphrase, nonce):
+        t, _fee = self.node.build_and_sign_tx(outputs, fee=fee,
+                                              passphrase=passphrase or None, memo=memo)
+        return t
+
+
+class _XlmSend:
+    """The XLM half of the send page, behind the two calls wallet_ui makes:
+    view() for what the XLM tab shows and send() for its form. The light
+    client has no trading wallet and passes none."""
+
+    def __init__(self, node):
+        self.node = node
+
+    def _path(self):
+        import market_routes
+        return market_routes.xlm_keyfile_path(self.node)
+
+    def view(self):
+        addr, spendable, locked = _xlm_view(self._path())
+        return dict(xlm_addr=addr, xlm_spendable=spendable, xlm_locked=locked,
+                    xlm_to_value="", xlm_amount_value="")
+
+    def send(self, form, passphrase, ctx):
+        import market_routes
+        to_addr = form.get("xlm_to", "").strip()
+        amount_raw = form.get("xlm_amount", "").strip()
+        ctx["xlm_to_value"] = to_addr
+        ctx["xlm_amount_value"] = amount_raw
+        if not to_addr:
+            ctx["alert_err"] = "Enter a destination address."
+            return
+        try:
+            amount_stroops = market_routes.parse_xlm(amount_raw)
+        except ValueError as e:
+            ctx["alert_err"] = str(e)
+            return
+        path = self._path()
+        _submit_xlm_and_alert(self.node, path, to_addr, amount_stroops,
+                              passphrase, ctx)
+        if ctx["alert_ok_tx"]:
+            ctx["xlm_to_value"] = ""
+            ctx["xlm_amount_value"] = ""
+            ctx["xlm_addr"], ctx["xlm_spendable"], ctx["xlm_locked"] = _xlm_view(path)
 
 
 def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
@@ -735,95 +625,12 @@ def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
 
 
 
-# The heavy part of the board (a scan of the whole chain plus the vote and
-# profile pass) only changes when a block lands or a board/vote tx enters or
-# leaves the mempool, so it is computed once per such state and every viewer,
-# poll and scroll chunk reuses it. One slot is enough: only the latest state
-# is ever asked for. Stored as a single tuple so a concurrent reader never
-# sees half of an update.
-_board_cache = {"key": None, "value": None}
 
 
-def _board_state_key(node):
-    chain = node.view.chain
-    mem = tuple(sorted(
-        tx_mod.tx_hash(t) for t in node.mempool.all_txs()
-        if (t.get("memo") or "").startswith((BOARD_MEMO_TAG, VOTE_UP_TAG, VOTE_DOWN_TAG))))
-    return (id(node), len(chain), chain[-1].get("hash") if chain else None, mem)
 
 
-def _board_snapshot(node):
-    key = _board_state_key(node)
-    cached = _board_cache["value"]
-    if cached is not None and _board_cache["key"] == key:
-        return key, cached
-    all_rows = _board_posts(node.view.chain)          # tip-first
-    entries = [{"height": h, "ts": ts, "hash": hsh, "tx": t, "pending": False}
-               for h, ts, hsh, t in reversed(all_rows)]
-    pending_rows = _board_pending(node.mempool)
-    entries += pending_rows                            # always newest
-    profiles, votes, pending_vote_refs = _board_profiles_and_votes(
-        node.view.chain, node.view.state.nicknames, node.mempool)
-    hash6_index = {h[:REPLY_REF_LEN]: {"tx": t} for _, _, h, t in all_rows}
-    for row in pending_rows:
-        hash6_index.setdefault(row["hash"][:REPLY_REF_LEN], {"tx": row["tx"]})
-    for row in entries:
-        row["ref6"] = row["hash"][:REPLY_REF_LEN]
-        row["reply_ref"] = parse_board_body(
-            (row["tx"].get("memo") or "")[len(BOARD_MEMO_TAG):])[2]
-
-    def score_of(row):
-        tally = votes.get(row["ref6"])
-        return (tally["up"] - tally["down"]) if tally else 0
-
-    flat, starts = _flatten_threads(entries, score_of)
-    value = (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
-             len(all_rows))
-    _board_cache["key"], _board_cache["value"] = key, value
-    return key, value
 
 
-def _board_ctx(node, page_arg, own_addr, extra=None):
-    """Board page context. The board is one continuous feed (no page
-    cuts): newest thread first, each thread kept whole with replies nested
-    under their parent. `page_arg` is how many chunks of
-    BOARD_THREADS_PER_CHUNK threads to render, so the page can keep
-    appending as the reader scrolls. Shared between the GET route
-    (read-only, both apps) and the private app's POST handler, so the two
-    never drift apart.
-
-    own_addr is the caller's call, not this function's: node.addr on the
-    private app always, and on the public app whatever the Dandelion
-    privacy setting (settings.HIDE_ADDRESS_PUBLICLY) says -- possibly
-    None, which never matches a real row.tx.from and so quietly drops the
-    "mine" styling in board.html rather than needing its own branch here.
-    """
-    _key, (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
-           post_count) = _board_snapshot(node)
-    chunks = max(page_arg, 1)
-    limit = chunks * BOARD_THREADS_PER_CHUNK
-    cut = starts[limit] if limit < len(starts) else len(flat)
-    # Copies: the cached entries are shared across requests and viewers,
-    # while enrichment (own_addr-dependent "mine", etc.) is per request.
-    page_rows = [dict(e, depth=d) for e, d in flat[:cut]]
-    for row in page_rows:
-        _enrich_board_row(row, profiles, votes, hash6_index, own_addr, pending_vote_refs)
-    has_more = limit < len(starts)
-    page = chunks
-
-    own_profile = profiles.get(own_addr)
-    own_icon_idx = own_profile["icon"] if own_profile else None
-    ctx = dict(title="Board", rows=page_rows,
-               post_count=post_count, own_addr=own_addr,
-               own_icon=_icon_emoji(own_icon_idx),
-               own_icon_idx=own_icon_idx or 0,
-               own_nick=own_profile.get("nick") if own_profile else None,
-               icon_palette=ICON_PALETTE,
-               tag_len=len(BOARD_MEMO_TAG),
-               page=page, has_more=has_more)
-    if extra:
-        ctx.update(extra)
-    return ctx
 
 
 def _shared_read_only_routes(app, node, pool, limiter,
@@ -842,6 +649,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
         if is_private or not node.settings.get(settings_mod.HIDE_ADDRESS_PUBLICLY):
             return node.addr
         return None
+
+    reader = local_reader_for(node)
+    register_board_pages(app, reader, pfx, _own_addr_or_hidden, csrf_token)
+    register_data_api(app, reader, pfx)
 
     @app.context_processor
     def inject_ctx():
@@ -1059,23 +870,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             ctx["alert_err"] = "Invalid address format."
             ctx["addr"] = ""
         elif addr:
-            ctx["balance"]  = v.state.get_balance(addr)
-            ctx["tx_count"] = v.state.get_nonce(addr)
-            tx_rows = [(h, hsh, direction, t, "tx")
-                       for h, hsh, direction, t in _get_address_history(addr, node)]
-            mined_rows = [(h, hsh, "mined", amount, "block")
-                          for h, hsh, amount in _get_mined_blocks_for_addr(addr, node)]
-            newest_first = sorted(tx_rows + mined_rows, key=lambda r: r[0], reverse=True)
-            total_pages = max(-(-len(newest_first) // HISTORY_PER_PAGE), 1)
-            page = min(page, total_pages)
-            start = (page - 1) * HISTORY_PER_PAGE
-            end   = start + HISTORY_PER_PAGE
-            ctx["page"] = page
-            ctx["total_pages"] = total_pages
-            ctx["page_window"] = _pagination_window(page, total_pages)
-            ctx["history"]  = newest_first[start:end]
-            ctx["has_prev"] = page > 1
-            ctx["has_next"] = end < len(newest_first)
+            ctx.update(address_ctx(reader, addr, page))
         return render_template("address.html", **ctx)
 
     @app.route("/address/distribution/<int:bucket>", endpoint=pfx+"distribution_bucket")
@@ -1210,16 +1005,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return redirect(f"/network?{request.query_string.decode()}"
                          if request.query_string else "/network", code=301)
 
-    @app.route("/board", endpoint=pfx+"board")
-    def board():
-        floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
-        extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
-                     message_value="", board_fee_floor=floor)
-        if csrf_token:   # private app only: composing needs a fee suggestion
-            extra["fees"] = fee_estimate(node)
-        page = request.args.get("page", 1, type=int) or 1
-        return render_template("board.html",
-                               **_board_ctx(node, page, _own_addr_or_hidden(), extra))
 
     @app.route("/api/board", endpoint=pfx+"api_board")
     def api_board():
@@ -1240,23 +1025,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
             ],
         })
 
-    @app.route("/api/board/fragment", endpoint=pfx+"api_board_fragment")
-    def api_board_fragment():
-        """Return live board rows without replacing the compose box."""
-        page = request.args.get("page", 1, type=int) or 1
-        own = _own_addr_or_hidden()
-        # Unchanged since the viewer's last poll: answer 304 without
-        # rendering anything. Validators are the board state itself plus the
-        # window size and viewer, the only inputs the fragment depends on.
-        key, _ = _board_snapshot(node)
-        etag = '"' + hashlib.sha1(repr((key, max(page, 1), own)).encode()).hexdigest() + '"'
-        if request.headers.get("If-None-Match") == etag:
-            resp = make_response("", 304)
-        else:
-            resp = make_response(render_template("board_rows.html", **_board_ctx(node, page, own)))
-        resp.headers["ETag"] = etag
-        resp.headers["Cache-Control"] = "no-cache"
-        return resp
 
     # Race-odds data for the current tip, computed once per tip and held
     # here rather than in a module global: one cache per app, keyed by
@@ -1742,275 +1510,16 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         ctx["own_addr"] = node.addr
         return render_template("settings.html", **ctx)
 
-    @app.route("/send", methods=["GET", "POST"])
-    def send():
-        import market_routes
-        v = node.view
-        xlm_keyfile_path = market_routes.xlm_keyfile_path(node)
-        xlm_addr, xlm_spendable, xlm_locked = _xlm_view(xlm_keyfile_path)
-        ctx = dict(title="Send", from_addr=node.addr,
-                   balance=v.state.get_balance(node.addr),
-                   fees=fee_estimate(node), csrf_token=csrf_token,
-                   outputs_value=_default_send_outputs(node),
-                   memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
-                   asset="lapse",
-                   xlm_addr=xlm_addr, xlm_spendable=xlm_spendable,
-                   xlm_locked=xlm_locked, xlm_to_value="",
-                   xlm_amount_value="",
-                   alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
-        if request.method == "POST":
-            if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
-                ctx["alert_err"] = "Session expired; reload the page and try again."
-                return render_template("send.html", **ctx)
 
-            asset = request.form.get("asset", "lapse")
-            ctx["asset"] = asset
-            passphrase = request.form.get("passphrase", "").strip()
 
-            if asset == "xlm":
-                to_addr = request.form.get("xlm_to", "").strip()
-                amount_raw = request.form.get("xlm_amount", "").strip()
-                ctx["xlm_to_value"] = to_addr
-                ctx["xlm_amount_value"] = amount_raw
-                if not to_addr:
-                    ctx["alert_err"] = "Enter a destination address."
-                else:
-                    try:
-                        amount_stroops = market_routes.parse_xlm(amount_raw)
-                    except ValueError as e:
-                        ctx["alert_err"] = str(e)
-                    if not ctx["alert_err"]:
-                        _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr,
-                                              amount_stroops, passphrase, ctx)
-                        if ctx["alert_ok_tx"]:
-                            ctx["xlm_to_value"] = ""
-                            ctx["xlm_amount_value"] = ""
-                            ctx["xlm_addr"], ctx["xlm_spendable"], ctx["xlm_locked"] = \
-                                _xlm_view(xlm_keyfile_path)
-            else:
-                outputs_raw = request.form.get("outputs", "").strip()
-                memo        = request.form.get("memo", "").strip()
-                csv_file    = request.files.get("csv_file")
-                if csv_file and csv_file.filename:
-                    outputs_raw = csv_file.read().decode()
-                ctx["outputs_value"] = outputs_raw
-                ctx["memo_value"] = memo
-                outputs, errors = _parse_csv_outputs(outputs_raw)
-                if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
-                    errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
-                if errors:
-                    ctx["alert_err_lines"] = errors
-                elif not outputs:
-                    ctx["alert_err"] = "No valid outputs."
-                else:
-                    _submit_and_alert(node, outputs, passphrase, ctx, memo=memo)
-                    if ctx["alert_ok_tx"]:
-                        ctx["alert_ok_verb"] = "Sent."
-                        ctx["outputs_value"] = ""
-                        ctx["memo_value"] = ""
-        return render_template("send.html", **ctx)
 
-    @app.route("/api/fees", endpoint="api_fees")
-    def api_fees():
-        """The same fee-market picture the send page renders at load, for
-        it to poll and stay live: the suggested rate is only true for as
-        long as the mempool doesn't change, and it changes constantly.
-        """
-        return jsonify(fee_estimate(node))
 
-    @app.route("/api/send/fee", endpoint="api_send_fee")
-    def api_send_fee():
-        """Whether the outputs/memo currently in the send form would go
-        through right now, and at what fee, so the Sign & Send button can
-        be disabled with the real reason before anything is signed rather
-        than after. Reuses the same parsing and fee logic the actual POST
-        handler uses, so this can't say "fine" to something that then
-        fails, or the reverse.
-        """
-        outputs, errors = _parse_csv_outputs(request.args.get("outputs", ""))
-        memo = request.args.get("memo", "")
-        if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
-            errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
-        if errors:
-            return jsonify({"ok": False, "reason": errors[0]})
-        if not outputs:
-            return jsonify({"ok": False, "reason": "No valid outputs."})
-        fee = _auto_fee(node, outputs, memo=memo)
-        total_out = sum(o["amount"] for o in outputs)
-        required = total_out + fee
-        balance = node.view.state.get_balance(node.addr)
-        if required > balance:
-            return jsonify({"ok": False, "fee": fee,
-                            "reason": f"Insufficient balance: have {fmt_balance(balance)}, "
-                                      f"need {fmt_balance(required)}."})
-        return jsonify({"ok": True, "fee": fee, "reason": ""})
 
-    @app.route("/api/board/fee", endpoint="api_board_fee")
-    def api_board_fee():
-        """The actual fee a board post of this length would pay right now,
-        for the compose box to show live as the message grows instead of a
-        static floor that stops being true the moment typing starts:
-        tx_size (what the fee is computed against) scales with the memo, so
-        a longer message really does cost more, and the mempool's own rate
-        can move between keystrokes too.
-        """
-        msg_bytes = min(max(0, request.args.get("bytes", 0, type=int) or 0), tx_mod.MAX_MEMO_BYTES)
-        # Profile/reply headers are opt-in and priced exactly like the rest
-        # of the memo (more bytes -> more fee), so the live estimate has to
-        # account for whichever of them this particular post will actually
-        # carry, not just the free-text part.
-        icon = request.args.get("icon", type=int)
-        nick = (request.args.get("nick") or "")[:16] or None
-        reply_ref = request.args.get("reply_ref") or None
-        # Checked before quoting a fee, not just before display: paying to
-        # set a name that's already someone else's is a real cost for a
-        # change that would then silently never show, so the compose box
-        # needs to know before the user signs anything, not after.
-        owner = _nickname_owned_by(node.view.state, nick)
-        if nick and owner is not None and owner != node.addr:
-            return jsonify({"fee": 0, "floor": 0, "ok": False, "nick_taken": True,
-                            "reason": f"'{nick}' is already taken."})
-        header = build_board_body("", icon=icon, nick=nick, reply_ref=reply_ref)
-        # An ASCII placeholder of the same byte length: close enough for an
-        # estimate, and the real message never leaves the browser until
-        # actually posted.
-        memo = BOARD_MEMO_TAG + header + ("x" * msg_bytes)
-        floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
-        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
-        fee = _auto_fee(node, outputs, memo=memo, floor=floor)
-        required = BOARD_POST_AMOUNT + fee
-        balance = node.view.state.get_balance(node.addr)
-        if required > balance:
-            return jsonify({"fee": fee, "floor": floor, "ok": False,
-                            "reason": f"Insufficient balance: have {fmt_balance(balance)}, "
-                                      f"need {fmt_balance(required)}."})
-        return jsonify({"fee": fee, "floor": floor, "ok": True, "reason": ""})
 
-    @app.route("/api/board/vote_fee", endpoint="api_board_vote_fee")
-    def api_board_vote_fee():
-        """What a vote on ref would actually cost right now: real coins
-        leave the wallet for this (the same 1-tick burn a board post
-        makes, plus whatever fee clears the next block), so the compose
-        UI shows it before the passphrase prompt, not after.
-        """
-        ref = (request.args.get("ref") or "")[:REPLY_REF_LEN]
-        tag = VOTE_UP_TAG if request.args.get("dir") == "+" else VOTE_DOWN_TAG
-        memo = tag + ref
-        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
-        fee = _auto_fee(node, outputs, memo=memo)
-        required = BOARD_POST_AMOUNT + fee
-        balance = node.view.state.get_balance(node.addr)
-        if required > balance:
-            return jsonify({"fee": fee, "ok": False,
-                            "reason": f"Insufficient balance: have {fmt_balance(balance)}, "
-                                      f"need {fmt_balance(required)}."})
-        return jsonify({"fee": fee, "ok": True, "reason": ""})
 
-    @app.route("/api/board/preview", methods=["POST"], endpoint="api_board_preview")
-    def api_board_preview():
-        """Renders exactly what board_post's own memo will render as, via
-        the same render_board_text() every already-posted row goes
-        through -- a client-side reimplementation of that regex subset
-        would drift from it eventually, this way "Preview" is never able
-        to show something the real post won't.
-        """
-        text = request.form.get("text", "")[:tx_mod.MAX_MEMO_BYTES]
-        return jsonify({"html": str(render_board_text(text))})
 
-    @app.route("/board", methods=["POST"], endpoint="board_post")
-    def board_post():
-        page = request.args.get("page", 1, type=int) or 1
-        # The floor is read fresh on every submit: it only moves when a
-        # block confirms (see tx.board_fee_floor), so this is always the
-        # same value tx.validate() will check the resulting tx against,
-        # modulo a block landing in between, which is exactly the rare
-        # "resubmit at the new floor" case that staircase is designed for.
-        floor = tx_mod.board_fee_floor(node.view.state.total_board_posts)
-        message    = request.form.get("message", "").strip()
-        passphrase = request.form.get("passphrase", "").strip()
-        # icon/nick only ride along when the compose form's own "profile
-        # changed" checkbox says so (see board.html): otherwise this post
-        # costs exactly what it would with no profile feature at all.
-        icon = request.form.get("icon", type=int) if request.form.get("profile_changed") else None
-        nick = (request.form.get("nick") or "").strip()[:16] or None if request.form.get("profile_changed") else None
-        if request.form.get("profile_changed") and icon is None:
-            icon = 0
-        reply_ref = request.form.get("reply_ref") or None
-        extra = dict(csrf_token=csrf_token, fees=fee_estimate(node),
-                     compose_err="", compose_ok="", board_fee_floor=floor,
-                     message_value=message)
-
-        def fail(msg):
-            extra["compose_err"] = msg
-            return render_template("board.html", **_board_ctx(node, page, node.addr, extra))
-
-        if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
-            return fail("Session expired; reload the page and try again.")
-        if not message:
-            return fail("Write something to post.")
-        # Refused outright, not just silently dropped at display time: a
-        # tx claiming a taken name now also fails tx.validate() itself
-        # (_check_nickname_available), but that check runs against the
-        # live floor node.addr; catching it here first still saves the
-        # round trip to a node that would only reject it anyway.
-        owner = _nickname_owned_by(node.view.state, nick)
-        if nick and owner is not None and owner != node.addr:
-            return fail(f"'{nick}' is already taken.")
-        body = build_board_body(message, icon=icon, nick=nick, reply_ref=reply_ref)
-        memo = BOARD_MEMO_TAG + body
-        over = len(memo.encode("utf-8")) - tx_mod.MAX_MEMO_BYTES
-        if over > 0:
-            return fail(f"{over} byte{'s' if over != 1 else ''} too long.")
-
-        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
-        alert_ctx = {}
-        _submit_and_alert(node, outputs, passphrase, alert_ctx, memo=memo, floor=floor)
-        if alert_ctx.get("alert_err"):
-            return fail(alert_ctx["alert_err"])
-
-        # Rendered as page 1 regardless of which page the form was on:
-        # that's the page pending posts appear on (see _board_ctx), and
-        # the one this post itself now shows up in, at the bottom, right
-        # above the compose box, so posting is its own confirmation. No
-        # separate "waiting to be mined" banner needed, the row is one.
-        extra["message_value"] = ""
-        return render_template("board.html", **_board_ctx(node, 1, node.addr, extra))
-
-    @app.route("/board/vote", methods=["POST"], endpoint="board_vote")
-    def board_vote():
-        """A vote is an ordinary, non-board-tagged transaction (see
-        VOTE_UP_TAG/VOTE_DOWN_TAG): tx.is_board_post never matches it, so
-        it never advances state.total_board_posts and never pays the
-        board fee floor, only the same congestion fee any other send
-        would, plus the same 1-tick burn a board post makes. No memo
-        length or profile handling needed here, a vote carries nothing
-        but the 6-hex reference to what it's voting on.
-        """
-        page = request.args.get("page", 1, type=int) or 1
-        ref  = (request.form.get("ref") or "")[:REPLY_REF_LEN]
-        direction  = request.form.get("dir")
-        passphrase = request.form.get("passphrase", "").strip()
-        extra = dict(csrf_token=csrf_token, fees=fee_estimate(node),
-                     compose_err="", compose_ok="", message_value="",
-                     board_fee_floor=tx_mod.board_fee_floor(node.view.state.total_board_posts))
-
-        def fail(msg):
-            extra["compose_err"] = msg
-            return render_template("board.html", **_board_ctx(node, page, node.addr, extra))
-
-        if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
-            return fail("Session expired; reload the page and try again.")
-        if direction not in ("+", "-") or len(ref) != REPLY_REF_LEN:
-            return fail("Bad vote request.")
-
-        tag = VOTE_UP_TAG if direction == "+" else VOTE_DOWN_TAG
-        memo = tag + ref
-        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
-        alert_ctx = {}
-        _submit_and_alert(node, outputs, passphrase, alert_ctx, memo=memo)
-        if alert_ctx.get("alert_err"):
-            return fail(alert_ctx["alert_err"])
-        return render_template("board.html", **_board_ctx(node, page, node.addr, extra))
+    register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
+                           xlm=_XlmSend(node))
 
     # Market and Trades live in their own module: this file is already long
     # and a node with swaps off never reaches any of it.
