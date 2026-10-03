@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import secrets
 from urllib.parse import urlencode
 
@@ -36,8 +37,10 @@ from flask import jsonify, make_response, redirect, render_template, request
 
 import crypto as crypto_mod
 import tx as tx_mod
-from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, REPLY_REF_LEN,
-                        VOTE_DOWN_TAG, VOTE_UP_TAG, board_ctx, build_board_body)
+from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, DELETE_TAG,
+                        MAX_POST_TEXT_BYTES, REPLY_REF_LEN, VOTE_DOWN_TAG,
+                        VOTE_UP_TAG, apply_splice, board_ctx, build_board_body,
+                        build_board_edit, make_splice)
 from ui_common import (_pagination_window, _parse_csv_outputs,
                        _reword_insufficient_balance, fmt_balance,
                        render_board_text)
@@ -90,6 +93,28 @@ def submit_and_alert(reader, signer, outputs, passphrase, ctx, memo="", floor=0)
     except Exception as e:
         log.warning("[wallet] tx build/submit failed  err=%s", e)
         ctx["alert_err"] = f"Error: {e}"
+
+
+_REF_RE = re.compile(r"[0-9a-f]{%d}" % REPLY_REF_LEN)
+
+
+def edit_text(ref, orig, new):
+    """(text, None) for the edit post that turns `orig` into `new` in the
+    post with reference `ref`, or (None, why not). The splice is worked
+    out here, from the two texts, so the page that asks for an edit and
+    the rule readers apply to it cannot disagree about what it means."""
+    if not _REF_RE.fullmatch(ref or ""):
+        return None, "Bad edit request."
+    if new == orig:
+        return None, "Nothing changed."
+    if not new.strip():
+        return None, "An edit cannot leave a post empty. Delete it instead."
+    if len(new.encode("utf-8")) > MAX_POST_TEXT_BYTES:
+        return None, f"A post can hold {MAX_POST_TEXT_BYTES} bytes at most."
+    pos, ndel, inserted = make_splice(orig, new)
+    if apply_splice(orig, pos, ndel, inserted) != new:
+        return None, "That edit cannot be applied."
+    return build_board_edit(ref, pos, ndel, inserted), None
 
 
 class WalletSigner:
@@ -388,6 +413,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         icon = request.args.get("icon", type=int)
         nick = (request.args.get("nick") or "")[:16] or None
         reply_ref = request.args.get("reply_ref") or None
+        edit_ref = request.args.get("edit_ref") or None
         acct = reader.account(signer.addr, nick=nick, fees=True)
         # Checked before quoting a fee, not just before display: paying to
         # set a name that's already someone else's is a real cost for a
@@ -397,11 +423,20 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         if nick and owner is not None and owner != signer.addr:
             return jsonify({"fee": 0, "floor": 0, "ok": False, "nick_taken": True,
                             "reason": f"'{nick}' is already taken."})
-        header = build_board_body("", icon=icon, nick=nick, reply_ref=reply_ref)
-        # An ASCII placeholder of the same byte length: close enough for an
-        # estimate, and the real message never leaves the browser until
-        # actually posted.
-        memo = BOARD_MEMO_TAG + header + ("x" * msg_bytes)
+        if edit_ref:
+            # An edit is priced on what it will really send, the splice
+            # and not the whole text, so it is worked out from the texts.
+            text, why = edit_text(edit_ref, request.args.get("orig", ""),
+                                  request.args.get("new", ""))
+            if why:
+                return jsonify({"fee": 0, "floor": 0, "ok": False, "reason": why})
+            memo = BOARD_MEMO_TAG + build_board_body(text, icon=icon, nick=nick)
+        else:
+            header = build_board_body("", icon=icon, nick=nick, reply_ref=reply_ref)
+            # An ASCII placeholder of the same byte length: close enough for
+            # an estimate, and the real message never leaves the browser
+            # until actually posted.
+            memo = BOARD_MEMO_TAG + header + ("x" * msg_bytes)
         floor = acct["board_floor"]
         outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
         fee = auto_fee(acct, signer.addr, signer.pk_hex, outputs, memo=memo, floor=floor)
@@ -410,23 +445,6 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
             return jsonify({"fee": fee, "floor": floor, "ok": False, "reason": short})
         return jsonify({"fee": fee, "floor": floor, "ok": True, "reason": ""})
 
-    @app.route("/api/board/vote_fee", endpoint="api_board_vote_fee")
-    def api_board_vote_fee():
-        """What a vote on ref would actually cost right now: real coins
-        leave the wallet for this (the same 1-tick burn a board post
-        makes, plus whatever fee clears the next block), so the compose
-        UI shows it before the passphrase prompt, not after.
-        """
-        ref = (request.args.get("ref") or "")[:REPLY_REF_LEN]
-        tag = VOTE_UP_TAG if request.args.get("dir") == "+" else VOTE_DOWN_TAG
-        memo = tag + ref
-        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
-        acct = reader.account(signer.addr, fees=True)
-        fee = auto_fee(acct, signer.addr, signer.pk_hex, outputs, memo=memo)
-        short = _insufficient(acct, BOARD_POST_AMOUNT + fee)
-        if short:
-            return jsonify({"fee": fee, "ok": False, "reason": short})
-        return jsonify({"fee": fee, "ok": True, "reason": ""})
 
     @app.route("/api/board/preview", methods=["POST"], endpoint="api_board_preview")
     def api_board_preview():
@@ -452,6 +470,8 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         if request.form.get("profile_changed") and icon is None:
             icon = 0
         reply_ref = request.form.get("reply_ref") or None
+        edit_ref = request.form.get("edit_ref") or None
+        edit_orig = request.form.get("edit_orig", "")
         # The floor is read fresh on every submit: it only moves when a
         # block confirms (see tx.board_fee_floor), so this is always the
         # same value tx.validate() will check the resulting tx against,
@@ -482,6 +502,13 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         owner = acct.get("nick_owner")
         if nick and owner is not None and owner != signer.addr:
             return fail(f"'{nick}' is already taken.")
+        if edit_ref:
+            # Posted as the edit it is: a splice against the text being
+            # edited, which costs what any post costs.
+            message, why = edit_text(edit_ref, edit_orig, message)
+            if why:
+                return fail(why)
+            reply_ref = None
         body = build_board_body(message, icon=icon, nick=nick, reply_ref=reply_ref)
         memo = BOARD_MEMO_TAG + body
         over = len(memo.encode("utf-8")) - tx_mod.MAX_MEMO_BYTES
@@ -502,19 +529,27 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         extra["message_value"] = ""
         return render(1)
 
-    @app.route("/board/vote", methods=["POST"], endpoint="board_vote")
-    def board_vote():
-        """A vote is an ordinary, non-board-tagged transaction (see
-        VOTE_UP_TAG/VOTE_DOWN_TAG): tx.is_board_post never matches it, so
-        it never advances state.total_board_posts and never pays the
-        board fee floor, only the same congestion fee any other send
-        would, plus the same 1-tick burn a board post makes. No memo
-        length or profile handling needed here, a vote carries nothing
-        but the 6-hex reference to what it's voting on.
-        """
+    def _quote(memo):
+        """What sending `memo` as a plain 1-tick burn would cost right now:
+        real coins leave the wallet for it, so the page shows the price
+        before it asks for the passphrase, not after."""
+        outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
+        acct = reader.account(signer.addr, fees=True)
+        fee = auto_fee(acct, signer.addr, signer.pk_hex, outputs, memo=memo)
+        short = _insufficient(acct, BOARD_POST_AMOUNT + fee)
+        if short:
+            return jsonify({"fee": fee, "ok": False, "reason": short})
+        return jsonify({"fee": fee, "ok": True, "reason": ""})
+
+    def _ref_tx(make_memo):
+        """Votes and deletes: an ordinary, non-board-tagged transaction
+        (tx.is_board_post never matches it), so it never advances
+        state.total_board_posts and never pays the board fee floor, only
+        the same congestion fee any other send would, plus the same 1-tick
+        burn a board post makes. It carries nothing but a tag and the 6-hex
+        reference to the post it is about. make_memo(form) returns the
+        memo to send, or None for a request that is not well formed."""
         page = request.args.get("page", 1, type=int) or 1
-        ref  = (request.form.get("ref") or "")[:REPLY_REF_LEN]
-        direction  = request.form.get("dir")
         passphrase = request.form.get("passphrase", "").strip()
         acct = reader.account(signer.addr, profile=True, fees=True)
         extra = dict(csrf_token=csrf_token, fees=acct["fees"],
@@ -531,14 +566,44 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
 
         if not _csrf_ok():
             return fail("Session expired; reload the page and try again.")
-        if direction not in ("+", "-") or len(ref) != REPLY_REF_LEN:
-            return fail("Bad vote request.")
-
-        tag = VOTE_UP_TAG if direction == "+" else VOTE_DOWN_TAG
-        memo = tag + ref
+        memo = make_memo(request.form)
+        if memo is None:
+            return fail("Bad request.")
         outputs = [{"to": crypto_mod.burn_address(), "amount": BOARD_POST_AMOUNT}]
         alert_ctx = {}
         submit_and_alert(reader, signer, outputs, passphrase, alert_ctx, memo=memo)
         if alert_ctx.get("alert_err"):
             return fail(alert_ctx["alert_err"])
         return render()
+
+    def _ref(source):
+        return (source.get("ref") or "")[:REPLY_REF_LEN]
+
+    @app.route("/api/board/vote_fee", endpoint="api_board_vote_fee")
+    def api_board_vote_fee():
+        tag = VOTE_UP_TAG if request.args.get("dir") == "+" else VOTE_DOWN_TAG
+        return _quote(tag + _ref(request.args))
+
+    @app.route("/api/board/delete_fee", endpoint="api_board_delete_fee")
+    def api_board_delete_fee():
+        return _quote(DELETE_TAG + _ref(request.args))
+
+    @app.route("/board/vote", methods=["POST"], endpoint="board_vote")
+    def board_vote():
+        def memo(form):
+            ref, direction = _ref(form), form.get("dir")
+            if direction not in ("+", "-") or len(ref) != REPLY_REF_LEN:
+                return None
+            return (VOTE_UP_TAG if direction == "+" else VOTE_DOWN_TAG) + ref
+        return _ref_tx(memo)
+
+    @app.route("/board/delete", methods=["POST"], endpoint="board_delete")
+    def board_delete():
+        """Hide one of your own posts from readers. Nothing is removed from
+        the chain, and readers only honor it for a post by the same sender
+        (see board_view.resolve_board), so deleting someone else's post
+        sends a transaction that changes nothing."""
+        def memo(form):
+            ref = _ref(form)
+            return DELETE_TAG + ref if _REF_RE.fullmatch(ref) else None
+        return _ref_tx(memo)

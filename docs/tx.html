@@ -222,7 +222,20 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 
 <div class="card">
 <div class="card-title">Nonce</div>
-<p>Nonces are sequential per sender, starting from 0 for an address that has never sent. A transaction is valid only if its nonce is exactly the last used nonce plus one, counting the sender's pending mempool transactions. See <a href="api.html">the API page</a> for how to derive it from <code>/api/address/{addr}/history</code> and <code>/api/mempool</code>.</p>
+<p>Nonces are sequential per sender, starting from 0 for an address that has never sent. A transaction is valid only if its nonce is exactly the last used nonce plus one, counting the sender's pending mempool transactions. <code>GET /api/state?addr=...</code> reports the highest nonce used, confirmed or pending; the next transaction uses that plus one. See <a href="api.html">the API page</a>.</p>
+</div>
+
+<div class="card">
+<div class="card-title">Board memos</div>
+<p>The board is made of ordinary transactions whose memo follows a few conventions. A <em>ref</em> is the first six hex characters of a post's transaction hash.</p>
+<table>
+<tr><th>Memo</th><th>Meaning</th></tr>
+<tr><td><code>[board] </code> + text</td><td>A post. May begin with a profile header <code>[p:icon:nick]</code> and then a reply header <code>[r:ref]</code>. Pays the board fee floor and burns 1 tick.</td></tr>
+<tr><td><code>[vote+] ref</code>, <code>[vote-] ref</code></td><td>A vote on a post. Not a board post: no fee floor, 1 tick burned.</td></tr>
+<tr><td><code>[board] [e:ref:pos:ndel]text</code></td><td>An edit. In the sender's post with that ref, replace <code>ndel</code> characters at character position <code>pos</code> with <code>text</code>. It is a board post, so it pays the fee floor, burns 1 tick and counts toward the floor's staircase.</td></tr>
+<tr><td><code>[del] ref</code></td><td>Hides the sender's post with that ref. Not a board post: no fee floor, 1 tick burned.</td></tr>
+</table>
+<p>Edits and deletes change nothing on the chain, and nothing could: the original text stays in its block. They are rules that readers apply the same way. An edit or delete acts only on a post by its own sender that came before it, and an edit is applied to the post as earlier edits left it, in chain order. The result must be non-empty and fit in a post (200 bytes of memo less the <code>[board] </code> tag). An edit that cannot be applied is not hidden: it shows as the ordinary post it also is. The node's validation does not check any of this, so a node will relay an edit or delete of someone else's post, and readers will ignore it.</p>
 </div>
 
 <div class="card">

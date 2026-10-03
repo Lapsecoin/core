@@ -6,7 +6,9 @@
   as the board fills up or with congestion. Voting is an ordinary transaction
   (still burns {{ BOARD_POST_AMOUNT }} tick) and never raises that floor.
   Icon and nickname ride along on a post you were already sending, never a
-  post of their own.
+  post of their own. You can edit or delete your own posts: an edit costs
+  what a post costs, and a delete only hides the post from readers. The
+  chain is permanent, so the original text stays in its block either way.
 </p>
 
 <div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
@@ -18,11 +20,18 @@
       <input type="hidden" name="profile_changed" id="board-profile-changed" value="">
       <input type="hidden" name="icon" id="board-icon-value" value="{{ own_icon_idx }}">
       <input type="hidden" name="reply_ref" id="board-reply-ref" value="">
+      <input type="hidden" name="edit_ref" id="board-edit-ref" value="">
+      <input type="hidden" name="edit_orig" id="board-edit-orig" value="">
       {% if compose_err %}<div class="alert alert-err" style="margin:0 0 .4rem">{{ compose_err }}</div>{% endif %}
 
       <div class="board-compose-row board-reply-banner" id="board-reply-banner" hidden>
         <span id="board-reply-text"></span>
         <button type="button" id="board-reply-cancel" title="Cancel reply">&times;</button>
+      </div>
+
+      <div class="board-compose-row board-reply-banner" id="board-edit-banner" hidden>
+        <span>editing your post: only what you change is sent</span>
+        <button type="button" id="board-edit-cancel" title="Cancel edit">&times;</button>
       </div>
 
       <div class="board-compose-row board-profile-row">
@@ -319,6 +328,40 @@
       btn.disabled = false;
     }
   }
+  // A delete hides the post from readers; it costs real coins like a vote,
+  // and it cannot take the text off the chain, so the prompt says both
+  // before it asks for the passphrase.
+  async function handleDeleteClick(btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const ref = btn.dataset.ref;
+      let cost = "";
+      try {
+        const res = await fetch(`/api/board/delete_fee?ref=${encodeURIComponent(ref)}`, {cache: "no-store"});
+        const data = await res.json();
+        if (!data.ok) { window.alert(data.reason || "Can't delete."); return; }
+        cost = ` This burns ${BURN} tick + ~${data.fee} tick fee (real coins).`;
+      } catch (e) {
+        // Fee lookup failed; still lets the delete through with a generic prompt.
+      }
+      const passphrase = window.prompt(
+        "Hide this post from readers? Its text stays on the chain for anyone who reads blocks." +
+        cost + " Passphrase:");
+      if (passphrase === null) return;  // cancelled, nothing sent
+      const body = new URLSearchParams({csrf_token: CSRF, ref, passphrase});
+      await fetch(`/board/delete?page=${PAGE}`, {method: "POST", body});
+      pollBoard();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  if (feedEl) {
+    feedEl.addEventListener("click", event => {
+      const btn = event.target.closest(".rc-deleteBtn");
+      if (btn) handleDeleteClick(btn);
+    });
+  }
   function wireVoteButtons(root) {
     (root || document).querySelectorAll(".rc-voteButton[data-ref]").forEach(btn => {
       btn.addEventListener("click", () => handleVoteClick(btn));
@@ -344,6 +387,10 @@
     const replyBanner   = document.getElementById("board-reply-banner");
     const replyText     = document.getElementById("board-reply-text");
     const replyCancel   = document.getElementById("board-reply-cancel");
+    const editRefInput  = document.getElementById("board-edit-ref");
+    const editOrigInput = document.getElementById("board-edit-orig");
+    const editBanner    = document.getElementById("board-edit-banner");
+    const editCancel    = document.getElementById("board-edit-cancel");
     const counter        = document.getElementById("board-msg-counter");
     const sendBtn         = document.getElementById("board-send");
     const feeEl           = document.getElementById("board-fee-live");
@@ -410,9 +457,40 @@
     });
     nickInput.addEventListener("input", markProfileDirty);
 
+    function leaveEditMode() {
+      editRefInput.value = "";
+      editOrigInput.value = "";
+      editBanner.hidden = true;
+    }
+
+    // Editing loads the post into the compose box. The server works out
+    // what changed from the original and the new text, so the page only
+    // has to say which post, and what it said.
     feedEl.addEventListener("click", event => {
-      const btn = event.target.closest(".rc-replyBtn");
+      const edit = event.target.closest(".rc-editBtn");
+      if (!edit) return;
+      replyRefInput.value = "";
+      replyBanner.hidden = true;
+      editRefInput.value = edit.dataset.ref;
+      editOrigInput.value = edit.dataset.text;
+      editBanner.hidden = false;
+      msgInput.value = edit.dataset.text;
+      msgInput.focus();
+      refreshCounter();
+      autoGrow();
+    });
+    editCancel.addEventListener("click", () => {
+      leaveEditMode();
+      msgInput.value = "";
+      refreshCounter();
+      autoGrow();
+    });
+
+    feedEl.addEventListener("click", event => {
+      const btn = event.target.closest(".rc-replyBtn:not(.rc-editBtn):not(.rc-deleteBtn)");
       if (!btn) return;
+      if (editRefInput.value) msgInput.value = "";  // the text being edited is not a reply
+      leaveEditMode();
       replyRefInput.value = btn.dataset.ref;
       replyText.textContent = "replying to " + btn.dataset.addr.slice(0, 14) + "…: “" + btn.dataset.snippet + "”";
       replyBanner.hidden = false;
@@ -459,6 +537,11 @@
             params.set("nick", cleanNick());
           }
           if (replyRefInput.value) params.set("reply_ref", replyRefInput.value);
+          if (editRefInput.value) {
+            params.set("edit_ref", editRefInput.value);
+            params.set("orig", editOrigInput.value);
+            params.set("new", msgInput.value);
+          }
           const res = await fetch("/api/board/fee?" + params.toString(), {cache: "no-store"});
           if (!res.ok) throw new Error("bad status " + res.status);
           const data = await res.json();
@@ -473,14 +556,21 @@
     }
 
     function refreshCounter() {
-      const maxBytes = MAX_MEMO_BYTES - TAG_LEN - headerBytes();
+      // An edit sends a splice, whose size the server works out (the fee
+      // quote below uses it), so what is limited here is the text the post
+      // ends up with. Anything else carries its header.
+      const maxBytes = editRefInput.value ? MAX_MEMO_BYTES - TAG_LEN
+                                          : MAX_MEMO_BYTES - TAG_LEN - headerBytes();
       const bytes = new TextEncoder().encode(msgInput.value).length;
       const empty = msgInput.value.trim() === "";
+      const unchanged = editRefInput.value !== "" && msgInput.value === editOrigInput.value;
       const over = bytes > maxBytes;
       counter.textContent = bytes + " / " + maxBytes;
       counter.style.color = over ? "var(--red, #c0392b)" : "var(--muted)";
       if (empty) {
         setSendState(true, "Write something to post.");
+      } else if (unchanged) {
+        setSendState(true, "Nothing changed.");
       } else if (over) {
         const excess = bytes - maxBytes;
         setSendState(true, excess + " byte" + (excess !== 1 ? "s" : "") + " too long.");
@@ -506,7 +596,6 @@
   // exactly what is loaded so new posts and votes show up in place.
   let loaded = PAGE;
   let pollInFlight = false;
-  const statusEl = document.getElementById("live-status");
 
   async function pollBoard() {
     if (pollInFlight) return;
@@ -522,7 +611,6 @@
       rows.replaceChildren(...next.content.childNodes);
       updateTimes(rows);
       wireVoteButtons(rows);
-      statusEl.textContent = "";
       watchSentinel();
     } catch (e) {
       // Keep the current feed usable when a poll is temporarily offline.

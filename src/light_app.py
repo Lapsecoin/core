@@ -16,7 +16,8 @@ from version import LOCAL_VERSION
 from wallet_ui import (WalletSigner, register_address_page, register_board_pages,
                        register_data_api, register_wallet_routes)
 
-_NAV = {"address_lookup": "address", "board": "board", "send": "send"}
+_NAV = {"address_lookup": "address", "send": "send", "board": "board",
+        "board_post": "board", "board_vote": "board", "board_delete": "board"}
 
 
 def _format_bytes(n):

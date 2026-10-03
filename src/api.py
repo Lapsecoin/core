@@ -148,7 +148,7 @@ from ui_common import (make_flask_app, register_static_routes, _tx_amount, fmt_b
 from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, parse_board_body,  # noqa: F401
                         build_board_body, REPLY_REF_LEN, ICON_PALETTE, ICON_GHOST,
                         _icon_emoji, VOTE_UP_TAG, VOTE_DOWN_TAG, _nickname_owned_by,
-                        _board_posts, _board_profiles_and_votes, _board_pending,
+                        _board_posts, _board_profiles_and_votes,
                         _enrich_board_row, BOARD_MAX_DEPTH, BOARD_THREADS_PER_CHUNK,
                         _flatten_threads)
 
