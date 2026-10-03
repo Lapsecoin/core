@@ -53,6 +53,7 @@ from chainstate import ChainState
 from params import (DB_PATH, MIN_BLOCK_SPACING_SECONDS,
                     VDF_CALIBRATION_ITERATIONS)
 from storage import Storage
+from wallet import Wallet
 
 log = logging.getLogger("ec.node")
 _rng = _secrets.SystemRandom()
@@ -245,10 +246,11 @@ class Node:
 
     def __init__(self, keyfile, public_key, gossip, syncer, pool, net_in_q,
                  db_path=None):
-        self.keyfile      = keyfile
-        self.pk           = public_key
-        self.pk_hex       = public_key.hex()
-        self.addr         = crypto.public_key_to_address(public_key)
+        self.wallet       = Wallet(keyfile, public_key)
+        self.keyfile      = self.wallet.keyfile
+        self.pk           = self.wallet.pk
+        self.pk_hex       = self.wallet.pk_hex
+        self.addr         = self.wallet.addr
         self.gossip       = gossip
         self.syncer       = syncer
         self.pool         = pool
@@ -740,10 +742,7 @@ class Node:
         committed = v.state.get_nonce(self.addr)
         pending   = self.mempool.pending_nonce(self.addr)
         nonce     = max(committed, pending) + 1
-        sk = crypto.decrypt_secret_key(self.keyfile, kek=kek)
-        t  = tx_mod.create(self.addr, self.pk_hex, to_outputs, nonce, fee, sk, memo=memo)
-        del sk
-        return t, fee
+        return self.wallet.sign_tx(to_outputs, nonce, fee, memo=memo, kek=kek)
 
     # ------------------------------------------------------------------
     # Block cycle
