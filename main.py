@@ -38,6 +38,9 @@ from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from updater import Updater
 from version import LOCAL_VERSION
+from wallet import (load_or_create_key as _load_or_create_key,
+                    prompt_new_passphrase as _prompt_new_passphrase,
+                    resolve_passphrase as _resolve_passphrase)
 
 LOG_FILE = "lapsecoin.log"
 LOCK_FILE = "lapsecoin.lock"
@@ -281,40 +284,8 @@ def _serve(app, host, port):
     ).start()
 
 
-def _resolve_passphrase(prompt):
-    env_pass = os.environ.get("LAPSECOIN_PASSPHRASE")
-    if env_pass:
-        return env_pass
-    return getpass.getpass(prompt)
 
 
-def _load_or_create_key(keyfile):
-    """Returns (pk, kek, passphrase). The passphrase is handed back for
-    symmetry with the GUI path; main discards it immediately, since nothing
-    past startup needs it. There is one key file and one address."""
-    if not os.path.exists(keyfile):
-        print("No key file found. Creating new FALCON-512 keypair.")
-        passphrase = _resolve_passphrase("New passphrase: ")
-        if not os.environ.get("LAPSECOIN_PASSPHRASE"):
-            passphrase = _prompt_new_passphrase(passphrase)
-        sk, pk = crypto.generate_keypair()
-        crypto.save_key(keyfile, sk, pk, passphrase)
-        kek = crypto.derive_kek(keyfile, passphrase)
-        addr = crypto.public_key_to_address(pk)
-        log.info("[startup] key created  file=%s", keyfile)
-        log.info("[startup] address=%s", addr)
-        del sk
-        return pk, kek, passphrase
-    passphrase = _resolve_passphrase("Passphrase: ")
-    try:
-        pk = crypto.load_pubkey(keyfile)
-        kek = crypto.derive_kek(keyfile, passphrase)
-        sk_test = crypto.decrypt_secret_key(keyfile, kek=kek)
-        del sk_test
-    except ValueError as e:
-        sys.exit(f"Error: {e}")
-    log.info("[startup] key loaded  file=%s", keyfile)
-    return pk, kek, passphrase
 
 
 def main():
@@ -719,17 +690,6 @@ def main():
         background_startup()
 
 
-def _prompt_new_passphrase(first=None):
-    while True:
-        p1 = first if first else getpass.getpass("New passphrase: ")
-        first = None
-        if len(p1) < 8:
-            print("Passphrase must be at least 8 characters.")
-            continue
-        p2 = getpass.getpass("Confirm passphrase: ")
-        if p1 == p2:
-            return p1
-        print("Passphrases do not match.")
 
 
 def _show_fatal_error(exc):

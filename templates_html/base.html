@@ -328,7 +328,7 @@
 <body>
 <header class="masthead">
   <div class="masthead-inner">
-    <div class="live-status" id="live-status"></div>
+    <div class="live-status" id="live-status">{{ live_status or "" }}</div>
     <div class="corner-links">
       <a href="https://github.com/Lapsecoin/core" target="_blank" rel="noopener" title="Source on GitHub" aria-label="Source on GitHub">
         <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
@@ -348,6 +348,11 @@
     </div>
     <div class="masthead-title"><img src="/favicon.svg" alt="" width="24" height="24">LapseCoin v{{ local_version }}</div>
     <nav class="mainnav">
+      {% if light %}
+      <a href="/address" class="{{ 'active' if nav_active == 'address' }}">Balance</a><span class="sep">&middot;</span>
+      <a href="/send" class="{{ 'active' if nav_active == 'send' }}">Send</a><span class="sep">&middot;</span>
+      <a href="/board" class="{{ 'active' if nav_active == 'board' }}">Board</a>
+      {% else %}
       <a href="/" class="{{ 'active' if nav_active == 'dashboard' }}">Dashboard</a><span class="sep">&middot;</span>
       {% if is_private %}
       <a href="/send" class="{{ 'active' if nav_active == 'send' }}">Send</a><span class="sep">&middot;</span>
@@ -362,6 +367,7 @@
       <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}">Whitepaper</a>
       {% if is_private %}
       <span class="sep">&middot;</span><a href="/settings" class="{{ 'active' if nav_active == 'settings' }}">Settings</a>
+      {% endif %}
       {% endif %}
     </nav>
     {% if update_checker and update_checker.severity %}

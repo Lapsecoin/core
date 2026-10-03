@@ -161,11 +161,22 @@ jobs:
       - name: Build AppImage
         run: make linux
 
+      # The light client reuses everything installed above (it needs only
+      # liboqs), so it is built here instead of in a job of its own that
+      # would rebuild liboqs from source a second time.
+      - name: Build light client
+        run: make dumb
+
+      - name: Smoke test light client
+        run: ./dist/lapsecoin-dumb --version
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: lapsecoin-linux
-          path: dist/lapsecoin
+          path: |
+            dist/lapsecoin
+            dist/lapsecoin-dumb
 
   build-windows:
     needs: test
@@ -233,11 +244,22 @@ jobs:
           & .\dist\lapsecoin.exe -h
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Build light client
+        run: pyinstaller --clean --noconfirm lapsecoin-dumb.spec
+
+      - name: Smoke test light client
+        shell: pwsh
+        run: |
+          & .\dist\lapsecoin-dumb.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: lapsecoin-windows
-          path: dist/lapsecoin.exe
+          path: |
+            dist/lapsecoin.exe
+            dist/lapsecoin-dumb.exe
 
   release:
     needs: [version, build-linux, build-windows]
@@ -263,7 +285,7 @@ jobs:
           path: artifacts/windows
 
       - name: Make AppImage executable
-        run: chmod +x artifacts/linux/lapsecoin
+        run: chmod +x artifacts/linux/lapsecoin artifacts/linux/lapsecoin-dumb
 
       - name: Generate changelog
         id: changelog
@@ -308,7 +330,9 @@ jobs:
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
             artifacts/linux/lapsecoin
+            artifacts/linux/lapsecoin-dumb
             artifacts/windows/lapsecoin.exe
+            artifacts/windows/lapsecoin-dumb.exe
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

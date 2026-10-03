@@ -75,7 +75,7 @@ def _nickname_owned_by(state, nick):
     case-insensitively), or None if nobody has. Now a thin read of
     consensus state itself (tx.validate()'s _check_nickname_available
     enforces the exact same registry, see state.py), not a separate scan
-    api.py used to run on its own -- used to warn/refuse *before* a post
+    api.py used to run on its own. It is used to warn/refuse *before* a post
     pays for a nickname that would fail validation, not just to decide
     what to display after the fact.
     """
@@ -111,12 +111,12 @@ def _board_profiles_and_votes(chain, nicknames, mempool=None):
     first-seen-per-address) board post that address ever set a profile
     header on. Every rendered row looks its poster up here rather than
     trusting its own memo, so an old post always shows who its author
-    currently is, not who they were when they wrote it -- the same
+    currently is, not who they were when they wrote it, the same
     "avatar looked up live, not frozen at post time" behaviour any chat
     client gives you.
 
     nicknames: addr's claimed nick is only honored if it matches
-    state.nicknames (passed in, not recomputed here) -- first-come-first-
+    state.nicknames (passed in, not recomputed here), first-come-first-
     served, case-insensitive, enforced by tx.validate()'s own
     _check_nickname_available, so this is a read of the same consensus
     registry every node already maintains, not a separate, display-only
@@ -125,7 +125,7 @@ def _board_profiles_and_votes(chain, nicknames, mempool=None):
     votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
     (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain,
     plus (this is why mempool is a param) any of the same still sitting
-    unconfirmed -- counted first, exactly like _board_pending already
+    unconfirmed, counted first, exactly like _board_pending already
     puts an unconfirmed post at the bottom of the feed instead of making
     the page look like the click did nothing until a block lands. One
     vote per (address, target) survives, not one per transaction: a vote
@@ -208,15 +208,15 @@ def _board_pending(mempool):
 
 
 def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_vote_refs=frozenset()):
-    """Attach everything board.html actually renders for one row -- the
+    """Attach everything board.html actually renders for one row: the
     poster's current icon/nickname (looked up live, see
     _board_profiles_and_votes), this post's own vote tally, whether that
     tally still has an unconfirmed vote in it (so the count can read as
-    still-settling instead of implying a final, mined number -- the same
+    still-settling instead of implying a final, mined number, the same
     "pending..." honesty a freshly posted message already gets), the
     viewer's own prior vote if any (so the matching button can show the
     same already-voted, disabled state Remark42's own CommentVotes does),
-    and a reply preview if it has one -- so the template only ever reads
+    and a reply preview if it has one, so the template only ever reads
     plain fields off row, never re-parses a memo itself.
     """
     memo = row["tx"].get("memo") or ""

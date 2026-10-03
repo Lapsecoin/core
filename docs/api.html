@@ -331,14 +331,43 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 </div>
 
 <div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/state</span></div>
+<div class="endpoint-desc">What a wallet needs about one address, in a single answer. Query parameters: <code>addr</code>, <code>nick</code>, <code>profile=1</code>, <code>fees=1</code>.</div>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td>board_floor</td><td>Always present: the minimum fee a board post must pay right now</td></tr>
+<tr><td>balance</td><td>With <code>addr</code>: the address's balance in ticks</td></tr>
+<tr><td>nonce</td><td>With <code>addr</code>: the highest nonce the address has used, confirmed or pending. The next transaction uses this plus one.</td></tr>
+<tr><td>nick_owner</td><td>With <code>nick</code>: the address that owns that board nickname, or null</td></tr>
+<tr><td>profile</td><td>With <code>profile=1</code>: the address's current board icon and nickname, or null</td></tr>
+<tr><td>fees</td><td>With <code>fees=1</code>: the same object as <code>/api/fees</code></td></tr>
+</table>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/address/{addr}/page</span></div>
+<div class="endpoint-desc">One page of the address's history as the Balance page shows it, with its totals. Optional <code>page</code> parameter. Returns <code>balance</code>, <code>tx_count</code>, <code>page</code>, <code>total_pages</code> and <code>rows</code>, each row <code>[height, hash, direction, amount, kind]</code> where kind is <code>"tx"</code> or <code>"block"</code> (a block the address built). Much smaller than <code>/history</code>, which carries whole transactions.</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/board/page</span></div>
+<div class="endpoint-desc">The board with threads, profiles, votes and reply targets resolved, as the Board page shows it. The <code>chunks</code> parameter is how many chunks of threads to include. The response carries an <code>ETag</code>: send it back as <code>If-None-Match</code> and an unchanged board costs a 304 with no body. Gzipped when the client sends <code>Accept-Encoding: gzip</code>.</div>
+</div>
+
+<div class="endpoint">
 <div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/peers</span></div>
 <div class="endpoint-desc">The node's peer graph: <code>self</code>, <code>peer_count</code>, <code>graph_peers</code>, <code>claims</code> and <code>attempting</code>. For a plain list of <code>ip:port</code> strings that can seed a new node, use <code>GET /api/peers/download</code>, which returns a <code>lapsecoin_peers.json</code> file.</div>
+</div>
+
+<div class="endpoint">
+<div class="endpoint-title"><span class="endpoint-method">GET</span> <span class="endpoint-path">/api/peers/http</span></div>
+<div class="endpoint-desc">Returns <code>{"nodes": ["ip:port", ...]}</code>: this node and the peers it has found answering HTTP on its own chain, best-connected first. A short list for light clients, which cannot afford <code>/api/peers</code>.</div>
 </div>
 </div>
 
 <div class="card">
 <div class="card-title">Finding the next nonce</div>
-<p>There is no nonce endpoint. A transaction's nonce must be exactly one more than the sender's last used nonce, starting from 0, so the first transaction uses nonce 1. Count the address's confirmed <code>"sent"</code> entries in its history, add any pending transactions from that address in <code>/api/mempool</code>, then add one.</p>
+<p>A transaction's nonce must be exactly one more than the sender's last used nonce, starting from 0, so the first transaction uses nonce 1. Ask <code>/api/state?addr=...</code>: its <code>nonce</code> is the highest the address has used, confirmed or pending, so the next transaction uses that plus one.</p>
 </div>
 </main>
 </body>

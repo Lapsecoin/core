@@ -171,14 +171,15 @@ class LocalReader:
         # an update.
         self._board_cache = {"key": None, "value": None}
 
-    # -- fee market -----------------------------------------------------
+    # Fee market
 
     def fee_estimate(self):
         return fee_estimate(self.node)
 
-    # -- one account ----------------------------------------------------
+    # One account
 
-    def account(self, addr=None, *, nick=None, profile=False, fees=False):
+    def account(self, addr=None, *, nick=None, profile=False, fees=False,
+                fresh=False):
         """Everything a wallet page needs to know about one address in a
         single answer, so a remote reader costs one request, not four.
 
@@ -186,7 +187,8 @@ class LocalReader:
         highest nonce either confirmed or still pending, so the next
         transaction is nonce + 1). With nick: nick_owner, the address that
         owns it or None. With profile: the address's current board icon and
-        nickname, or None. With fees: the fee_estimate dict.
+        nickname, or None. With fees: the fee_estimate dict. `fresh` is for readers that keep
+        answers for a while; this one always reads the live state.
         """
         node = self.node
         v = node.view
@@ -207,7 +209,7 @@ class LocalReader:
     def submit(self, tx_dict):
         return self.node.submit_tx_from_api(tx_dict)
 
-    # -- address page ---------------------------------------------------
+    # Address page
 
     def address_page(self, addr, page):
         """One page of an address's history, newest first, with the
@@ -229,7 +231,7 @@ class LocalReader:
                 "page": page, "total_pages": total_pages,
                 "rows": [list(r) for r in newest_first[start:start + HISTORY_PER_PAGE]]}
 
-    # -- board ----------------------------------------------------------
+    # Board
 
     def _board_state_key(self):
         node = self.node

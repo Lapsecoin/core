@@ -47,6 +47,33 @@ Public app  (default port 8333, externally reachable):
     GET  /api/mempool
          {"size": <n>, "transactions": [{"hash", "from", "outputs", "fee"}, ...]}
 
+    GET  /api/fees
+         {"pending", "min", "median", "max", "next_block"}: the fee market,
+         in ticks per byte. next_block is what clears the next block.
+
+    GET  /api/state[?addr=<addr>&nick=<n>&profile=1&fees=1]
+         What a wallet needs about one address in a
+         single answer. Always "board_floor". With addr: "balance" and
+         "nonce" (highest confirmed or pending; send nonce + 1). With nick:
+         "nick_owner". With profile: "profile" ({"icon","nick"} or null).
+         With fees: "fees", as /api/fees.
+
+    GET  /api/address/<addr>/page[?page=<n>]
+         One page of an address's history with its totals, as the Balance
+         page shows it: {"balance", "tx_count", "page", "total_pages",
+         "rows": [[height, hash, direction, amount, kind], ...]}.
+
+    GET  /api/board/page[?chunks=<n>]
+         The board, resolved (profiles, votes, replies), as the Board page
+         shows it, in the first n chunks of threads. Carries an ETag; send
+         it back as If-None-Match and an unchanged board is a 304. Gzipped
+         when the client accepts it.
+
+    GET  /api/peers/http
+         {"nodes": ["ip:port", ...]}: this node and the peers it has found
+         answering HTTP on its own chain. Short on purpose, for light
+         clients (see light.py) that cannot afford /api/peers.
+
     POST /api/tx/send                 rate-limited: 20 requests/second
          Request body (JSON): a signed plaintext tx dict, see tx.py
          (tx_mod.create): {"from", "pubkey", "outputs", "nonce", "fee",
@@ -113,9 +140,9 @@ from local_reader import (_get_address_history, _RewardSeries,  # noqa: F401
                           _reward_series, _block_reward,
                           _get_mined_blocks_for_addr, fee_estimate,
                           LocalReader, HISTORY_PER_PAGE, local_reader_for)
-from wallet_ui import (address_ctx, register_board_pages, register_data_api,
-                       register_wallet_routes)
-from ui_common import (_tx_amount, fmt_balance, fmt_lapse, fmt_lapse_dp, fmt_duration,  # noqa: F401
+from wallet_ui import (register_address_page, register_board_pages,
+                       register_data_api, register_wallet_routes)
+from ui_common import (make_flask_app, register_static_routes, _tx_amount, fmt_balance, fmt_lapse, fmt_lapse_dp, fmt_duration,  # noqa: F401
                        _pagination_window, _base_dir, _parse_csv_outputs,
                        _reword_insufficient_balance, render_board_text)
 from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, parse_board_body,  # noqa: F401
@@ -651,6 +678,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return None
 
     reader = local_reader_for(node)
+    register_static_routes(app, pfx)
     register_board_pages(app, reader, pfx, _own_addr_or_hidden, csrf_token)
     register_data_api(app, reader, pfx)
 
@@ -703,13 +731,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
                     "can_self_update": snap["can_self_update"]}
         return jsonify(**snap)
 
-    @app.route("/favicon.svg", endpoint=pfx+"favicon")
-    def favicon():
-        # Served straight from the repo's actual lapsecoin.svg (rather than a
-        # copy baked into the HTML) so the browser tab icon always matches
-        # whatever the file on disk currently looks like.
-        return send_file(os.path.join(_base_dir(), "lapsecoin.svg"),
-                         mimetype="image/svg+xml", max_age=3600)
 
     @app.route("/vendor/force-graph.min.js", endpoint=pfx+"vendor_force_graph")
     def vendor_force_graph():
@@ -719,11 +740,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return send_file(os.path.join(_base_dir(), "vendor", "force-graph.min.js"),
                          mimetype="application/javascript", max_age=86400)
 
-    @app.route("/vendor/markdown-toolbar-element.js", endpoint=pfx+"vendor_markdown_toolbar")
-    def vendor_markdown_toolbar():
-        # Same reasoning as vendor_force_graph above. See vendor/README.md.
-        return send_file(os.path.join(_base_dir(), "vendor", "markdown-toolbar-element.js"),
-                         mimetype="application/javascript", max_age=86400)
 
     @app.route("/lapsecoin.png", endpoint=pfx+"icon_png")
     def icon_png():
@@ -828,50 +844,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return render_template("tx_detail.html", title="Transaction",
             tx_hash=tx_hash, tx=found, location=location)
 
-    @app.route("/address", methods=["GET", "POST"], endpoint=pfx+"address_lookup")
-    def address_lookup():
-        addr = request.args.get("addr", "").strip()
-        # "burn" is a lot easier to type than the real twelve-word address,
-        # and the real one isn't a secret, it's the wordlist's own first
-        # ADDRESS_WORD_COUNT entries (see crypto.burn_address). Redirecting
-        # to it rather than silently substituting it keeps the URL itself
-        # the actual address, bookmarkable and shareable like any other
-        # lookup, not a special case that only works when typed as "burn".
-        if addr.lower() == "burn":
-            query = request.args.to_dict(flat=True)
-            query["addr"] = crypto_mod.burn_address()
-            return redirect(f"/address?{urlencode(query)}")
-        # Same redirect-to-the-real-address pattern as "burn" above: a
-        # board nickname is looked up the same deterministic way every
-        # node already resolves one for display (see _nickname_owned_by),
-        # so typing a name here lands on exactly the address that name
-        # actually belongs to, not a second, separate notion of identity.
-        if addr and not crypto_mod.is_valid_address(addr):
-            owner = _nickname_owned_by(node.view.state, addr)
-            if owner is not None:
-                query = request.args.to_dict(flat=True)
-                query["addr"] = owner
-                return redirect(f"/address?{urlencode(query)}")
-        page = max(request.args.get("page", 1, type=int) or 1, 1)
-        v = node.view
-        # The distribution histogram is only shown before a lookup runs, so
-        # skip computing it once an address has actually been submitted.
-        holder_count, histogram, histogram_max = 0, [], 0
-        if not addr:
-            all_balances = v.state.get_all_balances()
-            holder_count = len(all_balances)
-            histogram = compute_holder_histogram(all_balances)
-            histogram_max = max((c for _, c in histogram), default=0)
-        ctx = dict(title="Balance", addr=addr, alert_err="", page=page,
-                   history=None, balance=0, tx_count=0, has_prev=False, has_next=False,
-                   holder_count=holder_count,
-                   histogram=histogram, histogram_max=histogram_max)
-        if addr and not crypto_mod.is_valid_address(addr):
-            ctx["alert_err"] = "Invalid address format."
-            ctx["addr"] = ""
-        elif addr:
-            ctx.update(address_ctx(reader, addr, page))
-        return render_template("address.html", **ctx)
+    def _holder_histogram():
+        all_balances = node.view.state.get_all_balances()
+        histogram = compute_holder_histogram(all_balances)
+        return (len(all_balances), histogram,
+                max((c for _, c in histogram), default=0))
+
+    register_address_page(app, reader, pfx, histogram=_holder_histogram)
 
     @app.route("/address/distribution/<int:bucket>", endpoint=pfx+"distribution_bucket")
     def distribution_bucket(bucket):
@@ -1141,6 +1120,21 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "attempting": pool.attempting(),
         })
 
+    @app.route("/api/peers/http", endpoint=pfx+"api_peers_http")
+    def api_peers_http():
+        """Only the nodes a light client can use: this node itself and the
+        peers it has found answering HTTP and believes are on its own
+        chain, best-connected first. /api/peers describes the whole peer
+        graph for the network page; a light client on a small data
+        allowance needs a short list of addresses and nothing else."""
+        rows = sorted(pool.snapshot(), key=lambda r: r[3] or 0, reverse=True)
+        nodes = [p["address"] for p in _peer_dicts(rows)
+                 if p["http_reachable"] and p["active"] and not p["is_fork"]]
+        me = _self_external_addr()
+        if me and me not in nodes:
+            nodes.insert(0, me)
+        return jsonify({"nodes": nodes})
+
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")
     def api_peers_download():
         # Same shape discovery.py's own PEER_CACHE_FILE reads and writes
@@ -1348,17 +1342,7 @@ def _generate_icon(icon_path, width, height, ext):
 
 def create_app(node, pool, private_port=8335, public_port=8333,
                update_checker=None, updater=None):
-    app = Flask(__name__,
-                template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
-                                 fmt_duration=fmt_duration,
-                                 fmt_lapse_dp=fmt_lapse_dp,
-                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE,
-                                 BURN_ADDRESS=crypto_mod.burn_address(),
-                                 BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
-                                 render_board_text=render_board_text,
-                                 MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
-    app.logger.setLevel(logging.WARNING)
+    app = make_flask_app(__name__)
     # Deliberately not touching the werkzeug logger. main.py already sets it
     # to ERROR, and this line used to put it back to INFO, which is a
     # per-request access log: the dashboard polls /api/info on a timer and
@@ -1402,17 +1386,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 def create_private_app(node, pool, private_port=8335, public_port=8333,
                        update_checker=None, updater=None):
     """Full-featured app for local use. Never expose via Funnel or public port."""
-    app = Flask(__name__,
-                template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
-                                 fmt_duration=fmt_duration,
-                                 fmt_lapse_dp=fmt_lapse_dp,
-                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE,
-                                 BURN_ADDRESS=crypto_mod.burn_address(),
-                                 BOARD_POST_AMOUNT=BOARD_POST_AMOUNT,
-                                 render_board_text=render_board_text,
-                                 MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
-    app.logger.setLevel(logging.WARNING)
+    app = make_flask_app(__name__)
     _close_db_after_request(app)
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],
