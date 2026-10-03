@@ -473,7 +473,7 @@ def board_page_data(snapshot, chunks):
             "has_more": limit < len(starts)}
 
 
-def board_ctx(reader, page_arg, own_addr, extra=None, own_profile=None):
+def board_ctx(reader, page_arg, own_addr, extra=None):
     """Board page context. The board is one continuous feed (no page
     cuts): newest thread first, each thread kept whole with replies nested
     under their parent. `page_arg` is how many chunks of
@@ -489,8 +489,9 @@ def board_ctx(reader, page_arg, own_addr, extra=None, own_profile=None):
     quietly drops the "mine" styling in board.html rather than needing
     its own branch here.
 
-    own_profile is the viewer's current {"icon", "nick"}, if any: it is
-    about the viewer, not the page, so it is not part of the page data.
+    The viewer's own icon and nickname come from reader.profile(), which a
+    light client answers from the board it already has, so showing them
+    never tells a node whose address this is.
     """
     chunks = max(page_arg, 1)
     data = reader.board_page(chunks)
@@ -500,6 +501,7 @@ def board_ctx(reader, page_arg, own_addr, extra=None, own_profile=None):
     for row in page_rows:
         _enrich_board_row(row, data["profiles"], data["votes"], data["targets"],
                           own_addr, pending_vote_refs)
+    own_profile = reader.profile(own_addr) if own_addr else None
     own_icon_idx = own_profile["icon"] if own_profile else None
     ctx = dict(title="Board", rows=page_rows,
                post_count=data["post_count"], own_addr=own_addr,

@@ -24,8 +24,11 @@ import json
 import logging
 import os
 import random
+import secrets
+import socket
 import threading
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -43,6 +46,45 @@ DISCOVER_INTERVAL    = 6 * 3600
 
 class RemoteError(Exception):
     """No node could answer. The message says why, in words fit to show."""
+
+
+# Where Tor listens: the daemon, then Tor Browser.
+TOR_PORTS = (9050, 9150)
+
+
+def _listening(port):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+        return True
+    except OSError:
+        return False
+
+
+def resolve_proxy(proxy):
+    """The proxy URL to give requests, or None for none.
+
+    "tor" means Tor's local SOCKS port, whichever of the two is up. A
+    socks5 URL is made socks5h, so names are resolved by the proxy and not
+    by this machine, which would announce every node asked for to whoever
+    runs the resolver. And a socks proxy with no login of its own is given
+    a random one: Tor reads a different login as a request for a circuit of
+    its own, so this client does not share one with the rest of what the
+    machine sends through Tor, where the two could be told to be one user.
+    """
+    if not proxy:
+        return None
+    if proxy.strip().lower() == "tor":
+        port = next((p for p in TOR_PORTS if _listening(p)), None)
+        if port is None:
+            raise RemoteError("--proxy tor: nothing is listening on 127.0.0.1:9050 "
+                              "or 9150. Start Tor, or Tor Browser, first.")
+        proxy = f"socks5h://127.0.0.1:{port}"
+    parts = urlsplit(proxy)
+    if parts.scheme == "socks5":
+        parts = parts._replace(scheme="socks5h")
+    if parts.scheme.startswith("socks5") and "@" not in parts.netloc:
+        parts = parts._replace(netloc=f"lapse{secrets.token_hex(8)}:x@{parts.netloc}")
+    return urlunsplit(parts)
 
 
 def _norm(url):
@@ -125,8 +167,9 @@ class RemoteReader:
         self.cache_file = cache_file
         self._http = session or requests.Session()
         self._http.headers["User-Agent"] = f"lapsecoin-dumb/{LOCAL_VERSION}"
-        if proxy:
-            self._http.proxies = {"http": proxy, "https": proxy}
+        self.proxy = resolve_proxy(proxy)
+        if self.proxy:
+            self._http.proxies = {"http": self.proxy, "https": self.proxy}
         self._lock = threading.Lock()
         self._cache = {}                 # key -> (fetched_at, value)
         self._board = {}                 # chunks -> {"etag", "data", "at"}
@@ -231,15 +274,12 @@ class RemoteReader:
     def fee_estimate(self):
         return self._cached(("fees",), lambda: self._get_json("/api/fees"))
 
-    def account(self, addr=None, *, nick=None, profile=False, fees=False,
-                fresh=False):
+    def account(self, addr=None, *, nick=None, fees=False, fresh=False):
         params = {}
         if addr:
             params["addr"] = addr
         if nick:
             params["nick"] = nick
-        if profile:
-            params["profile"] = 1
         if fees:
             params["fees"] = 1
         key = ("state", tuple(sorted(params.items())))
@@ -291,6 +331,18 @@ class RemoteReader:
             self._board[chunks] = entry
         return entry
 
+    def profile(self, addr):
+        """addr's board icon and nickname, as far as the board already
+        fetched says. It never asks the node: asking is how a node learns
+        whose address this is, and a viewer's own icon is not worth that.
+        None when the address has no post on what was fetched."""
+        with self._lock:
+            held = [e["data"] for e in self._board.values()]
+        for data in held:
+            if addr in data.get("profiles", {}):
+                return data["profiles"][addr]
+        return None
+
     def board_etag(self, chunks):
         return self._board_entry(chunks)["etag"]
 
@@ -300,9 +352,19 @@ class RemoteReader:
     # For display
 
     def usage(self):
-        """What this session has cost so far, for the page to show."""
+        """What this session has cost so far, and how it is reaching the
+        node, for the page to show."""
+        node = self.nodes.current()
+        if self.proxy:
+            route = "via proxy"
+        elif node is None:
+            route = "direct"
+        elif node.startswith("https://"):
+            route = "direct, encrypted"
+        else:
+            route = "direct, not encrypted"
         return {"bytes": self.bytes_in, "requests": self.requests,
-                "node": self.nodes.current()}
+                "node": node, "route": route}
 
 
 def default_cache_file(directory="."):

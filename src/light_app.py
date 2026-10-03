@@ -42,7 +42,8 @@ def create_light_app(reader, wallet, port=8335):
                 "csrf_token": csrf_token,
                 "nav_active": _NAV.get((request.endpoint or "").split(".")[-1]),
                 "local_version": LOCAL_VERSION,
-                "live_status": f"{_format_bytes(usage['bytes'])} used this session"}
+                "live_status": f"{_format_bytes(usage['bytes'])} used this session, "
+                               f"{usage['route']}"}
 
     @app.errorhandler(RemoteError)
     def remote_down(e):
@@ -58,6 +59,9 @@ def create_light_app(reader, wallet, port=8335):
 
     @app.route("/")
     def home():
-        return redirect("/address")
+        # The board, not the balance: reading it names nobody, while the
+        # balance asks a node about this wallet's address. Nothing that
+        # does is fetched until the user goes there.
+        return redirect("/board")
 
     return app

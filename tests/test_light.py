@@ -178,7 +178,7 @@ def test_the_light_client_never_loads_the_full_node():
 class TestReadersAgree:
     def test_account(self, world):
         addr = world.wallet.addr
-        kw = dict(nick="nobody", profile=True, fees=True)
+        kw = dict(nick="nobody", fees=True)
         assert world.reader.account(addr, **kw) == world.local.account(addr, **kw)
 
     def test_account_without_an_address_still_has_the_floor(self, world):
@@ -497,3 +497,137 @@ class TestPeersHttpEndpoint:
         nodes = app.test_client().get("/api/peers/http").get_json()["nodes"]
         assert "8.8.8.8:8333" in nodes
         assert "8.8.4.4:8333" not in nodes
+
+
+# ---------------------------------------------------------------------------
+# What the node learns
+# ---------------------------------------------------------------------------
+
+class TestWhatTheNodeLearns:
+    """A node that is asked something can tie it to the asker's IP. So what
+    names the wallet's address is kept to what needs it, and reading the
+    board is not among it."""
+
+    def _everything_sent(self, world):
+        return json.dumps(world.session.log)
+
+    def test_opening_the_app_and_reading_the_board_names_nobody(self, world):
+        client = create_light_app(world.reader, world.wallet).test_client()
+        world.session.log.clear()
+        assert client.get("/").headers["Location"].endswith("/board")
+        client.get("/board")
+        client.get("/api/board/fragment?page=1")
+        client.get("/api/board/fragment?page=2")
+        assert world.session.log, "nothing was asked at all"
+        assert world.wallet.addr not in self._everything_sent(world)
+
+    def test_the_balance_page_does_name_it_because_that_is_the_question(self, world):
+        client = create_light_app(world.reader, world.wallet).test_client()
+        world.session.log.clear()
+        client.get("/address")
+        assert world.wallet.addr in self._everything_sent(world)
+
+    def test_asking_for_a_profile_asks_the_node_nothing(self, world):
+        world.reader.board_page(1)
+        world.session.log.clear()
+        world.reader.profile(world.wallet.addr)
+        assert world.session.log == []
+
+    def test_the_compose_box_still_shows_your_own_icon_from_the_board_itself(self, world):
+        sk = crypto.decrypt_secret_key(world.wallet.keyfile, passphrase=PASS)
+        mine = tx_mod.create(world.wallet.addr, world.wallet.pk_hex,
+                             [{"to": crypto.burn_address(), "amount": 1}], 1, 100, sk,
+                             memo=tx_mod.BOARD_MEMO_TAG + "[p:5:]my post, my icon")
+        world.cs.chain.append({"height": 3, "timestamp": int(time.time()),
+                               "transactions": [mine], "hash": "h3"})
+        client = create_light_app(world.reader, world.wallet).test_client()
+        world.session.log.clear()
+        html = client.get("/board").get_data(as_text=True)
+        assert 'data-own-icon-idx="5"' in html
+        assert world.wallet.addr not in self._everything_sent(world)
+
+    def test_posting_does_name_it_because_the_transaction_carries_it(self, world):
+        client = create_light_app(world.reader, world.wallet).test_client()
+        token = _csrf(client, "/board")
+        world.session.log.clear()
+        client.post("/board", data={"csrf_token": token, "passphrase": PASS, "message": "hi"})
+        assert world.wallet.addr in self._everything_sent(world)
+
+
+class TestHowItReachesTheNode:
+    def test_a_direct_plain_http_node_says_so(self, world):
+        world.reader.fee_estimate()
+        assert world.reader.usage()["route"] == "direct, not encrypted"
+        html = create_light_app(world.reader, world.wallet).test_client() \
+            .get("/board").get_data(as_text=True)
+        assert "direct, not encrypted" in html
+
+    def test_an_https_node_says_so(self, world):
+        r = RemoteReader(["https://secure.test"], session=world.session)
+        r.nodes.pick()
+        assert r.usage()["route"] == "direct, encrypted"
+
+    def test_a_proxy_says_so(self, world):
+        r = RemoteReader(["http://node.test"], proxy="http://127.0.0.1:8118",
+                         session=world.session)
+        assert r.usage()["route"] == "via proxy"
+
+    def test_no_proxy_means_none(self):
+        assert remote_reader.resolve_proxy(None) is None
+        assert remote_reader.resolve_proxy("") is None
+
+    def test_tor_finds_whichever_port_is_up(self, monkeypatch):
+        monkeypatch.setattr(remote_reader, "_listening", lambda port: port == 9150)
+        assert remote_reader.resolve_proxy("tor").endswith("@127.0.0.1:9150")
+        monkeypatch.setattr(remote_reader, "_listening", lambda port: True)
+        assert remote_reader.resolve_proxy("tor").endswith("@127.0.0.1:9050")
+
+    def test_tor_that_is_not_running_is_an_error_not_a_silent_direct_connection(self, monkeypatch):
+        monkeypatch.setattr(remote_reader, "_listening", lambda port: False)
+        with pytest.raises(RemoteError, match="Start Tor"):
+            remote_reader.resolve_proxy("tor")
+
+    def test_names_are_resolved_by_the_proxy_not_by_this_machine(self):
+        assert remote_reader.resolve_proxy("socks5://127.0.0.1:9050").startswith("socks5h://")
+
+    def test_each_run_gets_a_circuit_of_its_own(self):
+        a = remote_reader.resolve_proxy("socks5h://127.0.0.1:9050")
+        b = remote_reader.resolve_proxy("socks5h://127.0.0.1:9050")
+        assert a != b and a.endswith("@127.0.0.1:9050") and "lapse" in a
+
+    def test_a_login_the_user_chose_is_left_alone(self):
+        url = "socks5h://me:secret@127.0.0.1:9050"
+        assert remote_reader.resolve_proxy(url) == url
+
+    def test_an_http_proxy_is_passed_through(self):
+        assert remote_reader.resolve_proxy("http://127.0.0.1:8118") == "http://127.0.0.1:8118"
+
+    def test_the_reader_actually_uses_the_proxy_it_resolved(self, world):
+        r = RemoteReader(["http://node.test"], proxy="socks5://127.0.0.1:9050",
+                         session=world.session)
+        assert set(world.session.proxies.values()) == {r.proxy}
+        assert r.proxy.startswith("socks5h://")
+
+
+class TestStartup:
+    def _run(self, monkeypatch, tmp_path, *argv):
+        import light
+        monkeypatch.setenv("LAPSECOIN_PASSPHRASE", PASS)
+        monkeypatch.setattr(light, "_serve", lambda *a, **k: None)
+        monkeypatch.chdir(tmp_path)
+        return light.main(["--keyfile", str(tmp_path / "k.json"), "--no-browser", *argv])
+
+    def test_it_says_plainly_what_the_node_can_see(self, monkeypatch, tmp_path, capsys):
+        self._run(monkeypatch, tmp_path)
+        out = capsys.readouterr().out
+        assert "sees your IP address together with your wallet address" in out
+        assert "--proxy tor" in out
+
+    def test_it_does_not_say_so_when_a_proxy_is_in_use(self, monkeypatch, tmp_path, capsys):
+        self._run(monkeypatch, tmp_path, "--proxy", "http://127.0.0.1:8118")
+        assert "sees your IP address" not in capsys.readouterr().out
+
+    def test_tor_that_is_not_there_stops_it_before_anything_is_sent(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(remote_reader, "_listening", lambda port: False)
+        with pytest.raises(SystemExit, match="Start Tor"):
+            self._run(monkeypatch, tmp_path, "--proxy", "tor")
