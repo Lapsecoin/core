@@ -96,7 +96,6 @@ import threading
 from urllib.parse import urlencode
 
 import markdown
-from markupsafe import Markup, escape
 from flask import Flask, jsonify, make_response, redirect, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -110,6 +109,15 @@ import storage as storage_mod
 import tx as tx_mod
 from params import TICKS_PER_LAPSE, SUPPLY_CAP, MIN_RELAY_FEE_RATE
 from version import LOCAL_VERSION
+from ui_common import (fmt_balance, fmt_lapse, fmt_lapse_dp, fmt_duration,  # noqa: F401
+                       _pagination_window, _base_dir, _parse_csv_outputs,
+                       _reword_insufficient_balance, render_board_text)
+from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, parse_board_body,  # noqa: F401
+                        build_board_body, REPLY_REF_LEN, ICON_PALETTE, ICON_GHOST,
+                        _icon_emoji, VOTE_UP_TAG, VOTE_DOWN_TAG, _nickname_owned_by,
+                        _board_posts, _board_profiles_and_votes, _board_pending,
+                        _enrich_board_row, BOARD_MAX_DEPTH, BOARD_THREADS_PER_CHUNK,
+                        _flatten_threads)
 
 log = logging.getLogger("ec.api")
 
@@ -127,67 +135,13 @@ BOARD_PER_PAGE = 20
 # and an unreadable graph. See _capped_claims.
 CLAIMED_GRAPH_LIMIT = 60
 
-# Board tagging, burn amount and the fee-floor staircase are all consensus
-# rules now (see tx.py: is_board_post, board_fee_floor and friends), not
-# server-side UI defaults, so this module just aliases them.
-BOARD_MEMO_TAG    = tx_mod.BOARD_MEMO_TAG
-BOARD_POST_AMOUNT = tx_mod.BOARD_POST_AMOUNT
-
-# Profile (icon + nickname) and reply-reference parsing/building now
-# lives in tx.py, not here: the nickname a profile header carries is
-# consensus-relevant (tx.validate()'s _check_nickname_available), so the
-# code that decides what a post claims and the code that decides whether
-# that claim is valid have to be the same one, or api.py's own idea of a
-# memo's contents could quietly drift from what tx.py actually enforces.
-parse_board_body  = tx_mod.parse_board_body
-build_board_body  = tx_mod.build_board_body
-REPLY_REF_LEN     = tx_mod.REPLY_REF_LEN
-
-# Small built-in set so "icon" never means an uploaded image or a URL --
-# both would cost far more bytes than this feature is worth and an <img>
-# is exactly what render_board_text's whitelist refuses to ever emit.
-# Index into this list is all a profile header carries; unknown/out of
-# range indexes (an older client's palette was shorter, say) just fall
-# back to the ghost placeholder rather than failing to render.
-ICON_PALETTE = ["\U0001F47B", "\U0001F600", "\U0001F42C", "\U0001F984",
-                "\U0001F41D", "\U0001F340", "\U0001F525", "\U0001F30A",
-                "\U0001F31F", "\U0001F3AF", "\U0001F9E9", "\U0001F680",
-                "\U0001F338", "\U0001F9CA", "\U0001F98A", "\U0001F989",
-                "\U0001F42D", "\U0001F419", "\U0001F995", "\U0001F43C",
-                "\U0001F98B", "\U0001F41B", "\U0001F340", "\U0001F32E"]
-ICON_GHOST = "\U0001F47B"  # shown for an address with no profile post yet
 
 
-def _icon_emoji(idx):
-    """ICON_PALETTE[idx], or the ghost placeholder for an index outside
-    it. tx.parse_board_body deliberately doesn't bounds-check icon (see
-    its own docstring: that's a display concern, not a consensus one),
-    so an older/newer client's differently sized palette, or simply
-    nobody having set an icon at all, has to fall back safely here
-    instead of indexing out of range.
-    """
-    return ICON_PALETTE[idx] if idx is not None and 0 <= idx < len(ICON_PALETTE) else ICON_GHOST
-
-# Votes are ordinary transactions, not board posts: a different tag family
-# entirely (tx.is_board_post only matches BOARD_MEMO_TAG), so voting never
-# advances state.total_board_posts and never pays the board fee floor --
-# just the same congestion-based fee as any other send, plus the same
-# 1-tick burn a board post makes, on purpose (see conversation: kept equal
-# so a vote is still a real, priced action, just never a rationed one).
-VOTE_UP_TAG   = "[vote+] "
-VOTE_DOWN_TAG = "[vote-] "
 
 
-def _nickname_owned_by(state, nick):
-    """The address that owns nick (first board post to ever claim it,
-    case-insensitively), or None if nobody has. Now a thin read of
-    consensus state itself (tx.validate()'s _check_nickname_available
-    enforces the exact same registry, see state.py), not a separate scan
-    api.py used to run on its own -- used to warn/refuse *before* a post
-    pays for a nickname that would fail validation, not just to decide
-    what to display after the fact.
-    """
-    return state.nicknames.get(nick.lower()) if nick else None
+
+
+
 
 
 
@@ -195,44 +149,12 @@ def _nickname_owned_by(state, nick):
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def fmt_balance(ticks):
-    lapse = ticks // TICKS_PER_LAPSE
-    rem = ticks % TICKS_PER_LAPSE
-    return f"{lapse} LAPSE {rem:,} ticks"
 
 
-def fmt_lapse(ticks):
-    """Whole-LAPSE amount only, comma-grouped, for compact display."""
-    return f"{ticks // TICKS_PER_LAPSE:,} LAPSE"
 
 
-def fmt_lapse_dp(ticks, places=4):
-    """LAPSE with decimals: "28,708.2599 LAPSE".
-
-    For headline figures, where "28,708 LAPSE 25,987,856 ticks" is nine
-    digits of tick that wrap the line and answer nothing anyone asked. The
-    exact tick count is still on /api/info for anything that needs it.
-    """
-    return f"{ticks / TICKS_PER_LAPSE:,.{places}f} LAPSE"
 
 
-def fmt_duration(seconds):
-    """A span as the two largest units that fit: "1y 24d", "3d 4h", "12m".
-
-    Two units, never more: the point is a glanceable age, and seconds of
-    precision on something measured in days is noise dressed as detail.
-    """
-    seconds = max(int(seconds or 0), 0)
-    units = (("y", 31_536_000), ("d", 86_400), ("h", 3_600), ("m", 60))
-    parts = []
-    for suffix, size in units:
-        if seconds >= size or parts:
-            count, seconds = divmod(seconds, size)
-            if count or parts:
-                parts.append(f"{count}{suffix}")
-            if len(parts) == 2:
-                return " ".join(parts)
-    return " ".join(parts) if parts else "just now"
 
 
 # ---------------------------------------------------------------------------
@@ -292,24 +214,6 @@ def _tx_amount(t):
     return sum(o["amount"] for o in t.get("outputs", []))
 
 
-def _pagination_window(page, total_pages, radius=2):
-    """Page numbers to render as links: always the first and last page,
-    the current page and `radius` neighbors on each side, and None where
-    a gap between those is skipped (rendered as an ellipsis)."""
-    if total_pages <= 1:
-        return [1]
-    keep = {1, total_pages}
-    for p in range(page - radius, page + radius + 1):
-        if 1 <= p <= total_pages:
-            keep.add(p)
-    window = []
-    prev = None
-    for p in sorted(keep):
-        if prev is not None and p - prev > 1:
-            window.append(None)
-        window.append(p)
-        prev = p
-    return window
 
 
 def _recent_committed_txs(chain, limit, offset=0):
@@ -339,168 +243,12 @@ def _mempool_rows(mempool):
     return [{"hash": tx_mod.tx_hash(t), "tx": t} for t in txs]
 
 
-# A tiny, safe markdown-like subset for board post text, which is public
-# and written by anyone: real markdown.markdown() (used for the shipped
-# whitepaper.md elsewhere in this file) passes raw HTML straight through
-# unless separately sanitized, and this text is the one place on the site
-# that is untrusted, attacker-controlled input rendered to other people's
-# browsers. Escaping happens first, so every substitution below only ever
-# wraps already-escaped text in tags it introduces itself; by the time any
-# pattern runs, there is no way for a post's own content to contain a
-# literal '<', so nothing typed into it can inject an element of its own.
-_BOARD_CODE_RE = re.compile(r'`([^`]+?)`')
-_BOARD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
-_BOARD_ITALIC_RE = re.compile(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)')
-_BOARD_LINK_RE = re.compile(r'\[([^\]\n]+?)\]\((https?://[^\s()<>]+)\)')
-_BOARD_URL_RE = re.compile(r'(https?://[^\s<]+)')
-_BOARD_QUOTE_LINE_RE = re.compile(r'^&gt; ?(.*)$')
 
 
-def render_board_text(raw):
-    text = str(escape(raw))
-    text = _BOARD_CODE_RE.sub(r'<code>\1</code>', text)
-    text = _BOARD_BOLD_RE.sub(r'<strong>\1</strong>', text)
-    text = _BOARD_ITALIC_RE.sub(r'<em>\1</em>', text)
-
-    # [text](url) is pulled out to a placeholder before the bare-URL
-    # autolink pass runs, then stitched back in afterward: run in the
-    # other order, autolink would also match the raw url sitting inside
-    # the href="..." this substitution is about to produce, corrupting
-    # the tag it just built rather than leaving it alone.
-    links = []
-
-    def _stash_link(m):
-        links.append((m.group(1), m.group(2)))
-        return f"\x00LINK{len(links) - 1}\x00"
-
-    text = _BOARD_LINK_RE.sub(_stash_link, text)
-    text = _BOARD_URL_RE.sub(
-        lambda m: f'<a href="{m.group(1)}" rel="nofollow noopener noreferrer" target="_blank">{m.group(1)}</a>',
-        text)
-    for i, (link_text, url) in enumerate(links):
-        text = text.replace(
-            f"\x00LINK{i}\x00",
-            f'<a href="{url}" rel="nofollow noopener noreferrer" target="_blank">{link_text}</a>')
-
-    # Quote: a line starting with "> " (its escaped form, "&gt; ", since
-    # escaping already ran) becomes its own <blockquote>, checked per
-    # line after all inline formatting above so a quoted line can still
-    # contain bold/code/a link.
-    rendered_lines = []
-    for line in text.split("\n"):
-        m = _BOARD_QUOTE_LINE_RE.match(line)
-        if m:
-            rendered_lines.append(f"<blockquote>{m.group(1)}</blockquote>")
-        else:
-            rendered_lines.append(line)
-    return Markup("<br>".join(rendered_lines))
 
 
-def _board_posts(chain):
-    """Every board post on chain, tip first.
-
-    A board post is an ordinary tx whose memo starts with BOARD_MEMO_TAG,
-    so finding them means reading every transaction's memo, the same full
-    scan address_lookup already does for a balance's history. Small
-    enough a chain for that to be fine; if it stops being one, this is
-    where to add an index.
-    """
-    rows = []
-    for blk in reversed(chain):
-        for t in reversed(blk.get("transactions", [])):
-            memo = t.get("memo") or ""
-            if memo.startswith(BOARD_MEMO_TAG):
-                rows.append((blk["height"], blk.get("timestamp"),
-                             tx_mod.tx_hash(t), t))
-    return rows
 
 
-def _board_profiles_and_votes(chain, nicknames, mempool=None):
-    """One more full pass over the chain (see _board_posts' own docstring
-    on why that's fine at this scale), building the two pieces of state a
-    board post's header can affect but that no single post ever *is* by
-    itself:
-
-    profiles: addr -> {"icon", "nick"}, from the latest (tip-first, so
-    first-seen-per-address) board post that address ever set a profile
-    header on. Every rendered row looks its poster up here rather than
-    trusting its own memo, so an old post always shows who its author
-    currently is, not who they were when they wrote it -- the same
-    "avatar looked up live, not frozen at post time" behaviour any chat
-    client gives you.
-
-    nicknames: addr's claimed nick is only honored if it matches
-    state.nicknames (passed in, not recomputed here) -- first-come-first-
-    served, case-insensitive, enforced by tx.validate()'s own
-    _check_nickname_available, so this is a read of the same consensus
-    registry every node already maintains, not a separate, display-only
-    notion of ownership that could disagree with it.
-
-    votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
-    (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain,
-    plus (this is why mempool is a param) any of the same still sitting
-    unconfirmed -- counted first, exactly like _board_pending already
-    puts an unconfirmed post at the bottom of the feed instead of making
-    the page look like the click did nothing until a block lands. One
-    vote per (address, target) survives, not one per transaction: a vote
-    isn't a repeatable action that piles up, it's a single choice that
-    can change your mind, exactly like Remark42's own model (a vote there
-    is one stored value per user per comment, overwritten by a later
-    click, never summed). Walking mempool-then-tip-first and keeping only
-    the first vote seen per (address, target) pair gets that same
-    "latest replaces, doesn't add" semantics for free, the same trick
-    profiles above already uses for "latest icon/nickname wins".
-
-    pending_vote_refs: the set of target refs with an unconfirmed vote
-    counted above, so a row can show its score as still-settling instead
-    of implying a mined, final number.
-    """
-    profiles = {}
-    votes = {}
-    voted = set()  # (address, target ref) already counted, most recent/pending first
-    pending_vote_refs = set()
-
-    def _tally_vote(t):
-        """Counts t if it's a vote, returning the ref it targeted (so the
-        caller can mark that ref pending) or None if it wasn't a vote at
-        all."""
-        memo = t.get("memo") or ""
-        if not (memo.startswith(VOTE_UP_TAG) or memo.startswith(VOTE_DOWN_TAG)):
-            return None
-        up = memo.startswith(VOTE_UP_TAG)
-        tag = VOTE_UP_TAG if up else VOTE_DOWN_TAG
-        ref = memo[len(tag):len(tag) + REPLY_REF_LEN]
-        voter = t.get("from")
-        key = (voter, ref)
-        if key in voted:
-            return ref
-        voted.add(key)
-        tally = votes.setdefault(ref, {"up": 0, "down": 0, "by": {}})
-        tally["up" if up else "down"] += 1
-        tally["by"][voter] = "up" if up else "down"
-        return ref
-
-    if mempool is not None:
-        for t in mempool.all_txs():
-            ref = _tally_vote(t)
-            if ref is not None:
-                pending_vote_refs.add(ref)
-
-    for blk in reversed(chain):
-        for t in reversed(blk.get("transactions", [])):
-            memo = t.get("memo") or ""
-            if memo.startswith(BOARD_MEMO_TAG):
-                addr = t.get("from")
-                if addr in profiles:
-                    continue
-                icon, nick, _, _ = parse_board_body(memo[len(BOARD_MEMO_TAG):])
-                if nick and nicknames.get(nick.lower()) != addr:
-                    nick = None  # claimed by a different address; see state.nicknames
-                if icon is not None:
-                    profiles[addr] = {"icon": icon, "nick": nick}
-            else:
-                _tally_vote(t)
-    return profiles, votes, pending_vote_refs
 
 
 def _committed_tx_count(chain):
@@ -609,37 +357,6 @@ def _get_mined_blocks_for_addr(addr, node):
             if blk.get("builder") == addr]
 
 
-def _parse_csv_outputs(outputs_raw):
-    outputs, errors = [], []
-    for i, line in enumerate(outputs_raw.strip().splitlines(), 1):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split(",")
-        if len(parts) != 2:
-            errors.append(f"Line {i}: expected 'address,amount'")
-            continue
-        addr, amt_str = parts[0].strip(), parts[1].strip()
-        if addr.lower() == "burn":
-            addr = crypto_mod.burn_address()
-        if not crypto_mod.is_valid_address(addr):
-            errors.append(f"Line {i}: invalid address")
-            continue
-        try:
-            amt = int(amt_str)
-        except ValueError:
-            errors.append(f"Line {i}: invalid amount '{amt_str}'")
-            continue
-        if amt < 0:
-            errors.append(f"Line {i}: amount must not be negative")
-            continue
-        if amt == 0:
-            # A zero-amount output is never valid on the wire (tx_mod.validate
-            # rejects it), so this isn't a real output. It's the untouched
-            # half of a prefilled "address,0" line the sender left as-is.
-            continue
-        outputs.append({"to": addr, "amount": amt})
-    return outputs, errors
 
 
 def fee_estimate(node):
@@ -897,20 +614,8 @@ def _default_send_outputs(node):
     return ""
 
 
-_INSUFFICIENT_RE = re.compile(r"insufficient balance: have (\d+), need (\d+)")
 
 
-def _reword_insufficient_balance(msg):
-    """"insufficient balance: have 400000000, need 400001000" (ticks, the
-    only unit consensus speaks) read back as "have 4 LAPSE 0 ticks, need
-    4 LAPSE 1,000 ticks" so a person doesn't have to do the division
-    themselves to see they're short."""
-    m = _INSUFFICIENT_RE.search(msg)
-    if not m:
-        return msg
-    have, need = (int(g) for g in m.groups())
-    return (f"insufficient balance: have {fmt_balance(have)}, "
-            f"need {fmt_balance(need)}")
 
 
 def _auto_fee(node, outputs, memo="", floor=0):
@@ -1022,92 +727,12 @@ def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
         del seed
 
 
-def _board_pending(mempool):
-    """Board-tagged txs sitting in the mempool, not yet mined: the same
-    "waiting to be mined" fact a compose-time alert used to state in
-    words, shown instead as a row in the feed itself, since the mempool
-    already knows this and a separate banner was just repeating it less
-    usefully. No ordering guarantee among these (nothing pre-confirmation
-    has one), which is fine, they're always the newest thing on the page
-    regardless of the order a few of them happen to render in.
-    """
-    rows = []
-    for t in mempool.all_txs():
-        memo = t.get("memo") or ""
-        if memo.startswith(BOARD_MEMO_TAG):
-            rows.append({"height": None, "ts": None,
-                         "hash": tx_mod.tx_hash(t), "tx": t, "pending": True})
-    return rows
 
 
-def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_vote_refs=frozenset()):
-    """Attach everything board.html actually renders for one row -- the
-    poster's current icon/nickname (looked up live, see
-    _board_profiles_and_votes), this post's own vote tally, whether that
-    tally still has an unconfirmed vote in it (so the count can read as
-    still-settling instead of implying a final, mined number -- the same
-    "pending..." honesty a freshly posted message already gets), the
-    viewer's own prior vote if any (so the matching button can show the
-    same already-voted, disabled state Remark42's own CommentVotes does),
-    and a reply preview if it has one -- so the template only ever reads
-    plain fields off row, never re-parses a memo itself.
-    """
-    memo = row["tx"].get("memo") or ""
-    icon, _nick, reply_ref, text = parse_board_body(memo[len(BOARD_MEMO_TAG):])
-    prof = profiles.get(row["tx"].get("from"))
-    row["icon"] = _icon_emoji(prof["icon"]) if prof else ICON_GHOST
-    row["nick"] = prof.get("nick") if prof else None
-    row["text"] = text
-    row["ref6"] = row["hash"][:REPLY_REF_LEN]
-    tally = votes.get(row["ref6"], {"up": 0, "down": 0, "by": {}})
-    row["up"], row["down"] = tally["up"], tally["down"]
-    row["my_vote"] = tally.get("by", {}).get(own_addr)
-    row["vote_pending"] = row["ref6"] in pending_vote_refs
-    row["reply_ref"] = reply_ref
-    row["reply_from"] = row["reply_snippet"] = None
-    if reply_ref:
-        target = hash6_index.get(reply_ref)
-        if target is not None:
-            row["reply_from"] = target["tx"].get("from")
-            _, _, _, target_text = parse_board_body(
-                (target["tx"].get("memo") or "")[len(BOARD_MEMO_TAG):])
-            row["reply_snippet"] = target_text[:60]
-    return row
 
 
-BOARD_MAX_DEPTH = 4
-BOARD_THREADS_PER_CHUNK = 10
 
 
-def _flatten_threads(entries, score_of):
-    """All threads in display order as [(entry, depth)], plus the index in
-    that list where each thread starts. Does not mutate entries."""
-    by_ref = {e["ref6"]: e for e in entries}
-    seq = {id(e): i for i, e in enumerate(entries)}
-    children, roots = {}, []
-    for e in entries:
-        parent = by_ref.get(e["reply_ref"]) if e["reply_ref"] else None
-        if parent is None or parent is e:
-            roots.append(e)
-        else:
-            children.setdefault(parent["ref6"], []).append(e)
-    roots.reverse()                       # newest thread first
-    flat, starts, seen = [], [], set()
-
-    def walk(e, depth):
-        if e["ref6"] in seen:
-            return
-        seen.add(e["ref6"])
-        flat.append((e, min(depth, BOARD_MAX_DEPTH)))
-        kids = children.get(e["ref6"], [])
-        kids.sort(key=lambda c: (-score_of(c), -seq[id(c)]))
-        for c in kids:
-            walk(c, depth + 1)
-
-    for r in roots:
-        starts.append(len(flat))
-        walk(r, 0)
-    return flat, starts
 
 
 # The heavy part of the board (a scan of the whole chain plus the vote and
@@ -1911,12 +1536,6 @@ def _close_db_after_request(app):
             log.debug("[api] closing request db connection failed", exc_info=True)
 
 
-def _base_dir():
-    """Return the directory that contains templates_html/, working both from
-    source (repo root) and inside a PyInstaller bundle (sys._MEIPASS)."""
-    if getattr(sys, "frozen", False):
-        return sys._MEIPASS
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 
 # Formats servable by /lapsecoin-WxH.ext, all reachable from cairosvg's PNG
