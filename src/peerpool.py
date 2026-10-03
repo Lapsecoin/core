@@ -261,6 +261,22 @@ class PeerPool:
             self._info[addr]["http_checked_at"] = (
                 checked_at if checked_at is not None else time.time())
 
+    def set_public_url(self, addr, url):
+        """Record the HTTPS address addr says it can be reached at (see
+        public_url.py), or None for none. Only a claim: what a client does
+        with it is check the certificate, and a node that names someone
+        else's address just fails that. No-op for an untracked address."""
+        with self._lock:
+            if addr not in self._peers:
+                return
+            self._info.setdefault(addr, {})["public_url"] = url
+
+    def public_urls(self):
+        """{addr: https url} for every tracked peer that has advertised one."""
+        with self._lock:
+            return {a: i["public_url"] for a, i in self._info.items()
+                    if i.get("public_url") and a in self._peers}
+
     def touch(self, addr):
         """Update last-seen timestamp and clear strikes on successful contact."""
         with self._lock:

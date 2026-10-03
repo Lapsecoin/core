@@ -101,8 +101,9 @@ class _Session:
         self.log = []
 
     def request(self, method, url, params=None, json=None, headers=None, timeout=None):
-        path = urlsplit(url).path
-        self.log.append((method, path, json, params))
+        parts = urlsplit(url)
+        path = parts.path
+        self.log.append((method, path, json, params, f"{parts.scheme}://{parts.netloc}"))
         h = dict(self.headers)
         h.update(headers or {})
         return _Resp(self.client.open(path, method=method, query_string=params,
@@ -631,3 +632,228 @@ class TestStartup:
         monkeypatch.setattr(remote_reader, "_listening", lambda port: False)
         with pytest.raises(SystemExit, match="Start Tor"):
             self._run(monkeypatch, tmp_path, "--proxy", "tor")
+
+
+# ---------------------------------------------------------------------------
+# The wallet's address only goes where it is safe
+# ---------------------------------------------------------------------------
+
+class _OnlyAnswers(_Session):
+    """Answers for some hosts and refuses the rest, as a down node would."""
+
+    def __init__(self, client, up):
+        super().__init__(client)
+        self.up = up
+
+    def request(self, method, url, **kw):
+        if urlsplit(url).netloc not in self.up:
+            raise remote_reader.requests.ConnectionError("down")
+        return super().request(method, url, **kw)
+
+
+class TestAddressOnlyOverEncryptedNodes:
+    PLAIN = "9.9.9.9:8333"
+    PLAIN_URL = "http://9.9.9.9:8333"
+
+    def _reader(self, world, session=None, seeds=("https://secure.test",), plain=(), **kw):
+        r = RemoteReader(list(seeds), session=session or world.session, refresh=0, **kw)
+        r.nodes.add(list(plain))
+        r._discovered_at = time.time()           # do not go looking in these tests
+        return r
+
+    def _bases(self, world, path_prefix):
+        return {e[4] for e in world.session.log if e[1].startswith(path_prefix)
+                and (e[3] or {}).get("addr")}
+
+    def test_an_encrypted_node_gets_the_address_even_with_a_plain_one_listed(self, world):
+        r = self._reader(world, plain=[self.PLAIN])
+        r.account(world.wallet.addr, fees=True)
+        r.address_page(world.wallet.addr, 1)
+        assert {e[4] for e in world.session.log} == {"https://secure.test"}
+
+    def test_a_down_encrypted_node_means_the_address_is_withheld_not_sent_plain(self, world):
+        session = _OnlyAnswers(world.app.test_client(), up={"9.9.9.9:8333"})
+        r = self._reader(world, session, plain=[self.PLAIN])
+        for ask in (lambda: r.account(world.wallet.addr, fees=True),
+                    lambda: r.address_page(world.wallet.addr, 1),
+                    lambda: r.submit({"from": world.wallet.addr})):
+            with pytest.raises(RemoteError, match="encrypted"):
+                ask()
+        assert session.log == []                 # nothing went anywhere
+
+    def test_what_names_nobody_still_works_through_the_plain_node(self, world):
+        session = _OnlyAnswers(world.app.test_client(), up={"9.9.9.9:8333"})
+        r = self._reader(world, session, plain=[self.PLAIN])
+        assert r.fee_estimate()
+        assert r.board_page(1)["rows"]
+        assert r.account(None, fees=True)["board_floor"] >= 1
+        assert {e[4] for e in session.log} == {self.PLAIN_URL}
+
+    def test_with_no_encrypted_node_known_it_says_what_to_do(self, world):
+        r = self._reader(world, seeds=["https://x.test"])
+        r.nodes = NodeSet([])
+        r.nodes.add([self.PLAIN])
+        with pytest.raises(RemoteError) as e:
+            r.account(world.wallet.addr)
+        for hint in ("--proxy tor", "--node", "--allow-plain-http", "board can still be read"):
+            assert hint in str(e.value)
+
+    def test_a_node_the_user_named_is_trusted_with_it_even_over_plain_http(self, world):
+        r = self._reader(world, seeds=["http://mine.test:8333"])
+        r.account(world.wallet.addr)
+        assert {e[4] for e in world.session.log} == {"http://mine.test:8333"}
+
+    def test_a_proxy_lifts_the_rule(self, world):
+        r = self._reader(world, seeds=["https://x.test"], proxy="http://127.0.0.1:8118")
+        r.nodes = NodeSet([])
+        r.nodes.add([self.PLAIN])
+        assert r.account(world.wallet.addr)["balance"] > 0
+
+    def test_saying_so_lifts_the_rule(self, world):
+        r = self._reader(world, seeds=["https://x.test"], allow_plain_http=True)
+        r.nodes = NodeSet([])
+        r.nodes.add([self.PLAIN])
+        assert r.account(world.wallet.addr)["balance"] > 0
+
+    def test_a_board_post_is_withheld_too_not_just_the_balance(self, world):
+        session = _OnlyAnswers(world.app.test_client(), up={"9.9.9.9:8333"})
+        r = self._reader(world, session, plain=[self.PLAIN])
+        client = create_light_app(r, world.wallet).test_client()
+        token = _csrf(client, "/board")
+        resp = client.post("/board", data={"csrf_token": token, "passphrase": PASS,
+                                           "message": "should not go out"})
+        assert "encrypted" in resp.get_data(as_text=True)
+        assert world.node.mempool.all_txs() == []
+        assert all(world.wallet.addr not in json.dumps(e[2:4]) for e in session.log)
+
+    def test_the_page_says_why_instead_of_failing_blankly(self, world):
+        session = _OnlyAnswers(world.app.test_client(), up={"9.9.9.9:8333"})
+        r = self._reader(world, session, plain=[self.PLAIN])
+        resp = create_light_app(r, world.wallet).test_client().get("/address")
+        assert resp.status_code == 502 and "encrypted" in resp.get_data(as_text=True)
+
+    def test_https_peers_are_tried_before_plain_ones_of_the_same_kind(self):
+        ns = NodeSet([])
+        ns.add(["https://a.example.org", "http://9.9.9.9:8333"])
+        assert ns.pick() == "https://a.example.org"
+
+
+class TestWhatDiscoveryMayAdd:
+    def test_only_acceptable_nodes_are_kept(self):
+        got = RemoteReader._acceptable([
+            "https://ok.example.org", "9.9.9.9:8333", "http://8.8.4.4:8333",
+            "https://10.0.0.1", "https://localhost", "http://evil.example.org/x",
+            "10.0.0.5:8333", "127.0.0.1:8333", "192.168.1.1:8333", "169.254.1.1:80",
+            "9.9.9.9:0", "9.9.9.9:99999", "9.9.9.9:nope", "nonsense",
+            7, None, ["x"], {"a": 1}, b"9.9.9.9:8333", "",
+        ])
+        assert got == ["https://ok.example.org", "http://9.9.9.9:8333", "http://8.8.4.4:8333"]
+
+    def test_https_comes_first(self):
+        assert RemoteReader._acceptable(["9.9.9.9:8333", "https://a.example.org"]) == [
+            "https://a.example.org", "http://9.9.9.9:8333"]
+
+    def test_an_ipv6_peer_gets_a_valid_url(self):
+        assert RemoteReader._acceptable(["2606:4700:4700::1111:8333"]) == [
+            "http://[2606:4700:4700::1111]:8333"]
+
+    def test_discovery_from_a_node_with_an_https_address_learns_it(self, world):
+        from tests.test_api import _InfoNode
+        app = api.create_app(_InfoNode(world.cs), peerpool_mod.PeerPool(),
+                             public_url="https://node.example.org")
+        session = _Session(app.test_client())
+        r = RemoteReader(["http://node.test"], session=session, refresh=0)
+        r.fee_estimate()
+        assert "https://node.example.org" in r.nodes.all()
+
+    def test_a_node_that_lies_in_its_list_adds_nothing_unsafe(self, world):
+        class Liar(_Session):
+            def request(self, method, url, **kw):
+                if urlsplit(url).path == "/api/peers/http":
+                    r = _Resp(self.client.get("/api/fees"))
+                    r.content = json.dumps({"nodes": ["127.0.0.1:8335", "10.0.0.1:80", 5],
+                                            "https": ["https://127.0.0.1", "http://x.org",
+                                                      "https://fine.example.org"]}).encode()
+                    return r
+                return super().request(method, url, **kw)
+
+        r = RemoteReader(["http://node.test"], session=Liar(world.app.test_client()), refresh=0)
+        r.fee_estimate()
+        assert sorted(r.nodes.all()) == ["http://node.test", "https://fine.example.org"]
+
+    def test_a_poisoned_node_file_adds_nothing_unsafe(self, world, tmp_path):
+        cache = tmp_path / "nodes.json"
+        cache.write_text(json.dumps(["http://127.0.0.1:8335", "https://10.0.0.1", 3,
+                                     "https://fine.example.org", "9.9.9.9:8333"]))
+        r = RemoteReader(["http://node.test"], session=world.session, cache_file=str(cache))
+        assert sorted(r.nodes.all()) == ["http://9.9.9.9:8333", "http://node.test",
+                                         "https://fine.example.org"]
+
+    def test_a_node_file_that_is_not_a_list_is_ignored(self, world, tmp_path):
+        cache = tmp_path / "nodes.json"
+        cache.write_text('{"a": 1}')
+        r = RemoteReader(["http://node.test"], session=world.session, cache_file=str(cache))
+        assert r.nodes.all() == ["http://node.test"]
+
+
+class TestRouteForALocalNode:
+    def test_a_node_on_this_machine_says_so(self, world):
+        r = RemoteReader(["http://127.0.0.1:8333"], session=world.session, refresh=0)
+        r._discovered_at = time.time()
+        r.fee_estimate()
+        assert r.usage()["route"] == "direct, this machine"
+
+
+class TestStartupSaysWhereTheAddressGoes:
+    def _out(self, monkeypatch, tmp_path, capsys, *argv):
+        import light
+        monkeypatch.setenv("LAPSECOIN_PASSPHRASE", PASS)
+        monkeypatch.setattr(light, "_serve", lambda *a, **k: None)
+        monkeypatch.chdir(tmp_path)
+        light.main(["--keyfile", str(tmp_path / "k.json"), "--no-browser", *argv])
+        return capsys.readouterr().out
+
+    def test_by_default_it_goes_only_to_encrypted_nodes(self, monkeypatch, tmp_path, capsys):
+        out = self._out(monkeypatch, tmp_path, capsys)
+        assert "goes only to nodes reached over https" in out
+
+    def test_allowing_plain_is_a_warning(self, monkeypatch, tmp_path, capsys):
+        out = self._out(monkeypatch, tmp_path, capsys, "--allow-plain-http")
+        assert "Warning: --allow-plain-http" in out
+
+    def test_naming_a_plain_remote_node_is_a_warning(self, monkeypatch, tmp_path, capsys):
+        out = self._out(monkeypatch, tmp_path, capsys, "--node", "http://203.0.113.9:8333")
+        assert "Warning: --node http://203.0.113.9:8333 is plain http" in out
+
+    def test_naming_a_node_on_this_machine_is_not(self, monkeypatch, tmp_path, capsys):
+        out = self._out(monkeypatch, tmp_path, capsys, "--node", "http://127.0.0.1:8333")
+        assert "Warning: --node" not in out
+
+    def test_naming_an_https_node_is_not(self, monkeypatch, tmp_path, capsys):
+        out = self._out(monkeypatch, tmp_path, capsys, "--node", "https://node.example.org")
+        assert "Warning: --node" not in out
+
+
+class TestWhyNoNodeAnswered:
+    def test_the_reason_survives_the_cooldown(self, world):
+        """The first failure strikes the node, so the next request finds
+        none to ask. It must still say what went wrong, not "no node"."""
+        class Dead(_Session):
+            def request(self, *a, **k):
+                raise remote_reader.requests.ConnectionError("proxy refused")
+
+        r = RemoteReader(["https://only.test"], session=Dead(world.app.test_client()))
+        with pytest.raises(RemoteError, match="only.test: ConnectionError"):
+            r.fee_estimate()
+        with pytest.raises(RemoteError, match="only.test: ConnectionError"):
+            r.fee_estimate()                 # now in cooldown, same reason
+
+    def test_a_missing_socks_library_would_be_named_not_hidden(self, world):
+        class NoSocks(_Session):
+            def request(self, *a, **k):
+                raise remote_reader.requests.exceptions.InvalidSchema(
+                    "Missing dependencies for SOCKS support.")
+
+        r = RemoteReader(["https://only.test"], session=NoSocks(world.app.test_client()))
+        with pytest.raises(RemoteError, match="InvalidSchema"):
+            r.fee_estimate()
