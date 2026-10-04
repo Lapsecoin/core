@@ -1379,7 +1379,6 @@ class TestWaitForFieldOrOwnPace:
         self, node_env, monkeypatch
     ):
         node, *_, net_q = node_env
-        node._first_build_pending = False   # only the first build skips the wait
         node._own_build_seconds.append(0.05)   # short wait for the test
         monkeypatch.setattr(node_mod.block_mod, "race_odds",
                             lambda *a, **kw: {"odds_pct": 0.0})
@@ -1404,7 +1403,6 @@ class TestWaitForFieldOrOwnPace:
         builds for real rather than waiting forever on data that
         requires someone else to act."""
         node, *_ = node_env
-        node._first_build_pending = False
         node._own_build_seconds.append(0.05)   # short wait for the test
         monkeypatch.setattr(node_mod.block_mod, "race_odds",
                             lambda *a, **kw: {"odds_pct": 0.0})
@@ -1415,24 +1413,22 @@ class TestWaitForFieldOrOwnPace:
 
         evaluate_spy.assert_called()
 
-    def test_the_first_cycle_after_a_start_builds_whatever_the_odds(
+    def test_cycles_wait_for_the_timing_run_and_then_build(
         self, node_env, monkeypatch, caplog
     ):
-        node, *_, net_q = node_env
-        node._own_build_seconds.append(30.0)   # a wait this long would hang the test
-        monkeypatch.setattr(node_mod.block_mod, "race_odds",
-                            lambda *a, **kw: {"odds_pct": 0.0})
+        import threading
+        node, *_ = node_env
+        node._timing_done = threading.Event()   # a timing run is going
+        threading.Timer(0.3, node._timing_done.set).start()
         evaluate_spy = MagicMock(return_value=("aa" * 100, "bb" * 100, 0.05))
         monkeypatch.setattr(node_mod.vdf_mod, "evaluate", evaluate_spy)
         with caplog.at_level("INFO", logger="ec.node"):
             node._run_cycle()
-        evaluate_spy.assert_called()
-        assert "building anyway" in caplog.text
-        assert node._first_build_pending is False
+        assert "timing one full block on this machine first" in caplog.text
+        evaluate_spy.assert_called()   # built only after the timing run ended
 
     def test_waiting_says_why_in_the_log(self, node_env, monkeypatch, caplog):
         node, *_ = node_env
-        node._first_build_pending = False
         node._own_build_seconds.append(0.05)
         monkeypatch.setattr(node_mod.block_mod, "race_odds",
                             lambda *a, **kw: {"odds_pct": 0.0, "median": 120.0})
