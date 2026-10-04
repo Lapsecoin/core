@@ -1424,7 +1424,7 @@ class TestWaitForFieldOrOwnPace:
         monkeypatch.setattr(node_mod.vdf_mod, "evaluate", evaluate_spy)
         with caplog.at_level("INFO", logger="ec.node"):
             node._run_cycle()
-        assert "timing one full block on this machine first" in caplog.text
+        assert "the start-up benchmark is running" in caplog.text
         evaluate_spy.assert_called()   # built only after the timing run ended
 
     def test_mining_off_says_so_in_the_log(self, node_env, monkeypatch, caplog):

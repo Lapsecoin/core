@@ -524,13 +524,15 @@ class Node:
         by sharing the CPU."""
         try:
             iterations = block_mod.get_vdf_iterations(self.view.chain)
-            log.info("[vdf] timing one full block (%d iterations) in the "
-                     "background", iterations)
+            log.info("[vdf] benchmark started: one full block's worth of VDF "
+                     "(%d iterations), nothing else builds until it ends",
+                     iterations)
             _out, _proof, seconds = vdf_mod.evaluate(
                 crypto.sha256(b"lapsecoin-vdf-measurement"), iterations)
             self._own_build_seconds.append(seconds)
             self._save_own_build_seconds()
-            log.info("[vdf] a full block takes %.0fs on this machine", seconds)
+            log.info("[vdf] benchmark done: a full block takes %.0fs on this "
+                     "machine", seconds)
         except Exception:
             log.debug("[vdf] full build timing failed", exc_info=True)
         finally:
@@ -584,7 +586,8 @@ class Node:
             return
         self._commit(winner, relay=relay)
 
-    def _wait_for_field_or_own_pace(self, cs, pre_cycle_blocks, until=None):
+    def _wait_for_field_or_own_pace(self, cs, pre_cycle_blocks, until=None,
+                                    why="odds are 0%"):
         """Used only when this cycle's own odds are a measured 0% (see
         _run_cycle): rather than either blindly building anyway (paying
         for a real evaluation the field, if still active, almost
@@ -642,8 +645,8 @@ class Node:
                         else time.monotonic() >= deadline)):
             now = time.monotonic()
             if now - last_beat >= VDF_HEARTBEAT_INTERVAL_SECONDS:
-                log.info("[block %d] still waiting, not building: %.0fs so far",
-                         cs.height + 1, now - waited_from)
+                log.info("[block %d] still not building (%s): %.0fs so far",
+                         cs.height + 1, why, now - waited_from)
                 last_beat = now
             self._retry_unconfirmed_spreads()
             for blk in self._drain_queue(timeout=1):
@@ -846,11 +849,11 @@ class Node:
         if not self._timing_done.is_set():
             self.status_line = (f"timing a full block first  (block "
                                 f"{cs.height + 1}, not building yet)")
-            log.info("[block %d] not building yet: timing one full block on "
-                     "this machine first, so the figure is not skewed by "
-                     "another build running at the same time", cs.height + 1)
+            log.info("[block %d] not building: the start-up benchmark is "
+                     "running (blocks and syncing still go on)", cs.height + 1)
             if self._wait_for_field_or_own_pace(cs, pre_cycle_blocks,
-                                                until=self._timing_done):
+                                                until=self._timing_done,
+                                                why="benchmark running"):
                 return
             pre_cycle_blocks = []
         window = self.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
