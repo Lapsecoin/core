@@ -348,9 +348,10 @@ class Node:
         # Seconds per VDF iteration on this machine, measured once by
         # _calibrate_vdf and used until real builds supersede it.
         self._vdf_seconds_per_iteration = self._load_vdf_rate()
-        # True until this process has started its first real evaluation, so
-        # a restart always builds once instead of trusting a stored estimate.
-        self._first_build_pending = True
+        # Set while the start-up timing run is not going. Cycles wait on it,
+        # so that run has the CPU to itself and its figure is a real one.
+        self._timing_done = threading.Event()
+        self._timing_done.set()
 
         self.cs   = self._load_cs()
         self.view = NodeView(self.cs)
@@ -518,7 +519,9 @@ class Node:
         count, once per start, on its own thread. A node that is slower than
         the field never finishes a cycle of its own (the tip moves first),
         so without this its build time would only ever be an estimate from
-        the short calibration sample."""
+        the short calibration sample. Cycles wait for it (see _run_cycle),
+        so nothing else computes meanwhile and the figure is not inflated
+        by sharing the CPU."""
         try:
             iterations = block_mod.get_vdf_iterations(self.view.chain)
             log.info("[vdf] timing one full block (%d iterations) in the "
@@ -530,6 +533,8 @@ class Node:
             log.info("[vdf] a full block takes %.0fs on this machine", seconds)
         except Exception:
             log.debug("[vdf] full build timing failed", exc_info=True)
+        finally:
+            self._timing_done.set()
 
     def _run_cycle_paused(self, cs, pre_cycle_blocks):
         """Mining disabled: never submit a candidate of our own this
@@ -570,7 +575,7 @@ class Node:
             return
         self._commit(winner, relay=relay)
 
-    def _wait_for_field_or_own_pace(self, cs, pre_cycle_blocks):
+    def _wait_for_field_or_own_pace(self, cs, pre_cycle_blocks, until=None):
         """Used only when this cycle's own odds are a measured 0% (see
         _run_cycle): rather than either blindly building anyway (paying
         for a real evaluation the field, if still active, almost
@@ -621,12 +626,15 @@ class Node:
         waited_from = time.monotonic()
         last_beat = waited_from
         deadline = waited_from + (self.own_vdf_median() or 0)
-        while self.running and self.cs is cs and time.monotonic() < deadline:
+        # With `until`, the wait ends when that event is set instead of at
+        # the deadline (see _measure_full_build).
+        while (self.running and self.cs is cs
+               and not (until.is_set() if until is not None
+                        else time.monotonic() >= deadline)):
             now = time.monotonic()
             if now - last_beat >= VDF_HEARTBEAT_INTERVAL_SECONDS:
-                log.info("[block %d] still waiting, not building: %.0fs of "
-                         "%.0fs", cs.height + 1, now - waited_from,
-                         deadline - waited_from)
+                log.info("[block %d] still waiting, not building: %.0fs so far",
+                         cs.height + 1, now - waited_from)
                 last_beat = now
             self._retry_unconfirmed_spreads()
             for blk in self._drain_queue(timeout=1):
@@ -694,6 +702,7 @@ class Node:
         self._loop_thread = threading.current_thread()
         log.info("[startup] node ready, our address is %s", self.addr)
         if self.settings.get(settings_mod.MINING_ENABLED):
+            self._timing_done.clear()
             threading.Thread(target=self._measure_full_build, daemon=True,
                              name="vdf-measure").start()
         if not self._vdf_seconds_per_iteration:
@@ -825,12 +834,19 @@ class Node:
         # expected case; total silence for that whole stretch is itself
         # real evidence this node had a chance, so it builds for real.
         # See _wait_for_field_or_own_pace.
+        if not self._timing_done.is_set():
+            self.status_line = (f"timing a full block first  (block "
+                                f"{cs.height + 1}, not building yet)")
+            log.info("[block %d] not building yet: timing one full block on "
+                     "this machine first, so the figure is not skewed by "
+                     "another build running at the same time", cs.height + 1)
+            if self._wait_for_field_or_own_pace(cs, pre_cycle_blocks,
+                                                until=self._timing_done):
+                return
+            pre_cycle_blocks = []
         window = self.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
         race = block_mod.race_odds(cs.chain, self.own_vdf_median(), self.addr, window)
-        if race is not None and race["odds_pct"] == 0 and self._first_build_pending:
-            log.info("[block %d] odds are 0%%, building anyway: this is the "
-                     "first build since the node started", cs.height + 1)
-        elif race is not None and race["odds_pct"] == 0:
+        if race is not None and race["odds_pct"] == 0:
             self.status_line = (f"waiting  (block {cs.height + 1}, odds are 0%, "
                                 f"watching before building)")
             log.info("[block %d] not building yet: odds are 0%% (our full "
@@ -846,7 +862,6 @@ class Node:
             pre_cycle_blocks = []   # already consumed by the wait above
 
         self.status_line = f"computing VDF for block {cs.height + 1}"
-        self._first_build_pending = False
         log.info("[block %d] computing our own block now, expected about %.0fs "
                  "on this machine", cs.height + 1, self.own_vdf_median() or 0)
 
