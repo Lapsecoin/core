@@ -557,6 +557,15 @@ class Node:
         for blk in pre_cycle_blocks:
             self._consider_inbound_block(blk, cs, accumulated_blocks)
 
+        # Said on the first paused cycle and then every heartbeat interval,
+        # not every 20s cycle, so an idle node does not fill the log.
+        now = time.monotonic()
+        if now - getattr(self, "_last_paused_log", -VDF_HEARTBEAT_INTERVAL_SECONDS) \
+                >= VDF_HEARTBEAT_INTERVAL_SECONDS:
+            log.info("[block %d] not building: mining is off, so this node "
+                     "only syncs and relays", cs.height + 1)
+            self._last_paused_log = now
+
         deadline = time.monotonic() + NO_MINING_POLL_INTERVAL_SECONDS
         while self.running and self.cs is cs and time.monotonic() < deadline:
             self._retry_unconfirmed_spreads()
@@ -802,7 +811,7 @@ class Node:
         cs = self.cs   # local alias; can change under sync
         pruned = self.mempool.prune_stale(cs.state)
         peers = self.pool.count()
-        log.info("[block %d] building on %s  (%d peer%s, %d transaction%s waiting%s)",
+        log.info("[block %d] after %s  (%d peer%s, %d transaction%s waiting%s)",
                  cs.height + 1, cs.tip["hash"][:12],
                  peers, "" if peers == 1 else "s",
                  self.mempool.size(), "" if self.mempool.size() == 1 else "s",
