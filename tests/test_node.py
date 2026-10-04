@@ -1427,6 +1427,17 @@ class TestWaitForFieldOrOwnPace:
         assert "timing one full block on this machine first" in caplog.text
         evaluate_spy.assert_called()   # built only after the timing run ended
 
+    def test_mining_off_says_so_in_the_log(self, node_env, monkeypatch, caplog):
+        node, *_ = node_env
+        monkeypatch.setattr(node_mod, "NO_MINING_POLL_INTERVAL_SECONDS", 0.05)
+        monkeypatch.setattr(node.settings, "get",
+                            lambda key, *a, **kw: False
+                            if key == node_mod.settings_mod.MINING_ENABLED else None)
+        with caplog.at_level("INFO", logger="ec.node"):
+            node._run_cycle()
+            node._run_cycle()
+        assert caplog.text.count("not building: mining is off") == 1
+
     def test_waiting_says_why_in_the_log(self, node_env, monkeypatch, caplog):
         node, *_ = node_env
         node._own_build_seconds.append(0.05)
