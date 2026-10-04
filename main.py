@@ -415,6 +415,10 @@ def main():
         sys.exit(0)
 
     use_gui = not args.no_gui
+    if use_gui and sys.platform.startswith("linux") and not (
+            os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        log.info("[startup] no display found, running without the window")
+        use_gui = False
     gui = None
     if use_gui:
         try:
