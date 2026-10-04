@@ -835,11 +835,12 @@ class Node:
             pre_cycle_blocks = []   # already consumed by the wait above
 
         self.status_line = f"computing VDF for block {cs.height + 1}"
-        # The first evaluation after a start is not cancelled when the tip
-        # moves or the odds turn bad: a node slower than the field would
-        # otherwise never finish one, and never learn its own build time. It
-        # is one full block of work per start. If the tip moved meanwhile the
-        # result is dropped below, but the time is kept.
+        # The first evaluation after a start is not abandoned when a peer's
+        # block wins the height: a node slower than the field would otherwise
+        # never finish one, and never learn its own build time. Syncing still
+        # comes first: a sync, or a sibling replacing our tip, cancels it like
+        # any other build. If a peer's block won meanwhile the result is
+        # dropped below, but the time is kept.
         full_run = self._first_build_pending
         self._first_build_pending = False
         log.info("[block %d] computing our own block now, expected about %.0fs "
@@ -901,10 +902,10 @@ class Node:
                 # Mid-wait sync happens on evidence, not on a timer: a
                 # block from a height above ours landed in the drain above
                 # and set the hint. Nothing arriving means nothing to do.
-                if self._sync_if_triggered() and not full_run:
+                if self._sync_if_triggered():
                     handle.cancel()
 
-                if self.cs is not cs and not full_run:
+                if self.cs is not cs:
                     # The tip moved on (a sync, or a sibling that beat our
                     # own tip). What we're computing is for a parent that
                     # is no longer ours, so it can never be committed,
