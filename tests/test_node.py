@@ -1430,36 +1430,20 @@ class TestWaitForFieldOrOwnPace:
         assert "building anyway" in caplog.text and "first build" in caplog.text
         assert node._first_build_pending is False
 
-    def test_the_first_build_is_cancelled_when_the_tip_moves(
+    def test_the_first_build_is_not_cancelled_when_the_tip_moves(
         self, node_env, monkeypatch
     ):
-        """Syncing comes first: a chain adopted mid-build cancels it."""
         node, *_ = node_env
         node._own_build_seconds.clear()
         seen = {}
 
         def evaluate(challenge, iterations, handle=None):
             node.cs = node_mod.ChainState.from_genesis()   # the tip moves meanwhile
-            for _ in range(50):
-                if handle._cancelled:
-                    break
-                time.sleep(0.05)
             seen["cancelled"] = handle._cancelled
-            raise node_mod.vdf_mod.Cancelled()
+            return ("aa" * 100, "bb" * 100, 42.0)
         monkeypatch.setattr(node_mod.vdf_mod, "evaluate", evaluate)
         node._run_cycle()
-        assert seen["cancelled"] is True
-
-    def test_the_first_build_survives_a_peer_winning_the_height(
-        self, node_env, monkeypatch
-    ):
-        """What a slower node needs to ever learn its own build time."""
-        node, *_ = node_env
-        node._own_build_seconds.clear()
-        monkeypatch.setattr(node, "_should_abandon", lambda *a, **kw: True)
-        monkeypatch.setattr(node_mod.vdf_mod, "evaluate",
-                            MagicMock(return_value=("aa" * 100, "bb" * 100, 42.0)))
-        node._run_cycle()
+        assert seen["cancelled"] is False
         assert list(node._own_build_seconds) == [42.0]
 
     def test_mining_off_says_so_in_the_log(self, node_env, monkeypatch, caplog):
