@@ -8,6 +8,7 @@ and cannot drift between them.
 """
 
 import getpass
+import json
 import logging
 import os
 import sys
@@ -18,6 +19,49 @@ import tx as tx_mod
 # Same logger name main.py logs under, so the startup lines read the same
 # whichever program created or loaded the key.
 log = logging.getLogger("ec.main")
+
+
+DEFAULT_KEY = "lapsecoin_key.json"
+KEY_ENV = "LAPSECOIN_KEY"
+
+
+def key_path(value=None):
+    """The key file to use. `value` is --key, else $LAPSECOIN_KEY, else the
+    default file. Either may be a path to the key file or the text that
+    `--export` prints; text is saved to the default file (once) and that
+    file is used from then on, so everything downstream still gets a path."""
+    value = (value or os.environ.get(KEY_ENV) or DEFAULT_KEY).strip()
+    # A library we import prints a line of its own on stdout, so captured
+    # --export output can carry it in front of the key. Take the key's line.
+    lines = [ln.strip() for ln in value.splitlines() if ln.lstrip().startswith("{")]
+    if lines:
+        value = lines[-1]
+    if not value.startswith("{"):
+        return value
+    try:
+        data = json.loads(value)
+        for field in ("public_key", "ciphertext", "salt"):
+            if not isinstance(data[field], str):
+                raise TypeError(field)
+    except (ValueError, KeyError, TypeError):
+        raise ValueError("the key is neither a file path nor the output of --export")
+    if os.path.exists(DEFAULT_KEY):
+        if crypto.load_pubkey(DEFAULT_KEY).hex() != data["public_key"]:
+            raise ValueError(f"{DEFAULT_KEY} already holds a different key; "
+                             "remove it, or point --key at the key you want")
+        return DEFAULT_KEY
+    fd = os.open(DEFAULT_KEY, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(value)
+    log.info("[startup] key saved  file=%s", DEFAULT_KEY)
+    return DEFAULT_KEY
+
+
+def export_key(path):
+    """The key file as one line of text, for --key or $LAPSECOIN_KEY on
+    another machine. Still encrypted: it opens only with the passphrase."""
+    with open(path) as f:
+        return json.dumps(json.load(f), separators=(",", ":"))
 
 
 class Wallet:

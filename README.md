@@ -164,7 +164,8 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 | `--host` | `0.0.0.0` | Interface to bind for the public port |
 | `--port` | `8333` | Public port for HTTP API and peer connections |
 | `--private-port` | `port+2` | Private port for wallet UI, always bound to 127.0.0.1 |
-| `--keyfile` | `lapsecoin_key.json` | Path to encrypted keypair |
+| `--key` | `$LAPSECOIN_KEY`, else `lapsecoin_key.json` | The key: a path, or the text `--export` prints (`--keyfile` still works) |
+| `--export` | - | Print the key as one line of text (still encrypted) and exit |
 | `--db` | `lapsecoin_chain.db` | Path to SQLite chain database |
 | `--peer host:port` | - | Bootstrap peer (repeatable) |
 | `--max-peers` | `125` | Hard cap on peer table size |
