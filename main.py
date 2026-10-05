@@ -38,7 +38,7 @@ from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from updater import Updater
 from version import LOCAL_VERSION
-from wallet import load_or_create_key as _load_or_create_key
+from wallet import export_key, key_path, load_or_create_key as _load_or_create_key
 
 LOG_FILE = "lapsecoin.log"
 LOCK_FILE = "lapsecoin.lock"
@@ -294,8 +294,14 @@ def main():
     # someone typed on the command line to override it.
     parser.add_argument("--port",    type=int,
                         default=_env_port("LAPSECOIN_PORT", 8333))
-    parser.add_argument("--keyfile", default="lapsecoin_key.json"
+    parser.add_argument("--key", "--keyfile", dest="keyfile", default=None,
+                        help="The wallet key: a path to the key file, or the text "
+                             "--export prints. Default: $LAPSECOIN_KEY, else "
+                             "lapsecoin_key.json."
                         ).completer = FilesCompleter()
+    parser.add_argument("--export", action="store_true",
+                        help="Print the key as one line of text (still encrypted) "
+                             "and exit. Use it as --key or $LAPSECOIN_KEY elsewhere.")
     parser.add_argument("--db",      default=DB_PATH
                         ).completer = FilesCompleter()
     parser.add_argument("--peer",       action="append", default=[])
@@ -352,6 +358,16 @@ def main():
     )
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
+    try:
+        args.keyfile = key_path(args.keyfile)
+    except ValueError as e:
+        sys.exit(f"Error: --key: {e}")
+    if args.export:
+        try:
+            print(export_key(args.keyfile))
+        except OSError as e:
+            sys.exit(f"Error: {e}")
+        sys.exit(0)
     public_url = None
     if args.public_url:
         try:

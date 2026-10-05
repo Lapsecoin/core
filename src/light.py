@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 from remote_reader import DEFAULT_SEEDS, RemoteReader, default_cache_file
 from version import LOCAL_VERSION
-from wallet import Wallet, load_or_create_key
+from wallet import Wallet, export_key, key_path, load_or_create_key
 
 
 def _serve(app, host, port):
@@ -32,8 +32,12 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="lapsecoin-dumb",
         description="LapseCoin light client: wallet and board through another node.")
-    p.add_argument("--keyfile", default="lapsecoin_key.json",
-                   help="The wallet key. A key from the full node works as is.")
+    p.add_argument("--key", "--keyfile", dest="keyfile", default=None,
+                   help="The wallet key: a path to the key file, or the text --export "
+                        "prints. A key from the full node works as is. Default: "
+                        "$LAPSECOIN_KEY, else lapsecoin_key.json.")
+    p.add_argument("--export", action="store_true",
+                   help="Print the key as one line of text (still encrypted) and exit.")
     p.add_argument("--node", action="append", default=[], metavar="URL",
                    help="A node to ask (repeatable). Default: " + ", ".join(DEFAULT_SEEDS))
     p.add_argument("--port", type=int, default=8335, help="Local port for the wallet.")
@@ -53,6 +57,13 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    try:
+        args.keyfile = key_path(args.keyfile)
+    except ValueError as e:
+        sys.exit(f"--key: {e}")
+    if args.export:
+        print(export_key(args.keyfile))
+        return
     pk, _kek, _passphrase = load_or_create_key(args.keyfile)
     wallet = Wallet(args.keyfile, pk)
     if args.proxy not in ("auto", "none") and "://" not in args.proxy:

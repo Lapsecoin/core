@@ -43,6 +43,6 @@ EXPOSE 8333
 # or an env file); it is intentionally not baked into the image.
 CMD ["python", "main.py", \
      "--log-level", "INFO", \
-     "--keyfile", "/data/lapsecoin_key.json", \
+     "--key", "/data/lapsecoin_key.json", \
      "--db", "/data/lapsecoin_chain.db", \
      "--no-gui"]
