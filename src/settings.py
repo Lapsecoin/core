@@ -274,8 +274,18 @@ HIDE_ADDRESS_PUBLICLY = Setting(
          "setting. Turn off to go back to showing it publicly too.",
 )
 
+# Minimum race odds (percent) this node needs before it builds straight
+# away. At or below it, the node waits for the field first, the same wait
+# a measured 0% always got (see Node._wait_for_field_or_own_pace). Zero,
+# the default, keeps the old behavior of waiting only at 0%.
+MIN_ODDS_PCT = Setting(
+    "min_odds_pct", 0.0, float, minimum=0.0, slider_max=100.0,
+    label="Minimum odds to build straight away (%)",
+)
+
 ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH, SWAP_AUTO_ACCEPT_MIN_TRUST,
-       SHOW_HARDWARE_DETAILS, MINING_ENABLED, HIDE_ADDRESS_PUBLICLY]
+       SHOW_HARDWARE_DETAILS, MINING_ENABLED, MIN_ODDS_PCT,
+       HIDE_ADDRESS_PUBLICLY]
 
 
 # How long a value read from storage is reused before going back to the
