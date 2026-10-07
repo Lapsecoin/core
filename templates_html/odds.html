@@ -21,7 +21,7 @@
     <div class="stat-label">Odds</div>
     {% if waiting_zero_odds %}
     <div class="stat-value" id="odds-pct-val">Not mining</div>
-    <div class="stat-sub" id="odds-pct-sub">odds are 0%, watching before building</div>
+    <div class="stat-sub" id="odds-pct-sub">odds are at or below your minimum, watching before building</div>
     {% else %}
     <div class="stat-value" id="odds-pct-val">{{ ("%.1f"|format(race.odds_pct) ~ "%") if race.odds_pct is not none else "--" }}</div>
     <div class="stat-sub" id="odds-pct-sub">{% set w = "%g"|format(race.draw_window) %}{% if race.odds_pct is none %}no blocks to judge from yet{% elif race.odds_pct == 0 %}never inside the {{ w }}s draw window{% elif race.in_draw_pct < 95 %}in the {{ w }}s draw window on {{ "%.0f"|format(race.in_draw_pct) }}% of heights{% elif race.entrants < 1.05 %}only builder inside the {{ w }}s draw window{% else %}{{ "%.1f"|format(race.entrants) }} builders inside the {{ w }}s draw window{% endif %}</div>
@@ -409,7 +409,7 @@
       if (data.waiting_zero_odds) {
         document.getElementById("odds-pct-val").textContent = "Not mining";
         document.getElementById("odds-pct-sub").textContent =
-          "odds are 0%, watching before building";
+          "odds are at or below your minimum, watching before building";
       } else {
         document.getElementById("odds-pct-val").textContent =
           data.odds_pct !== null ? fmt1(data.odds_pct) + "%" : "--";
