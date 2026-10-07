@@ -858,19 +858,23 @@ class Node:
             pre_cycle_blocks = []
         window = self.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
         race = block_mod.race_odds(cs.chain, self.own_vdf_median(), self.addr, window)
-        if race is not None and race["odds_pct"] == 0:
-            self.status_line = (f"waiting  (block {cs.height + 1}, odds are 0%, "
-                                f"watching before building)")
-            log.info("[block %d] not building yet: odds are 0%% (our full "
-                     "build takes about %.0fs, recent blocks arrive every "
-                     "%.0fs). Waiting up to %.0fs for someone else's block "
-                     "before building anyway",
-                     cs.height + 1, self.own_vdf_median() or 0,
+        min_odds = self.settings.get(settings_mod.MIN_ODDS_PCT)
+        odds = race["odds_pct"] if race is not None else None
+        if odds is not None and odds <= min_odds:
+            shown = round(odds, 1)
+            self.status_line = (f"waiting  (block {cs.height + 1}, odds are "
+                                f"{shown:g}%, watching before building)")
+            log.info("[block %d] not building yet: odds are %g%% (minimum "
+                     "%g%%, our full build takes about %.0fs, recent blocks "
+                     "arrive every %.0fs). Waiting up to %.0fs for someone "
+                     "else's block before building anyway",
+                     cs.height + 1, shown, min_odds,
+                     self.own_vdf_median() or 0,
                      race.get("median") or 0, self.own_vdf_median() or 0)
             if self._wait_for_field_or_own_pace(cs, pre_cycle_blocks):
                 return
-            log.info("[vdf] odds were 0%% but nothing landed in ~%.0fs, "
-                     "building anyway", self.own_vdf_median() or 0)
+            log.info("[vdf] odds were %g%% but nothing landed in ~%.0fs, "
+                     "building anyway", shown, self.own_vdf_median() or 0)
             pre_cycle_blocks = []   # already consumed by the wait above
 
         self.status_line = f"computing VDF for block {cs.height + 1}"
