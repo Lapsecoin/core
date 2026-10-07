@@ -1449,6 +1449,56 @@ class TestWaitForFieldOrOwnPace:
             node._run_cycle()
         assert "not building yet: odds are 0%" in caplog.text
 
+    def test_odds_at_or_below_the_minimum_wait(self, node_env, monkeypatch, caplog):
+        node, *_ = node_env
+        node._own_build_seconds.append(0.05)
+        monkeypatch.setenv("LAPSECOIN_MIN_ODDS_PCT", "40")
+        monkeypatch.setattr(node_mod.block_mod, "race_odds",
+                            lambda *a, **kw: {"odds_pct": 25.0, "median": 120.0})
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate",
+                            MagicMock(return_value=("aa" * 100, "bb" * 100, 0.05)))
+        with caplog.at_level("INFO", logger="ec.node"):
+            node._run_cycle()
+        assert "not building yet: odds are 25%" in caplog.text
+
+    def test_odds_equal_to_the_minimum_wait(self, node_env, monkeypatch, caplog):
+        node, *_ = node_env
+        node._own_build_seconds.append(0.05)
+        monkeypatch.setenv("LAPSECOIN_MIN_ODDS_PCT", "50")
+        monkeypatch.setattr(node_mod.block_mod, "race_odds",
+                            lambda *a, **kw: {"odds_pct": 50.0, "median": 120.0})
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate",
+                            MagicMock(return_value=("aa" * 100, "bb" * 100, 0.05)))
+        with caplog.at_level("INFO", logger="ec.node"):
+            node._run_cycle()
+        assert "not building yet" in caplog.text
+
+    def test_odds_above_the_minimum_build_straight_away(
+        self, node_env, monkeypatch, caplog
+    ):
+        node, *_ = node_env
+        node._own_build_seconds.append(0.05)
+        monkeypatch.setenv("LAPSECOIN_MIN_ODDS_PCT", "40")
+        monkeypatch.setattr(node_mod.block_mod, "race_odds",
+                            lambda *a, **kw: {"odds_pct": 50.0, "median": 120.0})
+        evaluate_spy = MagicMock(return_value=("aa" * 100, "bb" * 100, 0.05))
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate", evaluate_spy)
+        with caplog.at_level("INFO", logger="ec.node"):
+            node._run_cycle()
+        assert "not building yet" not in caplog.text
+        evaluate_spy.assert_called()
+
+    def test_default_minimum_only_waits_at_zero(self, node_env, monkeypatch, caplog):
+        node, *_ = node_env
+        node._own_build_seconds.append(0.05)
+        monkeypatch.setattr(node_mod.block_mod, "race_odds",
+                            lambda *a, **kw: {"odds_pct": 1.0, "median": 120.0})
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate",
+                            MagicMock(return_value=("aa" * 100, "bb" * 100, 0.05)))
+        with caplog.at_level("INFO", logger="ec.node"):
+            node._run_cycle()
+        assert "not building yet" not in caplog.text
+
     def test_a_full_build_is_timed_once_per_start(self, node_env, monkeypatch):
         node, *_ = node_env
         node._own_build_seconds.clear()
