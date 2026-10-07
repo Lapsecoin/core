@@ -587,12 +587,12 @@ class TestSettingsValidation:
         assert "review every" in html
 
     def test_slider_metadata_reaches_the_page(self):
-        """The three numeric settings render a slider (a range input); the
+        """The four numeric settings render a slider (a range input); the
         bool settings (show_hardware_details, mining_enabled,
         hide_address_publicly) render a switch each, not a slider."""
         client, _ = self._client()
         html = client.get("/settings").get_data(as_text=True)
-        assert html.count('type="range"') == 3
+        assert html.count('type="range"') == 4
         assert html.count('class="switch"') == 3
 
 
