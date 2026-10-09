@@ -95,7 +95,7 @@ class TestPage:
 
     def test_it_discloses_what_the_lock_does(self, app):
         html = app.client.get("/fees").get_data(as_text=True)
-        assert "10 LAPSE lock comes back only if no node offers" in html
+        assert "10 LAPSE is burned, and comes back only if no node offers" in html
         assert "at most $2.00" in html
 
     def test_the_public_app_has_no_fees_page_but_has_the_status(self, app):

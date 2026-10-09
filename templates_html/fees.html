@@ -6,7 +6,7 @@
 <div class="card">
   <div class="card-title">Get gas on another network</div>
   <p>Pay a few LAPSE and a node operator sends you gas on the chain where your token is stuck.</p>
-  <p class="stat-sub">A free gift, as is. The {{ lock // 100000000 }} LAPSE lock comes back only if no node offers.
+  <p class="stat-sub">A free gift, as is. {{ lock // 100000000 }} LAPSE is burned, and comes back only if no node offers.
      Each node sends at most ${{ '%.2f' % node_cap_usd }}.</p>
 </div>
 
@@ -115,7 +115,7 @@
       $("plan-need").textContent = coin(p.target, p.decimals, p.symbol) + " (" + usd(p.target_usd) + ")";
       $("plan-send").textContent = p.needs_help ? coin(p.deliver, p.decimals, p.symbol) + " (" + usd(p.deliver_usd) + ")" : "nothing";
       $("plan-cover").textContent = p.needs_help ? Math.round(p.covers_share * 100) + "%" : "100%";
-      $("plan-pay").textContent = (p.lock / 1e8) + " LAPSE + network fee";
+      $("plan-pay").textContent = (p.lock / 1e8) + " LAPSE burned, plus the network fee";
       let note = "";
       if (!p.needs_help) note = "That address already holds enough for this. Nothing to request.";
       else if (p.covers_share < 1) note = "This needs more than one node will send (" + usd(p.cap_usd) +

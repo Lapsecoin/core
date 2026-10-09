@@ -179,7 +179,7 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 ## Fee requests
 
-Holding a token on a chain where you have none of its gas coin? Open **Fees**, pick the network and what you want to do, sign a message with the wallet that holds the address, and pay a 10 LAPSE lock. A node operator sends you the gas. The lock is returned if no node offers; otherwise it is recycled into the emission pool, whether or not the gas arrives. It is a free gift from operators, as is.
+Holding a token on a chain where you have none of its gas coin? Open **Fees**, pick the network and what you want to do, sign a message with the wallet that holds the address, and burn 10 LAPSE. A node operator sends you the gas. The 10 LAPSE is returned only if no node offers; otherwise it stays burned, whether or not the gas arrives, and burned LAPSE is paid out again by emission. It is a free gift from operators, as is.
 
 To serve requests, fund the Base address shown on **Send** (a node needs about $2 of ETH) and switch on **Pay fee requests** in Settings. A request never costs a node more than $2.
 

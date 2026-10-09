@@ -54,7 +54,7 @@ One kind of transaction carries a protocol-enforced minimum on top of the usual 
 
 ### Fee requests
 
-A request locks LAPSE in an unspendable escrow address for up to five blocks and names another network, a target balance and an address the sender controls. If no node posts a claim in that window the lock returns to the sender. If one does, the window closes a block later and the lock goes to the burn address, which section 5 counts as unminted. Nobody is paid for claiming or refunded for a failed delivery: the chain cannot see another network, and a reward would invite false claims. Claimers take turns in an order derived from chain data and each reads the destination's own balance before paying.
+A request burns LAPSE, held in an unspendable escrow address for up to five blocks while it waits for offers, and names another network, a target balance and an address the sender controls. If no node posts a claim in that window the lock returns to the sender. If one does, the window closes a block later and the lock goes to the burn address, which section 5 counts as unminted. Nobody is paid for claiming or refunded for a failed delivery: the chain cannot see another network, and a reward would invite false claims. Claimers take turns in an order derived from chain data and each reads the destination's own balance before paying.
 
 ## 5. Supply
 
