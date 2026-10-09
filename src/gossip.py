@@ -57,28 +57,6 @@ log = logging.getLogger("ec.gossip")
 
 SEEN_CACHE_SIZE = 50_000
 
-# Orders are gossiped by anyone willing to pay one FALCON verification,
-# with no block reward and no stake riding on getting one wrong, unlike a
-# block or a tx. A flood of them must not be able to spend the budget that
-# block and tx dedup depend on: evicting a block's entry means that block
-# gets re-flooded, which is a consensus cost paid for a swap feature doing
-# nothing wrong except being popular. Smaller than the consensus kinds'
-# budget on purpose, since it bounds only how much memory a flood of
-# advertisements can occupy, never how much delivery they get; the actual
-# rate a peer may push orders at is a separate admission control (see
-# market.MAX_ORDERS_PER_MAKER and the intake limits in market_routes.py).
-ORDER_SEEN_CACHE_SIZE = 20_000
-
-# Fill requests and responses (see market.py's handshake section) are
-# rarer than orders (one per fill attempt, not one per standing offer)
-# and shorter-lived (market.FILL_REQUEST_MAX_AGE_SECONDS /
-# FILL_RESPONSE_MAX_AGE_SECONDS prune them within the hour), so a smaller
-# budget than orders' still comfortably covers genuine traffic while
-# keeping the same isolation guarantee: a flood of either can never touch
-# the order, block or tx caches, or each other's.
-FILL_REQUEST_SEEN_CACHE_SIZE = 5_000
-FILL_RESPONSE_SEEN_CACHE_SIZE = 5_000
-
 # Probability that a stem hop forwards again instead of fluffing, giving a
 # geometric stem length with mean 1/(1-q) hops where the topology allows it.
 #
@@ -109,16 +87,10 @@ def _random_fraction():
 
 KIND_BLOCK = "block"
 KIND_TX    = "tx"
-KIND_ORDER = "order"
-KIND_FILL_REQUEST  = "fill_request"
-KIND_FILL_RESPONSE = "fill_response"
 
 _SEEN_CACHE_SIZES = {
     KIND_BLOCK: SEEN_CACHE_SIZE,
     KIND_TX: SEEN_CACHE_SIZE,
-    KIND_ORDER: ORDER_SEEN_CACHE_SIZE,
-    KIND_FILL_REQUEST: FILL_REQUEST_SEEN_CACHE_SIZE,
-    KIND_FILL_RESPONSE: FILL_RESPONSE_SEEN_CACHE_SIZE,
 }
 
 
@@ -248,12 +220,6 @@ class Gossip:
     def _send(self, item, kind, peers, stemming):
         if kind == KIND_BLOCK:
             self.udp.send_block(item, peers=peers, stemming=stemming)
-        elif kind == KIND_ORDER:
-            self.udp.send_order(item, peers=peers, stemming=stemming)
-        elif kind == KIND_FILL_REQUEST:
-            self.udp.send_fill_request(item, peers=peers, stemming=stemming)
-        elif kind == KIND_FILL_RESPONSE:
-            self.udp.send_fill_response(item, peers=peers, stemming=stemming)
         elif kind == KIND_TX:
             self.udp.send_tx(item, peers=peers, stemming=stemming)
         else:

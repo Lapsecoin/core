@@ -35,7 +35,7 @@ available, and none is ever refused for lack of one:
 The page header says which was used.
 
 Light-safe: imports nothing that pulls in the VDF, the chain database, or
-the swap code, and a test keeps it that way.
+the node, and a test keeps it that way.
 """
 
 import base64

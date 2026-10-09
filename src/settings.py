@@ -45,7 +45,7 @@ class Setting:
         # slider at all (rendered as a number field only).
         self.slider_max = slider_max
         # True only for a setting whose own semantics give infinity a real
-        # meaning (see SWAP_AUTO_ACCEPT_MIN_TRUST), never enforced here
+        # meaning, never enforced here
         # either: parse() already accepts float("inf") for any float
         # setting on its own terms (Python's float() does), this only
         # tells the settings page to offer a plain checkbox for that one
@@ -116,89 +116,6 @@ DRAW_WINDOW_SECONDS = Setting(
          "proof rather than speed, so this is also how much of a speed "
          "advantage it takes to win outright. Not a wait, work on the next "
          "height continues throughout.",
-)
-
-# How deep a LapseCoin payment must be buried before a swap treats it as
-# settled.
-#
-# The floor is two and the page will not accept less, which is not
-# caution but a property of this chain. A height keeps accepting a better
-# same-height block for the whole draw window above, so the tip changes
-# hands as a matter of routine (Node._reorg_to_sibling) and the node only
-# bothers recording a reorg at all once it replaced two blocks or more
-# (node.REORG_NOTABLE_DEPTH), because one is ordinary traffic. A payment
-# accepted at depth one can therefore be un-accepted by the chain working
-# exactly as designed, and in a swap that means reciprocating a payment
-# that no longer exists.
-#
-# Raising it costs time and nothing else: each step waits for this many
-# blocks, so the whole trade lengthens roughly in proportion. Worth doing
-# for a large trade, pointless for a small one, which is why it is a
-# setting rather than a constant.
-#
-# Snapshotted onto a trade when it starts, so changing this never moves
-# the goalposts on a trade already running.
-SWAP_CONFIRM_DEPTH = Setting(
-    "swap_confirm_depth", 2, int, minimum=2, slider_max=50,
-    label="Swap confirmation depth (blocks)",
-    help="How many blocks must bury a LapseCoin payment before a swap "
-         "counts it as settled. Two is the minimum and the default: the "
-         "draw window means the newest block routinely changes hands, so "
-         "a single confirmation can be undone by the chain behaving "
-         "normally. Higher is safer and slower; each step waits this many "
-         "blocks.",
-)
-
-# There used to be a per-node setting here, the most this node would
-# have outstanding in one step with a stranger. It was never really node-
-# local policy the way it claimed to be, despite living in this file
-# ("operator policy, never protocol", see the module docstring): it fed
-# straight into the exposure cap a maker computed when accepting a fill,
-# which is a number the maker signs into the FillResponse and the other
-# side (and any bystander reconstructing the trade later, see
-# trust._network_tally_by_counterparty) has to be able to recompute
-# identically to check it. A value either side could privately tune made
-# that impossible to verify and turned trade sizing into something a
-# maker unilaterally decided rather than a fact both parties' own public
-# trust history determines - exactly the asymmetry swap.plan_mutual and
-# swap_engine._open_taker_trade's own cap check now close. What used to
-# be this setting is swap.DEFAULT_STRANGER_CAP_STROOPS: one fixed number
-# every node computes a trade's terms from, not an operator dial.
-#
-# The trust score (trust.get_detail's "score") a counterparty must have
-# with this node before a fill request against your own order auto-
-# accepts. Below it, the request is not declined, it sits on the Market
-# page waiting for a person to accept or decline it by hand.
-#
-# There used to be a second switch here, a plain on/off for auto-accept
-# itself. It was redundant with this one: a trust score can never go
-# negative, so a floor of zero already means "accept anyone" and is the
-# whole of what the switch's "on" position did. Its "off" position (never
-# auto-accept, review everything by hand) has no finite score below it,
-# but this setting still expresses it directly: enter inf and no
-# counterparty, however trusted, will ever clear it, so every request
-# waits for a person on the Market page. One number now covers the
-# entire range from "trust nobody automatically" to "trust everybody
-# automatically" that used to need two settings to say.
-#
-# Zero, the default, auto-accepts anyone, including a total stranger
-# (score 0): the exposure cap already bounds what a stranger can cost
-# you in one step, so nothing unsafe changes by leaving this at zero.
-# Raising it keeps automatic trading within counterparties who have
-# already earned some standing while everyone else waits for a person;
-# inf is the limit of that, everyone waits for a person.
-SWAP_AUTO_ACCEPT_MIN_TRUST = Setting(
-    "swap_auto_accept_min_trust", 0.0, float, minimum=0.0, slider_max=20.0,
-    supports_inf=True,
-    label="Minimum trust to auto-accept",
-    help="A fill request auto-accepts only if this counterparty's trust "
-         "score is at least this. Zero (the default) auto-accepts "
-         "anyone; your exposure cap, not this number, is what actually "
-         "limits what a stranger can cost you. Raise it to auto-trade "
-         "only with counterparties who already have some history, and "
-         "review everyone else by hand on the Market page. Enter inf to "
-         "review every single request yourself, with the same trust "
-         "detail either way.",
 )
 
 # Two settings used to live here alongside this one: a switch to advertise
@@ -283,7 +200,7 @@ MIN_ODDS_PCT = Setting(
     label="Minimum odds to build straight away (%)",
 )
 
-ALL = [DRAW_WINDOW_SECONDS, SWAP_CONFIRM_DEPTH, SWAP_AUTO_ACCEPT_MIN_TRUST,
+ALL = [DRAW_WINDOW_SECONDS,
        SHOW_HARDWARE_DETAILS, MINING_ENABLED, MIN_ODDS_PCT,
        HIDE_ADDRESS_PUBLICLY]
 

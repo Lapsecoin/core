@@ -22,7 +22,6 @@ import http_probe
 import info_probe
 import params
 import upnp
-import xlm as xlm_mod
 from api import create_app, create_private_app
 from discovery import Discovery
 from gossip import Gossip
@@ -32,7 +31,6 @@ from peer_udp import LAN_DISCOVERY_PORT, PORT_BIND_RETRIES, UDPTransport, probe_
 from oblivious import ObliviousService
 from peerpool import PeerPool
 from public_url import parse_public_url
-from swap_worker import SwapWorker
 from syncer import Syncer
 from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
@@ -523,18 +521,6 @@ def main():
         _offer({"type": "tx", "tx": tx,
                 "sender": sender_addr, "stemming": stemming}, "tx")
 
-    def on_order(order, sender_addr, stemming=False):
-        _offer({"type": "order", "order": order,
-                "sender": sender_addr, "stemming": stemming}, "order")
-
-    def on_fill_request(request, sender_addr, stemming=False):
-        _offer({"type": "fill_request", "fill_request": request,
-                "sender": sender_addr, "stemming": stemming}, "fill request")
-
-    def on_fill_response(response, sender_addr, stemming=False):
-        _offer({"type": "fill_response", "fill_response": response,
-                "sender": sender_addr, "stemming": stemming}, "fill response")
-
     def on_peers(peer_list, sender_addr):
         # MT_PEERS reaches here from anyone who can put a UDP packet on
         # the wire with our (public, not secret) genesis hash attached,
@@ -634,10 +620,6 @@ def main():
             return (tip.get("height", 0), tip.get("hash", ""),
                     LOCAL_VERSION, node.cs.cumulative_iterations)
 
-        udp.set_order_callback(on_order)
-        udp.set_fill_request_callback(on_fill_request)
-        udp.set_fill_response_callback(on_fill_response)
-        udp.set_market_provider(node._market_provider)
         udp.set_chain_provider(_chain_provider)
         udp.set_tip_provider(_tip_provider)
 
@@ -660,33 +642,6 @@ def main():
         )
         update_checker.start()
         updater = Updater()
-
-        # Drives swap steps. Its own thread rather than part of the block
-        # cycle, because a step waits on a public API over the network and a
-        # cycle that blocks on one stops building blocks. It reconciles every
-        # unfinished trade against both chains before it sends anything, which
-        # is what makes a restart mid-trade safe, and it does nothing at all
-        # while swaps are off or the node is locked.
-        xlm_keyfile = os.path.join(
-            os.path.dirname(os.path.abspath(args.keyfile)), "xlm_trading.key")
-        if not os.path.exists(xlm_keyfile):
-            # Sealed under the same kek this process already holds from the
-            # node passphrase prompt above, exactly like market_routes.
-            # _create_wallet does by hand from the Market page - it holds
-            # nothing until funded, so there is no reason to make a first-run
-            # node sit locked (and the Trades page misreport it as such)
-            # purely for lack of a trading address nobody has any use for
-            # withholding.
-            seed, public = xlm_mod.generate_keypair()
-            xlm_mod.save_key(xlm_keyfile, seed, public, kek=kek)
-            del seed
-            log.info("[startup] created a Stellar trading address: %s", public)
-
-        swap_worker = SwapWorker(node, xlm_keyfile)
-        # Handed to the Trades page so a stalled trade can be told apart from a
-        # locked wallet or an unreachable Horizon instead of looking identical.
-        node.swap_worker = swap_worker
-        swap_worker.start()
 
         # ------------------------------------------------------------------
         # HTTP servers: browser UI only, no peer routes

@@ -519,92 +519,6 @@ def test_a_peer_below_the_protocol_floor_is_not_ponged():
     assert udp._send_one.call_count == 1
 
 
-def test_fill_request_dispatch_forwards_the_stem_flag():
-    on_req = MagicMock()
-    udp = _make_transport(MagicMock())
-    udp._on_fill_request = on_req
-    req = {"request_id": "r" * 16}
-    udp._dispatch(peer_udp.MT_FILL_REQUEST, 601,
-                 {"fill_request": req, "stemming": True}, ("1.2.3.4", 5000))
-    on_req.assert_called_once_with(req, "1.2.3.4:5000", True)
-
-
-def test_fill_request_dispatch_dedups_by_msg_id():
-    on_req = MagicMock()
-    udp = _make_transport(MagicMock())
-    udp._on_fill_request = on_req
-    msg = {"fill_request": {"request_id": "r" * 16}, "stemming": False}
-    udp._dispatch(peer_udp.MT_FILL_REQUEST, 602, msg, ("1.2.3.4", 5000))
-    udp._dispatch(peer_udp.MT_FILL_REQUEST, 602, msg, ("1.2.3.4", 5000))
-    assert on_req.call_count == 1
-
-
-def test_fill_request_dropped_when_no_callback_is_set():
-    udp = _make_transport(MagicMock())
-    assert udp._on_fill_request is None
-    udp._dispatch(peer_udp.MT_FILL_REQUEST, 603,
-                 {"fill_request": {"request_id": "r" * 16}},
-                 ("1.2.3.4", 5000))  # must not raise
-
-
-def test_a_fill_request_on_the_wire_is_compressed_like_an_order():
-    import zlib
-    udp = _make_transport(MagicMock())
-    udp._on_fill_request = MagicMock()
-    req = {"request_id": "r" * 16, "order_id": "o"}
-    payload = peer_udp._encode({"genesis": udp.genesis_hash, "fill_request": req,
-                                "stemming": False})
-
-    udp._handle_datagram(
-        peer_udp._pack(peer_udp.MT_FILL_REQUEST, 4244, 0, 1, zlib.compress(payload)),
-        ("5.6.7.8", 9999))
-
-    udp._on_fill_request.assert_called_once_with(req, "5.6.7.8:9999", False)
-
-
-def test_fill_response_dispatch_forwards_the_stem_flag():
-    on_resp = MagicMock()
-    udp = _make_transport(MagicMock())
-    udp._on_fill_response = on_resp
-    resp = {"request_id": "r" * 16}
-    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 701,
-                 {"fill_response": resp, "stemming": True}, ("1.2.3.4", 5000))
-    on_resp.assert_called_once_with(resp, "1.2.3.4:5000", True)
-
-
-def test_fill_response_dispatch_dedups_by_msg_id():
-    on_resp = MagicMock()
-    udp = _make_transport(MagicMock())
-    udp._on_fill_response = on_resp
-    msg = {"fill_response": {"request_id": "r" * 16}, "stemming": False}
-    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 702, msg, ("1.2.3.4", 5000))
-    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 702, msg, ("1.2.3.4", 5000))
-    assert on_resp.call_count == 1
-
-
-def test_fill_response_dropped_when_no_callback_is_set():
-    udp = _make_transport(MagicMock())
-    assert udp._on_fill_response is None
-    udp._dispatch(peer_udp.MT_FILL_RESPONSE, 703,
-                 {"fill_response": {"request_id": "r" * 16}},
-                 ("1.2.3.4", 5000))  # must not raise
-
-
-def test_a_fill_response_on_the_wire_is_compressed_like_an_order():
-    import zlib
-    udp = _make_transport(MagicMock())
-    udp._on_fill_response = MagicMock()
-    resp = {"request_id": "r" * 16, "order_id": "o"}
-    payload = peer_udp._encode({"genesis": udp.genesis_hash, "fill_response": resp,
-                                "stemming": False})
-
-    udp._handle_datagram(
-        peer_udp._pack(peer_udp.MT_FILL_RESPONSE, 4245, 0, 1, zlib.compress(payload)),
-        ("5.6.7.8", 9999))
-
-    udp._on_fill_response.assert_called_once_with(resp, "5.6.7.8:9999", False)
-
-
 def test_our_own_ping_advertises_the_protocol():
     assert peer_udp._protocol_ok({"proto": peer_udp.PROTOCOL_VERSION})
     assert not peer_udp._protocol_ok({})
@@ -897,7 +811,7 @@ class TestSyncRequestsNeedAReachableSource:
 
 
 class TestSyncServeConcurrencyBound:
-    """_serve_sync/_serve_market used to run inline on the shared 16-worker
+    """_serve_sync used to run inline on the shared 16-worker
     _executor, the same dispatch pool PING/PONG and everything else reads
     off. Since building and pacing out a sync reply can take tens of
     seconds, a handful of GETSYNC requests well within one source's own
@@ -1108,59 +1022,3 @@ class TestStrangerStillBootstraps:
                 assert resp is not None and len(resp["chain"]) == 5
         finally:
             server.stop(); client.stop()
-
-
-class TestMarketBackfillRoundTrip:
-    """A newly-joined node's MT_GET_MARKET/MT_MARKET round trip: same
-    reflection-attack gate as chain sync (_may_serve_sync), same
-    stranger-bootstraps-on-the-first-try guarantee."""
-
-    def _pair(self, ports, provider):
-        from peerpool import PeerPool
-        gen = "ab" * 32
-        made = []
-        for port in ports:
-            pool = PeerPool()
-            t = peer_udp.UDPTransport(port=port, genesis_hash=gen,
-                                      on_block=lambda *a: None,
-                                      on_tx=lambda *a: None,
-                                      on_peers=lambda *a: None, pool=pool)
-            t.set_market_provider(provider)
-            t.start()
-            made.append((t, pool))
-        time.sleep(0.4)
-        return made
-
-    def test_a_stranger_gets_the_book_on_its_first_request(self):
-        payload = {"orders": [{"order_id": "o1"}], "fills": [{"request": {}, "response": {}}]}
-        (server, server_pool), (client, _) = self._pair(
-            [19401, 19402], lambda kinds: payload)
-        try:
-            assert server_pool.all_addrs() == [], "precondition: client is a stranger"
-            resp = client.request_market(f"127.0.0.1:{server.port}",
-                                         kinds=["order", "fill"], timeout=8)
-            assert resp is not None, "a new node was refused its first backfill"
-            assert resp["orders"] == payload["orders"]
-            assert resp["fills"] == payload["fills"]
-        finally:
-            server.stop(); client.stop()
-
-    def test_no_provider_answers_with_an_empty_book(self):
-        (server, _), (client, __) = self._pair([19403, 19404], None)
-        try:
-            resp = client.request_market(f"127.0.0.1:{server.port}", timeout=8)
-            assert resp["orders"] == [] and resp["fills"] == []
-        finally:
-            server.stop(); client.stop()
-
-    def test_unreachable_peer_times_out_to_none(self):
-        pool = MagicMock()
-        pool.all_addrs.return_value = []
-        t = peer_udp.UDPTransport(port=0, genesis_hash="ab" * 32,
-                                  on_block=lambda *a: None, on_tx=lambda *a: None,
-                                  on_peers=lambda *a: None, pool=pool)
-        t.start()
-        try:
-            assert t.request_market("127.0.0.1:1", timeout=0.3) is None
-        finally:
-            t.stop()

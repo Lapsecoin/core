@@ -88,9 +88,9 @@ class AddrIndex(_Base):
     addr         = TextField()
     tx_hash      = TextField()
     block_height = IntegerField()
-    # A LapseCoin transaction's own memo, carried here so a swap step's
-    # find_payment can look a payment up by its exact session tag instead
-    # of scanning every transaction an address has ever made (see
+    # A LapseCoin transaction's own memo, carried here so a payment can be
+    # looked up by its exact memo instead of scanning every transaction an
+    # address has ever made (see
     # Storage.get_tx_by_addr_and_memo). Null for the overwhelming majority
     # of transfers, which have no memo at all.
     memo         = TextField(null=True)
@@ -269,11 +269,10 @@ class Storage:
     def get_tx_by_addr_and_memo(self, addr, memo):
         """Like get_tx_heights_for_addr, but filtered to one exact memo.
 
-        A swap step's find_payment already knows precisely which memo it
-        is looking for (its own session tag), so it has no reason to walk
-        every transaction an address has ever made; this is the
-        (addr, memo) index that lets it go straight there instead (see
-        AddrIndex.memo).
+        For a caller that knows precisely which memo it is looking for and
+        has no reason to walk every transaction an address has ever made;
+        this is the (addr, memo) index that lets it go straight there
+        (see AddrIndex.memo).
         """
         rows = (AddrIndex
                 .select(AddrIndex.block_height, AddrIndex.tx_hash)

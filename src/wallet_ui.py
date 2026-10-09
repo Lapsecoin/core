@@ -331,18 +331,16 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
         return resp
 
 
-def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
+def register_wallet_routes(app, reader, signer, csrf_token):
     """Send, post, vote and the fee quotes behind them: everything that
-    spends from `signer`'s address. `xlm`, when given, adds the XLM half of the send
-    page (see api._XlmSend); the light client has none."""
+    spends from `signer`'s address."""
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
 
     # What a send POST leaves for the page it redirects to (see forms.py).
     send_note_keys = ("alert_ok_tx", "alert_ok_verb", "alert_err", "alert_err_lines",
-                      "outputs_value", "memo_value", "asset", "xlm_to_value",
-                      "xlm_amount_value")
+                      "outputs_value", "memo_value")
 
     def _send_post():
         """Do what the send form asks, and answer with a redirect to the
@@ -350,8 +348,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
         answer to a POST sends the payment again when it is reloaded."""
         forms = forms_for(app)
         result = dict(alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[],
-                      outputs_value="", memo_value="", asset="lapse",
-                      xlm_to_value="", xlm_amount_value="")
+                      outputs_value="", memo_value="")
         if not _csrf_ok():
             result["alert_err"] = "Session expired; reload the page and try again."
             return forms.done("/send", result)
@@ -359,32 +356,27 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
             result["alert_err"] = ALREADY_SENT
             return forms.done("/send", result)
 
-        asset = request.form.get("asset", "lapse")
         passphrase = request.form.get("passphrase", "").strip()
-        if asset == "xlm" and xlm is not None:
-            result["asset"] = "xlm"
-            xlm.send(request.form, passphrase, result)
+        outputs_raw = request.form.get("outputs", "").strip()
+        memo        = request.form.get("memo", "").strip()
+        csv_file    = request.files.get("csv_file")
+        if csv_file and csv_file.filename:
+            outputs_raw = csv_file.read().decode()
+        result["outputs_value"] = outputs_raw
+        result["memo_value"] = memo
+        outputs, errors = _parse_csv_outputs(outputs_raw)
+        if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
+            errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
+        if errors:
+            result["alert_err_lines"] = errors
+        elif not outputs:
+            result["alert_err"] = "No valid outputs."
         else:
-            outputs_raw = request.form.get("outputs", "").strip()
-            memo        = request.form.get("memo", "").strip()
-            csv_file    = request.files.get("csv_file")
-            if csv_file and csv_file.filename:
-                outputs_raw = csv_file.read().decode()
-            result["outputs_value"] = outputs_raw
-            result["memo_value"] = memo
-            outputs, errors = _parse_csv_outputs(outputs_raw)
-            if len(memo.encode("utf-8")) > tx_mod.MAX_MEMO_BYTES:
-                errors.append(f"Memo exceeds {tx_mod.MAX_MEMO_BYTES} bytes.")
-            if errors:
-                result["alert_err_lines"] = errors
-            elif not outputs:
-                result["alert_err"] = "No valid outputs."
-            else:
-                submit_and_alert(reader, signer, outputs, passphrase, result, memo=memo)
-                if result["alert_ok_tx"]:
-                    result["alert_ok_verb"] = "Sent."
-                    result["outputs_value"] = ""
-                    result["memo_value"] = ""
+            submit_and_alert(reader, signer, outputs, passphrase, result, memo=memo)
+            if result["alert_ok_tx"]:
+                result["alert_ok_verb"] = "Sent."
+                result["outputs_value"] = ""
+                result["memo_value"] = ""
         return forms.done("/send", {k: result[k] for k in send_note_keys if k in result})
 
     @app.route("/send", methods=["GET", "POST"], endpoint="send")
@@ -397,10 +389,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, xlm=None):
                    balance=acct["balance"], fees=acct["fees"],
                    csrf_token=csrf_token, form_token=forms.tokens.issue(),
                    outputs_value="", memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
-                   asset="lapse", xlm_enabled=xlm is not None,
                    alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
-        if xlm is not None:
-            ctx.update(xlm.view())
         note = forms.notes.take(request.args.get("note"))
         ctx.update({k: v for k, v in note.items() if k in send_note_keys})
         return render_template("send.html", **ctx)
