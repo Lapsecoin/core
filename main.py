@@ -19,6 +19,7 @@ from argcomplete.completers import FilesCompleter
 
 import base_wallet
 import block as block_mod
+import gas_worker
 import http_probe
 import info_probe
 import params
@@ -649,6 +650,9 @@ def main():
         # not made to sit locked for lack of an address nobody has used.
         node.base_wallet_path = base_wallet.key_path_for(args.keyfile)
         base_wallet.ensure(node.base_wallet_path, kek)
+        # Answers fee requests when the operator has turned that on (see
+        # settings.GAS_ENABLED); idle otherwise.
+        gas_worker.GasWorker(node, gas_worker.LiveIO(node)).start()
 
         # ------------------------------------------------------------------
         # HTTP servers: browser UI only, no peer routes

@@ -325,6 +325,7 @@ class Storage:
             Nickname.insert_many(
                 [{"nick": nick, "owner": owner} for nick, owner in state.nicknames.items()]
             ).execute()
+        self._save_escrows(state)
         state.mark_persisted()
 
     def _save_state_delta_inner(self, state):
@@ -348,6 +349,7 @@ class Storage:
                             value=state.total_minted).on_conflict_replace().execute()
             Emission.insert(key="total_board_posts",
                             value=state.total_board_posts).on_conflict_replace().execute()
+            self._save_escrows(state)
             return
 
         rows, gone = [], []
@@ -374,7 +376,16 @@ class Storage:
             Nickname.insert_many(
                 [{"nick": nick, "owner": owner} for nick, owner in new_nicknames.items()]
             ).execute()
+        self._save_escrows(state)
         state.mark_persisted()
+
+    def _save_escrows(self, state):
+        """The open fee-request locks, as one small JSON value: a lock
+        settles within a few blocks, so there are never many, and writing
+        the lot each block is cheaper than keeping a table in step. Inside
+        the caller's db.atomic(), so it lands with the block."""
+        Meta.insert(key="gas_escrows", value=json.dumps(state.escrows, sort_keys=True)
+                    ).on_conflict_replace().execute()
 
     def save_state(self, state):
         with db.atomic():
@@ -388,6 +399,12 @@ class Storage:
         nicknames = {r.nick: r.owner for r in Nickname.select()}
         return (balances, nonces, em.get("total_minted", 0),
                 em.get("total_board_posts", 0), nicknames)
+
+    def load_escrows(self):
+        """The open fee-request locks saved with the last state (see
+        _save_escrows). Empty on a database from before fee requests."""
+        row = Meta.get_or_none(Meta.key == "gas_escrows")
+        return json.loads(row.value) if row and row.value else {}
 
     def state_exists(self):
         return State.select().exists()

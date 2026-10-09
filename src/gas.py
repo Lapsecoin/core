@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 
 import evm
+import gaslock
 
 # ---------------------------------------------------------------------------
 # Policy constants. Fixed in code on purpose: they are what makes one node's
@@ -38,14 +39,15 @@ GAS_SAFETY = 1.5
 # A destination already holding this share of its target is done.
 SATISFIED_SHARE = 0.9
 
-# Blocks, derived from chain data only.
-CLAIM_WINDOW_BLOCKS = 5     # from the request's block to the latest a claim may land
+# Blocks, derived from chain data only. The window and the memo tags are
+# consensus (the chain settles the lock on them) so they live in gaslock.
+CLAIM_WINDOW_BLOCKS = gaslock.CLAIM_WINDOW_BLOCKS
 RANK_SLOT_BLOCKS = 2        # each ranked claimer's time to pay before the next may
 MAX_RANKS = 3
 
-REQUEST_TAG = "[gas] "
-CLAIM_TAG = "[gas-claim] "
-REF_LEN = 24                # hex characters of the request txid a claim names
+REQUEST_TAG = gaslock.REQUEST_TAG
+CLAIM_TAG = gaslock.CLAIM_TAG
+REF_LEN = gaslock.REF_LEN
 
 
 @dataclass(frozen=True)
@@ -315,10 +317,7 @@ def window_close(request_height: int, first_claim_height=None) -> int:
     """The last block a claim may land in. The first claim, at x, closes the
     window at x+1 (one block for everyone else to show they saw the request),
     never later than the request's block plus CLAIM_WINDOW_BLOCKS."""
-    latest = request_height + CLAIM_WINDOW_BLOCKS
-    if first_claim_height is None:
-        return latest
-    return min(first_claim_height + 1, latest)
+    return gaslock.close_height({"height": request_height, "claim": first_claim_height})
 
 
 def rank_key(request_txid: str, window_close_block_hash: str, claimer_addr: str) -> str:

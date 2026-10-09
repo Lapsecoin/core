@@ -124,6 +124,13 @@ def burn_address():
     return ".".join(_WORDLIST[:ADDRESS_WORD_COUNT])
 
 
+def escrow_address():
+    """Where a fee request's lock sits until it settles (see gaslock.py).
+    Built like burn_address: a fixed word sequence nobody holds the key to,
+    taken from further along the wordlist so the two never coincide."""
+    return ".".join(_WORDLIST[ADDRESS_WORD_COUNT:2 * ADDRESS_WORD_COUNT])
+
+
 def is_valid_address(addr):
     """True if addr is exactly ADDRESS_WORD_COUNT dot-separated words, all
     drawn from the BIP39 wordlist. Does not (and cannot) verify the address
