@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import evm
 import gaslock
+from params import TICKS_PER_LAPSE
 
 # ---------------------------------------------------------------------------
 # Policy constants. Fixed in code on purpose: they are what makes one node's
@@ -38,6 +39,11 @@ GAS_SAFETY = 1.5
 
 # A destination already holding this share of its target is done.
 SATISFIED_SHARE = 0.9
+
+# What a node asks as the lock before it will serve a request. A policy, not
+# a rule: it follows the price of LAPSE, so it is a constant that gets
+# lowered in a release when LAPSE is worth more, and updated nodes follow.
+MIN_SERVED_LOCK = 10 * TICKS_PER_LAPSE
 
 # Blocks, derived from chain data only. The window and the memo tags are
 # consensus (the chain settles the lock on them) so they live in gaslock.

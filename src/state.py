@@ -37,6 +37,9 @@ class State:
         # "height", "claim"}. Consensus state, like nicknames (see
         # gaslock.py): small, since a lock settles within a few blocks.
         self.escrows = {}
+        # Height of the block this state is the result of, so a transaction
+        # can be checked against the rules of the block it would join.
+        self.height = 0
         # Addresses whose balance or nonce has moved since the last time
         # this state was written to disk. See dirty_addresses().
         self._dirty       = set()
@@ -191,7 +194,8 @@ class State:
     @classmethod
     def from_snapshot(cls, balances: dict, nonces: dict,
                       total_minted: int, total_board_posts: int = 0,
-                      nicknames: dict = None, escrows: dict = None) -> "State":
+                      nicknames: dict = None, escrows: dict = None,
+                      height: int = 0) -> "State":
         """Restore a State from persisted data. Replaces direct field assignment.
 
         Zero balances are dropped on the way in, because the table on disk
@@ -209,6 +213,7 @@ class State:
         s.total_board_posts = total_board_posts
         s.nicknames    = dict(nicknames) if nicknames else {}
         s.escrows      = {k: dict(v) for k, v in escrows.items()} if escrows else {}
+        s.height       = height
         return s
 
     # ------------------------------------------------------------------
@@ -231,6 +236,7 @@ class State:
         s.total_board_posts = self.total_board_posts
         s.nicknames    = self.nicknames.copy()
         s.escrows      = {k: dict(v) for k, v in self.escrows.items()}
+        s.height       = self.height
         s._dirty       = set(self._dirty)
         s._dirty_nicknames = set(self._dirty_nicknames)
         return s

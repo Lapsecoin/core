@@ -31,99 +31,18 @@ import gas
 import gaslock
 import relay
 import settings as settings_mod
-from params import TICKS_PER_LAPSE
+from gas_io import ChainIO
+from gas_track import Request, Tracker, claimers_in_order  # noqa: F401  (re-exported)
 
 log = logging.getLogger("ec.gas_worker")
 
-# What a node asks as the lock before it will serve a request. A policy, not
-# a rule: it follows the price of LAPSE, so it is a constant that gets
-# lowered in a release when LAPSE is worth more, and updated nodes follow.
-MIN_SERVED_LOCK = 10 * TICKS_PER_LAPSE
+MIN_SERVED_LOCK = gas.MIN_SERVED_LOCK
 
 # Blocks of history scanned at startup, to pick up requests already open.
 BACKLOG_BLOCKS = gaslock.CLAIM_WINDOW_BLOCKS + gas.MAX_RANKS * gas.RANK_SLOT_BLOCKS + 2
 
 POLL_SECONDS = 15
 DONE_KEY = "gas_done"
-
-
-class Request:
-    __slots__ = ("txid", "height", "lapse_from", "lock", "req",
-                 "first_claim", "claims")
-
-    def __init__(self, txid, height, lapse_from, lock, req):
-        self.txid = txid
-        self.height = height
-        self.lapse_from = lapse_from
-        self.lock = lock
-        self.req = req                # gas.parse_request_memo(), signature verified
-        self.first_claim = None       # the chain's reading: any well-formed claim counts
-        self.claims = []              # {"height", "lapse", "base"} with a verified signature
-
-    @property
-    def close(self):
-        return gaslock.close_height({"height": self.height, "claim": self.first_claim})
-
-
-class Tracker:
-    """What the chain says about open and recently closed requests, rebuilt
-    from blocks. No I/O, no clock: the same blocks give the same answers."""
-
-    def __init__(self):
-        self.requests = {}
-
-    def ingest(self, blk):
-        height = blk["height"]
-        txs = [t for t in blk.get("transactions", []) if isinstance(t, dict)]
-        for t in txs:
-            self._claim(t, height)
-        for t in txs:
-            self._request(t, height)
-
-    def _request(self, t, height):
-        if not gaslock.escrow_outputs(t) or gaslock.check_lock(t)[0] is False:
-            return
-        req = gas.parse_request_memo(t.get("memo"))
-        if req is None or not gas.verify_request_signature(req, t["from"], t["nonce"]):
-            return
-        import tx as tx_mod
-        txid = tx_mod.tx_hash(t)
-        self.requests[txid] = Request(txid, height, t["from"],
-                                      gaslock.escrow_outputs(t)[0]["amount"], req)
-
-    def _claim(self, t, height):
-        ref = gaslock.claim_ref(t)
-        if ref is None:
-            return
-        parsed = gas.parse_claim_memo(t.get("memo"))
-        for r in self.requests.values():
-            if not r.txid.startswith(ref) or not r.height < height <= r.height + gaslock.CLAIM_WINDOW_BLOCKS:
-                continue
-            # The chain counts any well-formed claim, so the window follows it.
-            if r.first_claim is None:
-                r.first_claim = height
-            if parsed and gas.verify_claim_signature(parsed, t["from"]):
-                r.claims.append({"height": height, "lapse": t["from"],
-                                 "base": parsed["base_addr"]})
-
-    def forget_before(self, height):
-        for txid in [k for k, r in self.requests.items() if self.finished_at(r) < height]:
-            del self.requests[txid]
-
-    @staticmethod
-    def finished_at(r):
-        return gas.turn_start(r.close, gas.MAX_RANKS) + gas.RANK_SLOT_BLOCKS
-
-
-def claimers_in_order(r, close_hash, funded):
-    """Claimer LAPSE addresses, first to pay first: those whose claim landed
-    inside the window and whose Base address holds enough to pay, put in the
-    order every node derives identically."""
-    eligible = {}
-    for c in r.claims:
-        if c["height"] <= r.close and c["lapse"] not in eligible and funded(c["base"]):
-            eligible[c["lapse"]] = c["base"]
-    return gas.order_claimers(r.txid, close_hash, eligible)
 
 
 class GasWorker:
@@ -210,6 +129,14 @@ class GasWorker:
         return gas.payout_units(net, r.req["target"],
                                 self.io.dest_balance(net, r.req["dest"]), price) > 0
 
+    def _clear(self, net, r):
+        """False when the destination is sanctioned, or cannot be checked:
+        a node that cannot tell does not help."""
+        try:
+            return not self.io.sanctioned(net, r.req["dest"])
+        except (evm.EVMError, relay.RelayError):
+            return False
+
     # ------------------------------------------------------------------
     # Claim
     # ------------------------------------------------------------------
@@ -220,7 +147,7 @@ class GasWorker:
         if not self._serves(r):
             return
         net = gas.network(r.req["network"])
-        if not (self._can_afford() and self._needs_help(net, r)):
+        if not (self._can_afford() and self._needs_help(net, r) and self._clear(net, r)):
             return
         ok, err = self.io.claim(r.txid)
         if ok:
@@ -254,6 +181,14 @@ class GasWorker:
         if tip < gas.turn_start(r.close, order.index(self.node.addr)):
             return
         net = gas.network(r.req["network"])
+        try:
+            if self.io.sanctioned(net, r.req["dest"]):
+                self._mark(r.txid, "refused")
+                log.info("[gas] %s is on a sanctions list, not paying", r.req["dest"])
+                return
+        except (evm.EVMError, relay.RelayError) as e:
+            log.warning("[gas] could not screen %s, will retry: %s", r.req["dest"], e)
+            return
         price = self.io.price(net)
         amount = gas.payout_units(net, r.req["target"],
                                   self.io.dest_balance(net, r.req["dest"]), price)
@@ -289,34 +224,19 @@ class GasWorker:
         return self._funded[base_addr]
 
 
-class LiveIO:
+class LiveIO(ChainIO):
     """The real world: public RPCs for balances, Relay for prices and payouts,
     the node for the claim transaction."""
 
     def __init__(self, node):
+        super().__init__(node.settings)
         self.node = node
 
-    def _base_rpc(self):
-        return (self.node.settings.get(settings_mod.BASE_RPC_URL).strip() or evm.DEFAULT_BASE_RPC)
-
-    def _relay_key(self):
-        return self.node.settings.get(settings_mod.RELAY_API_KEY).strip()
-
-    def price(self, net):
-        return relay.price_usd(net, self._relay_key())
-
     def balance_of_base(self, addr):
-        return evm.get_balance_wei(self._base_rpc(), addr)
+        return evm.get_balance_wei(self.base_rpc(), addr)
 
     def base_balance(self):
         return self.balance_of_base(base_wallet.load_address(self.node.base_wallet_path))
-
-    def dest_balance(self, net, addr):
-        if net.vm == "evm":
-            url = self._base_rpc() if net.slug == "base" else net.rpc
-            return evm.get_balance_wei(url, addr)
-        resp = evm.rpc(net.rpc, "getBalance", [addr])
-        return int(resp["value"]) if isinstance(resp, dict) else int(resp)
 
     def claim(self, request_txid):
         import wallet_ui
@@ -340,11 +260,11 @@ class LiveIO:
         node = self.node
         if net.slug == "base":
             return base_wallet.send_eth(node.base_wallet_path, node._kek,
-                                        self._base_rpc(), dest, amount)
+                                        self.base_rpc(), dest, amount)
         sender = base_wallet.load_address(node.base_wallet_path)
-        q = relay.quote(net, dest, amount, sender, self._relay_key())
+        q = relay.quote(net, dest, amount, sender, self.relay_key())
         secret = base_wallet.decrypt_secret(node.base_wallet_path, node._kek)
         try:
-            return relay.deposit(q, secret, self._base_rpc())
+            return relay.deposit(q, secret, self.base_rpc())
         finally:
             del secret

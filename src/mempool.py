@@ -58,6 +58,10 @@ class _Overlay:
         # this always reads straight through to the underlying state.
         return self._base.total_board_posts
 
+    @property
+    def height(self):
+        return self._base.height
+
     def credit(self, addr, amount):
         if amount <= 0:
             raise ValueError(f"credit amount must be positive, got {amount}")

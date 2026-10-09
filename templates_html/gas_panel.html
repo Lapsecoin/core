@@ -1,0 +1,99 @@
+<div class="card" id="gas-card">
+  <div class="card-title">Fee request</div>
+  <ol id="gas-steps" style="display:flex;gap:.5rem;list-style:none;padding:0;margin:0 0 .6rem;flex-wrap:wrap">
+    <li data-step="mined">Mined</li>
+    <li data-step="offers">Offers</li>
+    <li data-step="sending">Sending</li>
+    <li data-step="done">Received</li>
+  </ol>
+  <div id="gas-headline" style="font-weight:bold">Checking...</div>
+  <p id="gas-why" class="stat-sub"></p>
+  <table class="kv-table" id="gas-table" style="display:none">
+    <tr><td>Network</td><td id="gas-network"></td></tr>
+    <tr><td>Address</td><td class="hash-short" id="gas-dest" style="word-break:break-all"></td></tr>
+    <tr><td>Nodes that offered</td><td id="gas-claimers"></td></tr>
+    <tr><td>Order</td><td id="gas-order"></td></tr>
+    <tr><td>Your lock</td><td id="gas-lock"></td></tr>
+  </table>
+</div>
+<style>
+  #gas-steps li { padding:.15rem .6rem; border:1px solid var(--rule-lt); color:var(--muted); font-size:.85rem; }
+  #gas-steps li.done { color:var(--ink); border-color:var(--rule); }
+  #gas-steps li.now { color:var(--paper); background:var(--accent); border-color:var(--accent); }
+</style>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const FINAL = ["funded", "unclaimed", "no_eligible", "gave_up", "none"];
+  const STEP = {pending: 0, collecting: 1, paying: 2, funded: 3, unclaimed: 1, no_eligible: 2, gave_up: 2};
+  let status = null, asOf = 0;
+
+  const mins = s => { const m = Math.max(1, Math.round(s / 60)); return m + " min"; };
+  const left = s => s >= 60 ? "about " + mins(s) : "under a minute";
+  const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+
+  function words(s, remaining) {
+    const eta = remaining === null ? "" : left(remaining);
+    switch (s.stage) {
+      case "pending":
+        return ["Waiting to be mined", "Your request is in the mempool. A block comes about every 2 minutes."];
+      case "collecting":
+        return ["Waiting for nodes to offer",
+          "Offers are taken until block " + s.close + " (" + eta + "). " +
+          (s.offers ? plural(s.claimers, "node") + " offered, so the window closes one block after the first offer."
+                    : "No offer yet. The window closes at block " + s.close + ", or one block after the first offer.")];
+      case "paying":
+        return ["Node " + s.current.rank + " of " + s.order.length + " is sending your gas",
+          "It has until block " + s.slot_end + " (" + eta + "). If your address is still short then" +
+          (s.ranks_left ? ", the next node tries (" + s.ranks_left + " more)." : ", nobody is left.")];
+      case "funded":
+        return ["Your address has its gas", "It now holds what it asked for."];
+      case "unclaimed":
+        return ["No node offered to help", "Nobody claimed it before block " + s.close + ". Your lock was returned."];
+      case "no_eligible":
+        return ["The nodes that offered could not pay",
+          "None of them holds enough on Base to cover it. Your lock was not returned."];
+      case "gave_up":
+        return ["The gas did not arrive",
+          "All " + s.order.length + " nodes that offered have had their turn and the address is still short. " +
+          "Your lock was not returned, and the chain cannot see why."];
+    }
+    return ["Not a fee request", "This transaction is not a signed fee request."];
+  }
+
+  function render() {
+    const s = status;
+    if (!s) return;
+    const remaining = s.eta_seconds === undefined ? null
+      : Math.max(0, s.eta_seconds - Math.floor((Date.now() - asOf) / 1000));
+    const [head, why] = words(s, remaining);
+    $("gas-headline").textContent = head;
+    $("gas-why").textContent = why;
+    const at = STEP[s.stage];
+    document.querySelectorAll("#gas-steps li").forEach((li, i) => {
+      li.className = at === undefined ? "" : (i < at ? "done" : (i === at ? (s.stage === "funded" ? "done" : "now") : ""));
+    });
+    if (s.network_name) {
+      $("gas-table").style.display = "";
+      $("gas-network").textContent = s.network_name + " (" + s.symbol + ")";
+      $("gas-dest").textContent = s.dest;
+      $("gas-claimers").textContent = s.claimers;
+      $("gas-order").textContent = s.order && s.order.length
+        ? s.order.map(o => o.rank + ". " + o.id).join("   ") : "set when the window closes";
+      $("gas-lock").textContent = (s.lock / 1e8) + " LAPSE, " +
+        (s.lock_outcome === "refunded" ? "returned" : s.lock_outcome === "recycled" ? "not returned" : "held until the window closes");
+    }
+  }
+
+  async function poll() {
+    try {
+      status = await (await fetch("{{ status_url }}")).json();
+      asOf = Date.now();
+    } catch (e) { /* keep what is shown; try again */ }
+    render();
+    if (!status || !FINAL.includes(status.stage)) setTimeout(poll, 10000);
+  }
+  setInterval(render, 1000);
+  poll();
+})();
+</script>

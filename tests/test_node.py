@@ -197,6 +197,37 @@ class TestLoadCs:
         assert n2.cs.height == 0
         assert n2.cs.tip["hash"] == n1.cs.tip["hash"]
 
+    def test_a_reloaded_node_knows_its_height_and_its_open_fee_locks(self, tmp_path):
+        """Activation (params.GAS_LOCK_ACTIVATION_HEIGHT) is judged against the
+        height the state is at, so it must come back from disk with it, and
+        an open lock must survive the restart."""
+        import crypto as crypto_mod
+        from tests.fixtures import make_block, make_tx
+        sk, pk = keypair(1)
+        keyfile = str(tmp_path / "node3.key")
+        crypto.save_key(keyfile, sk, pk, "pass")
+        db_path = str(tmp_path / "chain3.db")
+
+        def start():
+            return Node(keyfile=keyfile, public_key=pk, gossip=MagicMock(), syncer=MagicMock(),
+                        pool=MagicMock(), net_in_q=queue.Queue(), db_path=db_path)
+
+        n1 = start()
+        cs = n1.cs
+        cs.state.credit(address(3), 50 * TICKS_PER_LAPSE)
+        ask = make_tx(3, 0, 0, cs.state, fee=1000,
+                      memo="[gas] ethereum 5 0x" + "1" * 40 + " c2ln",
+                      outputs_override=[{"to": crypto_mod.escrow_address(), "amount": 10 * TICKS_PER_LAPSE}])
+        for txs in ([], [ask], []):
+            blk = make_block(cs.height + 1, cs.tip["hash"], txs, builder_index=9)
+            cs = cs.apply_block(blk)
+            n1.storage.save_block_and_state(blk, cs.state)
+        assert cs.height == 3 and len(cs.state.escrows) == 1
+
+        n2 = start()
+        assert n2.cs.height == 3 and n2.cs.state.height == 3
+        assert n2.cs.state.escrows == cs.state.escrows
+
 
 # ---------------------------------------------------------------------------
 # 4. Simple accessors

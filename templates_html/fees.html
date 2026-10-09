@@ -5,13 +5,9 @@
 
 <div class="card">
   <div class="card-title">Get gas on another network</div>
-  <p>You hold a token on a chain but have none of that chain's own coin to move it. Node operators on this
-     network can send you a little. Pick the chain and what you want to do there, prove the address is yours,
-     and pay with LAPSE.</p>
-  <p class="stat-sub">This is a free gift from node operators, as is, with no guarantee. The
-     {{ lock // 100000000 }} LAPSE lock is returned if no node offers to help. If one does, it is not returned,
-     whether or not the gas arrives: the chain cannot see other networks, so it cannot tell. Each node sends at
-     most ${{ '%.2f' % node_cap_usd }} per request.</p>
+  <p>Pay a few LAPSE and a node operator sends you gas on the chain where your token is stuck.</p>
+  <p class="stat-sub">A free gift, as is. The {{ lock // 100000000 }} LAPSE lock comes back only if no node offers.
+     Each node sends at most ${{ '%.2f' % node_cap_usd }}.</p>
 </div>
 
 <div class="card">

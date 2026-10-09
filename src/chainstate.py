@@ -43,6 +43,7 @@ def _apply_to_state(state, blk):
     and from_chain go through here.
     """
     gaslock.process_block(state, blk)
+    state.height = blk["height"]
     builder = blk.get("builder")
     if builder:
         _apply_builder_reward(state, builder, blk)

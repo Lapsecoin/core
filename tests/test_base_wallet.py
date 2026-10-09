@@ -13,10 +13,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import api
 import base_send
+import gas
 import base_wallet
 import crypto
 import evm
 import peerpool as peerpool_mod
+import relay
 import settings as settings_mod
 from chainstate import ChainState
 from params import TICKS_PER_LAPSE
@@ -25,6 +27,7 @@ from tests.test_light import PASS, _FullNode
 
 DEST = "0x000000000000000000000000000000000000dEaD"
 RPC = "http://rpc.test"
+ZERO = "0x" + "0" * 40
 
 
 @pytest.fixture
@@ -169,26 +172,30 @@ class TestSendPage:
         assert page.addr in html and "unavailable" in html
 
     def test_a_send_goes_through_and_is_reported_once(self, page):
-        r = submit(page.client, "/send", asset="base", base_to=DEST,
-                   base_amount="0.01", passphrase=PASS)
+        r = submit(page.client, "/send", asset="base", base_to=DEST, base_network="base",
+                   base_token=ZERO, base_amount="0.01", passphrase=PASS)
         html = r.get_data(as_text=True)
-        assert "Sent on Base." in html and len(page.chain.sent) == 1
+        assert "Sent from Base." in html and len(page.chain.sent) == 1
         assert evm.transaction_hash(page.chain.sent[0]) in html
 
     def test_wrong_passphrase_sends_nothing_and_says_so(self, page):
-        html = submit(page.client, "/send", asset="base", base_to=DEST,
-                      base_amount="0.01", passphrase="wrong").get_data(as_text=True)
+        html = submit(page.client, "/send", asset="base", base_to=DEST, base_network="base",
+                      base_token=ZERO, base_amount="0.01", passphrase="wrong").get_data(as_text=True)
         assert page.chain.sent == []
         assert re.search(r"alert-err[^>]*>[^<]*wrong passphrase", html)
 
     @pytest.mark.parametrize("fields,message", [
         (dict(base_to="", base_amount="0.01"), "Enter a destination"),
         (dict(base_to=DEST, base_amount="lots"), "Enter an amount"),
-        (dict(base_to="nope", base_amount="0.01"), "valid EVM address"),
+        (dict(base_to="nope", base_amount="0.01"), "valid Base address"),
         (dict(base_to=DEST, base_amount="0.01", passphrase=""), "Passphrase required"),
+        (dict(base_to=DEST, base_amount="0.01", base_network="dogechain"), "Pick a network"),
+        (dict(base_to=DEST, base_amount="0.01", base_token="0x" + "9" * 40), "Pick a token"),
     ])
     def test_bad_input_is_explained_and_nothing_is_sent(self, page, fields, message):
         fields.setdefault("passphrase", PASS)
+        fields.setdefault("base_network", "base")
+        fields.setdefault("base_token", ZERO)
         html = submit(page.client, "/send", asset="base", **fields).get_data(as_text=True)
         assert message in html and page.chain.sent == []
 
@@ -208,3 +215,160 @@ def test_rpc_url_falls_back_to_the_public_endpoint():
         settings = settings_mod.Settings(type("M", (), dict(
             get_meta=lambda self, k: "  ", set_meta=lambda *a: None))())
     assert base_send.BaseSend(N())._rpc_url() == evm.DEFAULT_BASE_RPC
+
+
+USDC_OP = "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
+LISTED = {10: [{"symbol": "ETH", "address": ZERO, "decimals": 18},
+               {"symbol": "USDC", "address": USDC_OP, "decimals": 6}],
+          8453: [{"symbol": "ETH", "address": ZERO, "decimals": 18}]}
+
+
+def exit_quote(sender, dest, amount, chain_id=10, token=USDC_OP, impact="-0.24"):
+    return {
+        "requestId": "0xreq",
+        "steps": [{"id": "deposit", "kind": "transaction", "items": [{"data": {
+            "from": sender, "to": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+            "data": "0x49290c1c", "value": str(amount), "chainId": 8453, "gas": "32432"}}]}],
+        "details": {
+            "sender": sender, "recipient": dest,
+            "totalImpact": {"usd": "-0.06", "percent": impact},
+            "currencyIn": {"currency": {"chainId": 8453, "address": ZERO}, "amount": str(amount),
+                           "amountUsd": "24.79"},
+            "currencyOut": {"currency": {"chainId": chain_id, "address": token, "symbol": "USDC",
+                                         "decimals": 6},
+                            "amount": "24739355", "minimumAmount": "24244568", "amountUsd": "24.73"}}}
+
+
+class TestSendFromBase:
+    """Sending to another network or token is a quoted swap through Relay."""
+
+    @pytest.fixture
+    def relayed(self, page, monkeypatch):
+        calls = {"quotes": [], "deposits": []}
+        monkeypatch.setattr(relay, "tokens", lambda key="": LISTED)
+
+        def quote(net, token, dest, amount, sender, api_key=""):
+            calls["quotes"].append((net.slug, token, dest, amount))
+            return exit_quote(sender, dest, amount, net.chain_id, token)
+        monkeypatch.setattr(relay, "quote_exit", quote)
+        monkeypatch.setattr(relay, "deposit", lambda q, secret, url: calls["deposits"].append(q) or "0xdeposit")
+        return type("R", (), dict(page=page, calls=calls))
+
+    def test_the_token_list_starts_with_the_gas_coin(self, relayed):
+        d = relayed.page.client.get("/api/send/base/tokens?network=optimism").get_json()
+        assert [t["symbol"] for t in d["tokens"]] == ["ETH", "USDC"]
+        assert relayed.page.client.get("/api/send/base/tokens?network=nope").status_code == 400
+
+    def test_the_token_list_falls_back_to_the_gas_coin_when_relay_is_down(self, relayed, monkeypatch):
+        def down(key=""):
+            raise relay.RelayUnreachable("down")
+        monkeypatch.setattr(relay, "tokens", down)
+        d = relayed.page.client.get("/api/send/base/tokens?network=optimism").get_json()
+        assert [t["symbol"] for t in d["tokens"]] == ["ETH"]
+
+    def test_a_plain_eth_transfer_on_base_needs_no_quote(self, relayed):
+        d = relayed.page.client.get("/api/send/base/preview", query_string=dict(
+            network="base", token=ZERO, to=DEST, amount="0.01")).get_json()
+        assert d["ok"] and d["direct"] and relayed.calls["quotes"] == []
+
+    def test_the_preview_says_what_will_arrive(self, relayed):
+        d = relayed.page.client.get("/api/send/base/preview", query_string=dict(
+            network="optimism", token=USDC_OP, to=DEST, amount="0.01")).get_json()
+        assert d["ok"] and not d["direct"]
+        assert (d["receive"], d["minimum"], d["symbol"], d["decimals"]) == (24739355, 24244568, "USDC", 6)
+        assert d["impact_percent"] == pytest.approx(0.24)
+        assert relayed.calls["quotes"] == [("optimism", USDC_OP, DEST, 10 ** 16)]
+
+    def test_the_preview_explains_bad_input_and_a_failed_quote(self, relayed, monkeypatch):
+        r = relayed.page.client.get("/api/send/base/preview", query_string=dict(
+            network="optimism", token=USDC_OP, to="nope", amount="0.01"))
+        assert r.status_code == 400 and "valid Optimism address" in r.get_json()["error"]
+
+        def refuse(*a, **k):
+            raise relay.RelayError("no route")
+        monkeypatch.setattr(relay, "quote_exit", refuse)
+        r = relayed.page.client.get("/api/send/base/preview", query_string=dict(
+            network="optimism", token=USDC_OP, to=DEST, amount="0.01"))
+        assert r.status_code == 502 and "no route" in r.get_json()["error"]
+
+    def test_a_send_to_another_network_goes_through_relay(self, relayed):
+        r = submit(relayed.page.client, "/send", asset="base", base_to=DEST, base_network="optimism",
+                   base_token=USDC_OP, base_amount="0.01", passphrase=PASS)
+        html = r.get_data(as_text=True)
+        assert "Sent from Base." in html and "0xdeposit" in html
+        assert len(relayed.calls["deposits"]) == 1 and relayed.page.chain.sent == []
+        assert relayed.calls["quotes"][-1] == ("optimism", USDC_OP, DEST, 10 ** 16)
+
+    def test_a_token_on_base_itself_is_a_swap_not_a_transfer(self, relayed, monkeypatch):
+        usdc_base = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        LISTED[8453].append({"symbol": "USDC", "address": usdc_base, "decimals": 6})
+        try:
+            submit(relayed.page.client, "/send", asset="base", base_to=DEST, base_network="base",
+                   base_token=usdc_base, base_amount="0.01", passphrase=PASS)
+        finally:
+            LISTED[8453].pop()
+        assert len(relayed.calls["deposits"]) == 1 and relayed.page.chain.sent == []
+
+    def test_it_will_not_spend_more_than_the_wallet_holds(self, relayed):
+        html = submit(relayed.page.client, "/send", asset="base", base_to=DEST, base_network="optimism",
+                      base_token=USDC_OP, base_amount="5", passphrase=PASS).get_data(as_text=True)
+        assert "more than this wallet can send" in html and relayed.calls["deposits"] == []
+
+    def test_a_relay_refusal_is_shown_and_nothing_is_sent(self, relayed, monkeypatch):
+        def refuse(*a, **k):
+            raise relay.RelayError("amount too low")
+        monkeypatch.setattr(relay, "quote_exit", refuse)
+        html = submit(relayed.page.client, "/send", asset="base", base_to=DEST, base_network="optimism",
+                      base_token=USDC_OP, base_amount="0.01", passphrase=PASS).get_data(as_text=True)
+        assert "amount too low" in html and relayed.calls["deposits"] == []
+
+
+class TestExitQuoteChecks:
+    ME = evm.address_from_secret((5).to_bytes(32, "big"))
+    OP = gas.NETWORKS["optimism"]
+
+    def check(self, q, amount=10 ** 16, token=USDC_OP, dest=DEST):
+        return relay.check_exit_quote(q, self.OP, token, dest, amount, self.ME)
+
+    def test_a_good_quote_is_summarised(self):
+        s = self.check(exit_quote(self.ME, DEST, 10 ** 16))
+        assert s["receive"] == 24739355 and s["minimum"] == 24244568 and s["symbol"] == "USDC"
+        assert s["impact_percent"] == pytest.approx(0.24)
+
+    def test_a_quote_spending_a_different_amount_is_refused(self):
+        with pytest.raises(relay.RelayError, match="different amount"):
+            self.check(exit_quote(self.ME, DEST, 2 * 10 ** 16))
+
+    @pytest.mark.parametrize("path,value,message", [
+        (["details", "recipient"], "0x" + "2" * 40, "someone else"),
+        (["details", "currencyOut", "currency", "address"], "0x" + "3" * 40, "wrong asset"),
+        (["details", "currencyOut", "currency", "chainId"], 1, "wrong chain"),
+        (["details", "currencyOut", "minimumAmount"], "0", "pays out nothing"),
+        (["details", "totalImpact", "percent"], "-35", "loses 35.0%"),
+        (["steps", 0, "items", 0, "data", "value"], "1", "does not match"),
+    ])
+    def test_a_quote_that_is_not_what_was_asked_is_refused(self, path, value, message):
+        q = exit_quote(self.ME, DEST, 10 ** 16)
+        cur = q
+        for k in path[:-1]:
+            cur = cur[k]
+        cur[path[-1]] = value
+        with pytest.raises(relay.RelayError, match=message):
+            self.check(q)
+
+    def test_garbage_is_a_relay_error(self):
+        for q in ({}, {"details": {}}, None):
+            with pytest.raises(relay.RelayError):
+                self.check(q)
+
+    def test_the_token_list_is_read_from_the_chain_data(self, monkeypatch):
+        relay._tokens_cache.update(at=0.0, data={})
+        body = {"chains": [{"id": 10, "featuredTokens": [
+            {"symbol": "ETH", "address": ZERO, "decimals": 18, "name": "Ether"}]},
+            {"id": 99, "disabled": True, "featuredTokens": [{"symbol": "X", "address": "a", "decimals": 1}]}]}
+        calls = []
+        monkeypatch.setattr(relay, "_call", lambda *a, **k: calls.append(a) or body)
+        assert relay.tokens() == {10: [{"symbol": "ETH", "address": ZERO, "decimals": 18}]}
+        relay.tokens()
+        assert len(calls) == 1                   # cached
+        relay._tokens_cache.update(at=0.0, data={})
