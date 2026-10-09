@@ -81,7 +81,7 @@
       $("gas-order").textContent = s.order && s.order.length
         ? s.order.map(o => o.rank + ". " + o.id).join("   ") : "set when the window closes";
       $("gas-lock").textContent = (s.lock / 1e8) + " LAPSE, " +
-        (s.lock_outcome === "refunded" ? "returned" : s.lock_outcome === "recycled" ? "not returned" : "held until the window closes");
+        (s.lock_outcome === "refunded" ? "returned" : s.lock_outcome === "burned" ? "not returned" : "held until the window closes");
     }
   }
 

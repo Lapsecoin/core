@@ -54,13 +54,15 @@ One kind of transaction carries a protocol-enforced minimum on top of the usual 
 
 ### Fee requests
 
-A request locks LAPSE in an unspendable escrow address for up to five blocks and names another network, a target balance and an address the sender controls. If no node posts a claim in that window the lock returns to the sender. If one does, the window closes a block later and the lock is subtracted from the minted total, so section 5's curve pays it out again to builders. Nobody is paid for claiming or refunded for a failed delivery: the chain cannot see another network, and a reward would invite false claims. Claimers take turns in an order derived from chain data and each reads the destination's own balance before paying.
+A request locks LAPSE in an unspendable escrow address for up to five blocks and names another network, a target balance and an address the sender controls. If no node posts a claim in that window the lock returns to the sender. If one does, the window closes a block later and the lock goes to the burn address, which section 5 counts as unminted. Nobody is paid for claiming or refunded for a failed delivery: the chain cannot see another network, and a reward would invite false claims. Claimers take turns in an order derived from chain data and each reads the destination's own balance before paying.
 
 ## 5. Supply
 
 ```
-reward(block) = floor((21,000,000 LAPSE - total minted) * (1 - 0.5^(1/5,000,000)))
+reward(block) = floor((21,000,000 LAPSE - (total minted - burned)) * (1 - 0.5^(1/5,000,000)))
 ```
+
+Burned is whatever the burn address holds (from block 25,800; before that it was not subtracted), so burned LAPSE is paid out again over time instead of leaving the supply for good.
 
 The halflife is about 5,000,000 blocks, roughly 20 years at 2 minutes per block. This smooth curve avoids the instability a hard halving schedule can cause.
 

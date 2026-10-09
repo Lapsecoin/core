@@ -50,7 +50,7 @@ def request_status(chain, tip, txid, found_height, dest_funded, claimer_funded=l
     if r.first_claim is None:
         out.update(stage="unclaimed", lock_outcome="refunded")
         return out
-    out["lock_outcome"] = "recycled"
+    out["lock_outcome"] = "burned"
     order = gas_track.claimers_in_order(r, chain[r.close]["hash"], claimer_funded)
     out["order"] = [{"rank": i + 1, "id": short(a)} for i, a in enumerate(order)]
     if not order:

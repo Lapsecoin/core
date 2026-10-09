@@ -7,9 +7,10 @@ learns whether anyone was actually helped. What it does see is whether any
 node offered to, by posting a claim:
 
   no claim in the window  -> the lock goes back to the sender
-  at least one claim      -> the lock is recycled: removed from circulation
-                             and returned to the emission pool, so it is
-                             re-issued to builders over time rather than lost
+  at least one claim      -> the lock is burned: it goes to the burn address,
+                             which emission counts as unminted again (see
+                             state.State.recycled), so builders are paid it out
+                             over time rather than it being lost
 
 Everything here is derived from chain data, so every node reaches the same
 answer. The pieces:
@@ -122,5 +123,5 @@ def process_block(state, blk):
         if entry["claim"] is None:
             state.credit(entry["sender"], entry["amount"])
         else:
-            state.total_minted = max(0, state.total_minted - entry["amount"])
+            state.credit(crypto.burn_address(), entry["amount"])
         del state.escrows[txid]

@@ -169,10 +169,12 @@ BEP44_SLOT_COUNT = 256
 
 
 
-# First block height at which fee request locks (gaslock.py) are enforced.
-# Before it a transaction paying the escrow address is an ordinary transfer,
-# exactly as on the chain today, so nodes can upgrade at their own pace and
-# only a node still on old code at this height falls off the chain. Set it
-# well above the live height when releasing (the chain was at 25,644 on
-# 2026-10-09, about 145 s per block) and raise it again if the release slips.
-GAS_LOCK_ACTIVATION_HEIGHT = 34_000
+# First block height at which two rules start: fee request locks are enforced
+# (gaslock.py), and emission stops counting what sits in the burn address as
+# minted (state.State.compute_can_mint), so burned ticks are paid out again to
+# builders over time. Before it the chain behaves exactly as it always has:
+# a payment to the escrow address is an ordinary transfer and burned ticks
+# stay out of the pool for good. Nodes can upgrade at their own pace; only a
+# node still on old code at this height falls off the chain. The chain was at
+# 25,644 on 2026-10-09 (about 145 s per block).
+GAS_LOCK_ACTIVATION_HEIGHT = 25_800

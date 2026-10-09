@@ -28,12 +28,11 @@ def claim_memo(txid):
     return f"[gas-claim] {txid[:gaslock.REF_LEN]} 0x{'0' * 40} c2ln"
 
 
-def after_recycling(minted, amount):
-    """total_minted after a block that recycles `amount`: the settlement
-    runs before the builder's reward, so that reward is already computed on
-    the reduced total."""
-    reduced = minted - amount
-    return reduced + state_mod.compute_reward(reduced)
+def after_block(minted, burned_after):
+    """total_minted after a block whose settlement left `burned_after` in the
+    burn address: settlement runs before the builder's reward, so that
+    reward is computed with the burn address already holding it."""
+    return minted + state_mod.compute_reward(minted, burned_after)
 
 
 def control_after(height):
@@ -164,19 +163,28 @@ class TestSettlement:
         c.mine()                                     # block h + 2 closes it
         assert c.escrow is None
 
-    def test_a_claimed_lock_is_recycled_not_refunded_and_not_paid_to_anyone(self):
+    def test_a_claimed_lock_goes_to_the_burn_address_not_back_and_not_to_anyone(self):
         c = Chain()
         c.ask()
         asker_before = c.state.get_balance(address(1))
         c.claim()
         minted = c.state.total_minted
+        burned = c.state.get_balance(crypto.burn_address())
         c.mine()
         assert c.state.get_balance(ESC) == 0
+        assert c.state.get_balance(crypto.burn_address()) == burned + LOCK
         assert c.state.get_balance(address(1)) == asker_before              # not refunded
         assert c.state.get_balance(address(2)) == START - FEE - 1           # claimer paid its own fee, got nothing
-        assert c.state.total_minted == after_recycling(minted, LOCK)        # back in the pool
+        # settlement does not touch the minted total; only the reward does
+        assert c.state.total_minted == after_block(minted, burned + LOCK)
 
-    def test_the_recycled_amount_is_mintable_again(self):
+    def test_a_refunded_lock_never_reaches_the_burn_address(self):
+        c = Chain()
+        c.ask()
+        c.mine_until(c.cs.height + gaslock.CLAIM_WINDOW_BLOCKS)
+        assert c.state.get_balance(crypto.burn_address()) == 0
+
+    def test_the_burned_lock_is_mintable_again(self):
         c = Chain()
         c.ask()
         c.claim()
@@ -203,7 +211,8 @@ class TestSettlement:
         minted = c.state.total_minted
         c.claim()                                    # block h + 5
         assert c.escrow is None                      # settled in that same block, as claimed
-        assert c.state.total_minted == after_recycling(minted, LOCK)
+        assert c.state.get_balance(crypto.burn_address()) == LOCK
+        assert c.state.total_minted == after_block(minted, LOCK)
 
     def test_a_claim_after_the_window_changes_nothing(self):
         c = Chain()
@@ -403,8 +412,80 @@ class TestActivation:
         c.ask()                                               # lands in block 5
         assert c.cs.height == 5 and c.escrow is not None
 
-    def test_the_default_is_ahead_of_the_chain_at_the_time_it_was_chosen(self):
+    def test_the_default_is_ahead_of_the_chain_when_it_was_chosen(self):
         import importlib
         import params
         importlib.reload(params)
-        assert params.GAS_LOCK_ACTIVATION_HEIGHT > 25_644 + 5_000
+        assert params.GAS_LOCK_ACTIVATION_HEIGHT > 25_644
+
+
+class TestRecyclingTheBurnAddress:
+    """What the burn address holds is paid out again by emission, from the
+    activation height on, whoever burned it and however."""
+
+    def _burn(self, c, amount):
+        t = make_tx(1, 0, 0, c.state, fee=FEE,
+                    outputs_override=[{"to": crypto.burn_address(), "amount": amount}])
+        c.mine([t])
+
+    def test_every_burn_counts_not_just_locks(self):
+        c = Chain()
+        before = control_after(1).state.compute_can_mint()
+        self._burn(c, 5 * TICKS_PER_LAPSE)
+        gained = c.state.compute_can_mint() - before
+        assert 5 * TICKS_PER_LAPSE * 0.99 < gained <= 5 * TICKS_PER_LAPSE + c.state.compute_block_reward()
+
+    def test_the_pool_is_the_cap_less_minted_net_of_the_burn_address(self):
+        c = Chain()
+        self._burn(c, 7 * TICKS_PER_LAPSE)
+        s = c.state
+        assert s.recycled() == s.get_balance(crypto.burn_address()) == 7 * TICKS_PER_LAPSE
+        assert s.compute_can_mint() == state_mod.SUPPLY_CAP - (s.total_minted - s.recycled())
+        assert s.compute_block_reward() == state_mod.compute_reward(s.total_minted, s.recycled())
+
+    def test_nothing_is_recycled_before_the_activation_height(self, monkeypatch):
+        import params
+        monkeypatch.setattr(params, "GAS_LOCK_ACTIVATION_HEIGHT", 10)
+        c = Chain()
+        self._burn(c, 5 * TICKS_PER_LAPSE)
+        assert c.state.height < 10
+        assert c.state.recycled() == 0
+        assert c.state.compute_can_mint() == state_mod.SUPPLY_CAP - c.state.total_minted
+
+    def test_it_starts_with_the_block_at_the_activation_height(self, monkeypatch):
+        import params
+        monkeypatch.setattr(params, "GAS_LOCK_ACTIVATION_HEIGHT", 4)
+        c = Chain()
+        self._burn(c, 5 * TICKS_PER_LAPSE)                        # block 1
+        c.mine_until(2)
+        minted = c.state.total_minted
+        c.mine()                                                  # block 3: still the old rule
+        assert c.state.total_minted == minted + state_mod.compute_reward(minted)
+        minted = c.state.total_minted
+        c.mine()                                                  # block 4: burned ticks count
+        assert c.state.total_minted == minted + state_mod.compute_reward(minted, 5 * TICKS_PER_LAPSE)
+
+    def test_the_minted_total_still_only_grows_and_supply_adds_up(self):
+        c = Chain()
+        last = c.state.total_minted
+        for amount in (3, 4):
+            self._burn(c, amount * TICKS_PER_LAPSE)
+            assert c.state.total_minted >= last
+            last = c.state.total_minted
+            assert sum(c.state.all_balances().values()) == c.state.total_minted
+
+    def test_a_replay_from_genesis_agrees(self):
+        cs = ChainState.from_genesis()
+
+        def mine(txs=()):
+            nonlocal cs
+            cs = cs.apply_block(make_block(cs.height + 1, cs.tip["hash"], list(txs), builder_index=9))
+
+        for _ in range(6):
+            mine()
+        mine([make_tx(9, 0, 0, cs.state, fee=FEE,
+                      outputs_override=[{"to": crypto.burn_address(), "amount": TICKS_PER_LAPSE}])])
+        mine()
+        replay = ChainState.from_chain(cs.chain)
+        assert replay.state.total_minted == cs.state.total_minted
+        assert replay.state.get_balance(crypto.burn_address()) == TICKS_PER_LAPSE
