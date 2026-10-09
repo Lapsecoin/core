@@ -13,7 +13,7 @@
     <tr><td>Address</td><td class="hash-short" id="gas-dest" style="word-break:break-all"></td></tr>
     <tr><td>Nodes that offered</td><td id="gas-claimers"></td></tr>
     <tr><td>Order</td><td id="gas-order"></td></tr>
-    <tr><td>Your lock</td><td id="gas-lock"></td></tr>
+    <tr><td>Your burn</td><td id="gas-lock"></td></tr>
   </table>
 </div>
 <style>
@@ -49,14 +49,14 @@
       case "funded":
         return ["Your address has its gas", "It now holds what it asked for."];
       case "unclaimed":
-        return ["No node offered to help", "Nobody claimed it before block " + s.close + ". Your lock was returned."];
+        return ["No node offered to help", "Nobody claimed it before block " + s.close + ". Your LAPSE was returned."];
       case "no_eligible":
         return ["The nodes that offered could not pay",
-          "None of them holds enough on Base to cover it. Your lock was not returned."];
+          "None of them holds enough on Base to cover it. Your LAPSE stays burned."];
       case "gave_up":
         return ["The gas did not arrive",
           "All " + s.order.length + " nodes that offered have had their turn and the address is still short. " +
-          "Your lock was not returned, and the chain cannot see why."];
+          "Your LAPSE stays burned, and the chain cannot see why."];
     }
     return ["Not a fee request", "This transaction is not a signed fee request."];
   }
@@ -81,7 +81,7 @@
       $("gas-order").textContent = s.order && s.order.length
         ? s.order.map(o => o.rank + ". " + o.id).join("   ") : "set when the window closes";
       $("gas-lock").textContent = (s.lock / 1e8) + " LAPSE, " +
-        (s.lock_outcome === "refunded" ? "returned" : s.lock_outcome === "burned" ? "not returned" : "held until the window closes");
+        (s.lock_outcome === "refunded" ? "returned, nobody offered" : s.lock_outcome === "burned" ? "burned" : "burned unless nobody offers");
     }
   }
 
