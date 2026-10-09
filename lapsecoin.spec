@@ -10,7 +10,7 @@ nacl_datas,    nacl_binaries,    nacl_hiddenimports    = collect_all("nacl")
 cffi_datas,    cffi_binaries,    cffi_hiddenimports    = collect_all("cffi")
 oqs_datas,     oqs_binaries,     oqs_hiddenimports     = collect_all("oqs")
 chiavdf_datas, chiavdf_binaries, chiavdf_hiddenimports = collect_all("chiavdf")
-coincurve_datas, coincurve_binaries, coincurve_hiddenimports = collect_all("coincurve")
+crypto_datas, crypto_binaries, crypto_hiddenimports = collect_all("cryptography")
 
 _search_roots = [
     "/usr/local/lib",
@@ -87,12 +87,12 @@ _all_datas = [
     ("favicon.ico",        "."),
     ("templates_html",     "templates_html"),
     ("vendor",             "vendor"),
-    *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas, *coincurve_datas,
+    *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas, *crypto_datas,
 ]
 _all_hiddenimports = [
     *nacl_hiddenimports, *cffi_hiddenimports,
-    *oqs_hiddenimports, *chiavdf_hiddenimports, *coincurve_hiddenimports,
-    "coincurve", "Crypto.Hash.keccak",
+    *oqs_hiddenimports, *chiavdf_hiddenimports, *crypto_hiddenimports,
+    
     "oqs", "_cffi_backend", "libtorrent", "miniupnpc",
     "flask", "werkzeug", "werkzeug.serving", "werkzeug.debug",
     # waitress serves both HTTP ports (see main.py _serve); its

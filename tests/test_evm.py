@@ -20,6 +20,62 @@ REFERENCE_TX = "02f87782210507830f4240832dc6c082ea609400000000000000000000000000
 REFERENCE_TX_HASH = "0xce18df3b8b7ae102dc3eadbd4d7a08631e93a9f963e5700004aa89cdb1b0687b"
 
 
+def rlp_decode(b):
+    """A small RLP decoder, just to read a signed transaction back."""
+    def one(i):
+        t = b[i]
+        if t < 0x80:
+            return b[i:i + 1], i + 1
+        if t < 0xB8:
+            n = t - 0x80
+            return b[i + 1:i + 1 + n], i + 1 + n
+        if t < 0xC0:
+            ln = t - 0xB7
+            n = int.from_bytes(b[i + 1:i + 1 + ln], "big")
+            return b[i + 1 + ln:i + 1 + ln + n], i + 1 + ln + n
+        if t < 0xF8:
+            n, start = t - 0xC0, i + 1
+        else:
+            ln = t - 0xF7
+            n, start = int.from_bytes(b[i + 1:i + 1 + ln], "big"), i + 1 + ln
+        items, j = [], start
+        while j < start + n:
+            item, j = one(j)
+            items.append(item)
+        return items, start + n
+    return one(0)[0]
+
+
+def sender_of(raw):
+    """Who signed a type-2 transaction, from nothing but its bytes."""
+    f = rlp_decode(raw[1:])
+    unsigned = evm.rlp_encode([int.from_bytes(x, "big") if not isinstance(x, list) and i not in (5, 7, 8) else x
+                               for i, x in enumerate(f[:9])])
+    y, r, s = (int.from_bytes(x, "big") for x in f[9:12])
+    xy = evm._recover(evm.keccak256(b"\x02" + unsigned), r, s, y)
+    return evm._address_of_xy(xy)
+
+
+class TestKeccak:
+    VECTORS = {
+        b"": "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        b"abc": "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45",
+        b"a" * 3: "b9a5dc0048db9a7d13548781df3cd4b2334606391f75f40c14225a92f4cb3537",
+        b"a" * 135: "34367dc248bbd832f4e3e69dfaac2f92638bd0bbd18f2912ba4ef454919cf446",
+        b"a" * 136: "a6c4d403279fe3e0af03729caada8374b5ca54d8065329a3ebcaeb4b60aa386e",
+        b"a" * 137: "d869f639c7046b4929fc92a4d988a8b22c55fbadb802c0c66ebcd484f1915f39",
+        b"a" * 272: "cf7fcd4f705ee749930d19ca84561a9bf62516bd90a471545fa2f49fdc7e63c8",
+    }
+
+    def test_known_digests_including_the_padding_boundaries(self):
+        for data, digest in self.VECTORS.items():
+            assert evm.keccak256(data).hex() == digest, len(data)
+
+    def test_it_is_not_sha3(self):
+        import hashlib
+        assert evm.keccak256(b"abc") != hashlib.sha3_256(b"abc").digest()
+
+
 class TestAddresses:
     def test_known_address_for_key_one(self):
         assert evm.address_from_secret(KEY_ONE) == KEY_ONE_ADDR
@@ -87,35 +143,77 @@ class TestRlp:
 
 
 class TestSigning:
-    def test_message_signature_recovers_the_signer(self):
+    # Signed by eth-account for key 1 over b"hello lapse": a signature made by
+    # someone else's implementation that ours has to read correctly.
+    EXTERNAL_SIG = ("0x1ad2787a46d63be8e945b1696543152a3afd92338b7f593093ccbe4ff001e084"
+                    "34cf05a12a1cbe9720cccd77351bb8c29f73788c03a062ba9e05e931aa739c161b")
+
+    def test_a_signature_made_elsewhere_recovers_to_its_signer(self):
+        assert evm.recover_message_signer(b"hello lapse", self.EXTERNAL_SIG) == KEY_ONE_ADDR
+
+    def test_a_signature_of_ours_recovers_to_us(self):
         sig = evm.sign_message(b"hello lapse", KEY_ONE)
         assert len(sig) == 132 and sig[-2:] in ("1b", "1c")
         assert evm.recover_message_signer(b"hello lapse", sig) == KEY_ONE_ADDR
 
-    def test_signature_is_deterministic(self):
-        assert evm.sign_message(b"x", KEY_ONE) == evm.sign_message(b"x", KEY_ONE)
+    def test_signatures_are_low_s(self):
+        for _ in range(20):
+            sig = bytes.fromhex(evm.sign_message(b"x", evm.generate_keypair()[0])[2:])
+            assert int.from_bytes(sig[32:64], "big") <= evm._N // 2
 
     def test_another_message_does_not_recover_the_signer(self):
         sig = evm.sign_message(b"one", KEY_ONE)
         assert evm.recover_message_signer(b"two", sig) != KEY_ONE_ADDR
 
+    def test_a_signature_from_a_random_key_recovers_to_that_keys_address(self):
+        for _ in range(5):
+            sk, addr = evm.generate_keypair()
+            assert evm.recover_message_signer(b"m", evm.sign_message(b"m", sk)) == addr
+
     @pytest.mark.parametrize("junk", ["", "0x", "0x12", "zz", "0x" + "00" * 65, "0x" + "11" * 64 + "05"])
     def test_malformed_signatures_recover_nothing(self, junk):
         assert evm.recover_message_signer(b"x", junk) is None
 
-    def test_transaction_matches_the_reference_encoding(self):
+    def test_out_of_range_values_recover_nothing(self):
+        d = evm.keccak256(b"x")
+        assert evm._recover(d, 0, 1, 0) is None
+        assert evm._recover(d, 1, 0, 0) is None
+        assert evm._recover(d, evm._N, 1, 0) is None
+        assert evm._recover(d, 1, evm._N, 0) is None
+        assert evm._recover(d, 1, 1, 2) is None
+
+    def test_a_transaction_made_elsewhere_reads_back_to_its_sender(self):
+        assert sender_of(bytes.fromhex(REFERENCE_TX)) == KEY_ONE_ADDR
+
+    def test_our_transaction_has_the_right_fields_and_reads_back_to_us(self):
         raw = evm.sign_transaction(
             KEY_ONE, chain_id=8453, nonce=7, to=DEAD, value=10 ** 15,
             data=bytes.fromhex("49290c1c00ff"), gas=60000,
             max_fee_per_gas=3_000_000, max_priority_fee_per_gas=1_000_000)
         assert raw[:1] == b"\x02"
-        assert raw.hex() == REFERENCE_TX
-        assert evm.transaction_hash(raw) == REFERENCE_TX_HASH
+        f = rlp_decode(raw[1:])
+        assert [int.from_bytes(x, "big") for x in f[:5]] == [8453, 7, 1_000_000, 3_000_000, 60000]
+        assert f[5].hex() == DEAD[2:].lower() and int.from_bytes(f[6], "big") == 10 ** 15
+        assert f[7].hex() == "49290c1c00ff" and f[8] == []
+        assert sender_of(raw) == KEY_ONE_ADDR
+        assert evm.transaction_hash(raw) == "0x" + evm.keccak256(raw).hex()
+
+    def test_the_external_transaction_has_the_same_shape_as_ours(self):
+        ours = rlp_decode(evm.sign_transaction(
+            KEY_ONE, chain_id=8453, nonce=7, to=DEAD, value=10 ** 15,
+            data=bytes.fromhex("49290c1c00ff"), gas=60000,
+            max_fee_per_gas=3_000_000, max_priority_fee_per_gas=1_000_000)[1:])
+        theirs = rlp_decode(bytes.fromhex(REFERENCE_TX)[1:])
+        assert ours[:9] == theirs[:9] and len(ours) == len(theirs) == 12
 
     def test_a_bad_destination_is_refused_before_signing(self):
         with pytest.raises(ValueError):
             evm.sign_transaction(KEY_ONE, chain_id=1, nonce=0, to="0x12", value=1,
                                  gas=21000, max_fee_per_gas=1, max_priority_fee_per_gas=1)
+
+    def test_an_invalid_secret_is_refused(self):
+        with pytest.raises(ValueError):
+            evm.address_from_secret(b"\x00" * 32)
 
 
 class TestRpc:
