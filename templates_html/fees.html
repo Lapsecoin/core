@@ -56,32 +56,40 @@
   const $ = id => document.getElementById(id);
   const form = $("fees-form"), btn = $("submit-btn");
   const low = {{ 'true' if low else 'false' }};
-  let plan = null, timer = null;
+  let plan = null, timer = null, seq = 0;
 
   const coin = (u, d, sym) => { const v = Number(u) / Math.pow(10, d); return (v >= 1 ? v.toFixed(4) : v.toPrecision(2)) + " " + sym; };
   const usd = v => "$" + Number(v).toFixed(2);
 
   function setErr(msg) { const el = $("plan-err"); el.textContent = msg || ""; el.style.display = msg ? "" : "none"; }
+  // Only a result for exactly what is in the fields now can enable the button.
   function refresh() { btn.disabled = low || !(plan && plan.needs_help); }
+  function invalidate() { plan = null; seq++; $("plan-line").textContent = ""; setErr(""); refresh(); }
 
   async function loadPlan() {
-    const q = new URLSearchParams({network: $("network").value, action: $("action").value, dest: $("dest").value.trim()});
+    const my = ++seq, dest = $("dest").value.trim();
+    if (!dest) { plan = null; refresh(); return; }
+    const q = new URLSearchParams({network: $("network").value, action: $("action").value, dest: dest});
     try {
       const p = await (await fetch("/api/fees/plan?" + q)).json();
+      if (my !== seq) return;                               // fields changed meanwhile
       if (!p.ok) { plan = null; $("plan-line").textContent = ""; setErr(p.error); refresh(); return; }
       plan = p; setErr("");
       $("plan-line").textContent = !p.needs_help ? "That address already has enough."
         : "Needs about " + coin(p.target, p.decimals, p.symbol) + " (" + usd(p.target_usd) + "). Nodes send up to " + usd(p.cap_usd) +
           (p.covers_share < 1 ? ", which covers " + Math.round(p.covers_share * 100) + "% of it." : ".");
-    } catch (e) { plan = null; setErr("Could not reach this node."); }
+    } catch (e) { if (my === seq) { plan = null; setErr("Could not reach this node."); } }
     refresh();
   }
-  const later = () => { clearTimeout(timer); timer = setTimeout(loadPlan, 400); };
-  ["network", "action", "dest"].forEach(id => $(id).addEventListener("input", later));
+  const edited = () => { clearTimeout(timer); invalidate(); timer = setTimeout(loadPlan, 400); };
+  ["network", "action", "dest"].forEach(id => $(id).addEventListener("input", edited));
   $("network").addEventListener("change", () => {
     $("dest").placeholder = $("network").selectedOptions[0].dataset.vm === "svm" ? "Solana address" : "0x...";
   });
-  form.addEventListener("submit", () => { btn.disabled = true; });
+  form.addEventListener("submit", e => {
+    if (!(plan && plan.needs_help) || low) { e.preventDefault(); return; }
+    btn.disabled = true;
+  });
 
   if ($("dest").value) loadPlan();
 })();
