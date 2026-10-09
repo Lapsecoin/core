@@ -668,6 +668,9 @@ class Node:
             # ordinary balance, the burn address's, so it doesn't fall out
             # of total_minted on its own. Circulating is what's actually
             # spendable by someone: minted minus whatever's been burned.
+            # From params.GAS_LOCK_ACTIVATION_HEIGHT emission counts the
+            # burn address's content as unminted too (State.recycled), so
+            # can_mint and block_reward rise with it.
             "burned":       v.state.get_balance(crypto.burn_address()),
             "circulating":  v.state.total_minted - v.state.get_balance(crypto.burn_address()),
             "can_mint":     v.state.compute_can_mint(),

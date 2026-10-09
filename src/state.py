@@ -1,25 +1,33 @@
 """Balance ledger, nonce tracking, and emission accounting. No disk I/O."""
 
+import crypto
+import params
 import tx as tx_mod
 from params import EMISSION_DECAY_NUMERATOR, EMISSION_DECAY_DENOMINATOR, SUPPLY_CAP
 
 
-def compute_can_mint(total_minted: int) -> int:
-    """Ticks still mintable: SUPPLY_CAP - total_minted, floored at 0.
+def compute_can_mint(total_minted: int, burned: int = 0) -> int:
+    """Ticks still mintable: SUPPLY_CAP - (total_minted - burned), floored at 0.
+
+    `burned` is what the burn address holds and emission is to treat as
+    unminted again; 0 before params.GAS_LOCK_ACTIVATION_HEIGHT.
 
     Single source of truth for the mintable pool.
     """
-    return max(0, SUPPLY_CAP - total_minted)
+    return max(0, SUPPLY_CAP - (total_minted - burned))
 
 
-def compute_reward(total_minted: int) -> int:
+def compute_reward(total_minted: int, burned: int = 0) -> int:
     """Single source of truth for block reward. Used by State and NodeView stats.
 
     Pure integer arithmetic. No floating point, so every node computes
     the exact same reward regardless of platform. See params.py for how
     the decay ratio was derived.
     """
-    return (compute_can_mint(total_minted) * EMISSION_DECAY_NUMERATOR) // EMISSION_DECAY_DENOMINATOR
+    return (compute_can_mint(total_minted, burned) * EMISSION_DECAY_NUMERATOR) // EMISSION_DECAY_DENOMINATOR
+
+
+_BURN = crypto.burn_address()
 
 
 class State:
@@ -166,13 +174,20 @@ class State:
     # Emission
     # ------------------------------------------------------------------
 
+    def recycled(self) -> int:
+        """What the burn address holds, counted back into the pool from the
+        activation height on (see params.GAS_LOCK_ACTIVATION_HEIGHT)."""
+        if self.height < params.GAS_LOCK_ACTIVATION_HEIGHT:
+            return 0
+        return self._balances.get(_BURN, 0)
+
     def compute_can_mint(self) -> int:
         """Ticks still available to mint."""
-        return compute_can_mint(self.total_minted)
+        return compute_can_mint(self.total_minted, self.recycled())
 
     def compute_block_reward(self) -> int:
         """Compute the reward for the next accepted block."""
-        return compute_reward(self.total_minted)
+        return compute_reward(self.total_minted, self.recycled())
 
     def apply_reward_distribution(self, distribution):
         """Credit a pre-computed reward distribution.

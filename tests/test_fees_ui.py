@@ -344,7 +344,7 @@ class TestStatus:
         w.mine_until(r_close)
         s = self.status(w, txid)
         assert s["stage"] == "paying" and s["current"]["rank"] == 1 and len(s["order"]) == 3
-        assert s["lock_outcome"] == "recycled" and s["ranks_left"] == 2
+        assert s["lock_outcome"] == "burned" and s["ranks_left"] == 2
         w.mine_until(r_close + 1 + gas.RANK_SLOT_BLOCKS)
         s = self.status(w, txid)
         assert s["current"]["rank"] == 2 and s["ranks_left"] == 1
@@ -363,7 +363,7 @@ class TestStatus:
         w.claim_together(txid, [3, 4])
         w.mine_until(3 + 1 + 2 * gas.RANK_SLOT_BLOCKS)
         s = self.status(w, txid)
-        assert s["stage"] == "gave_up" and s["lock_outcome"] == "recycled"
+        assert s["stage"] == "gave_up" and s["lock_outcome"] == "burned"
 
     def test_claimers_who_cannot_pay_are_not_in_the_order(self, tmp_path):
         w = self.world(tmp_path)
