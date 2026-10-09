@@ -135,6 +135,7 @@ import block as block_mod
 import crypto as crypto_mod
 import hardware_info
 import settings as settings_mod
+from base_send import BaseSend
 import storage as storage_mod
 import tx as tx_mod
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
@@ -1485,7 +1486,8 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
 
 
-    register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token)
+    register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
+                           base=BaseSend(node))
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

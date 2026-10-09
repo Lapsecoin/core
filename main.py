@@ -17,6 +17,7 @@ import time
 import argcomplete
 from argcomplete.completers import FilesCompleter
 
+import base_wallet
 import block as block_mod
 import http_probe
 import info_probe
@@ -642,6 +643,12 @@ def main():
         )
         update_checker.start()
         updater = Updater()
+
+        # The gas wallet: one Base key sealed under the node's kek, created
+        # on first start. It holds nothing until funded, so a fresh node is
+        # not made to sit locked for lack of an address nobody has used.
+        node.base_wallet_path = base_wallet.key_path_for(args.keyfile)
+        base_wallet.ensure(node.base_wallet_path, kek)
 
         # ------------------------------------------------------------------
         # HTTP servers: browser UI only, no peer routes

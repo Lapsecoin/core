@@ -331,16 +331,18 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
         return resp
 
 
-def register_wallet_routes(app, reader, signer, csrf_token):
+def register_wallet_routes(app, reader, signer, csrf_token, base=None):
     """Send, post, vote and the fee quotes behind them: everything that
-    spends from `signer`'s address."""
+    spends from `signer`'s address. `base`, when given, adds the ETH-on-Base half
+    of the send page (see base_send.BaseSend); the light client has none."""
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
 
     # What a send POST leaves for the page it redirects to (see forms.py).
     send_note_keys = ("alert_ok_tx", "alert_ok_verb", "alert_err", "alert_err_lines",
-                      "outputs_value", "memo_value")
+                      "outputs_value", "memo_value", "asset", "base_to_value",
+                      "base_amount_value")
 
     def _send_post():
         """Do what the send form asks, and answer with a redirect to the
@@ -348,7 +350,8 @@ def register_wallet_routes(app, reader, signer, csrf_token):
         answer to a POST sends the payment again when it is reloaded."""
         forms = forms_for(app)
         result = dict(alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[],
-                      outputs_value="", memo_value="")
+                      outputs_value="", memo_value="", asset="lapse",
+                      base_to_value="", base_amount_value="")
         if not _csrf_ok():
             result["alert_err"] = "Session expired; reload the page and try again."
             return forms.done("/send", result)
@@ -356,7 +359,12 @@ def register_wallet_routes(app, reader, signer, csrf_token):
             result["alert_err"] = ALREADY_SENT
             return forms.done("/send", result)
 
+        asset = request.form.get("asset", "lapse")
         passphrase = request.form.get("passphrase", "").strip()
+        if asset == "base" and base is not None:
+            result["asset"] = "base"
+            base.send(request.form, passphrase, result)
+            return forms.done("/send", {k: result[k] for k in send_note_keys if k in result})
         outputs_raw = request.form.get("outputs", "").strip()
         memo        = request.form.get("memo", "").strip()
         csv_file    = request.files.get("csv_file")
@@ -389,7 +397,10 @@ def register_wallet_routes(app, reader, signer, csrf_token):
                    balance=acct["balance"], fees=acct["fees"],
                    csrf_token=csrf_token, form_token=forms.tokens.issue(),
                    outputs_value="", memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
+                   asset="lapse", base_enabled=base is not None,
                    alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
+        if base is not None:
+            ctx.update(base.view())
         note = forms.notes.take(request.args.get("note"))
         ctx.update({k: v for k, v in note.items() if k in send_note_keys})
         return render_template("send.html", **ctx)
