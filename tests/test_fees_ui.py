@@ -24,7 +24,7 @@ from node import NodeView
 from params import TICKS_PER_LAPSE
 from tests.browser import submit, tokens
 from tests.fixtures import address, make_block, make_tx
-from tests.test_gas_worker import (ASKER, DEST, DEST_KEY, ESC, FakeIO, ME, NET, PRICE, TARGET,
+from tests.test_gas_worker import (ASKER, DEST, ESC, FakeIO, ME, NET, PRICE, TARGET,
                                    World)
 from tests.test_light import PASS, _FullNode
 
@@ -65,38 +65,63 @@ def app(tmp_path, monkeypatch):
     return type("A", (), dict(node=node, client=client, io=node.gas_io))
 
 
-def sign(dest_key, message):
-    return evm.sign_message(message.encode(), dest_key)
-
-
-def prepare(app, **kw):
-    q = dict(network="optimism", action="send", dest=DEST)
-    q.update(kw)
-    return app.client.get("/api/fees/prepare", query_string=q).get_json()
-
-
-def post(app, signature, prepared=None, **kw):
-    p = prepared or prepare(app)
-    fields = dict(network="optimism", action="send", dest=DEST, target=str(p["target"]),
-                  signature=signature, passphrase=PASS)
+def post(app, passphrase=PASS, **kw):
+    fields = dict(network="optimism", action="send", dest=DEST, passphrase=passphrase)
     fields.update(kw)
-    return submit(app.client, "/fees", page="/fees", follow=False, **fields), p
+    return submit(app.client, "/fees", page="/fees", follow=False, **fields)
+
+
+def follow(app, response):
+    return app.client.get(response.headers["Location"]).get_data(as_text=True)
 
 
 class TestPage:
-    def test_it_lists_networks_and_actions_and_says_what_it_is(self, app):
+    def test_it_lists_networks_and_actions(self, app):
         html = app.client.get("/fees").get_data(as_text=True)
         for n in gas.NETWORKS.values():
             assert f'value="{n.slug}"' in html
         for a in gas.ACTIONS.values():
             assert f'value="{a.key}"' in html
-        assert "A free gift, as is." in html
         assert 'href="/fees"' in html
 
-    def test_it_discloses_what_the_lock_does(self, app):
+    def test_one_button_says_what_it_does_and_nothing_asks_to_be_paid(self, app):
         html = app.client.get("/fees").get_data(as_text=True)
-        assert "10 LAPSE is burned, and comes back only if no node offers" in html
-        assert "at most $2.00" in html
+        assert html.count('type="submit"') == 1
+        assert "Burn 10 LAPSE and request" in html
+        assert 'id="sign-btn"' not in html and "Pay " not in html and "pay " not in html.split("<script>")[0]
+
+    def test_nothing_asks_the_user_to_sign_anything(self, app):
+        html = app.client.get("/fees").get_data(as_text=True)
+        assert html.count("<button") == 1
+        for word in ("personal_sign", "signMessage", "ethereum.request", "eth_requestAccounts", 'name="signature"'):
+            assert word not in html
+
+    def test_it_says_the_gift_is_as_is_and_when_the_burn_comes_back(self, app):
+        html = app.client.get("/fees").get_data(as_text=True)
+        assert "A free gift, as is. The 10 LAPSE comes back only if no node offers." in html
+
+    def test_the_page_is_a_short_read(self, app):
+        html = app.client.get("/fees").get_data(as_text=True)
+        body = html.split("<h2>Fees</h2>", 1)[1].split("<script>", 1)[0]
+        body = re.sub(r"<select.*?</select>|<details.*?</details>", " ", body, flags=re.S)   # the lists, not the copy
+        words = re.sub(r"<[^>]+>", " ", body).split()
+        assert len(words) < 60, len(words)
+
+    def test_with_enough_lapse_there_is_no_hint_about_getting_some(self, app):
+        html = app.client.get("/fees").get_data(as_text=True)
+        assert "Mine some" not in html and "You need 10 LAPSE" not in html
+
+    def test_without_enough_lapse_it_says_to_mine_or_use_discord(self, app):
+        app.node.cs.state.debit(app.node.addr, 995 * TICKS_PER_LAPSE)
+        app.node.view = NodeView(app.node.cs)
+        html = app.client.get("/fees").get_data(as_text=True)
+        assert "You need 10 LAPSE. Mine some, or get free LAPSE on" in html
+        assert f'<a href="{fees_ui.DISCORD}" target="_blank"' in html and 'type="submit" id="submit-btn" style="flex:0 0 auto" disabled' in html
+
+    def test_an_unreadable_balance_does_not_block_the_page(self, app, monkeypatch):
+        monkeypatch.setattr(type(app.node.view.state), "get_balance",
+                            lambda self, a: (_ for _ in ()).throw(RuntimeError("down")))
+        assert app.client.get("/fees").status_code == 200
 
     def test_the_public_app_has_no_fees_page_but_has_the_status(self, app):
         public = api.create_app(app.node, peerpool_mod.PeerPool()).test_client()
@@ -159,17 +184,14 @@ class TestPlan:
 
 
 class TestSanctioned:
-    def test_a_listed_address_is_refused_everywhere_on_the_page(self, app):
+    def test_a_listed_address_is_refused_on_the_page(self, app):
         app.io.listed = {DEST}
         q = dict(network="optimism", action="send", dest=DEST)
         assert app.client.get("/api/fees/plan", query_string=q).get_json()["error"] == fees_ui.REFUSED
-        assert app.client.get("/api/fees/prepare", query_string=q).get_json()["error"] == fees_ui.REFUSED
 
     def test_a_listed_address_cannot_be_submitted(self, app):
-        p = prepare(app)
-        sig = sign(DEST_KEY, p["message"])
         app.io.listed = {DEST}
-        r, _ = post(app, sig, prepared=p)
+        r = post(app)
         assert fees_ui.REFUSED in follow(app, r) and app.node.mempool.all_txs() == []
 
     def test_an_oracle_outage_does_not_block_the_page(self, app):
@@ -178,105 +200,58 @@ class TestSanctioned:
         assert r.get_json()["ok"]
 
 
-class TestPrepare:
-    def test_the_message_binds_sender_nonce_and_numbers(self, app):
-        p = prepare(app)
-        assert p["ok"]
-        assert p["message"] == gas.request_message(
-            "optimism", p["target"], DEST, app.node.addr, p["nonce"]).decode()
-        assert p["nonce"] == 1
-
-    def test_the_nonce_follows_what_is_pending(self, app):
-        t = make_tx_for(app.node)
-        assert app.node.submit_tx_from_api(t)[0]
-        assert prepare(app)["nonce"] == 2
-
-    def test_it_will_not_prepare_for_an_address_that_has_enough(self, app):
-        app.io.dest = 10 ** 18
-        r = app.client.get("/api/fees/prepare", query_string=dict(network="optimism", action="send", dest=DEST))
-        assert r.status_code == 400 and "already holds enough" in r.get_json()["error"]
-
-    def test_it_needs_an_address(self, app):
-        r = app.client.get("/api/fees/prepare", query_string=dict(network="optimism", action="send"))
-        assert r.status_code == 400
-
-
-def make_tx_for(node):
-    return tx_mod.create(node.addr, node.pk_hex, [{"to": address(5), "amount": 5}], 1, 1000,
-                         crypto.decrypt_secret_key(node.keyfile, kek=crypto.derive_kek(node.keyfile, PASS)))
-
-
 class TestSubmit:
-    def good(self, app):
-        p = prepare(app)
-        return sign(DEST_KEY, p["message"])
-
-    def test_a_signed_request_locks_the_fee_and_goes_to_the_transaction_page(self, app):
-        before = app.node.cs.state.get_balance(app.node.addr)
-        r, p = post(app, self.good(app))
+    def test_one_post_burns_the_lapse_and_goes_to_the_transaction_page(self, app):
+        r = post(app)
         assert r.status_code == 303
         txid = r.headers["Location"].rsplit("/", 1)[1]
         t = app.node.mempool.get(txid)
         assert t and t["outputs"] == [{"to": ESC, "amount": fees_ui.LOCK}]
         req = gas.parse_request_memo(t["memo"])
-        assert req["dest"] == DEST and req["target"] == p["target"]
-        assert gas.verify_request_signature(req, app.node.addr, t["nonce"])
+        assert req["dest"] == DEST and req["network"] == "optimism"
+        assert req["target"] == int(65_000 * GAS_PRICE * gas.GAS_SAFETY)
         assert gaslock.check_lock(t, 1)[0] and tx_mod.validate(t, app.node.cs.state)[0]
 
-    def test_a_signature_from_another_key_is_refused(self, app):
-        p = prepare(app)
-        r, _ = post(app, sign((99).to_bytes(32, "big"), p["message"]))
-        assert "does not match" in follow(app, r)
-        assert app.node.mempool.all_txs() == []
-
-    def test_a_signature_over_other_text_is_refused(self, app):
-        r, _ = post(app, sign(DEST_KEY, "something else"))
-        assert "does not match" in follow(app, r)
-
-    def test_no_signature_no_request(self, app):
-        r, _ = post(app, "")
-        assert "Sign the message" in follow(app, r) and app.node.mempool.all_txs() == []
-
-    def test_a_malformed_signature_is_refused(self, app):
-        r, _ = post(app, "0x1234")
-        assert "Sign the message" in follow(app, r)
-
-    def test_a_target_far_from_the_live_price_is_refused(self, app):
-        sig = self.good(app)
-        r, _ = post(app, sig, target=str(10 ** 6))
-        assert "price moved" in follow(app, r)
-
-    def test_a_target_that_is_not_a_number_is_refused(self, app):
-        r, _ = post(app, self.good(app), target="lots")
-        assert "Prepare the request again" in follow(app, r)
+    def test_nothing_is_signed_by_anyone_but_the_sender(self, app):
+        t = app.node.mempool.get(post(app).headers["Location"].rsplit("/", 1)[1])
+        assert t["from"] == app.node.addr and "signature" not in t["memo"] and len(t["memo"].split()) == 4
 
     def test_a_funded_address_cannot_ask(self, app):
-        p = prepare(app)
-        sig = sign(DEST_KEY, p["message"])
-        app.io.dest = 10 ** 18                    # funded between preparing and paying
-        r, _ = post(app, sig, prepared=p)
-        assert "already holds enough" in follow(app, r)
+        app.io.dest = 10 ** 18
+        assert "already holds enough" in follow(app, post(app))
 
     def test_wrong_passphrase_sends_nothing(self, app):
-        r, _ = post(app, self.good(app), passphrase="wrong")
+        post(app, passphrase="wrong")
         assert app.node.mempool.all_txs() == []
 
     def test_a_missing_passphrase_is_asked_for(self, app):
-        r, _ = post(app, self.good(app), passphrase="")
-        assert "Passphrase required" in follow(app, r)
+        assert "Passphrase required" in follow(app, post(app, passphrase=""))
 
     def test_not_enough_lapse_is_said_plainly(self, app):
         app.node.cs.state.debit(app.node.addr, 999 * TICKS_PER_LAPSE + 5 * 10 ** 7)
         app.node.view = NodeView(app.node.cs)
-        r, _ = post(app, self.good(app))
-        assert "Not enough LAPSE" in follow(app, r)
+        assert "Not enough LAPSE" in follow(app, post(app))
+
+    @pytest.mark.parametrize("kw,message", [
+        (dict(network="dogechain"), "Pick a network"),
+        (dict(action="teleport"), "Pick what you want to do"),
+        (dict(dest=""), "Enter the address"),
+        (dict(dest="0x12"), "not a valid Optimism address"),
+    ])
+    def test_bad_input_is_explained_and_nothing_is_sent(self, app, kw, message):
+        r = post(app, **kw)
+        assert message in follow(app, r) and app.node.mempool.all_txs() == []
+
+    def test_an_unreachable_network_is_a_calm_message(self, app):
+        def down(net, addr):
+            raise evm.EVMUnreachable("down")
+        app.io.dest_balance = down
+        assert "Try again" in follow(app, post(app))
 
     def test_the_form_works_once(self, app):
-        sig = self.good(app)
         csrf, form = tokens(app.client, "/fees")
-        p = prepare(app)
         data = dict(csrf_token=csrf, form_token=form, network="optimism", action="send",
-                    dest=DEST, target=str(p["target"]), signature=sig, passphrase=PASS)
+                    dest=DEST, passphrase=PASS)
         first = app.client.post("/fees", data=data)
         again = app.client.post("/fees", data=data, follow_redirects=True)
         assert first.status_code == 303
@@ -289,13 +264,7 @@ class TestSubmit:
         assert "Session expired" in r.get_data(as_text=True)
 
     def test_bad_input_keeps_what_was_typed(self, app):
-        r, _ = post(app, "", passphrase="")
-        html = follow(app, r)
-        assert DEST in html
-
-
-def follow(app, response):
-    return app.client.get(response.headers["Location"]).get_data(as_text=True)
+        assert DEST in follow(app, post(app, passphrase=""))
 
 
 class TestStatus:
@@ -311,7 +280,6 @@ class TestStatus:
 
     def test_a_malformed_transaction_is_not_a_request(self, tmp_path):
         w = self.world(tmp_path)
-        w.request(bad_signature=True)
         assert self.status(w, "ab" * 32) is None
 
     def test_collecting_while_the_window_is_open(self, tmp_path):
@@ -396,7 +364,7 @@ class TestStatusEndpoint:
         assert fees_ui.status_for(node, w.io, "cd" * 32) == {"stage": "none"}
         # a request still in the mempool
         pending = make_tx(ASKER, 0, 0, None, fee=1000, nonce_override=9,
-                          memo=gas.build_request_memo("optimism", 5, DEST, b"\x00" * 65),
+                          memo=gas.build_request_memo("optimism", 5, DEST),
                           outputs_override=[{"to": ESC, "amount": gaslock.MIN_LOCK}])
         w.heights = {}
         node = self.node_for(w, mempool={"p" * 64: pending})
@@ -430,16 +398,3 @@ class TestStatusEndpoint:
             raise evm.EVMUnreachable("down")
         w.io.dest_balance = down
         assert fees_ui.status_for(node, w.io, txid)["stage"] == "paying"
-
-
-def test_decode_signature_accepts_hex_and_base64_of_the_right_length():
-    import base64
-    ev, sol = gas.NETWORKS["optimism"], gas.NETWORKS["solana"]
-    raw65, raw64 = bytes(range(65)), bytes(range(64))
-    assert fees_ui.decode_signature(ev, "0x" + raw65.hex()) == raw65
-    assert fees_ui.decode_signature(ev, raw65.hex()) == raw65
-    assert fees_ui.decode_signature(sol, base64.b64encode(raw64).decode()) == raw64
-    assert fees_ui.decode_signature(ev, base64.b64encode(raw64).decode()) is None
-    assert fees_ui.decode_signature(sol, "0x" + raw65.hex()) is None
-    assert fees_ui.decode_signature(ev, "not a signature!") is None
-    assert fees_ui.decode_signature(ev, None) is None

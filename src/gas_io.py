@@ -8,12 +8,10 @@ import evm
 import gas
 import relay
 import sanctions
-import settings as settings_mod
 
 
 class ChainIO:
-    def __init__(self, settings=None, proxy=None):
-        self.settings = settings
+    def __init__(self, proxy=None):
         self.proxy = proxy          # callable returning a proxy URL or None (the light client's Tor)
 
     def _route(self):
@@ -29,10 +27,10 @@ class ChainIO:
         return self.settings.get(setting).strip() if self.settings is not None else ""
 
     def base_rpc(self):
-        return self._setting(settings_mod.BASE_RPC_URL) or evm.DEFAULT_BASE_RPC
+        return evm.DEFAULT_BASE_RPC
 
     def relay_key(self):
-        return self._setting(settings_mod.RELAY_API_KEY)
+        return ""
 
     def _rpc_for(self, net):
         return self.base_rpc() if net.slug == "base" else net.rpc

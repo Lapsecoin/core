@@ -520,9 +520,8 @@ def _peers_for_download(known_addrs, self_addr):
 
 
 def _gas_io(node):
-    """How the pages read other networks: the node's own settings decide the
-    Base endpoint and Relay key. Tests put a fake on the node."""
-    return getattr(node, "gas_io", None) or ChainIO(getattr(node, "settings", None))
+    """How the pages read other networks. Tests put a fake on the node."""
+    return getattr(node, "gas_io", None) or ChainIO()
 
 
 class _NodeSigner:

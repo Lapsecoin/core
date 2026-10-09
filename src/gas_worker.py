@@ -30,7 +30,6 @@ import evm
 import gas
 import gaslock
 import relay
-import settings as settings_mod
 from gas_io import ChainIO
 from gas_track import Request, Tracker, claimers_in_order  # noqa: F401  (re-exported)
 
@@ -53,6 +52,8 @@ class GasWorker:
         self.cursor = None            # last height ingested
         self.cursor_hash = None       # its hash, to notice a reorg under us
         self._funded = {}             # Base address -> bool, for one pass
+        self._afford = None           # (height, bool): can this wallet pay for one request
+        self._tip = 0
         self.claimed = set()          # request txids this process has claimed
         self._stop = threading.Event()
         self._thread = None
@@ -79,9 +80,6 @@ class GasWorker:
     # One pass
     # ------------------------------------------------------------------
 
-    def enabled(self):
-        return bool(self.node.settings.get(settings_mod.GAS_ENABLED))
-
     def step(self):
         view = self.node.view
         tip = view.height
@@ -91,13 +89,14 @@ class GasWorker:
             self.tracker = Tracker()
             self.cursor = None
         self._funded = {}
+        self._tip = tip
         start = (tip - BACKLOG_BLOCKS) if self.cursor is None else self.cursor
         for h in range(max(start, 0) + (0 if self.cursor is None else 1), tip + 1):
             self.tracker.ingest(view.chain[h])
         self.cursor = tip
         self.cursor_hash = view.chain[tip]["hash"]
         self.tracker.forget_before(tip)
-        if not self.enabled() or getattr(self.node, "_kek", None) is None:
+        if getattr(self.node, "_kek", None) is None:
             return
         for r in sorted(self.tracker.requests.values(), key=lambda r: r.txid):
             if tip < r.close:
@@ -120,9 +119,20 @@ class GasWorker:
         return not (net.slug == "base" and gas.same_address(net, r.req["dest"], own or ""))
 
     def _can_afford(self):
-        price = self.io.price(gas.NETWORKS["base"])
-        have_usd = gas.units_to_usd(gas.NETWORKS["base"], self.io.base_balance(), price)
-        return have_usd >= gas.NODE_CAP_USD
+        """Whether the gas wallet holds enough to pay for one request. This is
+        the whole on/off switch: a node that does not want to serve requests
+        never funds the wallet. Asked once per block, not per pass, so an
+        unfunded node does not poll a public endpoint for every open request."""
+        if self._afford is not None and self._afford[0] == self._tip:
+            return self._afford[1]
+        try:
+            price = self.io.price(gas.NETWORKS["base"])
+            ok = gas.units_to_usd(gas.NETWORKS["base"], self.io.base_balance(),
+                                  price) >= gas.NODE_CAP_USD
+        except (relay.RelayError, evm.EVMError):
+            ok = False                # cannot tell: do not offer
+        self._afford = (self._tip, ok)
+        return ok
 
     def _needs_help(self, net, r):
         price = self.io.price(net)
@@ -229,7 +239,7 @@ class LiveIO(ChainIO):
     the node for the claim transaction."""
 
     def __init__(self, node):
-        super().__init__(node.settings)
+        super().__init__()
         self.node = node
 
     def balance_of_base(self, addr):

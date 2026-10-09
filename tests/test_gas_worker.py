@@ -24,8 +24,7 @@ from tests.fixtures import address, make_block, make_tx
 
 ESC = crypto.escrow_address()
 NET = gas.NETWORKS["optimism"]
-DEST_KEY = (21).to_bytes(32, "big")
-DEST = evm.address_from_secret(DEST_KEY)
+DEST = evm.address_from_secret((21).to_bytes(32, "big"))
 TARGET = 5 * 10 ** 14                    # $1.25 at the fake price: under the ceiling
 PRICE = 2500.0
 RICH = 10 ** 18                          # a funded Base wallet: $2500 at the fake price
@@ -91,12 +90,9 @@ class FakeIO:
 class World:
     """A chain of real signed transactions, one node under test, a fake outside."""
 
-    def __init__(self, tmp_path, enabled=True):
+    def __init__(self, tmp_path):
         self.chain = [{"height": 0, "hash": "g" * 64, "transactions": []}]
-        meta = Meta()
-        self.settings = settings_mod.Settings(meta)
-        if enabled:
-            self.settings.set(settings_mod.GAS_ENABLED, True)
+        self.settings = settings_mod.Settings(Meta())
         keyfile = str(tmp_path / "node.key")
         sk, pk = crypto.generate_keypair()
         crypto.save_key(keyfile, sk, pk, "pw")
@@ -129,16 +125,10 @@ class World:
         self.nonces[idx] = self.nonces.get(idx, 0) + 1
         return self.nonces[idx]
 
-    def request(self, lock=gas_worker.MIN_SERVED_LOCK, target=TARGET, dest_key=DEST_KEY,
-                net=NET, signer=None, bad_signature=False, sender=ASKER):
-        nonce = self._nonce(sender)
-        dest = evm.address_from_secret(dest_key)
-        msg = gas.request_message(net.slug, target, dest, address(sender), nonce)
-        sig = evm.sign_message(msg, signer or dest_key)
-        if bad_signature:
-            sig = evm.sign_message(b"something else", dest_key)
-        memo = gas.build_request_memo(net.slug, target, dest, sig)
-        t = make_tx(sender, 0, 0, None, fee=1000, nonce_override=nonce, memo=memo,
+    def request(self, lock=gas_worker.MIN_SERVED_LOCK, target=TARGET, dest=DEST, net=NET,
+                sender=ASKER):
+        memo = gas.build_request_memo(net.slug, target, dest)
+        t = make_tx(sender, 0, 0, None, fee=1000, nonce_override=self._nonce(sender), memo=memo,
                     outputs_override=[{"to": ESC, "amount": lock}])
         self.mine([t])
         return tx_mod.tx_hash(t)
@@ -185,12 +175,6 @@ class TestTracker:
         w.step()
         r = w.worker.tracker.requests[txid]
         assert (r.height, r.lock, r.req["dest"], r.req["network"]) == (1, gas_worker.MIN_SERVED_LOCK, DEST, "optimism")
-
-    def test_a_request_not_signed_by_its_destination_is_not_tracked(self, w):
-        w.request(signer=(22).to_bytes(32, "big"))
-        w.request(bad_signature=True)
-        w.step()
-        assert w.worker.tracker.requests == {}
 
     def test_a_request_with_a_lock_but_a_bad_memo_is_not_tracked(self, w):
         t = make_tx(ASKER, 0, 0, None, fee=1000, nonce_override=1, memo="[gas] a b",
@@ -248,11 +232,22 @@ class TestClaiming:
         w.step()                                         # first pass scans the backlog
         assert w.io.claims == [txid]
 
-    def test_off_by_default(self, tmp_path):
-        w = World(tmp_path, enabled=False)
+    def test_a_locked_node_does_nothing(self, w):
+        w.node._kek = None
         w.request()
         w.step()
         assert w.io.claims == [] and w.io.paid == []
+
+    def test_an_unfunded_wallet_is_the_off_switch_and_is_checked_once_per_block(self, w):
+        w.io.base = 0
+        calls = []
+        real = w.io.base_balance
+        w.io.base_balance = lambda: calls.append(1) or real()
+        w.request(); w.request(sender=3)
+        w.step(); w.step()
+        assert w.io.claims == [] and len(calls) == 1
+        w.mine(); w.step()
+        assert len(calls) == 2
 
     def test_a_small_lock_is_not_worth_it(self, w):
         w.request(lock=gas_worker.MIN_SERVED_LOCK - 1)
@@ -496,10 +491,8 @@ class TestLiveIO:
         assert io.dest_balance(gas.NETWORKS["solana"], "addr") == 7
         assert calls == [(gas.NETWORKS["solana"].rpc, "getBalance", ["addr"])]
 
-    def test_base_balance_uses_the_configured_endpoint(self, monkeypatch):
+    def test_base_reads_use_the_public_base_endpoint(self, monkeypatch):
         seen = []
         monkeypatch.setattr(evm, "get_balance_wei", lambda url, a: seen.append(url) or 5)
-        node = SimpleNamespace(settings=settings_mod.Settings(Meta()), base_wallet_path="x")
-        node.settings.set(settings_mod.BASE_RPC_URL, "http://mine")
-        gas_worker.LiveIO(node).dest_balance(gas.NETWORKS["base"], "0x" + "1" * 40)
-        assert seen == ["http://mine"]
+        gas_worker.LiveIO(SimpleNamespace()).dest_balance(gas.NETWORKS["base"], "0x" + "1" * 40)
+        assert seen == [evm.DEFAULT_BASE_RPC]

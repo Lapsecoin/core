@@ -9,21 +9,9 @@ import evm
 import gas
 import gas_io
 import relay
-import settings as settings_mod
 
 OP = gas.NETWORKS["optimism"]
 PROXY = "socks5h://127.0.0.1:9050"
-
-
-class Meta:
-    def __init__(self):
-        self.d = {}
-
-    def get_meta(self, k, default=None):
-        return self.d.get(k, default)
-
-    def set_meta(self, k, v):
-        self.d[k] = v
 
 
 def test_reads_go_through_the_proxy_when_there_is_one(monkeypatch):
@@ -55,14 +43,9 @@ def test_the_proxy_is_asked_each_time_so_tor_can_come_and_go(monkeypatch):
     assert seen == [{"http": PROXY, "https": PROXY}, {}]
 
 
-def test_the_nodes_settings_choose_the_base_endpoint_and_relay_key():
-    settings = settings_mod.Settings(Meta())
-    io = gas_io.ChainIO(settings)
+def test_base_uses_the_public_endpoint_and_relay_needs_no_key():
+    io = gas_io.ChainIO()
     assert io.base_rpc() == evm.DEFAULT_BASE_RPC and io.relay_key() == ""
-    settings.set(settings_mod.BASE_RPC_URL, "http://mine")
-    settings.set(settings_mod.RELAY_API_KEY, " k ")
-    assert io.base_rpc() == "http://mine" and io.relay_key() == "k"
-    assert gas_io.ChainIO().base_rpc() == evm.DEFAULT_BASE_RPC
 
 
 def test_only_evm_destinations_are_screened(monkeypatch):

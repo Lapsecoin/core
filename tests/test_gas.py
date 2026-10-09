@@ -1,4 +1,4 @@
-"""Fee requests: networks, amounts, memos, signatures, window and order."""
+"""Fee requests: networks, amounts, memos, claim signatures, window and order."""
 
 import base64
 import os
@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import evm
 import gas
-from nacl.signing import SigningKey
 
 KEY = (7).to_bytes(32, "big")
 ADDR = evm.address_from_secret(KEY)
@@ -18,12 +17,6 @@ BASE = gas.NETWORKS["base"]
 ETH = gas.NETWORKS["ethereum"]
 SOL = gas.NETWORKS["solana"]
 TXID = "ab" * 32
-
-
-def evm_request(target=10 ** 15, net="ethereum", nonce=4, lapse="aa" * 20, key=KEY):
-    dest = evm.address_from_secret(key)
-    sig = evm.sign_message(gas.request_message(net, target, dest, lapse, nonce), key)
-    return gas.build_request_memo(net, target, dest, sig), dest
 
 
 class TestTables:
@@ -143,52 +136,29 @@ class TestAmounts:
 
 
 class TestRequestMemo:
-    def test_round_trip_and_signature(self):
-        memo, dest = evm_request()
-        req = gas.parse_request_memo(memo)
-        assert req["network"] == "ethereum" and req["dest"] == dest and req["target"] == 10 ** 15
-        assert gas.verify_request_signature(req, "aa" * 20, 4)
+    def test_round_trip(self):
+        memo = gas.build_request_memo("ethereum", 10 ** 15, ADDR)
+        assert memo == f"[gas] ethereum {10 ** 15} {ADDR}"
+        assert gas.parse_request_memo(memo) == dict(network="ethereum", target=10 ** 15, dest=ADDR)
 
     def test_fits_in_a_memo(self):
         import tx
-        memo, _ = evm_request(target=10 ** 30)
-        assert len(memo.encode()) <= tx.MAX_MEMO_BYTES
-
-    def test_signature_is_bound_to_sender_and_nonce_and_fields(self):
-        memo, _ = evm_request()
-        req = gas.parse_request_memo(memo)
-        assert not gas.verify_request_signature(req, "bb" * 20, 4)      # another sender
-        assert not gas.verify_request_signature(req, "aa" * 20, 5)      # another nonce
-        assert not gas.verify_request_signature({**req, "target": req["target"] + 1}, "aa" * 20, 4)
-        assert not gas.verify_request_signature({**req, "network": "base"}, "aa" * 20, 4)
-
-    def test_someone_elses_signature_does_not_prove_the_address(self):
-        other = (9).to_bytes(32, "big")
-        dest = evm.address_from_secret(KEY)
-        sig = evm.sign_message(gas.request_message("ethereum", 5, dest, "aa" * 20, 1), other)
-        req = gas.parse_request_memo(gas.build_request_memo("ethereum", 5, dest, sig))
-        assert not gas.verify_request_signature(req, "aa" * 20, 1)
+        assert len(gas.build_request_memo("avalanche", 10 ** 30, ADDR).encode()) <= tx.MAX_MEMO_BYTES
 
     def test_solana_round_trip(self):
-        sk = SigningKey.generate()
-        dest = _b58encode(bytes(sk.verify_key))
-        msg = gas.request_message("solana", 2_050_000, dest, "aa" * 20, 2)
-        memo = gas.build_request_memo("solana", 2_050_000, dest, sk.sign(msg).signature)
-        req = gas.parse_request_memo(memo)
-        assert req and gas.verify_request_signature(req, "aa" * 20, 2)
-        assert not gas.verify_request_signature(req, "aa" * 20, 3)
-        assert len(memo.encode()) <= 200
+        dest = "DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK"
+        memo = gas.build_request_memo("solana", 2_050_000, dest)
+        assert gas.parse_request_memo(memo) == dict(network="solana", target=2_050_000, dest=dest)
 
     @pytest.mark.parametrize("memo", [
-        None, "", "[gas]", "[gas] ", "[gas] ethereum", "hello",
-        "[gas] dogechain 5 " + ADDR + " " + base64.b64encode(b"x" * 65).decode(),
-        "[gas] ethereum 0 " + ADDR + " " + base64.b64encode(b"x" * 65).decode(),
-        "[gas] ethereum -5 " + ADDR + " " + base64.b64encode(b"x" * 65).decode(),
-        "[gas] ethereum 5 0x12 " + base64.b64encode(b"x" * 65).decode(),
-        "[gas] ethereum 5 " + ADDR + " not-base64!!",
-        "[gas] ethereum 5 " + ADDR + " " + base64.b64encode(b"x" * 64).decode(),
-        "[gas] ethereum 5 " + ADDR + " " + base64.b64encode(b"x" * 65).decode() + " extra",
-        "[gas] ethereum " + "9" * 40 + " " + ADDR + " " + base64.b64encode(b"x" * 65).decode(),
+        None, "", "[gas]", "[gas] ", "[gas] ethereum", "hello", "[gas] ethereum 5",
+        "[gas] dogechain 5 " + ADDR,
+        "[gas] ethereum 0 " + ADDR,
+        "[gas] ethereum -5 " + ADDR,
+        "[gas] ethereum 5 0x12",
+        "[gas] ethereum 5 " + ADDR + " extra",
+        "[gas] ethereum " + "9" * 40 + " " + ADDR,
+        "[gas] ethereum 5 DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK",
     ])
     def test_malformed_memos_are_not_requests(self, memo):
         assert gas.parse_request_memo(memo) is None

@@ -650,8 +650,8 @@ def main():
         # not made to sit locked for lack of an address nobody has used.
         node.base_wallet_path = base_wallet.key_path_for(args.keyfile)
         base_wallet.ensure(node.base_wallet_path, kek)
-        # Answers fee requests when the operator has turned that on (see
-        # settings.GAS_ENABLED); idle otherwise.
+        # Answers fee requests while the gas wallet holds enough to pay for
+        # one; an operator who does not want to simply does not fund it.
         gas_worker.GasWorker(node, gas_worker.LiveIO(node)).start()
 
         # ------------------------------------------------------------------

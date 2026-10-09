@@ -2,18 +2,16 @@
 but no gas coin.
 
 You pick a network and what you want to do there. The page works out what that
-needs from the network's live gas price, tells you plainly what nodes will
-send (they cap it) and how much of the need that covers, and has your own
-wallet sign a message proving the address is yours. Then it sends an ordinary
-transaction that locks a few LAPSE for a few blocks and names the network,
-the target balance and the address. Nodes that can help offer on-chain, one
-of them pays, and the lock is returned if nobody offered (see gaslock.py).
+needs from the network's live gas price and tells you plainly what nodes will
+send (they cap it) and how much of the need that covers. One button burns the
+LAPSE and sends an ordinary transaction naming the network, the target balance
+and the address. Nodes that can help offer on-chain, one of them pays, and the
+LAPSE is returned if nobody offered (see gaslock.py).
 
 Everything that reads another chain happens here on the node, not in the
 browser: the page only ever talks to its own node.
 """
 
-import base64
 import logging
 import re
 import secrets
@@ -35,10 +33,7 @@ log = logging.getLogger("ec.fees")
 # use to decide whether a request is worth serving.
 LOCK = gas.MIN_SERVED_LOCK
 
-# A target far from what the page would work out now is not a stale quote,
-# it is a different request.
-TARGET_TOLERANCE = (0.5, 2.0)
-
+DISCORD = "https://discord.gg/FP2d8JmK6r"
 
 def network_options():
     return [dict(slug=n.slug, name=n.name, symbol=n.symbol, vm=n.vm)
@@ -78,19 +73,6 @@ def _listed(io, net, dest):
 REFUSED = "Nodes cannot send to that address."
 
 
-def decode_signature(net, raw):
-    """The wallet's signature as bytes, from hex or base64, or None."""
-    raw = (raw or "").strip()
-    try:
-        if re.fullmatch(r"(0x)?[0-9a-fA-F]+", raw):
-            b = bytes.fromhex(raw[2:] if raw.startswith("0x") else raw)
-        else:
-            b = base64.b64decode(raw, validate=True)
-    except ValueError:
-        return None
-    return b if len(b) == (65 if net.vm == "evm" else 64) else None
-
-
 def _problem(message, status=400):
     return jsonify(ok=False, error=message), status
 
@@ -120,10 +102,13 @@ def register(app, reader, signer, csrf_token, io, light=False):
     @app.route("/fees", endpoint="fees")
     def fees():
         f = forms_mod.forms_for(app)
+        try:
+            low = reader.account(signer.addr)["balance"] < LOCK
+        except Exception:                # unknown balance: do not block the page
+            low = False
         ctx = dict(title="Fees", csrf_token=csrf_token, form_token=f.tokens.issue(),
                    networks=network_options(), actions=action_options(),
-                   lock=LOCK, node_cap_usd=gas.NODE_CAP_USD,
-                   alert_err="", alert_ok="", form={})
+                   lock=LOCK, low=low, discord=DISCORD, alert_err="", form={})
         ctx.update({k: v for k, v in f.notes.take(request.args.get("note")).items()
                     if k in ("alert_err", "form")})
         return render_template("fees.html", **ctx)
@@ -141,30 +126,10 @@ def register(app, reader, signer, csrf_token, io, light=False):
             log.info("[fees] plan failed: %s", e)
             return _problem("Could not read the network just now. Try again in a moment.", 502)
 
-    @app.route("/api/fees/prepare", endpoint="api_fees_prepare")
-    def api_fees_prepare():
-        """The message the destination's wallet signs. Fixed to this sender,
-        this nonce and these numbers, so the signature cannot be reused."""
-        net, action, dest, err = _lookup(request.args)
-        if err or not dest:
-            return _problem(err or "Enter the address to fund.")
-        try:
-            plan = make_plan(io, net, action, dest)
-        except Refused:
-            return _problem(REFUSED)
-        except (evm.EVMError, relay.RelayError):
-            return _problem("Could not read the network just now. Try again in a moment.", 502)
-        if not plan["needs_help"]:
-            return _problem("That address already holds enough gas for this.")
-        nonce = reader.account(signer.addr, fresh=True)["nonce"] + 1
-        msg = gas.request_message(net.slug, plan["target"], dest, signer.addr, nonce)
-        return jsonify(ok=True, message=msg.decode(), target=plan["target"], nonce=nonce)
-
     @app.route("/fees", methods=["POST"], endpoint="fees_submit")
     def fees_submit():
         f = forms_mod.forms_for(app)
-        form = {k: request.form.get(k, "").strip()
-                for k in ("network", "action", "dest", "target")}
+        form = {k: request.form.get(k, "").strip() for k in ("network", "action", "dest")}
 
         def back(message):
             return f.done("/fees", {"alert_err": message, "form": form})
@@ -179,33 +144,21 @@ def register(app, reader, signer, csrf_token, io, light=False):
         passphrase = request.form.get("passphrase", "").strip()
         if not passphrase:
             return back("Passphrase required.")
-        sig = decode_signature(net, request.form.get("signature"))
-        if sig is None:
-            return back("Sign the message with the wallet that holds that address first.")
         try:
-            target = int(form["target"])
             plan = make_plan(io, net, action, dest)
-        except ValueError:
-            return back("Prepare the request again.")
         except Refused:
             return back(REFUSED)
         except (evm.EVMError, relay.RelayError):
             return back("Could not read the network just now. Try again in a moment.")
-        lo, hi = TARGET_TOLERANCE
         if not plan["needs_help"]:
             return back("That address already holds enough gas for this.")
-        if not lo * plan["target"] <= target <= hi * plan["target"]:
-            return back("The price moved. Prepare the request again.")
         acct = reader.account(signer.addr, fees=True, fresh=True)
-        req = dict(network=net.slug, target=target, dest=dest, signature=sig)
-        if not gas.verify_request_signature(req, signer.addr, acct["nonce"] + 1):
-            return back("That signature does not match this request. Prepare it again.")
-        memo = gas.build_request_memo(net.slug, target, dest, sig)
+        memo = gas.build_request_memo(net.slug, plan["target"], dest)
         outputs = [{"to": crypto.escrow_address(), "amount": LOCK}]
         try:
             fee = wallet_ui.auto_fee(acct, signer.addr, signer.pk_hex, outputs, memo=memo)
             if acct["balance"] < LOCK + fee:
-                return back("Not enough LAPSE for the lock and the network fee.")
+                return back("Not enough LAPSE for the burn and the network fee.")
             t = signer.sign(outputs, fee, memo, passphrase, acct["nonce"] + 1)
             ok, result = reader.submit(t)
         except ValueError as e:
