@@ -420,6 +420,18 @@ class TestPaying:
             r, "x" * 64, lambda b: b != theirs)
         assert order == [address(ME)]
 
+    def test_one_base_wallet_takes_one_place_however_many_lapse_addresses_name_it(self, w):
+        txid = w.request()
+        shared = os.urandom(32)
+        w.mine([w._claim_tx(txid, 3, base_secret=shared), w._claim_tx(txid, 4, base_secret=shared),
+                w._claim_tx(txid, 5)])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        assert len(r.claims) == 3
+        order = gas_worker.claimers_in_order(r, "c" * 64, lambda b: True)
+        assert len(order) == 2 and address(5) in order
+        assert address(3) in order and address(4) not in order       # the earlier claim keeps it
+
     def test_each_node_gets_the_same_order(self, w):
         txid = settled_world(w, [ME, 3, 4, 5])
         w.step()
