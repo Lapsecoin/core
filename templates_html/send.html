@@ -5,6 +5,13 @@
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 {% if alert_err_lines %}<div class="alert alert-err">{% for line in alert_err_lines %}{{ line }}<br>{% endfor %}</div>{% endif %}
 
+{% if base_enabled %}
+<div class="form-group" style="display:flex;gap:1rem;margin-bottom:.5rem">
+  <label><input type="radio" name="asset-picker" value="lapse" {% if asset != 'base' %}checked{% endif %}> LAPSE</label>
+  <label><input type="radio" name="asset-picker" value="base" {% if asset == 'base' %}checked{% endif %}> ETH on Base</label>
+</div>
+{% endif %}
+
 <div id="lapse-panel">
 <div class="stats">
   <div class="stat" style="flex-basis:280px">
@@ -29,6 +36,7 @@
   <form method="POST" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="form_token" value="{{ form_token }}">
+    <input type="hidden" name="asset" value="lapse">
     <div class="form-group">
       <label>CSV outputs (address,amount). Only lines changed to a nonzero amount get sent.
         Use <code>burn</code> in place of an address to destroy it instead of paying anyone.</label>
@@ -56,6 +64,53 @@
   </form>
 </div>
 </div>
+
+{% if base_enabled %}
+<div id="base-panel">
+{% if not base_addr %}
+<div class="card">
+  <div class="card-title">ETH on Base</div>
+  <p>This node has no Base gas wallet yet. It is created the next time the node starts.</p>
+</div>
+{% else %}
+<div class="stats">
+  <div class="stat" style="flex-basis:280px">
+    <div class="stat-label">Your Base address (send ETH on Base here to fund fee requests)</div>
+    <div class="hash">{{ base_addr }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Balance</div>
+    <div class="stat-value" style="color:var(--green);font-size:.95rem">{% if base_balance_known %}{{ base_balance }} ETH{% else %}unavailable{% endif %}</div>
+  </div>
+</div>
+<div class="card">
+  <div class="card-title">Send ETH on Base</div>
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <input type="hidden" name="asset" value="base">
+    <div class="form-group">
+      <label for="base-to">Destination address (on Base)</label>
+      <input type="text" id="base-to" name="base_to" value="{{ base_to_value }}"
+             placeholder="0x..." autocomplete="off" style="width:100%">
+    </div>
+    <div class="form-group" style="display:flex;gap:.75rem;flex-wrap:wrap">
+      <div style="flex:0 0 160px">
+        <label for="base-amount">Amount, in ETH</label>
+        <input type="text" id="base-amount" name="base_amount" value="{{ base_amount_value }}"
+               placeholder="0.01" autocomplete="off" style="width:100%">
+      </div>
+      <div style="flex:1 1 220px">
+        <label for="base-passphrase">Your signing passphrase</label>
+        <input type="password" id="base-passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
+      </div>
+      <button type="submit" style="flex:0 0 auto">Sign &amp; Send</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+</div>
+{% endif %}
 
 <script>
 (function () {
@@ -142,5 +197,22 @@
   setInterval(refresh, 8000);
 })();
 
+
+{% if base_enabled %}
+(function () {
+  // Which panel shows is purely a display choice; the server decides which
+  // form was actually submitted from the "asset" hidden field each form
+  // carries, so nothing here needs to touch validation.
+  const radios = document.querySelectorAll('input[name="asset-picker"]');
+  const panels = {lapse: document.getElementById("lapse-panel"),
+                  base: document.getElementById("base-panel")};
+  function show() {
+    const picked = document.querySelector('input[name="asset-picker"]:checked').value;
+    for (const key in panels) panels[key].style.display = key === picked ? "" : "none";
+  }
+  radios.forEach(r => r.addEventListener("change", show));
+  show();
+})();
+{% endif %}
 </script>
 {% endblock %}
