@@ -217,16 +217,8 @@ def plan(net: Network, action: Action, *, gas_price: int, price_usd: float, bala
 
 
 # ---------------------------------------------------------------------------
-# Messages the two parties sign, and the memos that carry them
+# The claim a helping node signs, and the memos that carry requests and claims
 # ---------------------------------------------------------------------------
-
-def request_message(net_slug: str, target: int, dest: str, lapse_from: str, nonce: int) -> bytes:
-    """What the destination address signs to show it belongs to the sender.
-    Bound to the sender and its nonce so a signature cannot be lifted onto
-    someone else's request."""
-    return (f"LapseCoin fee request\n{net_slug}\n{target}\n{dest}\n"
-            f"{lapse_from}\n{nonce}").encode()
-
 
 def claim_message(ref: str, lapse_from: str) -> bytes:
     """What a claimer's Base address signs to show it holds the funds it
@@ -240,10 +232,8 @@ def _b64(sig_hex_or_bytes) -> str:
     return base64.b64encode(raw).decode()
 
 
-def build_request_memo(net_slug: str, target: int, dest: str, signature) -> str:
-    """`signature` is the wallet's: a 0x-hex personal_sign string for an EVM
-    address, raw 64 bytes for a Solana one."""
-    return f"{REQUEST_TAG}{net_slug} {target} {dest} {_b64(signature)}"
+def build_request_memo(net_slug: str, target: int, dest: str) -> str:
+    return f"{REQUEST_TAG}{net_slug} {target} {dest}"
 
 
 def parse_request_memo(memo):
@@ -251,36 +241,15 @@ def parse_request_memo(memo):
     if not isinstance(memo, str) or not memo.startswith(REQUEST_TAG):
         return None
     parts = memo[len(REQUEST_TAG):].split(" ")
-    if len(parts) != 4:
+    if len(parts) != 3:
         return None
-    slug, target, dest, sig = parts
+    slug, target, dest = parts
     net = NETWORKS.get(slug)
     if net is None or not re.fullmatch(r"[1-9][0-9]{0,30}", target):
         return None
     if not is_valid_address(net, dest):
         return None
-    try:
-        raw = base64.b64decode(sig, validate=True)
-    except ValueError:
-        return None
-    if len(raw) != (65 if net.vm == "evm" else 64):
-        return None
-    return dict(network=slug, target=int(target), dest=dest, signature=raw)
-
-
-def verify_request_signature(req: dict, lapse_from: str, nonce: int) -> bool:
-    net = NETWORKS[req["network"]]
-    msg = request_message(req["network"], req["target"], req["dest"], lapse_from, nonce)
-    if net.vm == "evm":
-        signer = evm.recover_message_signer(msg, "0x" + req["signature"].hex())
-        return signer is not None and signer.lower() == req["dest"].lower()
-    import nacl.exceptions
-    import nacl.signing
-    try:
-        nacl.signing.VerifyKey(b58decode(req["dest"])).verify(msg, req["signature"])
-        return True
-    except (nacl.exceptions.BadSignatureError, ValueError):
-        return False
+    return dict(network=slug, target=int(target), dest=dest)
 
 
 def request_ref(request_txid: str) -> str:

@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import api
 import crypto
-import evm
 import fees_ui
 import gas
 import gaslock
@@ -26,7 +25,7 @@ from params import TICKS_PER_LAPSE
 from remote_reader import RemoteReader
 from tests.browser import submit, tokens
 from tests.fixtures import make_block
-from tests.test_gas_worker import DEST, DEST_KEY, ESC, FakeIO
+from tests.test_gas_worker import DEST, ESC, FakeIO
 from tests.test_light import PASS, _FullNode, _Session
 from wallet import Wallet
 
@@ -63,16 +62,9 @@ def mine_block(l, txs=()):
     return blk
 
 
-def prepare(l):
-    return l.client.get("/api/fees/prepare", query_string=dict(
-        network="optimism", action="send", dest=DEST)).get_json()
-
-
 def request(l):
-    p = prepare(l)
-    sig = evm.sign_message(p["message"].encode(), DEST_KEY)
     return submit(l.client, "/fees", follow=False, network="optimism", action="send", dest=DEST,
-                  target=str(p["target"]), signature=sig, passphrase=PASS)
+                  passphrase=PASS)
 
 
 def banner(l, r):
@@ -89,11 +81,6 @@ class TestPage:
             network="optimism", action="send", dest=DEST)).get_json()
         assert p["ok"] and p["target"] == int(65_000 * GAS_PRICE * gas.GAS_SAFETY)
 
-    def test_the_message_uses_the_wallets_own_nonce(self, light):
-        p = prepare(light)
-        assert p["message"] == gas.request_message(
-            "optimism", p["target"], DEST, light.wallet.addr, 1).decode()
-
     def test_a_sanctioned_address_is_refused_here_too(self, light):
         light.io.listed = {DEST}
         r = light.client.get("/api/fees/plan", query_string=dict(
@@ -102,27 +89,22 @@ class TestPage:
 
 
 class TestRequest:
-    def test_a_signed_request_goes_through_the_node_and_to_its_status_page(self, light):
+    def test_one_post_goes_through_the_node_and_to_its_status_page(self, light):
         r = request(light)
         assert r.status_code == 303 and r.headers["Location"].startswith("/fees/")
         txid = r.headers["Location"].rsplit("/", 1)[1]
         t = light.node.mempool.get(txid)
         assert t["outputs"] == [{"to": ESC, "amount": fees_ui.LOCK}] and t["from"] == light.wallet.addr
-        assert gas.verify_request_signature(gas.parse_request_memo(t["memo"]), t["from"], t["nonce"])
-
-    def test_a_wrong_signature_is_refused_before_anything_is_sent(self, light):
-        p = prepare(light)
-        sig = evm.sign_message(b"other text", DEST_KEY)
-        r = submit(light.client, "/fees", follow=False, network="optimism", action="send", dest=DEST,
-                   target=str(p["target"]), signature=sig, passphrase=PASS)
-        assert "does not match" in banner(light, r) and light.node.mempool.all_txs() == []
+        assert gas.parse_request_memo(t["memo"])["dest"] == DEST
 
     def test_a_wrong_passphrase_sends_nothing(self, light):
-        p = prepare(light)
-        sig = evm.sign_message(p["message"].encode(), DEST_KEY)
-        submit(light.client, "/fees", network="optimism", action="send", dest=DEST,
-               target=str(p["target"]), signature=sig, passphrase="wrong")
+        submit(light.client, "/fees", network="optimism", action="send", dest=DEST, passphrase="wrong")
         assert light.node.mempool.all_txs() == []
+
+    def test_a_sanctioned_address_sends_nothing(self, light):
+        light.io.listed = {DEST}
+        r = request(light)
+        assert fees_ui.REFUSED in banner(light, r) and light.node.mempool.all_txs() == []
 
 
 class TestStatus:

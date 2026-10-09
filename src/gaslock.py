@@ -64,7 +64,7 @@ def check_lock(tx_dict, next_height):
     if outs[0]["amount"] < MIN_LOCK:
         return False, "the lock is below the minimum"
     memo = tx_dict.get("memo", "")
-    if not memo.startswith(REQUEST_TAG) or len(memo[len(REQUEST_TAG):].split(" ")) != 4:
+    if not memo.startswith(REQUEST_TAG) or len(memo[len(REQUEST_TAG):].split(" ")) != 3:
         return False, "funds sent to escrow need a fee request memo"
     return True, None
 

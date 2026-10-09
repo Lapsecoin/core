@@ -16,7 +16,7 @@ class Request:
         self.height = height
         self.lapse_from = lapse_from
         self.lock = lock
-        self.req = req                # gas.parse_request_memo(), signature verified
+        self.req = req                # gas.parse_request_memo()
         self.first_claim = None       # the chain's reading: any well-formed claim counts
         self.claims = []              # {"height", "lapse", "base"} with a verified signature
 
@@ -45,7 +45,7 @@ class Tracker:
                 or gaslock.check_lock(t, height)[0] is False:
             return
         req = gas.parse_request_memo(t.get("memo"))
-        if req is None or not gas.verify_request_signature(req, t["from"], t["nonce"]):
+        if req is None:
             return
         txid = tx_mod.tx_hash(t)
         self.requests[txid] = Request(txid, height, t["from"],

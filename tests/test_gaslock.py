@@ -20,7 +20,7 @@ from tests.fixtures import address, make_block, make_tx, seed_balance
 ESC = crypto.escrow_address()
 LOCK = 10 * TICKS_PER_LAPSE
 FEE = 1_000
-REQ_MEMO = "[gas] ethereum 1000000 0x000000000000000000000000000000000000dEaD c2ln"
+REQ_MEMO = "[gas] ethereum 1000000 0x000000000000000000000000000000000000dEaD"
 START = 100 * TICKS_PER_LAPSE
 
 
@@ -99,7 +99,7 @@ class TestValidity:
         c = Chain()
         assert tx_mod.validate(make_tx(1, 2, 5, c.state, fee=FEE), c.state)[0]
 
-    @pytest.mark.parametrize("memo", ["", "hello", "[gas]", "[gas] a b c", "[gas] a b c d e",
+    @pytest.mark.parametrize("memo", ["", "hello", "[gas]", "[gas] a b", "[gas] a b c d",
                                       "[gas-claim] x y z", "[board] hi"])
     def test_funds_sent_to_escrow_need_a_request_memo(self, memo):
         c = Chain()

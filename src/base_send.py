@@ -13,7 +13,6 @@ import crypto as crypto_mod
 import evm
 import gas
 import relay
-import settings as settings_mod
 
 log = logging.getLogger("ec.base_send")
 
@@ -24,12 +23,13 @@ class BaseSend:
     def __init__(self, node):
         self.node = node
 
-    def _rpc_url(self):
-        return (self.node.settings.get(settings_mod.BASE_RPC_URL).strip()
-                or evm.DEFAULT_BASE_RPC)
+    @staticmethod
+    def _rpc_url():
+        return evm.DEFAULT_BASE_RPC
 
-    def _relay_key(self):
-        return self.node.settings.get(settings_mod.RELAY_API_KEY).strip()
+    @staticmethod
+    def _relay_key():
+        return ""
 
     def _path(self):
         return getattr(self.node, "base_wallet_path", None)

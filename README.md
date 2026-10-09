@@ -149,9 +149,6 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 | `LAPSECOIN_SHOW_HARDWARE_DETAILS` | `true` | Show this node's hardware details on the odds page |
 | `LAPSECOIN_MINING_ENABLED` | `true` | Enable this node's block building |
 | `LAPSECOIN_HIDE_ADDRESS_PUBLICLY` | `true` | Hide this node's address from the public dashboard |
-| `LAPSECOIN_GAS_ENABLED` | `false` | Answer fee requests from this node's ETH on Base (see Fee requests) |
-| `LAPSECOIN_BASE_RPC_URL` | public Base endpoint | Base RPC the gas wallet reads and sends through |
-| `LAPSECOIN_RELAY_API_KEY` | empty | Optional Relay API key; Relay is moving to requiring one |
 
 `APPIMAGE` is set by the AppImage runtime itself and is not normally configured by users. `LAPSECOIN_REPO_RAW` is used only by the source installer to override where it downloads `requirements.txt` from.
 
@@ -179,7 +176,7 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 ## Fee requests
 
-**Fees** in the wallet gets you gas on another chain: pick the network and what you want to do, sign with the wallet that holds the address, and burn 10 LAPSE (returned only if no node offers). To serve requests, fund the Base address on **Send** and turn on **Pay fee requests** in Settings.
+**Fees** in the wallet gets you gas on another chain: pick the network and what you want to do, sign with the wallet that holds the address, and burn 10 LAPSE (returned only if no node offers). To serve requests, fund the Base address on **Send**. A node helps while that wallet holds enough, and does nothing otherwise.
 
 ## Exchanges
 

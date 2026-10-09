@@ -168,39 +168,6 @@ MINING_ENABLED = Setting(
          "This node fully validates and syncs every block either way.",
 )
 
-# Fee requests: whether this node pays other people's gas requests at all.
-# Off by default, because turning it on spends real ETH from the Base gas
-# wallet (see base_wallet.py) and a new node's wallet is empty. The worker
-# that acts on it is gas_worker.py.
-GAS_ENABLED = Setting(
-    "gas_enabled", False, bool,
-    label="Pay fee requests",
-    help="Lets this node answer fee requests by sending the requester a "
-         "little gas on their chain, paid from this node's ETH on Base. "
-         "Off by default. Fund the Base address on the Send page first.",
-)
-
-# The Base RPC endpoint the gas wallet reads and sends through. A blank
-# value means the public endpoint; an operator with their own provider
-# puts it here.
-BASE_RPC_URL = Setting(
-    "base_rpc_url", "https://mainnet.base.org", str,
-    label="Base RPC URL",
-    help="The endpoint used to read the gas wallet's balance and send from "
-         "it. Leave as is unless you run your own or have a provider key.",
-)
-
-# Relay (relay.link) quotes and routes the payouts. Anonymous use works
-# today, but the docs say a key becomes mandatory on quote requests, and
-# the default limit is per key, so each operator brings their own. Keys are
-# self-serve in the Relay dashboard.
-RELAY_API_KEY = Setting(
-    "relay_api_key", "", str,
-    label="Relay API key",
-    help="Optional today, expected to be required by Relay. Create one for "
-         "free in the Relay dashboard and paste it here.",
-)
-
 # Dandelion-style relay exists to keep the IP that sends a transaction
 # separate from the wallet address behind it. This node's own public,
 # externally-reachable dashboard can undo that for itself regardless of
@@ -235,7 +202,7 @@ MIN_ODDS_PCT = Setting(
 
 ALL = [DRAW_WINDOW_SECONDS,
        SHOW_HARDWARE_DETAILS, MINING_ENABLED, MIN_ODDS_PCT,
-       HIDE_ADDRESS_PUBLICLY, GAS_ENABLED, BASE_RPC_URL, RELAY_API_KEY]
+       HIDE_ADDRESS_PUBLICLY]
 
 
 # How long a value read from storage is reused before going back to the

@@ -210,11 +210,8 @@ class TestSendPage:
         assert "no Base gas wallet yet" in html
 
 
-def test_rpc_url_falls_back_to_the_public_endpoint():
-    class N:
-        settings = settings_mod.Settings(type("M", (), dict(
-            get_meta=lambda self, k: "  ", set_meta=lambda *a: None))())
-    assert base_send.BaseSend(N())._rpc_url() == evm.DEFAULT_BASE_RPC
+def test_the_base_endpoint_is_the_public_one():
+    assert base_send.BaseSend(None)._rpc_url() == evm.DEFAULT_BASE_RPC
 
 
 USDC_OP = "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
