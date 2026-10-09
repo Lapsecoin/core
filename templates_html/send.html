@@ -117,7 +117,7 @@
         <label for="base-passphrase">Your signing passphrase</label>
         <input type="password" id="base-passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
       </div>
-      <button type="submit" style="flex:0 0 auto">Sign &amp; Send</button>
+      <button type="submit" id="base-send" style="flex:0 0 auto" disabled>Sign &amp; Send</button>
     </div>
   </form>
 </div>
@@ -169,6 +169,9 @@
       setSendState(true, "No outputs entered.");
       return;
     }
+    // An edit switches it off straight away; only a check of what is in the
+    // box now switches it back on.
+    setSendState(true, "Checking...");
     timer = setTimeout(async () => {
       const s = ++seq;
       try {
@@ -179,8 +182,9 @@
         if (s !== seq) return;
         setSendState(!data.ok, data.reason || "");
       } catch (e) {
-        // Quiet failure: leaves whatever state was last known rather than
-        // guessing, and the server still validates for real on submit.
+        // The check could not be made: let the send through, the server
+        // still validates for real on submit.
+        if (s === seq) setSendState(false, "");
       }
     }, 300);
   }
@@ -250,8 +254,10 @@
     const v = Number(units) / Math.pow(10, decimals);
     return v >= 1 ? v.toFixed(4) : v.toPrecision(3);
   }
+  const sendBtn = $("base-send");
   async function quote() {
     const el = $("base-quote"), my = ++seq;
+    sendBtn.disabled = true;                      // on again only for a quote of what is in the fields now
     if (!$("base-amount").value.trim() || !$("base-to").value.trim()) { el.textContent = ""; return; }
     const q = new URLSearchParams({network: $("base-network").value, token: $("base-token").value,
                                    to: $("base-to").value.trim(), amount: $("base-amount").value.trim()});
@@ -260,13 +266,14 @@
       const d = await (await fetch("/api/send/base/preview?" + q)).json();
       if (my !== seq) return;
       if (!d.ok) { el.textContent = d.error; return; }
+      sendBtn.disabled = false;
       el.textContent = d.direct ? "A plain transfer on Base."
         : "You receive about " + fmt(d.receive, d.decimals) + " " + d.symbol + " (at least " +
           fmt(d.minimum, d.decimals) + "), costing about " + d.impact_percent.toFixed(2) + "% in fees.";
     } catch (e) { if (my === seq) el.textContent = "Could not get a quote."; }
   }
-  const later = () => { clearTimeout(timer); timer = setTimeout(quote, 500); };
-  $("base-network").addEventListener("change", () => { $("base-token").dataset.initial = ""; loadTokens(); });
+  const later = () => { clearTimeout(timer); seq++; sendBtn.disabled = true; $("base-quote").textContent = ""; timer = setTimeout(quote, 500); };
+  $("base-network").addEventListener("change", () => { sendBtn.disabled = true; $("base-token").dataset.initial = ""; loadTokens(); });
   ["base-token", "base-amount", "base-to"].forEach(id => $(id).addEventListener("input", later));
   loadTokens();
 })();

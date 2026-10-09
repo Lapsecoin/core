@@ -77,10 +77,15 @@ class Tracker:
 
 def claimers_in_order(r, close_hash, funded):
     """Claimer LAPSE addresses, first to pay first: those whose claim landed
-    inside the window and whose Base address holds enough to pay, put in the
-    order every node derives identically."""
-    eligible = {}
+    inside the window, whose signature showed they own the Base address they
+    named, and whose Base address holds enough to pay, put in the order every
+    node derives identically. One Base address takes one place however many
+    LAPSE addresses name it: the earliest claim keeps it."""
+    eligible, used = {}, set()
     for c in r.claims:
-        if c["height"] <= r.close and c["lapse"] not in eligible and funded(c["base"]):
+        base = c["base"].lower()
+        if (c["height"] <= r.close and c["lapse"] not in eligible
+                and base not in used and funded(c["base"])):
             eligible[c["lapse"]] = c["base"]
+            used.add(base)
     return gas.order_claimers(r.txid, close_hash, eligible)
