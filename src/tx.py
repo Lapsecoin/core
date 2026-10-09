@@ -271,6 +271,13 @@ def _check_not_from_burn_address(tx_dict):
     return True, None
 
 
+def _check_lock(tx_dict):
+    """A fee request's lock, see gaslock.check_lock. Imported here, not at
+    the top: gaslock reads this module for tx_hash."""
+    import gaslock
+    return gaslock.check_lock(tx_dict)
+
+
 def _check_fields_and_outputs(tx_dict):
     unexpected = set(tx_dict) - _ALLOWED_FIELDS
     if unexpected:
@@ -403,6 +410,7 @@ def validate(tx_dict, state, board_fee_floor_override=None):
     for check, args in (
         (_check_fields_and_outputs,    (tx_dict,)),
         (_check_not_from_burn_address, (tx_dict,)),
+        (_check_lock,                  (tx_dict,)),
         (_check_signature,             (tx_dict,)),
         (_check_nonce,                 (tx_dict, state)),
         (_check_balance,               (tx_dict, state)),

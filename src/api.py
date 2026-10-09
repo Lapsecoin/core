@@ -136,6 +136,8 @@ import crypto as crypto_mod
 import hardware_info
 import settings as settings_mod
 from base_send import BaseSend
+import fees_ui
+import gaslock
 import storage as storage_mod
 import tx as tx_mod
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
@@ -632,6 +634,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     register_static_routes(app, pfx)
     register_board_pages(app, reader, pfx, _own_addr_or_hidden, csrf_token)
     register_data_api(app, reader, pfx)
+    fees_ui.register_status(app, node, pfx)
 
     @app.context_processor
     def inject_ctx():
@@ -645,7 +648,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "address_lookup": "address", "distribution_bucket": "address",
             "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
-            "settings": "settings",
+            "settings": "settings", "fees": "fees", "fees_submit": "fees",
         }.get(endpoint)
         return {"is_private": is_private,
                 "private_port": private_port,
@@ -791,7 +794,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         location = (f"Block {found_height}"
                     if found_height is not None else "Mempool (unconfirmed)")
         return render_template("tx_detail.html", title="Transaction",
-            tx_hash=tx_hash, tx=found, location=location)
+            tx_hash=tx_hash, tx=found, location=location,
+            gas_request=found.get("memo", "").startswith(gaslock.REQUEST_TAG))
 
     def _holder_histogram():
         all_balances = node.view.state.get_all_balances()
@@ -1488,6 +1492,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
     register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
                            base=BaseSend(node))
+    fees_ui.register(app, node, local_reader_for(node), _NodeSigner(node), csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

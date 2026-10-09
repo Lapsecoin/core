@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Fees</h2>
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+
+<div class="card">
+  <div class="card-title">Get gas on another network</div>
+  <p>You hold a token on a chain but have none of that chain's own coin to move it. Node operators on this
+     network can send you a little. Pick the chain and what you want to do there, prove the address is yours,
+     and pay with LAPSE.</p>
+  <p class="stat-sub">This is a free gift from node operators, as is, with no guarantee. The
+     {{ lock // 100000000 }} LAPSE lock is returned if no node offers to help. If one does, it is not returned,
+     whether or not the gas arrives: the chain cannot see other networks, so it cannot tell. Each node sends at
+     most ${{ '%.2f' % node_cap_usd }} per request.</p>
+</div>
+
+<div class="card">
+  <form method="POST" action="/fees" id="fees-form" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <input type="hidden" name="target" id="target" value="{{ form.get('target', '') }}">
+    <input type="hidden" name="signature" id="signature" value="">
+
+    <div class="form-group" style="display:flex;gap:.75rem;flex-wrap:wrap">
+      <div style="flex:1 1 200px">
+        <label for="network">Network</label>
+        <select id="network" name="network" style="width:100%">
+          {% for n in networks %}
+          <option value="{{ n.slug }}" data-vm="{{ n.vm }}" data-symbol="{{ n.symbol }}"
+                  {% if form.get('network') == n.slug %}selected{% endif %}>{{ n.name }} ({{ n.symbol }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="flex:1 1 240px">
+        <label for="action">What do you want to do</label>
+        <select id="action" name="action" style="width:100%">
+          {% for a in actions %}
+          <option value="{{ a.key }}" {% if form.get('action') == a.key %}selected{% endif %}>{{ a.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="dest">Your address on that network (the one holding the token)</label>
+      <input type="text" id="dest" name="dest" value="{{ form.get('dest', '') }}"
+             placeholder="0x..." autocomplete="off" spellcheck="false" style="width:100%">
+    </div>
+
+    <div id="plan" class="stats" style="display:none">
+      <div class="stat"><div class="stat-label">You need</div>
+        <div class="stat-value" id="plan-need" style="font-size:.95rem"></div></div>
+      <div class="stat"><div class="stat-label">Nodes will send</div>
+        <div class="stat-value" id="plan-send" style="font-size:.95rem"></div></div>
+      <div class="stat"><div class="stat-label">Covers</div>
+        <div class="stat-value" id="plan-cover" style="font-size:.95rem"></div></div>
+      <div class="stat"><div class="stat-label">You pay</div>
+        <div class="stat-value" id="plan-pay" style="font-size:.95rem"></div></div>
+    </div>
+    <p id="plan-note" class="stat-sub"></p>
+    <p id="plan-err" class="alert alert-err" style="display:none"></p>
+
+    <div class="form-group">
+      <button type="button" id="sign-btn" disabled>1. Sign with your wallet</button>
+      <span class="stat-sub" id="sign-state"></span>
+      <details style="margin-top:.4rem">
+        <summary class="stat-sub">No browser wallet? Sign the message yourself</summary>
+        <p class="stat-sub">Sign exactly this text with the key of that address (personal_sign on EVM chains,
+           signMessage on Solana) and paste the signature below.</p>
+        <pre id="message" style="white-space:pre-wrap;word-break:break-all"></pre>
+        <input type="text" id="manual-sig" placeholder="Signature" style="width:100%" spellcheck="false">
+      </details>
+    </div>
+
+    <div class="form-group" style="display:flex;gap:.75rem;flex-wrap:wrap">
+      <div style="flex:1 1 220px">
+        <label for="passphrase">Your signing passphrase</label>
+        <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
+      </div>
+      <button type="submit" id="submit-btn" style="flex:0 0 auto" disabled>2. Pay and request</button>
+    </div>
+  </form>
+</div>
+
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const form = $("fees-form");
+  let plan = null, prepared = null, timer = null;
+
+  function coin(units, decimals, symbol) {
+    const v = Number(units) / Math.pow(10, decimals);
+    return (v >= 1 ? v.toFixed(4) : v.toPrecision(3)) + " " + symbol;
+  }
+  const usd = v => "$" + Number(v).toFixed(2);
+
+  function setErr(msg) {
+    const el = $("plan-err");
+    el.textContent = msg || "";
+    el.style.display = msg ? "" : "none";
+  }
+
+  function refreshButtons() {
+    $("sign-btn").disabled = !(plan && plan.needs_help);
+    $("submit-btn").disabled = !($("signature").value && prepared);
+  }
+
+  async function loadPlan() {
+    prepared = null; $("signature").value = ""; $("sign-state").textContent = "";
+    $("message").textContent = "";
+    const q = new URLSearchParams({network: $("network").value, action: $("action").value,
+                                   dest: $("dest").value.trim()});
+    try {
+      const r = await fetch("/api/fees/plan?" + q);
+      const p = await r.json();
+      if (!p.ok) { plan = null; $("plan").style.display = "none"; setErr(p.error); refreshButtons(); return; }
+      plan = p; setErr("");
+      $("plan").style.display = "";
+      $("plan-need").textContent = coin(p.target, p.decimals, p.symbol) + " (" + usd(p.target_usd) + ")";
+      $("plan-send").textContent = p.needs_help ? coin(p.deliver, p.decimals, p.symbol) + " (" + usd(p.deliver_usd) + ")" : "nothing";
+      $("plan-cover").textContent = p.needs_help ? Math.round(p.covers_share * 100) + "%" : "100%";
+      $("plan-pay").textContent = (p.lock / 1e8) + " LAPSE + network fee";
+      let note = "";
+      if (!p.needs_help) note = "That address already holds enough for this. Nothing to request.";
+      else if (p.covers_share < 1) note = "This needs more than one node will send (" + usd(p.cap_usd) +
+        " at most), so it covers " + Math.round(p.covers_share * 100) + "% of what you need.";
+      $("plan-note").textContent = note;
+    } catch (e) { plan = null; setErr("Could not reach this node."); }
+    refreshButtons();
+  }
+
+  function schedule() { clearTimeout(timer); timer = setTimeout(loadPlan, 400); }
+  ["network", "action", "dest"].forEach(id => $(id).addEventListener("input", schedule));
+  $("network").addEventListener("change", () => {
+    $("dest").placeholder = $("network").selectedOptions[0].dataset.vm === "svm" ? "Solana address" : "0x...";
+  });
+
+  async function prepare() {
+    const q = new URLSearchParams({network: $("network").value, action: $("action").value,
+                                   dest: $("dest").value.trim()});
+    const r = await fetch("/api/fees/prepare?" + q);
+    const p = await r.json();
+    if (!p.ok) throw new Error(p.error);
+    $("message").textContent = p.message;
+    $("target").value = p.target;
+    prepared = p;
+    return p;
+  }
+
+  const b64 = bytes => btoa(String.fromCharCode.apply(null, Array.from(bytes)));
+  const hex = s => "0x" + Array.from(new TextEncoder().encode(s)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+  $("sign-btn").addEventListener("click", async () => {
+    setErr(""); $("sign-state").textContent = "";
+    try {
+      const p = await prepare();
+      const svm = $("network").selectedOptions[0].dataset.vm === "svm";
+      const dest = $("dest").value.trim();
+      let sig;
+      if (svm) {
+        if (!window.solana || !window.solana.signMessage) throw new Error("No Solana wallet found. Use the manual option below.");
+        await window.solana.connect();
+        const out = await window.solana.signMessage(new TextEncoder().encode(p.message), "utf8");
+        sig = b64(out.signature);
+      } else {
+        if (!window.ethereum) throw new Error("No browser wallet found. Use the manual option below.");
+        const accounts = await window.ethereum.request({method: "eth_requestAccounts"});
+        const mine = accounts.find(a => a.toLowerCase() === dest.toLowerCase());
+        if (!mine) throw new Error("Switch your wallet to " + dest + " and try again.");
+        sig = await window.ethereum.request({method: "personal_sign", params: [hex(p.message), mine]});
+      }
+      $("signature").value = sig;
+      $("sign-state").textContent = " signed";
+    } catch (e) { setErr(e.message || "Signing was cancelled."); }
+    refreshButtons();
+  });
+
+  $("manual-sig").addEventListener("input", async () => {
+    const v = $("manual-sig").value.trim();
+    if (!v) { $("signature").value = ""; refreshButtons(); return; }
+    try { if (!prepared) await prepare(); $("signature").value = v; setErr(""); }
+    catch (e) { setErr(e.message); }
+    refreshButtons();
+  });
+
+  document.querySelector("details").addEventListener("toggle", e => {
+    if (e.target.open && !prepared && plan && plan.needs_help) prepare().catch(err => setErr(err.message));
+  });
+
+  form.addEventListener("submit", () => { $("submit-btn").disabled = true; });
+  if ($("dest").value) loadPlan();
+})();
+</script>
+{% endblock %}

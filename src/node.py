@@ -399,7 +399,8 @@ class Node:
                                        for t in blk.get("transactions", []))
 
         if self.storage.state_exists():
-            s = state_mod.State.from_snapshot(*self.storage.load_state())
+            s = state_mod.State.from_snapshot(
+                *self.storage.load_state(), escrows=self.storage.load_escrows())
             cs = ChainState.from_storage(stored, s)
         else:
             cs = ChainState.from_chain(stored)

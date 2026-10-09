@@ -10,6 +10,7 @@ The node holds one reference and replaces it atomically (GIL-safe).
 
 import block as block_mod
 import crypto
+import gaslock
 import state as state_mod
 
 
@@ -41,6 +42,7 @@ def _apply_to_state(state, blk):
     applied in place. The single definition of that rule; both apply_block
     and from_chain go through here.
     """
+    gaslock.process_block(state, blk)
     builder = blk.get("builder")
     if builder:
         _apply_builder_reward(state, builder, blk)
