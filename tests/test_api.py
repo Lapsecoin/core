@@ -552,8 +552,6 @@ class TestSettingsValidation:
         form = {
             "csrf_token": self._token(client),
             "draw_window_seconds": "10.0",
-            "swap_confirm_depth": "2",
-            "swap_auto_accept_min_trust": "0.0",
         }
         form.update(overrides)
         return form
@@ -572,27 +570,13 @@ class TestSettingsValidation:
         client.post("/settings", data=self._full_form(client))
         assert node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS) is False
 
-    def test_inf_is_accepted_for_min_trust(self):
-        client, node = self._client()
-        resp = client.post("/settings", data=self._full_form(
-            client, swap_auto_accept_min_trust="inf"))
-        assert b"not valid" not in resp.data
-        assert node.settings.get(settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST) == float("inf")
-
-    def test_settings_page_marks_the_inf_row_correctly(self):
-        client, node = self._client()
-        node.settings.set(settings_mod.SWAP_AUTO_ACCEPT_MIN_TRUST, float("inf"))
-        html = client.get("/settings").get_data(as_text=True)
-        assert 'value="inf"' in html
-        assert "review every" in html
-
     def test_slider_metadata_reaches_the_page(self):
-        """The four numeric settings render a slider (a range input); the
+        """The numeric settings render a slider (a range input); the
         bool settings (show_hardware_details, mining_enabled,
         hide_address_publicly) render a switch each, not a slider."""
         client, _ = self._client()
         html = client.get("/settings").get_data(as_text=True)
-        assert html.count('type="range"') == 4
+        assert html.count('type="range"') == 2
         assert html.count('class="switch"') == 3
 
 
@@ -1341,140 +1325,6 @@ class TestDashboardNickname:
         client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
         data = client.get("/api/info").get_json()
         assert data["nick"] == "Al"
-
-
-# ---------------------------------------------------------------------------
-# /send's XLM half: a plain payment through the same wallet
-# market_routes trades against. No Flask app or HTTP involved;
-# api._submit_xlm_and_alert is a pure function of (node, wallet path,
-# form values, ctx dict) once Horizon itself is faked out.
-# ---------------------------------------------------------------------------
-
-import crypto as crypto_mod
-import xlm as xlm_mod
-
-
-class _XlmSendNode:
-    def __init__(self, tmp_path):
-        sk, pk = crypto_mod.generate_keypair()
-        self.keyfile = str(tmp_path / "node.key")
-        self.passphrase = "correct horse battery staple"
-        crypto_mod.save_key(self.keyfile, sk, pk, self.passphrase)
-        self.addr = crypto_mod.public_key_to_address(pk)
-
-
-def _make_wallet(tmp_path, node, name="xlm.key"):
-    kek = crypto_mod.derive_kek(node.keyfile, node.passphrase)
-    seed, pub = xlm_mod.generate_keypair()
-    path = str(tmp_path / name)
-    xlm_mod.save_key(path, seed, pub, kek=kek)
-    return path, pub
-
-
-class TestXlmView:
-    def test_no_wallet_reads_as_blank(self, tmp_path):
-        assert api._xlm_view(str(tmp_path / "none.key")) == ("", 0, 0)
-
-    def test_reports_spendable_and_locked(self, tmp_path, monkeypatch):
-        node = _XlmSendNode(tmp_path)
-        path, pub = _make_wallet(tmp_path, node)
-        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 100)
-        monkeypatch.setattr(xlm_mod, "get_balance_stroops", lambda addr: 1100)
-        addr, spendable, locked = api._xlm_view(path)
-        assert addr == pub
-        assert spendable == 100
-        assert locked == 1000
-
-    def test_unreachable_horizon_reads_as_zero_not_a_crash(self, tmp_path, monkeypatch):
-        node = _XlmSendNode(tmp_path)
-        path, _pub = _make_wallet(tmp_path, node)
-        def boom(addr):
-            raise xlm_mod.XLMUnreachable("down")
-        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", boom)
-        _addr, spendable, locked = api._xlm_view(path)
-        assert (spendable, locked) == (0, 0)
-
-
-class TestSubmitXlmAndAlert:
-    def _ctx(self):
-        return {"alert_err": "", "alert_ok_tx": "", "alert_ok_verb": ""}
-
-    def test_requires_a_passphrase(self, tmp_path):
-        node = _XlmSendNode(tmp_path)
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, "", "GDEST", 100, "", ctx)
-        assert "Passphrase" in ctx["alert_err"]
-
-    def test_requires_a_wallet_to_exist(self, tmp_path):
-        node = _XlmSendNode(tmp_path)
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, str(tmp_path / "missing.key"), "GDEST",
-                                  100, node.passphrase, ctx)
-        assert "trading address" in ctx["alert_err"]
-
-    def test_rejects_an_invalid_destination(self, tmp_path):
-        node = _XlmSendNode(tmp_path)
-        path, _pub = _make_wallet(tmp_path, node)
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, path, "not-an-address", 100,
-                                  node.passphrase, ctx)
-        assert "valid Stellar address" in ctx["alert_err"]
-
-    def test_rejects_the_wrong_passphrase(self, tmp_path):
-        node = _XlmSendNode(tmp_path)
-        path, _pub = _make_wallet(tmp_path, node)
-        _seed, dest = xlm_mod.generate_keypair()
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, path, dest, 100, "wrong", ctx)
-        assert "passphrase" in ctx["alert_err"]
-
-    def test_rejects_sending_to_its_own_address(self, tmp_path):
-        node = _XlmSendNode(tmp_path)
-        path, pub = _make_wallet(tmp_path, node)
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, path, pub, 100, node.passphrase, ctx)
-        assert "own address" in ctx["alert_err"]
-
-    def test_rejects_an_amount_above_spendable(self, tmp_path, monkeypatch):
-        node = _XlmSendNode(tmp_path)
-        path, _pub = _make_wallet(tmp_path, node)
-        _seed, dest = xlm_mod.generate_keypair()
-        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: 1)
-        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 50)
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, path, dest, 100, node.passphrase, ctx)
-        assert "spend" in ctx["alert_err"]
-
-    def test_a_successful_payment_reports_the_tx_hash(self, tmp_path, monkeypatch):
-        node = _XlmSendNode(tmp_path)
-        path, _pub = _make_wallet(tmp_path, node)
-        _seed, dest = xlm_mod.generate_keypair()
-        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: 1)
-        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 1000)
-        monkeypatch.setattr(xlm_mod, "build_payment",
-                            lambda seed, to, amt, memo, seq: ("xdr", "hash123"))
-        monkeypatch.setattr(xlm_mod, "submit_envelope",
-                            lambda xdr: (True, "hash123", "submitted"))
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, path, dest, 100, node.passphrase, ctx)
-        assert ctx["alert_ok_tx"] == "hash123"
-        assert ctx["alert_err"] == ""
-
-    def test_a_rejected_submission_reports_the_chains_own_detail(self, tmp_path, monkeypatch):
-        node = _XlmSendNode(tmp_path)
-        path, _pub = _make_wallet(tmp_path, node)
-        _seed, dest = xlm_mod.generate_keypair()
-        monkeypatch.setattr(xlm_mod, "get_sequence", lambda addr: 1)
-        monkeypatch.setattr(xlm_mod, "get_spendable_stroops", lambda addr: 1000)
-        monkeypatch.setattr(xlm_mod, "build_payment",
-                            lambda seed, to, amt, memo, seq: ("xdr", "hash123"))
-        monkeypatch.setattr(xlm_mod, "submit_envelope",
-                            lambda xdr: (False, "hash123", "tx_bad_seq"))
-        ctx = self._ctx()
-        api._submit_xlm_and_alert(node, path, dest, 100, node.passphrase, ctx)
-        assert "tx_bad_seq" in ctx["alert_err"]
-        assert ctx["alert_ok_tx"] == ""
-
 
 
 def test_flatten_threads_newest_thread_first_replies_by_score():

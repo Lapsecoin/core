@@ -80,20 +80,9 @@ class TestMarkSeen:
             t.join()
         assert errors == []
 
-    def test_kinds_do_not_share_a_budget(self):
-        """The whole point of the split: filling one kind's cache to its
-        ceiling must not evict, or even touch, another kind's entries."""
-        g, _, _ = make_gossip()
-        g.mark_seen("shared-hash", gossip_mod.KIND_BLOCK)
-        for i in range(gossip_mod.ORDER_SEEN_CACHE_SIZE + 100):
-            g.mark_seen(f"order-{i}", gossip_mod.KIND_ORDER)
-        assert g.mark_seen("shared-hash", gossip_mod.KIND_BLOCK) is True, \
-            "a block hash must survive an order flood"
-
     def test_same_hash_different_kinds_are_independent(self):
         g, _, _ = make_gossip()
         assert g.mark_seen("h", gossip_mod.KIND_TX) is False
-        assert g.mark_seen("h", gossip_mod.KIND_ORDER) is False
         assert g.mark_seen("h", gossip_mod.KIND_TX) is True
         assert g.mark_seen("h", gossip_mod.KIND_BLOCK) is False
 
@@ -232,13 +221,11 @@ def _build_network(adj):
     that record what would have gone out instead of transmitting it.
 
     Returns (nodes, outboxes), where outboxes has one queue per item kind,
-    mirroring the three distinct send_* methods the real transport exposes
-    (peer_udp.UDPTransport.send_tx/send_block/send_order): nothing here
+    mirroring the distinct send_* methods the real transport exposes
+    (peer_udp.UDPTransport.send_tx/send_block): nothing here
     should be able to confuse one kind's traffic for another's.
     """
-    outboxes = {gossip_mod.KIND_TX: [], gossip_mod.KIND_BLOCK: [],
-                gossip_mod.KIND_ORDER: [],
-                gossip_mod.KIND_FILL_REQUEST: [], gossip_mod.KIND_FILL_RESPONSE: []}
+    outboxes = {gossip_mod.KIND_TX: [], gossip_mod.KIND_BLOCK: []}
     nodes = {}
 
     def udp_for(me):
@@ -249,15 +236,6 @@ def _build_network(adj):
             def send_block(self, item, peers, stemming):
                 for p in peers:
                     outboxes[gossip_mod.KIND_BLOCK].append((p, me, item, stemming))
-            def send_order(self, item, peers, stemming):
-                for p in peers:
-                    outboxes[gossip_mod.KIND_ORDER].append((p, me, item, stemming))
-            def send_fill_request(self, item, peers, stemming):
-                for p in peers:
-                    outboxes[gossip_mod.KIND_FILL_REQUEST].append((p, me, item, stemming))
-            def send_fill_response(self, item, peers, stemming):
-                for p in peers:
-                    outboxes[gossip_mod.KIND_FILL_RESPONSE].append((p, me, item, stemming))
         return U()
 
     class Pool:
@@ -460,8 +438,8 @@ class TestFluffReachesEveryConnectedNode:
 
 
 # ---------------------------------------------------------------------------
-# 5. Delivery at scale, under the network's own real randomness, then under
-#    an order flood. What plan.md 4.1 asks for: measured, not asserted.
+# 5. Delivery at scale, under the network's own real randomness, measured,
+#    not asserted.
 # ---------------------------------------------------------------------------
 
 class TestDeliveryUnderRealRandomness:
@@ -487,14 +465,11 @@ class TestDeliveryUnderRealRandomness:
     # _forward/_fluff never branch on kind (see gossip.Gossip._forward and
     # ._fluff: kind is only used to pick the seen-cache and, in _send, the
     # wire method); the delivery guarantee below is provably the same
-    # walk for a tx, a block, an order, or the fill-request/response
-    # handshake pair. Proven here for all five rather than argued from
+    # walk for a tx or a block. Proven here for both rather than argued from
     # the source, so any of them gaining a kind-specific branch later
     # that quietly weakens its delivery would fail these tests, not just
     # look correct on inspection.
-    KINDS = (gossip_mod.KIND_TX, gossip_mod.KIND_BLOCK,
-            gossip_mod.KIND_ORDER,
-            gossip_mod.KIND_FILL_REQUEST, gossip_mod.KIND_FILL_RESPONSE)
+    KINDS = (gossip_mod.KIND_TX, gossip_mod.KIND_BLOCK)
 
     def test_full_delivery_at_3_nodes(self):
         adj = _ring(3)
@@ -529,111 +504,3 @@ class TestDeliveryUnderRealRandomness:
                 assert held == set(adj), (
                     f"{kind} trial {trial} from node {origin} reached "
                     f"{len(held)}/100 nodes on the sparse graph")
-
-
-class TestOrderFloodDoesNotDegradeConsensusDelivery:
-    """The property plan.md 4.1 exists for: a swap feature must not be
-    able to slow consensus down. Before the per-kind cache split, enough
-    distinct orders sharing a block's dedup cache could evict its entry,
-    and an evicted block hash means that block gets re-flooded, a
-    consensus cost paid for a feature that moves no funds and enters no
-    block. The split makes this structural rather than a matter of timing:
-    proven here by flooding an order cache well past its own ceiling on
-    every node in the network and then measuring, not assuming, that a
-    block still reaches all of them.
-
-    Flood generation is pinned to always-fluff, which is a claim about
-    speed and determinism for that phase only, not about the property
-    under test: it makes each flooded order take the shortest path to
-    full coverage so filling the cache costs one pass per item rather
-    than an average of ten. The final block delivery, which is what the
-    assertion is actually about, runs under real randomness so it is not
-    trivially true by construction.
-    """
-
-    def test_block_still_reaches_everyone_after_the_order_cache_is_saturated(
-            self, monkeypatch):
-        n = 8
-        adj = _mesh(n, extra_edges_per_node=2, seed=7)
-        nodes, outboxes = _build_network(adj)
-
-        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
-        flood_count = gossip_mod.ORDER_SEEN_CACHE_SIZE + 2_000
-        origin = 0
-        for k in range(flood_count):
-            h = f"order-{k}"
-            nodes[origin].spread({"o": h}, gossip_mod.KIND_ORDER, h)
-            _drain(nodes, outboxes[gossip_mod.KIND_ORDER],
-                  gossip_mod.KIND_ORDER, h, held={origin})
-            origin = (origin + 1) % n   # spread the flood's origin around
-
-        for node in nodes.values():
-            assert len(node._seen[gossip_mod.KIND_ORDER]) == \
-                gossip_mod.ORDER_SEEN_CACHE_SIZE, \
-                "the order cache should have filled to its ceiling and no further"
-
-        monkeypatch.undo()   # real randomness for the thing under test
-        held = {5}
-        nodes[5].spread({"h": "the-real-block"}, gossip_mod.KIND_BLOCK,
-                        "the-real-block")
-        _drain(nodes, outboxes[gossip_mod.KIND_BLOCK], gossip_mod.KIND_BLOCK,
-              "the-real-block", held)
-        assert held == set(adj), \
-            f"block delivery degraded by the order flood: reached {held}"
-
-    def test_tx_dedup_is_also_untouched_by_the_order_flood(self, monkeypatch):
-        """Same property, the other consensus kind. Orders and txs are
-        gossiped over the same peers at the same time in practice, so both
-        need their own proof, not just block's."""
-        n = 8
-        adj = _mesh(n, extra_edges_per_node=2, seed=11)
-        nodes, outboxes = _build_network(adj)
-
-        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
-        flood_count = gossip_mod.ORDER_SEEN_CACHE_SIZE + 2_000
-        for k in range(flood_count):
-            h = f"order-{k}"
-            nodes[0].spread({"o": h}, gossip_mod.KIND_ORDER, h)
-            _drain(nodes, outboxes[gossip_mod.KIND_ORDER],
-                  gossip_mod.KIND_ORDER, h, held={0})
-
-        monkeypatch.undo()
-        held = {3}
-        nodes[3].spread({"h": "atx"}, gossip_mod.KIND_TX, "atx")
-        _drain(nodes, outboxes[gossip_mod.KIND_TX], gossip_mod.KIND_TX,
-              "atx", held)
-        assert held == set(adj)
-
-    def test_fill_request_flood_does_not_degrade_order_or_block_delivery(self, monkeypatch):
-        """Fill requests are another kind sharing the same infrastructure
-        as orders (see market.py's fill-request section); they need the
-        identical proof orders got, against both a legitimate order and
-        a block."""
-        n = 8
-        adj = _mesh(n, extra_edges_per_node=2, seed=13)
-        nodes, outboxes = _build_network(adj)
-
-        monkeypatch.setattr(gossip_mod, "_random_fraction", lambda: 1.0)
-        flood_count = gossip_mod.FILL_REQUEST_SEEN_CACHE_SIZE + 500
-        for k in range(flood_count):
-            h = f"fill-request-{k}"
-            nodes[0].spread({"c": h}, gossip_mod.KIND_FILL_REQUEST, h)
-            _drain(nodes, outboxes[gossip_mod.KIND_FILL_REQUEST],
-                  gossip_mod.KIND_FILL_REQUEST, h, held={0})
-
-        for node in nodes.values():
-            assert len(node._seen[gossip_mod.KIND_FILL_REQUEST]) == \
-                gossip_mod.FILL_REQUEST_SEEN_CACHE_SIZE
-
-        monkeypatch.undo()
-        order_held = {1}
-        nodes[1].spread({"o": "an-order"}, gossip_mod.KIND_ORDER, "an-order")
-        _drain(nodes, outboxes[gossip_mod.KIND_ORDER], gossip_mod.KIND_ORDER,
-              "an-order", order_held)
-        assert order_held == set(adj)
-
-        block_held = {6}
-        nodes[6].spread({"h": "a-block"}, gossip_mod.KIND_BLOCK, "a-block")
-        _drain(nodes, outboxes[gossip_mod.KIND_BLOCK], gossip_mod.KIND_BLOCK,
-              "a-block", block_held)
-        assert block_held == set(adj)

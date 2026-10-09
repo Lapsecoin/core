@@ -15,5 +15,4 @@ PySocks>=1.7.1
 pystray>=0.19
 pytest>=8.0
 requests>=2.31
-stellar-sdk>=13.0
 waitress>=3.0

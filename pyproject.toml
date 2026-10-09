@@ -25,7 +25,6 @@ dependencies = [
     "PyNaCl>=1.5",
     "pystray>=0.19",
     "requests>=2.31",
-    "stellar-sdk>=13.0",
     "waitress>=3.0",
 ]
 

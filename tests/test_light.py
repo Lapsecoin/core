@@ -156,8 +156,8 @@ def test_the_light_client_never_loads_the_full_node():
     code = (
         "import sys; sys.path.insert(0, %r)\n"
         "import light, light_app, remote_reader, wallet_ui, board_view, ui_common, wallet\n"
-        "banned = ['chiavdf', 'peewee', 'libtorrent', 'stellar_sdk', 'cairosvg', 'pystray',\n"
-        "          'block', 'vdf', 'storage', 'market', 'swap', 'swap_engine', 'xlm',\n"
+        "banned = ['chiavdf', 'peewee', 'libtorrent', 'cairosvg', 'pystray',\n"
+        "          'block', 'vdf', 'storage', \n"
         "          'node', 'chainstate', 'state', 'mempool', 'gossip', 'syncer',\n"
         "          'discovery', 'peer_udp', 'api', 'local_reader', 'hardware_info']\n"
         "print('IMPORTED:' + ','.join(m for m in banned if m in sys.modules))\n" % SRC)
@@ -169,8 +169,8 @@ def test_the_light_client_never_loads_the_full_node():
     imported = line[len("IMPORTED:"):]
     assert imported == "", f"light client imported: {imported}"
     assert not any(m in imported.split(",") for m in (
-        "chiavdf", "peewee", "libtorrent", "stellar_sdk", "block", "vdf", "storage",
-        "market", "swap", "xlm", "node", "chainstate", "api", "local_reader")), imported
+        "chiavdf", "peewee", "libtorrent", "block", "vdf", "storage",
+        "node", "chainstate", "api", "local_reader")), imported
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ class TestLightPages:
         nav = html[html.index('<nav class="mainnav">'):html.index("</nav>")]
         for present in ("/address", "/send", "/board"):
             assert f'href="{present}"' in nav
-        for absent in ("/explorer", "/market", "/network", "/mempool", "/settings", "/odds"):
+        for absent in ("/explorer", "/network", "/mempool", "/settings", "/odds"):
             assert f'href="{absent}"' not in nav
 
     def test_balance_page_shows_the_wallet(self, world):
@@ -250,10 +250,10 @@ class TestLightPages:
         assert "1000 LAPSE" in html
         assert "received" in html and ">5000<" in html
 
-    def test_send_page_has_no_xlm_half(self, world):
+    def test_send_page_is_lapse_only(self, world):
         html = self._light(world).get("/send").get_data(as_text=True)
         assert "lapse-panel" in html
-        assert "xlm-panel" not in html and "asset-picker" not in html
+        assert "asset-picker" not in html
 
     def test_every_page_says_what_it_has_cost(self, world):
         html = self._light(world).get("/board").get_data(as_text=True)

@@ -1,6 +1,6 @@
 """Formatting and form-parsing helpers shared by the full node's web app
 and the light client. Light-safe: imports nothing that pulls in the VDF,
-the chain database, or the swap code, and a test keeps it that way."""
+the chain database, or the node, and a test keeps it that way."""
 
 import logging
 import os

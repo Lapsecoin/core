@@ -6,7 +6,7 @@
 # Both platforms: make dumb -> dist/lapsecoin-dumb  (.exe on Windows, onefile)
 #
 # It needs only liboqs (to sign) and the web stack, so the VDF, the chain
-# database, the torrent and swap code, and the desktop GUI are all left out
+# database, the torrent code, and the desktop GUI are all left out
 # of the build, which is most of what makes the full node hard to build and
 # large to download. tests/test_light.py checks nothing it imports reaches
 # for them.
@@ -102,7 +102,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=["hook_oqs.py"],
     excludes=["pytest", "unittest", "tkinter", "chiavdf", "peewee", "libtorrent",
-              "stellar_sdk", "pystray", "PIL", "cairosvg", "miniupnpc", "markdown",
+              "pystray", "PIL", "cairosvg", "miniupnpc", "markdown",
               "flask_limiter", "argcomplete", "gi"],
     noarchive=False,
 )

@@ -146,8 +146,6 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 | `LAPSECOIN_DOCKER` | unset | Set to `1` inside the project Docker image; disables self-update |
 | `LAPSECOIN_PEERS_URL` | project default | Starter peer-list URL used by the installer and update fallback |
 | `LAPSECOIN_DRAW_WINDOW_SECONDS` | `10` | Same-height draw window in seconds |
-| `LAPSECOIN_SWAP_CONFIRM_DEPTH` | `2` | How many blocks must bury a LapseCoin payment before a swap treats it as settled |
-| `LAPSECOIN_SWAP_AUTO_ACCEPT_MIN_TRUST` | `0` | Minimum counterparty trust score for a fill request to auto-accept |
 | `LAPSECOIN_SHOW_HARDWARE_DETAILS` | `true` | Show this node's hardware details on the odds page |
 | `LAPSECOIN_MINING_ENABLED` | `true` | Enable this node's block building |
 | `LAPSECOIN_HIDE_ADDRESS_PUBLICLY` | `true` | Hide this node's address from the public dashboard |
@@ -180,7 +178,7 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 No LAPSE exchange listings yet.
 
-In the meantime, [Discord](https://discord.gg/FP2d8JmK6r) allows direct trades with XLM, as well as the in-app Market (beta). Default rate is 1 XLM for 1000 LAPSE.
+In the meantime, the [Discord](https://discord.gg/FP2d8JmK6r) is the place to trade directly with other members.
 ---
 
 <div align="center" id="support">

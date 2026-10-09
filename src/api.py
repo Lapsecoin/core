@@ -515,24 +515,6 @@ def _peers_for_download(known_addrs, self_addr):
 
 
 
-def _xlm_view(xlm_keyfile_path):
-    """(addr, spendable, locked) for the send page's XLM tab, or a blank
-    tuple if this node has no trading wallet yet. Failures against
-    Horizon read as 0 rather than raising: a page that cannot reach a
-    public API should still render, just without a number it cannot get.
-    """
-    import xlm as xlm_mod
-    addr = xlm_mod.load_public_key(xlm_keyfile_path)
-    if not addr:
-        return "", 0, 0
-    try:
-        spendable = xlm_mod.get_spendable_stroops(addr)
-        locked = max(xlm_mod.get_balance_stroops(addr) - spendable, 0)
-    except xlm_mod.XLMError:
-        spendable = locked = 0
-    return addr, spendable, locked
-
-
 class _NodeSigner:
     """What the wallet routes sign through on a full node: the node itself
     builds and signs, from its own chain state (see Node.build_and_sign_tx).
@@ -554,112 +536,6 @@ class _NodeSigner:
         t, _fee = self.node.build_and_sign_tx(outputs, fee=fee,
                                               passphrase=passphrase or None, memo=memo)
         return t
-
-
-class _XlmSend:
-    """The XLM half of the send page, behind the two calls wallet_ui makes:
-    view() for what the XLM tab shows and send() for its form. The light
-    client has no trading wallet and passes none."""
-
-    def __init__(self, node):
-        self.node = node
-
-    def _path(self):
-        import market_routes
-        return market_routes.xlm_keyfile_path(self.node)
-
-    def view(self):
-        addr, spendable, locked = _xlm_view(self._path())
-        return dict(xlm_addr=addr, xlm_spendable=spendable, xlm_locked=locked,
-                    xlm_to_value="", xlm_amount_value="")
-
-    def send(self, form, passphrase, ctx):
-        import market_routes
-        to_addr = form.get("xlm_to", "").strip()
-        amount_raw = form.get("xlm_amount", "").strip()
-        ctx["xlm_to_value"] = to_addr
-        ctx["xlm_amount_value"] = amount_raw
-        if not to_addr:
-            ctx["alert_err"] = "Enter a destination address."
-            return
-        try:
-            amount_stroops = market_routes.parse_xlm(amount_raw)
-        except ValueError as e:
-            ctx["alert_err"] = str(e)
-            return
-        path = self._path()
-        _submit_xlm_and_alert(self.node, path, to_addr, amount_stroops,
-                              passphrase, ctx)
-        if ctx["alert_ok_tx"]:
-            ctx["xlm_to_value"] = ""
-            ctx["xlm_amount_value"] = ""
-            ctx["xlm_addr"], ctx["xlm_spendable"], ctx["xlm_locked"] = _xlm_view(path)
-
-
-def _submit_xlm_and_alert(node, xlm_keyfile_path, to_addr, amount_stroops,
-                          passphrase, ctx):
-    """The XLM half of /send. Mirrors _submit_and_alert's shape (build,
-    submit, report) but this wallet has no crash-recovery path the way a
-    swap's does: it is a one-off manual action, so nothing here persists
-    an envelope before sending it. A failed submit is simply not retried;
-    the user sees the error and can try again.
-    """
-    import xlm as xlm_mod
-    if not passphrase:
-        ctx["alert_err"] = "Passphrase required."
-        return
-    if not xlm_keyfile_path or not xlm_mod.load_public_key(xlm_keyfile_path):
-        ctx["alert_err"] = "Create a Stellar trading address on the Market page first."
-        return
-    if not xlm_mod.is_valid_address(to_addr):
-        ctx["alert_err"] = "That is not a valid Stellar address."
-        return
-    try:
-        kek = crypto_mod.derive_kek(node.keyfile, passphrase)
-        seed = xlm_mod.decrypt_seed(xlm_keyfile_path, kek=kek)
-    except ValueError:
-        ctx["alert_err"] = "That is not this node's passphrase."
-        return
-    try:
-        source = xlm_mod.Keypair.from_secret(seed).public_key
-        if to_addr == source:
-            ctx["alert_err"] = "That is this wallet's own address."
-            return
-        sequence = xlm_mod.get_sequence(source)
-        spendable = xlm_mod.get_spendable_stroops(source)
-        if amount_stroops > spendable:
-            ctx["alert_err"] = (
-                "That is more than this wallet can spend; "
-                f"{xlm_mod.stroops_to_str(spendable)} XLM is free of its reserve.")
-            return
-        xdr, tx_hash = xlm_mod.build_payment(seed, to_addr, amount_stroops, "", sequence)
-        verb = "Sent."
-        ok, tx_hash, detail = xlm_mod.submit_envelope(xdr)
-        if ok:
-            ctx["alert_ok_tx"] = tx_hash
-            ctx["alert_ok_verb"] = verb
-        else:
-            ctx["alert_err"] = f"Error: {detail}"
-    except xlm_mod.XLMError as e:
-        ctx["alert_err"] = f"Error: {e}"
-    finally:
-        del seed
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # What a sealed request may ask for: what a wallet needs to name its address
@@ -769,8 +645,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
             "settings": "settings",
-            "market": "market", "market_take": "market",
-            "market_book": "market_book", "trades": "trades",
         }.get(endpoint)
         return {"is_private": is_private,
                 "private_port": private_port,
@@ -1611,13 +1485,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
 
 
-    register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
-                           xlm=_XlmSend(node))
-
-    # Market and Trades live in their own module: this file is already long
-    # and a node with swaps off never reaches any of it.
-    import market_routes
-    market_routes.register(app, node, csrf_token)
+    register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

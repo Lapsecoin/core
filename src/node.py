@@ -43,7 +43,6 @@ import time
 import block as block_mod
 import crypto
 import gossip as gossip_mod
-import market as market_mod
 import mempool as mempool_mod
 import settings as settings_mod
 import tx as tx_mod
@@ -360,35 +359,6 @@ class Node:
         # else that wants "what is this node doing right now" without
         # scraping the log file.
         self.status_line = "starting"
-
-        # Set from outside (see main.py) once a SwapWorker exists for
-        # this node. Optional and checked at every call site: a node
-        # that never trades has none, and nothing here should care.
-        self.swap_worker = None
-
-    def _wake_swap_worker(self):
-        """Tell the swap worker something changed that could move a trade
-        forward, without waiting for its own backstop interval.
-
-        This is the entire replacement for the swap worker's old fixed
-        poll: rather than that thread asking "did anything happen?" on a
-        clock, the places that actually know the answer (a tx admitted
-        to the mempool, a new block committed, a fill request or
-        response gossiped in) say so directly, right here, the moment
-        they know it. Cheap and safe from any thread: wake() only sets
-        an Event, and is a no-op if the worker was never started or
-        swaps are disabled (the next pass decides that, not this call).
-        Wrapped so a bug in a caller of this method, or in the worker
-        itself reacting, can never break the chain/gossip path that
-        noticed the event in the first place.
-        """
-        worker = self.swap_worker
-        if worker is None:
-            return
-        try:
-            worker.wake()
-        except Exception:
-            log.exception("[swap] waking the swap worker failed")
 
     # ------------------------------------------------------------------
     # Startup
@@ -1351,11 +1321,6 @@ class Node:
         self.storage.save_block_and_state(blk, self.cs.state)
         self.mempool.remove_many(confirmed)
         self.view = NodeView(self.cs)
-        # A new height changes what every pending swap step's
-        # deadline_height means (see swap_engine.deadline_height) and
-        # what confirmation depth every submitted leg now has; let the
-        # worker re-check rather than wait for its backstop.
-        self._wake_swap_worker()
 
         # Nothing is propagated from here. A peer block was already passed
         # on when it arrived (_handle_inbound_block), and our own candidate
@@ -1409,12 +1374,6 @@ class Node:
             msg["reply"].put(self.submit_tx(msg["tx"]))
         elif t == "tx":
             self._handle_inbound_tx(msg)
-        elif t == "order":
-            self._handle_inbound_order(msg)
-        elif t == "fill_request":
-            self._handle_inbound_fill_request(msg)
-        elif t == "fill_response":
-            self._handle_inbound_fill_response(msg)
 
     def _spread(self, item, kind, item_hash):
         """Originate an item and remember it until we see it come back from
@@ -1729,297 +1688,6 @@ class Node:
                 self._sync_hint = sender
                 self._sync_hint_height = height
 
-    def _handle_inbound_order(self, msg):
-        """Verify a swap order or cancellation, store it, and pass it on.
-
-        Verified before relaying, not after. An order is signed, so a
-        relay cannot forge one, but relaying first would mean every node
-        forwarding whatever junk anyone sends and only then discovering it
-        was junk, which is a free amplifier. A block is handled the same
-        way for the same reason.
-
-        Nothing here touches consensus. An order is an advertisement: it
-        moves no funds, enters no block, and a node that never trades can
-        drop every one of these without consequence.
-        """
-        item = msg["order"]
-        sender = msg.get("sender")
-        stemming = msg.get("stemming", False)
-
-        try:
-            item_hash = market_mod.order_hash(item)
-        except Exception:
-            log.debug("[market] ignoring an unreadable order")
-            return
-
-        self._note_echo(item_hash, sender)
-
-        if not market_mod.already_known(item):
-            # A database lookup, not gossip.mark_seen: that cache tracks
-            # whether *this node has flooded the item onward*, a different
-            # question, and answering this one from it would mark the item
-            # seen before this node ever actually sent it, so the relay
-            # below would always find "already seen" and silently do
-            # nothing. See market.already_known.
-            try:
-                if market_mod.is_cancellation(item):
-                    canceller = market_mod.verify_cancellation(item)
-                    market_mod.apply_cancellation(item["cancel"], canceller)
-                else:
-                    market_mod.verify_order(item, current_height=self.view.height)
-                    market_mod.store_order(item)
-            except market_mod.OrderRejected as e:
-                log.debug("[market] rejected an order from %s: %s", sender, e)
-                return
-            except Exception:
-                log.warning("[market] failed to handle an inbound order",
-                            exc_info=True)
-                return
-            # New, and might now cross one of this node's own resting
-            # orders (see swap_engine.auto_match_orders, which only runs
-            # from the worker's own pass): waking it here is the same
-            # reasoning _handle_inbound_fill_request/_handle_inbound_
-            # fill_response already apply for a new request/response, just
-            # for the other event that can also make a trade possible.
-            # A cancellation never needs this: it only ever removes
-            # capacity, never creates a crossing opportunity worth acting
-            # on sooner.
-            if not market_mod.is_cancellation(item):
-                self._wake_swap_worker()
-
-        # Relayed either way, exactly like a tx or a block: whether we had
-        # already verified this and whether gossip has already flooded it
-        # are different questions, and gossip.relay (by way of
-        # gossip._fluff) answers the second itself, once per item hash.
-        # Gating this on the first is what would strand every peer
-        # reachable only through whoever originated the item, including
-        # this node's own orders echoing back to it.
-        self.gossip.relay(item, gossip_mod.KIND_ORDER, item_hash,
-                          sender, stemming=stemming)
-
-    def publish_order(self, item):
-        """Put this node's own order or cancellation onto the network."""
-        self._spread(item, gossip_mod.KIND_ORDER, market_mod.order_hash(item))
-
-    def _handle_inbound_fill_request(self, msg):
-        """Verify a taker's fill request, store it, and pass it on.
-
-        Same shape and same reasoning as _handle_inbound_order: verified
-        before relaying so a flood of junk costs one signature check and
-        goes no further, relayed either way so gossip's own flood logic
-        is the only thing deciding whether this node has already sent it
-        onward. Nothing here decides whether the request should be
-        accepted; that happens only for a request naming one of this
-        node's own orders, in swap_engine's periodic pass over the
-        request book, once it has this node's own current view of that
-        order's remaining size and its own trust in this specific taker.
-        """
-        item = msg["fill_request"]
-        sender = msg.get("sender")
-        stemming = msg.get("stemming", False)
-
-        try:
-            item_hash = market_mod.fill_request_hash(item)
-        except Exception:
-            log.debug("[market] ignoring an unreadable fill request")
-            return
-
-        self._note_echo(item_hash, sender)
-
-        if not market_mod.already_known_fill_request(item):
-            try:
-                market_mod.verify_fill_request(item)
-                market_mod.store_fill_request(item)
-            except market_mod.FillRequestRejected as e:
-                log.debug("[market] rejected a fill request from %s: %s", sender, e)
-                return
-            except Exception:
-                log.warning("[market] failed to handle an inbound fill request",
-                            exc_info=True)
-                return
-            # New, and might be against one of this node's own orders;
-            # let the worker decide it now rather than on its backstop.
-            self._wake_swap_worker()
-
-        self.gossip.relay(item, gossip_mod.KIND_FILL_REQUEST, item_hash,
-                          sender, stemming=stemming)
-
-    def publish_fill_request(self, item):
-        """Put this node's own fill request onto the network."""
-        self._spread(item, gossip_mod.KIND_FILL_REQUEST,
-                    market_mod.fill_request_hash(item))
-
-    def _handle_inbound_fill_response(self, msg):
-        """Verify a maker's answer to a fill request, store it, and pass
-        it on. Same shape and same reasoning as _handle_inbound_fill_request.
-
-        Verified here only at the level any relay can check: that it is
-        well-formed and genuinely signed by *someone*. Whether it was
-        signed by the *right* someone (the actual maker of the order it
-        answers) is not checkable at relay time by a node that may not
-        even have that order, and is exactly the check the waiting
-        taker itself must make before treating an acceptance as real
-        (see market.verify_fill_response's expected_maker_addr and
-        swap_engine's handling of a taker's own outstanding request).
-
-        The order's own terms (direction/maker_xlm_addr/xlm_total) are a
-        different matter: unlike who signed it, this relay can check
-        them itself whenever it happens to already have the order this
-        response names, order books being gossiped exactly as widely as
-        everything else here, and doing so is what stops a bad accepted
-        response - one whose signed terms diverge from its own order,
-        the durable trade record every bystander later trusts (see
-        swap_engine.verify_trade_against_chain) - from ever being
-        admitted and relayed in the first place, rather than only ever
-        being caught by the one taker who happened to be waiting on it.
-        """
-        item = msg["fill_response"]
-        sender = msg.get("sender")
-        stemming = msg.get("stemming", False)
-
-        try:
-            item_hash = market_mod.fill_response_hash(item)
-        except Exception:
-            log.debug("[market] ignoring an unreadable fill response")
-            return
-
-        self._note_echo(item_hash, sender)
-
-        if not market_mod.already_known_fill_response(item):
-            order_row = market_mod.get_order(item.get("order_id", ""))
-            req_row = market_mod.get_fill_request(item.get("request_id", ""))
-            try:
-                market_mod.verify_fill_response(
-                    item, order_row=order_row, req_row=req_row)
-                market_mod.store_fill_response(item)
-            except market_mod.FillResponseRejected as e:
-                log.debug("[market] rejected a fill response from %s: %s", sender, e)
-                return
-            except Exception:
-                log.warning("[market] failed to handle an inbound fill response",
-                            exc_info=True)
-                return
-            # Might be the answer to one of this node's own outstanding
-            # requests; let the worker open the trade now rather than on
-            # its backstop.
-            self._wake_swap_worker()
-
-        self.gossip.relay(item, gossip_mod.KIND_FILL_RESPONSE, item_hash,
-                          sender, stemming=stemming)
-
-    def publish_fill_response(self, item):
-        """Put this node's own answer to a fill request onto the network."""
-        self._spread(item, gossip_mod.KIND_FILL_RESPONSE,
-                    market_mod.fill_response_hash(item))
-
-    def _market_provider(self, kinds):
-        """What this node offers a peer's market backfill request
-        (peer_udp.MT_GET_MARKET): its current order book and/or known
-        accepted fills, each as the exact signed dict(s) gossip already
-        carries, capped the same way a chain sync page is (see
-        peer_udp.MAX_MARKET_ORDERS/MAX_MARKET_FILLS). A node that never
-        trades still answers from an empty book rather than refusing the
-        request outright, the same courtesy MT_GETSYNC extends to a node
-        with no chain yet.
-        """
-        import peer_udp as peer_udp_mod
-        out = {"orders": [], "fills": []}
-        if "order" in kinds:
-            out["orders"] = [market_mod.order_to_wire(r) for r in
-                             market_mod.recent_orders(peer_udp_mod.MAX_MARKET_ORDERS)]
-        if "fill" in kinds:
-            out["fills"] = [market_mod.accepted_fill_to_wire(req, resp) for req, resp in
-                            market_mod.recent_accepted_fills(peer_udp_mod.MAX_MARKET_FILLS)]
-        return out
-
-    def backfill_market_from(self, peer_addr, timeout=8.0):
-        """Ask one peer for its order book and known accepted fills, and
-        admit whatever comes back through the exact same verify-then-store
-        path an inbound gossip message would (market.verify_order/
-        store_order, market.verify_fill_request/verify_fill_response and
-        their store_ counterparts): backfilled data gets no special trust
-        for having arrived this way. Returns (orders_added, fills_added).
-
-        Best-effort and one-shot per call, not a continuous sync: see
-        peer_udp.request_market for why one page is not the same
-        guarantee chain sync gives. Meant to be tried a handful of times
-        against different peers while this node's own book looks thin,
-        not run forever.
-        """
-        # Node holds no direct transport reference of its own; gossip's
-        # is the one already wired up (see gossip.Gossip.__init__), the
-        # same way _spread/relay reach the wire through self.gossip
-        # rather than a udp attribute this class does not have.
-        resp = self.gossip.udp.request_market(peer_addr, timeout=timeout)
-        if resp is None:
-            log.debug("[market] backfill request to %s timed out or got "
-                     "no reply", peer_addr)
-            return 0, 0
-        log.debug("[market] backfill reply from %s: %d order(s), %d fill(s) "
-                 "offered", peer_addr, len(resp.get("orders", [])),
-                 len(resp.get("fills", [])))
-        orders_added = 0
-        for order in resp.get("orders", []):
-            if not isinstance(order, dict) or market_mod.already_known(order):
-                continue
-            try:
-                market_mod.verify_order(order, current_height=self.view.height)
-                if market_mod.store_order(order):
-                    orders_added += 1
-            except market_mod.OrderRejected as e:
-                log.debug("[market] backfilled order from %s rejected: %s",
-                         peer_addr, e)
-                continue
-            except Exception:
-                # Isolated per item, exactly like the gossip handlers
-                # (_handle_inbound_order and friends): one malformed or
-                # unexpectedly-typed row from a peer's backfill batch must
-                # not abort every order still queued behind it. A peer
-                # that wants to make its own backfill useless against it
-                # gets one skipped row for the attempt, not a dropped
-                # batch.
-                log.warning("[market] skipping an unreadable backfilled "
-                           "order from %s", peer_addr, exc_info=True)
-                continue
-        fills_added = 0
-        for pair in resp.get("fills", []):
-            if not isinstance(pair, dict):
-                continue
-            req, fresp = pair.get("request"), pair.get("response")
-            if not isinstance(req, dict) or not isinstance(fresp, dict):
-                continue
-            try:
-                if not market_mod.already_known_fill_request(req):
-                    try:
-                        market_mod.verify_fill_request(req)
-                        market_mod.store_fill_request(req)
-                    except market_mod.FillRequestRejected as e:
-                        log.debug("[market] backfilled fill request from "
-                                 "%s rejected: %s", peer_addr, e)
-                        continue
-                if market_mod.already_known_fill_response(fresp):
-                    continue
-                order_row = market_mod.get_order(fresp.get("order_id", ""))
-                req_row = market_mod.get_fill_request(fresp.get("request_id", ""))
-                market_mod.verify_fill_response(
-                    fresp, order_row=order_row, req_row=req_row)
-                if market_mod.store_fill_response(fresp):
-                    fills_added += 1
-            except (market_mod.FillRequestRejected,
-                   market_mod.FillResponseRejected) as e:
-                log.debug("[market] backfilled fill from %s rejected: %s",
-                         peer_addr, e)
-                continue
-            except Exception:
-                log.warning("[market] skipping an unreadable backfilled "
-                           "fill from %s", peer_addr, exc_info=True)
-                continue
-        log.info("[market] backfill from %s: added %d/%d order(s), "
-                "%d/%d fill(s)", peer_addr, orders_added,
-                len(resp.get("orders", [])), fills_added,
-                len(resp.get("fills", [])))
-        return orders_added, fills_added
-
     def _handle_inbound_tx(self, msg):
         """Route an inbound tx: validate, admit to the mempool, propagate.
 
@@ -2062,17 +1730,11 @@ class Node:
             if added:
                 log.debug("[tx] fluffed here, keeping it  hash=%s  from=%s",
                           h_or_err[:12], origin)
-                # A newly-seen tx may be the very leg a pending swap step
-                # is waiting on (see swap_engine.Engine.check_inbound);
-                # let the worker look now rather than on its next
-                # backstop pass.
-                self._wake_swap_worker()
             return
 
         added, h_or_err = self.mempool.add(tx_dict)
         if added:
             log.debug("[tx] inbound accepted  hash=%s  from=%s", h_or_err[:12], origin)
-            self._wake_swap_worker()
         else:
             log.debug("[tx] inbound duplicate  from=%s", origin)
         # Relayed either way. Whether our mempool already held this and
@@ -2318,17 +1980,6 @@ class Node:
         except Exception:
             log.exception("[reorg] mempool re-add failed; chain state already "
                           "committed, mempool may hold stale entries until pruned")
-
-        # A reorg can specifically un-settle a swap leg this node already
-        # marked confirmed (see swap_engine.Engine.check_outbound/
-        # check_inbound's own reorg handling): the transaction that
-        # settled it may now sit on the abandoned branch, either gone
-        # from every chain (re-added to the mempool above, to be mined
-        # again) or superseded by a conflicting one on the new branch.
-        # Either way a pending trade's view of what has and has not
-        # settled needs re-deriving against the chain that is now
-        # canonical, immediately, not on the worker's backstop pace.
-        self._wake_swap_worker()
 
         # How much of our own chain was thrown away, which is not the same
         # as how much we took on: a heavier fork can be shorter.
