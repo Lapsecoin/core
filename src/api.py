@@ -137,6 +137,7 @@ import hardware_info
 import settings as settings_mod
 from base_send import BaseSend
 import fees_ui
+from gas_io import ChainIO
 import gaslock
 import storage as storage_mod
 import tx as tx_mod
@@ -518,6 +519,12 @@ def _peers_for_download(known_addrs, self_addr):
 
 
 
+def _gas_io(node):
+    """How the pages read other networks: the node's own settings decide the
+    Base endpoint and Relay key. Tests put a fake on the node."""
+    return getattr(node, "gas_io", None) or ChainIO(getattr(node, "settings", None))
+
+
 class _NodeSigner:
     """What the wallet routes sign through on a full node: the node itself
     builds and signs, from its own chain state (see Node.build_and_sign_tx).
@@ -634,7 +641,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     register_static_routes(app, pfx)
     register_board_pages(app, reader, pfx, _own_addr_or_hidden, csrf_token)
     register_data_api(app, reader, pfx)
-    fees_ui.register_status(app, node, pfx)
+    fees_ui.register_status(app, node, pfx, _gas_io(node))
 
     @app.context_processor
     def inject_ctx():
@@ -649,6 +656,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
             "settings": "settings", "fees": "fees", "fees_submit": "fees",
+            "fees_status": "fees",
         }.get(endpoint)
         return {"is_private": is_private,
                 "private_port": private_port,
@@ -1492,7 +1500,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
     register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
                            base=BaseSend(node))
-    fees_ui.register(app, node, local_reader_for(node), _NodeSigner(node), csrf_token)
+    fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node))
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

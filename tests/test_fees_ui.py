@@ -60,7 +60,7 @@ def app(tmp_path, monkeypatch):
     node = AskerNode(cs, keyfile, sk, pk)
     cs.state.credit(node.addr, 1000 * TICKS_PER_LAPSE)
     node.view = NodeView(cs)                  # the pages read the published view
-    monkeypatch.setattr(fees_ui, "_gas_price", lambda n, net: GAS_PRICE)
+    node.gas_io.gas_price_value = GAS_PRICE
     client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
     return type("A", (), dict(node=node, client=client, io=node.gas_io))
 
@@ -90,13 +90,13 @@ class TestPage:
             assert f'value="{n.slug}"' in html
         for a in gas.ACTIONS.values():
             assert f'value="{a.key}"' in html
-        assert "free gift from node operators" in html and "no guarantee" in html
+        assert "A free gift, as is." in html
         assert 'href="/fees"' in html
 
     def test_it_discloses_what_the_lock_does(self, app):
         html = app.client.get("/fees").get_data(as_text=True)
-        assert "10 LAPSE lock is returned if no node offers" in html
-        assert "$2.00 per request" in html
+        assert "10 LAPSE lock comes back only if no node offers" in html
+        assert "at most $2.00" in html
 
     def test_the_public_app_has_no_fees_page_but_has_the_status(self, app):
         public = api.create_app(app.node, peerpool_mod.PeerPool()).test_client()
@@ -119,7 +119,7 @@ class TestPlan:
         assert p["lock"] == fees_ui.LOCK
 
     def test_a_cheap_action_is_covered_in_full(self, app, monkeypatch):
-        monkeypatch.setattr(fees_ui, "_gas_price", lambda n, net: 10 ** 6)
+        app.io.gas_price_value = 10 ** 6
         p = self.get(app).get_json()
         assert p["covers_share"] == 1.0
 
@@ -156,6 +156,26 @@ class TestPlan:
             raise relay.RelayUnreachable("down")
         app.io.price = down
         assert self.get(app).status_code == 502
+
+
+class TestSanctioned:
+    def test_a_listed_address_is_refused_everywhere_on_the_page(self, app):
+        app.io.listed = {DEST}
+        q = dict(network="optimism", action="send", dest=DEST)
+        assert app.client.get("/api/fees/plan", query_string=q).get_json()["error"] == fees_ui.REFUSED
+        assert app.client.get("/api/fees/prepare", query_string=q).get_json()["error"] == fees_ui.REFUSED
+
+    def test_a_listed_address_cannot_be_submitted(self, app):
+        p = prepare(app)
+        sig = sign(DEST_KEY, p["message"])
+        app.io.listed = {DEST}
+        r, _ = post(app, sig, prepared=p)
+        assert fees_ui.REFUSED in follow(app, r) and app.node.mempool.all_txs() == []
+
+    def test_an_oracle_outage_does_not_block_the_page(self, app):
+        app.io.screening_down = True
+        r = app.client.get("/api/fees/plan", query_string=dict(network="optimism", action="send", dest=DEST))
+        assert r.get_json()["ok"]
 
 
 class TestPrepare:
@@ -201,7 +221,7 @@ class TestSubmit:
         req = gas.parse_request_memo(t["memo"])
         assert req["dest"] == DEST and req["target"] == p["target"]
         assert gas.verify_request_signature(req, app.node.addr, t["nonce"])
-        assert gaslock.check_lock(t)[0] and tx_mod.validate(t, app.node.cs.state)[0]
+        assert gaslock.check_lock(t, 1)[0] and tx_mod.validate(t, app.node.cs.state)[0]
 
     def test_a_signature_from_another_key_is_refused(self, app):
         p = prepare(app)

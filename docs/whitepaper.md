@@ -54,9 +54,7 @@ One kind of transaction carries a protocol-enforced minimum on top of the usual 
 
 ### Fee requests
 
-A holder of a token on another network who has none of that network's gas coin can ask the network's nodes for some. The request is an ordinary transaction that locks a few LAPSE in an unspendable escrow address for a few blocks and names the other network, a target balance and an address the sender controls (proved by a signature from that address). Nodes that will help post claims. The lock settles from chain data alone, so every node agrees: if no claim arrived within five blocks of the request it returns to the sender; if one did, the window closes one block after the first, and the lock is removed from circulation and subtracted from the minted total, so the emission curve of section 5 pays it out again to builders over time rather than losing it.
-
-Nothing pays the claimer and nothing pays the requester back for a failed delivery. That is deliberate: the chain cannot see another network, and a reward for claiming would be a reason to claim falsely. Delivery is read from the destination's own balance by whichever claimer's turn it is, in an order every node computes from the closing block's hash, so a node that fails to deliver costs the requester a few blocks, not the funds. The service is a free gift from node operators, as is.
+A request locks LAPSE in an unspendable escrow address for up to five blocks and names another network, a target balance and an address the sender controls. If no node posts a claim in that window the lock returns to the sender. If one does, the window closes a block later and the lock is subtracted from the minted total, so section 5's curve pays it out again to builders. Nobody is paid for claiming or refunded for a failed delivery: the chain cannot see another network, and a reward would invite false claims. Claimers take turns in an order derived from chain data and each reads the destination's own balance before paying.
 
 ## 5. Supply
 

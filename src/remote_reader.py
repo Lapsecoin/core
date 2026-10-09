@@ -352,6 +352,10 @@ class RemoteReader:
     def _active_proxy(self):
         return self._tor_proxy() if self._auto_tor else self.proxy
 
+    def proxy_url(self):
+        """The proxy requests go through now, or None."""
+        return self._active_proxy()
+
     # Transport
 
     def _send(self, method, base, path, params, body, headers):
@@ -520,6 +524,10 @@ class RemoteReader:
         return self._cached(key, lambda: self._get_json("/api/state", params,
                                                         names_wallet=bool(addr)),
                             fresh=fresh)
+
+    def gas_status(self, txid):
+        """Where a fee request stands, from the node (see gas_status.py)."""
+        return self._get_json(f"/api/gas/{txid}")
 
     def submit(self, tx_dict):
         resp = self._request("POST", "/api/tx/send", body=tx_dict, names_wallet=True)

@@ -10,6 +10,8 @@ import secrets
 
 from flask import jsonify, redirect, render_template, request
 
+import fees_ui
+from gas_io import ChainIO
 from remote_reader import RemoteError
 from ui_common import make_flask_app, register_static_routes
 from version import LOCAL_VERSION
@@ -17,6 +19,7 @@ from wallet_ui import (WalletSigner, register_address_page, register_board_pages
                        register_data_api, register_wallet_routes)
 
 _NAV = {"address_lookup": "address", "send": "send", "board": "board",
+        "fees": "fees", "fees_submit": "fees", "fees_status": "fees",
         "board_post": "board", "board_vote": "board", "board_delete": "board"}
 
 
@@ -25,7 +28,7 @@ def _format_bytes(n):
                                       else f"{n / 1024 ** 2:.2f} MB")
 
 
-def create_light_app(reader, wallet, port=8335):
+def create_light_app(reader, wallet, port=8335, gas_io=None):
     app = make_flask_app(__name__)
     # Per-process CSRF token, for the same reason the full node's private
     # app has one: a local, single-user, 127.0.0.1-only app with no login,
@@ -56,6 +59,7 @@ def create_light_app(reader, wallet, port=8335):
     register_address_page(app, reader, "", default_addr=lambda: wallet.addr)
     register_board_pages(app, reader, "", lambda: wallet.addr, csrf_token)
     register_wallet_routes(app, reader, WalletSigner(wallet), csrf_token)
+    fees_ui.register(app, reader, WalletSigner(wallet), csrf_token, gas_io or ChainIO(proxy=reader.proxy_url), light=True)
 
     @app.route("/")
     def home():

@@ -342,7 +342,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
     # What a send POST leaves for the page it redirects to (see forms.py).
     send_note_keys = ("alert_ok_tx", "alert_ok_verb", "alert_err", "alert_err_lines",
                       "outputs_value", "memo_value", "asset", "base_to_value",
-                      "base_amount_value")
+                      "base_amount_value", "base_network_value", "base_token_value")
 
     def _send_post():
         """Do what the send form asks, and answer with a redirect to the
@@ -351,7 +351,8 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
         forms = forms_for(app)
         result = dict(alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[],
                       outputs_value="", memo_value="", asset="lapse",
-                      base_to_value="", base_amount_value="")
+                      base_to_value="", base_amount_value="",
+                      base_network_value="base", base_token_value="")
         if not _csrf_ok():
             result["alert_err"] = "Session expired; reload the page and try again."
             return forms.done("/send", result)
@@ -404,6 +405,26 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
         note = forms.notes.take(request.args.get("note"))
         ctx.update({k: v for k, v in note.items() if k in send_note_keys})
         return render_template("send.html", **ctx)
+
+    if base is not None:
+        import evm      # the light client never gets here, so it never loads these
+        import relay
+
+        @app.route("/api/send/base/tokens", endpoint="api_send_base_tokens")
+        def api_send_base_tokens():
+            tokens = base.tokens(request.args.get("network", ""))
+            if tokens is None:
+                return jsonify(ok=False, error="Pick a network."), 400
+            return jsonify(ok=True, tokens=tokens)
+
+        @app.route("/api/send/base/preview", endpoint="api_send_base_preview")
+        def api_send_base_preview():
+            try:
+                return jsonify(ok=True, **base.preview(request.args))
+            except ValueError as e:
+                return jsonify(ok=False, error=str(e)), 400
+            except (evm.EVMError, relay.RelayError) as e:
+                return jsonify(ok=False, error=f"Could not get a quote: {e}"), 502
 
     @app.route("/api/send/fee", endpoint="api_send_fee")
     def api_send_fee():

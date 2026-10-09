@@ -400,7 +400,8 @@ class Node:
 
         if self.storage.state_exists():
             s = state_mod.State.from_snapshot(
-                *self.storage.load_state(), escrows=self.storage.load_escrows())
+                *self.storage.load_state(), escrows=self.storage.load_escrows(),
+                height=stored[-1]["height"])
             cs = ChainState.from_storage(stored, s)
         else:
             cs = ChainState.from_chain(stored)

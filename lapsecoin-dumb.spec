@@ -17,6 +17,8 @@ from PyInstaller.utils.hooks import collect_all
 nacl_datas,    nacl_binaries,    nacl_hiddenimports    = collect_all("nacl")
 cffi_datas,    cffi_binaries,    cffi_hiddenimports    = collect_all("cffi")
 oqs_datas,     oqs_binaries,     oqs_hiddenimports     = collect_all("oqs")
+# The Fees page checks an EVM address signature and an address checksum.
+coincurve_datas, coincurve_binaries, coincurve_hiddenimports = collect_all("coincurve")
 
 _search_roots = [
     "/usr/local/lib",
@@ -71,7 +73,7 @@ if sys.platform == "win32":
 
 
 _all_binaries = [
-    *nacl_binaries, *cffi_binaries, *oqs_binaries,
+    *nacl_binaries, *cffi_binaries, *oqs_binaries, *coincurve_binaries,
     *_liboqs_bins, *_msvc_dlls,
 ]
 _all_datas = [
@@ -80,11 +82,11 @@ _all_datas = [
     ("lapsecoin.svg",       "."),
     ("templates_html",     "templates_html"),
     ("vendor/markdown-toolbar-element.js", "vendor"),
-    *nacl_datas, *cffi_datas, *oqs_datas,
+    *nacl_datas, *cffi_datas, *oqs_datas, *coincurve_datas,
 ]
 _all_hiddenimports = [
-    *nacl_hiddenimports, *cffi_hiddenimports, *oqs_hiddenimports,
-    "oqs", "_cffi_backend",
+    *nacl_hiddenimports, *cffi_hiddenimports, *oqs_hiddenimports, *coincurve_hiddenimports,
+    "oqs", "_cffi_backend", "coincurve", "Crypto.Hash.keccak",
     "flask", "werkzeug", "jinja2", "jinja2.ext",
     "waitress", "waitress.server", "waitress.task", "waitress.channel",
     # Only used when --proxy names a socks5 proxy (Tor), reached by requests

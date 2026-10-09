@@ -17,6 +17,7 @@ import base64
 import logging
 import re
 import secrets
+import time
 
 from flask import jsonify, redirect, render_template, request
 
@@ -25,17 +26,14 @@ import evm
 import forms as forms_mod
 import gas
 import gas_status
-import gas_worker
-import gaslock
 import relay
-import settings as settings_mod
 import wallet_ui
 
 log = logging.getLogger("ec.fees")
 
 # What the lock costs, shown to the requester. The same constant the nodes
 # use to decide whether a request is worth serving.
-LOCK = gas_worker.MIN_SERVED_LOCK
+LOCK = gas.MIN_SERVED_LOCK
 
 # A target far from what the page would work out now is not a stale quote,
 # it is a different request.
@@ -51,23 +49,33 @@ def action_options():
     return [dict(key=a.key, label=a.label) for a in gas.ACTIONS.values()]
 
 
-def _gas_price(node, net):
-    if net.vm == "svm":
-        return 0
-    url = (node.settings.get(settings_mod.BASE_RPC_URL).strip() or evm.DEFAULT_BASE_RPC) \
-        if net.slug == "base" else net.rpc
-    return evm.gas_price_wei(url)
+class Refused(Exception):
+    """The destination is on a sanctions list."""
 
 
-def make_plan(node, io, net, action, dest):
+def make_plan(io, net, action, dest):
     """The numbers the page shows, from live data. Raises the usual outside
     errors; the routes turn them into a message."""
+    if dest and _listed(io, net, dest):
+        raise Refused()
     price = io.price(net)
     balance = io.dest_balance(net, dest) if dest else 0
-    p = gas.plan(net, action, gas_price=_gas_price(node, net), price_usd=price, balance=balance)
+    p = gas.plan(net, action, gas_price=io.gas_price(net), price_usd=price, balance=balance)
     p.update(price_usd=price, balance=balance, symbol=net.symbol, decimals=net.decimals,
              floor_usd=gas.FLOOR_USD, lock=LOCK)
     return p
+
+
+def _listed(io, net, dest):
+    """Sanctioned, as far as it can be told. An oracle that cannot be asked
+    does not block the page: every node screens again before it helps."""
+    try:
+        return io.sanctioned(net, dest)
+    except (evm.EVMError, relay.RelayError):
+        return False
+
+
+REFUSED = "Nodes cannot send to that address."
 
 
 def decode_signature(net, raw):
@@ -87,9 +95,12 @@ def _problem(message, status=400):
     return jsonify(ok=False, error=message), status
 
 
-def register(app, node, reader, signer, csrf_token, io=None):
-    """The private app's Fees routes. `io` is injectable for tests."""
-    io = io or getattr(node, "gas_io", None) or gas_worker.LiveIO(node)
+def register(app, reader, signer, csrf_token, io, light=False):
+    """The Fees routes. `reader` and `signer` are the full node's own or the
+    light client's (wallet_ui.WalletSigner); `io` reads the other networks
+    (gas_io.ChainIO or a fake). In the light client the request's status comes
+    from the node it talks to."""
+    after = "/fees/{}" if light else "/explorer/tx/{}"
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
@@ -123,7 +134,9 @@ def register(app, node, reader, signer, csrf_token, io=None):
         if err:
             return _problem(err)
         try:
-            return jsonify(ok=True, **make_plan(node, io, net, action, dest))
+            return jsonify(ok=True, **make_plan(io, net, action, dest))
+        except Refused:
+            return _problem(REFUSED)
         except (evm.EVMError, relay.RelayError) as e:
             log.info("[fees] plan failed: %s", e)
             return _problem("Could not read the network just now. Try again in a moment.", 502)
@@ -136,7 +149,9 @@ def register(app, node, reader, signer, csrf_token, io=None):
         if err or not dest:
             return _problem(err or "Enter the address to fund.")
         try:
-            plan = make_plan(node, io, net, action, dest)
+            plan = make_plan(io, net, action, dest)
+        except Refused:
+            return _problem(REFUSED)
         except (evm.EVMError, relay.RelayError):
             return _problem("Could not read the network just now. Try again in a moment.", 502)
         if not plan["needs_help"]:
@@ -169,9 +184,11 @@ def register(app, node, reader, signer, csrf_token, io=None):
             return back("Sign the message with the wallet that holds that address first.")
         try:
             target = int(form["target"])
-            plan = make_plan(node, io, net, action, dest)
+            plan = make_plan(io, net, action, dest)
         except ValueError:
             return back("Prepare the request again.")
+        except Refused:
+            return back(REFUSED)
         except (evm.EVMError, relay.RelayError):
             return back("Could not read the network just now. Try again in a moment.")
         lo, hi = TARGET_TOLERANCE
@@ -195,17 +212,42 @@ def register(app, node, reader, signer, csrf_token, io=None):
             return back(str(e) or "That is not this node's passphrase.")
         if not ok:
             return back(f"Error: {result}")
-        return redirect(f"/explorer/tx/{result}", code=303)
+        return redirect(after.format(result), code=303)
+
+    @app.route("/fees/<txid>", endpoint="fees_status")
+    def fees_status(txid):
+        if not re.fullmatch(r"[0-9a-f]{64}", txid):
+            return render_template("error.html", title="Not found",
+                                   message="Not a transaction hash."), 404
+        return render_template("fees_status.html", title="Fee request", tx_hash=txid)
+
+    if light:
+        @app.route("/api/gas/<txid>", endpoint="api_gas_status")
+        def api_gas_status(txid):
+            return jsonify(reader.gas_status(txid))
 
 
-def register_status(app, node, pfx, io=None):
+STATUS_TTL = 15
+_status_cache = {}
+
+
+def register_status(app, node, pfx, io):
     """The live status of a request, on both apps: it reads the chain and the
-    destination's own balance, nothing private."""
-    io = io or getattr(node, "gas_io", None) or gas_worker.LiveIO(node)
+    destination's own balance, nothing private. Light clients ask for it
+    here, so answers are kept a few seconds rather than costing a round of
+    outside calls per poll."""
 
     @app.route("/api/gas/<txid>", endpoint=pfx + "api_gas_status")
     def api_gas_status(txid):
-        return jsonify(status_for(node, io, txid))
+        key = (id(node), txid, node.view.height)
+        hit = _status_cache.get(key)
+        if hit and time.monotonic() - hit[0] < STATUS_TTL:
+            return jsonify(hit[1])
+        st = status_for(node, io, txid)
+        if len(_status_cache) > 500:
+            _status_cache.clear()
+        _status_cache[key] = (time.monotonic(), st)
+        return jsonify(st)
 
 
 def status_for(node, io, txid):

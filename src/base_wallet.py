@@ -18,6 +18,7 @@ import nacl.secret
 import nacl.utils
 
 import evm
+import relay
 
 log = logging.getLogger("ec.base_wallet")
 
@@ -115,5 +116,30 @@ def send_eth(path: str, kek: bytes, rpc_url: str, to: str, value_wei: int):
             max_priority_fee_per_gas=tip)
         evm.send_raw_transaction(rpc_url, raw)
         return evm.transaction_hash(raw)
+    finally:
+        del secret
+
+
+def send_exit(path: str, kek: bytes, rpc_url: str, net, token_address: str,
+              to: str, value_wei: int, api_key: str = ""):
+    """Spend `value_wei` of the wallet's ETH on Base to deliver `token_address`
+    on `net` to `to`, through Relay. Returns the Base transaction hash.
+    The quote is checked (relay.check_exit_quote) before anything is signed."""
+    if value_wei <= 0:
+        raise ValueError("Enter an amount above zero.")
+    secret = decrypt_secret(path, kek)
+    try:
+        sender = evm.address_from_secret(secret)
+        max_fee, _tip = evm.get_fee_params(rpc_url)
+        balance = evm.get_balance_wei(rpc_url, sender)
+        headroom = relay.MAX_DEPOSIT_GAS * 2 * max_fee
+        if value_wei + headroom > balance:
+            raise ValueError(
+                f"That is more than this wallet can send; {evm.wei_to_str(balance)} ETH "
+                f"is held and the network fee needs up to {evm.wei_to_str(headroom, 8)} ETH.")
+        q = relay.quote_exit(net, token_address, to, value_wei, sender, api_key)
+        return relay.deposit(q, secret, rpc_url)
+    except relay.RelayError as e:
+        raise ValueError(str(e)) from e
     finally:
         del secret

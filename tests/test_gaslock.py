@@ -128,7 +128,7 @@ class TestValidity:
 
     def test_the_escrow_address_can_never_send(self):
         t = {"from": ESC, "outputs": [{"to": address(1), "amount": 1}], "nonce": 1, "fee": 1}
-        assert gaslock.check_lock(t) == (False, "the escrow address can never be a sender")
+        assert gaslock.check_lock(t, 1) == (False, "the escrow address can never be a sender")
         ok, err = tx_mod.validate(t, Chain().state)
         assert not ok
 
@@ -357,3 +357,54 @@ class TestBlockValidation:
         ok, err = block_mod._apply_transactions(blk(bad), c.state.snapshot())
         assert not ok and "escrow" in err
         assert block_mod._apply_transactions(blk(good), c.state.snapshot()) == (True, None)
+
+
+class TestActivation:
+    """Before the activation height the chain behaves as it always has."""
+
+    def _at(self, monkeypatch, height):
+        import params
+        monkeypatch.setattr(params, "GAS_LOCK_ACTIVATION_HEIGHT", height)
+
+    def test_a_payment_to_escrow_before_activation_is_an_ordinary_transfer(self, monkeypatch):
+        self._at(monkeypatch, 10)
+        c = Chain()
+        bad = make_tx(1, 0, 0, c.state, fee=FEE, memo="no request memo",
+                      outputs_override=[{"to": ESC, "amount": 5}])
+        assert tx_mod.validate(bad, c.state)[0]               # fine, as on the old chain
+        c.mine([bad])
+        assert c.state.get_balance(ESC) == 5 and c.state.escrows == {}
+
+    def test_nothing_is_tracked_or_settled_before_activation(self, monkeypatch):
+        self._at(monkeypatch, 10)
+        c = Chain()
+        c.ask()                                               # a proper request, too early
+        c.mine_until(8)
+        assert c.state.escrows == {} and c.state.get_balance(ESC) == LOCK
+        assert c.state.get_balance(address(1)) == START - LOCK - FEE     # never refunded
+
+    def test_the_first_block_that_enforces_it_is_the_activation_height(self, monkeypatch):
+        self._at(monkeypatch, 5)
+        c = Chain()
+        c.mine_until(3)
+        bad = make_tx(1, 0, 0, c.state, fee=FEE, memo="nope",
+                      outputs_override=[{"to": ESC, "amount": LOCK}])
+        # state is at height 3, so this would join block 4: still the old rules
+        assert tx_mod.validate(bad, c.state)[0]
+        c.mine_until(4)
+        # now it would join block 5: the lock rules apply
+        ok, err = tx_mod.validate(bad, c.state)
+        assert not ok and "escrow" in err
+
+    def test_a_request_in_the_first_enforced_block_is_locked(self, monkeypatch):
+        self._at(monkeypatch, 5)
+        c = Chain()
+        c.mine_until(4)
+        c.ask()                                               # lands in block 5
+        assert c.cs.height == 5 and c.escrow is not None
+
+    def test_the_default_is_ahead_of_the_chain_at_the_time_it_was_chosen(self):
+        import importlib
+        import params
+        importlib.reload(params)
+        assert params.GAS_LOCK_ACTIVATION_HEIGHT > 25_644 + 5_000

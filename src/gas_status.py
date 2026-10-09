@@ -7,8 +7,7 @@ paid: the page shows the destination's own balance.
 """
 
 import gas
-import gas_worker
-import gaslock
+import gas_track
 
 # What the page tells people when it estimates waiting time. A rough average
 # (blocks are at least 90 seconds apart), never used for any decision.
@@ -28,7 +27,7 @@ def request_status(chain, tip, txid, found_height, dest_funded, claimer_funded=l
     claimer_funded(base_addr): whether a claimer's Base address can pay; a
     node that cannot is not in the order, so it is not shown as one.
     """
-    tracker = gas_worker.Tracker()
+    tracker = gas_track.Tracker()
     for h in range(found_height, tip + 1):
         tracker.ingest(chain[h])
     r = tracker.requests.get(txid)
@@ -45,13 +44,14 @@ def request_status(chain, tip, txid, found_height, dest_funded, claimer_funded=l
     }
     if tip < r.close:
         out.update(stage="collecting", blocks_left=r.close - tip,
-                   eta_seconds=(r.close - tip) * BLOCK_SECONDS)
+                   eta_seconds=(r.close - tip) * BLOCK_SECONDS,
+                   closes_early=r.first_claim is not None)
         return out
     if r.first_claim is None:
         out.update(stage="unclaimed", lock_outcome="refunded")
         return out
     out["lock_outcome"] = "recycled"
-    order = gas_worker.claimers_in_order(r, chain[r.close]["hash"], claimer_funded)
+    order = gas_track.claimers_in_order(r, chain[r.close]["hash"], claimer_funded)
     out["order"] = [{"rank": i + 1, "id": short(a)} for i, a in enumerate(order)]
     if not order:
         out.update(stage="no_eligible")
@@ -67,7 +67,7 @@ def request_status(chain, tip, txid, found_height, dest_funded, claimer_funded=l
     idx = max(0, started // gas.RANK_SLOT_BLOCKS)
     slot_end = gas.turn_start(r.close, idx + 1)
     out.update(stage="paying", current={"rank": idx + 1, "id": short(order[idx])},
-               blocks_left=max(slot_end - tip, 0),
+               slot_end=slot_end, blocks_left=max(slot_end - tip, 0),
                eta_seconds=max(slot_end - tip, 0) * BLOCK_SECONDS,
                ranks_left=len(order) - idx - 1)
     return out

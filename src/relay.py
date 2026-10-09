@@ -84,38 +84,47 @@ def quote(net: gas.Network, recipient: str, amount: int, sender: str, api_key=""
     return body
 
 
+def _common(q, net, token_address, recipient, sender):
+    """The checks every quote must pass before the node signs it, whatever
+    it is for: the right sender, chains, asset and recipient, paid for in ETH
+    on Base with a single plain deposit whose value is its stated cost.
+    Returns (details, transaction)."""
+    d = q["details"]
+    out, cin = d["currencyOut"], d["currencyIn"]
+    if out["currency"]["chainId"] != net.chain_id:
+        raise RelayError("quote pays out on the wrong chain")
+    if out["currency"]["address"].lower() != token_address.lower():
+        raise RelayError("quote pays out the wrong asset")
+    if not gas.same_address(net, d["recipient"], recipient):
+        raise RelayError("quote pays someone else")
+    if d["sender"].lower() != sender.lower():
+        raise RelayError("quote is for another sender")
+    if cin["currency"]["chainId"] != evm.BASE_CHAIN_ID or \
+            cin["currency"]["address"].lower() != gas.NETWORKS["base"].currency:
+        raise RelayError("quote is not paid in ETH on Base")
+    items = [i for s in q["steps"] for i in s.get("items", [])]
+    if len(q["steps"]) != 1 or len(items) != 1 or q["steps"][0].get("kind") != "transaction":
+        raise RelayError("quote needs more than one deposit")
+    tx = items[0]["data"]
+    if tx["chainId"] != evm.BASE_CHAIN_ID or tx["from"].lower() != sender.lower():
+        raise RelayError("quote's transaction is not from this wallet on Base")
+    if int(tx["value"]) != int(cin["amount"]):
+        raise RelayError("quote's transaction value does not match its cost")
+    if int(tx.get("gas", 0)) > MAX_DEPOSIT_GAS:
+        raise RelayError("quote's transaction asks for too much gas")
+    if not evm.is_valid_address(tx["to"]):
+        raise RelayError("quote's transaction has no destination")
+    return d, tx
+
+
 def check_quote(q, net, recipient, amount, sender):
     """Raise RelayError unless q is exactly the payout that was asked for and
     costs no more than a node's ceiling. Returns (transaction, cost_usd)."""
     try:
-        d = q["details"]
-        out, cin = d["currencyOut"], d["currencyIn"]
-        if out["currency"]["chainId"] != net.chain_id:
-            raise RelayError("quote pays out on the wrong chain")
-        if out["currency"]["address"].lower() != net.currency.lower():
-            raise RelayError("quote pays out the wrong asset")
-        if int(out["amount"]) < amount:
+        d, tx = _common(q, net, net.currency, recipient, sender)
+        if int(d["currencyOut"]["amount"]) < amount:
             raise RelayError("quote pays out less than was asked")
-        if not gas.same_address(net, d["recipient"], recipient):
-            raise RelayError("quote pays someone else")
-        if d["sender"].lower() != sender.lower():
-            raise RelayError("quote is for another sender")
-        if cin["currency"]["chainId"] != evm.BASE_CHAIN_ID or \
-                cin["currency"]["address"].lower() != gas.NETWORKS["base"].currency:
-            raise RelayError("quote is not paid in ETH on Base")
-        cost_usd = float(cin["amountUsd"])
-        items = [i for s in q["steps"] for i in s.get("items", [])]
-        if len(q["steps"]) != 1 or len(items) != 1 or q["steps"][0].get("kind") != "transaction":
-            raise RelayError("quote needs more than one deposit")
-        tx = items[0]["data"]
-        if tx["chainId"] != evm.BASE_CHAIN_ID or tx["from"].lower() != sender.lower():
-            raise RelayError("quote's transaction is not from this wallet on Base")
-        if int(tx["value"]) != int(cin["amount"]):
-            raise RelayError("quote's transaction value does not match its cost")
-        if int(tx.get("gas", 0)) > MAX_DEPOSIT_GAS:
-            raise RelayError("quote's transaction asks for too much gas")
-        if not evm.is_valid_address(tx["to"]):
-            raise RelayError("quote's transaction has no destination")
+        cost_usd = float(d["currencyIn"]["amountUsd"])
     except RelayError:
         raise
     except (KeyError, TypeError, ValueError, AttributeError) as e:
@@ -124,6 +133,76 @@ def check_quote(q, net, recipient, amount, sender):
     if cost_usd > cap:
         raise RelayError(f"quote costs ${cost_usd:.2f}, above the ${cap:.2f} ceiling")
     return tx, cost_usd
+
+
+# What a person sending their own ETH away may lose to Relay's fees and
+# price impact before the node refuses the quote as something gone wrong.
+MAX_EXIT_IMPACT_PERCENT = 10.0
+
+_tokens_cache = {"at": 0.0, "data": {}}
+TOKENS_TTL = 3600
+
+
+def tokens(api_key=""):
+    """{chain_id: [{"symbol", "address", "decimals"}]}: the tokens Relay
+    features on each chain (the gas coin first), fetched at most hourly."""
+    import time
+    now = time.time()
+    if _tokens_cache["data"] and now - _tokens_cache["at"] < TOKENS_TTL:
+        return _tokens_cache["data"]
+    body = _call("GET", "/chains", api_key)
+    out = {}
+    try:
+        for c in body["chains"]:
+            if c.get("disabled"):
+                continue
+            out[c["id"]] = [{"symbol": t["symbol"], "address": t["address"],
+                             "decimals": t["decimals"]}
+                            for t in c.get("featuredTokens", [])]
+    except (KeyError, TypeError) as e:
+        raise RelayError("chains: unexpected reply") from e
+    _tokens_cache.update(at=now, data=out)
+    return out
+
+
+def quote_exit(net, token_address, recipient, amount, sender, api_key=""):
+    """A quote for spending exactly `amount` wei of the node's ETH on Base to
+    receive `token_address` on `net` at `recipient`. Checked before it is
+    returned; see check_exit_quote."""
+    body = _call("POST", "/quote/v2", api_key, json={
+        "user": sender, "originChainId": evm.BASE_CHAIN_ID,
+        "originCurrency": gas.NETWORKS["base"].currency,
+        "destinationChainId": net.chain_id, "destinationCurrency": token_address,
+        "tradeType": "EXACT_INPUT", "amount": str(amount), "recipient": recipient})
+    check_exit_quote(body, net, token_address, recipient, amount, sender)
+    return body
+
+
+def check_exit_quote(q, net, token_address, recipient, amount, sender):
+    """Raise RelayError unless q spends exactly `amount` and pays the
+    recipient what it says. Returns the summary shown before sending:
+    {"receive", "minimum", "receive_usd", "cost_usd", "impact_percent"}."""
+    try:
+        d, tx = _common(q, net, token_address, recipient, sender)
+        out, cin = d["currencyOut"], d["currencyIn"]
+        if int(cin["amount"]) != amount:
+            raise RelayError("quote spends a different amount than asked")
+        receive, minimum = int(out["amount"]), int(out["minimumAmount"])
+        if receive <= 0 or minimum <= 0:
+            raise RelayError("quote pays out nothing")
+        impact = -float(d["totalImpact"]["percent"])
+        summary = {"receive": receive, "minimum": minimum,
+                   "receive_usd": float(out["amountUsd"]),
+                   "cost_usd": float(cin["amountUsd"]), "impact_percent": impact,
+                   "decimals": out["currency"]["decimals"],
+                   "symbol": out["currency"]["symbol"]}
+    except RelayError:
+        raise
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        raise RelayError(f"quote is not in the expected shape ({e!r})") from e
+    if impact > MAX_EXIT_IMPACT_PERCENT:
+        raise RelayError(f"quote loses {impact:.1f}% to fees and price impact")
+    return summary
 
 
 def transaction_of(q):

@@ -179,22 +179,9 @@ Node-local settings live on the private wallet UI under **Settings**, and each c
 
 ## Fee requests
 
-Holding a token on another chain with none of that chain's own coin to move it is a dead end. Fee requests get you out: you pay a few LAPSE, and a node operator sends you a little gas on that chain.
+Holding a token on a chain where you have none of its gas coin? Open **Fees**, pick the network and what you want to do, sign a message with the wallet that holds the address, and pay a 10 LAPSE lock. A node operator sends you the gas. The lock is returned if no node offers; otherwise it is recycled into the emission pool, whether or not the gas arrives. It is a free gift from operators, as is.
 
-**As a user**, open **Fees** in the wallet UI. Pick the network (Ethereum, Base, Optimism, Arbitrum, Linea, BNB Chain, Polygon, Avalanche or Solana) and what you want to do there. The page reads the chain's live gas price, shows what that needs, what nodes will send (at most $2 each) and how much of your need that covers. Sign a message with the wallet that holds the address, which proves it is yours, then pay. The page then follows your request: how many nodes offered, which one is paying, and when the gas lands.
-
-The cost is a 10 LAPSE lock plus the usual network fee. The lock is held for a few blocks:
-
-- if no node offers to help, it is returned;
-- if one does, it is recycled (taken out of circulation and returned to the emission pool, so builders are paid it over time) whether or not the gas arrives, because the chain cannot see other networks to tell. This is a free gift from node operators, as is, with no guarantee.
-
-**As a node operator**, nodes hold ETH on Base in a gas wallet created at first start, next to the node key. The **Send** page shows its address and balance, and lets you send ETH out of it. Fee requests are off by default. Fund the wallet (a node only offers when it holds enough to cover its $2 ceiling), then switch **Pay fee requests** on under **Settings**. Payouts go through [Relay](https://relay.link): you may want a free Relay API key from its dashboard (**Relay API key** setting), since Relay is moving to requiring one. A node never spends more than $2 on one request, payout and Relay's overhead together.
-
-How a request is served, step by step:
-
-1. The request confirms in block *h*. Nodes that will help post a claim within 5 blocks; the first claim closes the window one block after it.
-2. The claimers whose Base address holds enough are put in an order every node derives from chain data alone.
-3. The first pays, checking the destination's own balance first. If the gas has not arrived after 2 blocks the next one tries, and so on, up to 3. A node whose turn comes after the destination is funded does nothing.
+To serve requests, fund the Base address shown on **Send** (a node needs about $2 of ETH) and switch on **Pay fee requests** in Settings. A request never costs a node more than $2.
 
 ## Exchanges
 

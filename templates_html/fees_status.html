@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Fee request</h2>
+{% set status_url = "/api/gas/" ~ tx_hash %}
+{% include "gas_panel.html" %}
+<p class="stat-sub hash">{{ tx_hash }}</p>
+{% endblock %}

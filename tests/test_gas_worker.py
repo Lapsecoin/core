@@ -13,6 +13,7 @@ import base_wallet
 import crypto
 import evm
 import gas
+import gas_io
 import gas_worker
 import gaslock
 import relay
@@ -52,9 +53,15 @@ class FakeIO:
         self.claims = []
         self.fail_pay = None
         self.claim_ok = True
+        self.gas_price_value = 10 ** 9
+        self.listed = set()              # destination addresses on a sanctions list
+        self.screening_down = False
 
     def price(self, net):
         return PRICE
+
+    def gas_price(self, net):
+        return self.gas_price_value
 
     def base_balance(self):
         return self.base
@@ -64,6 +71,11 @@ class FakeIO:
 
     def dest_balance(self, net, addr):
         return self.dest
+
+    def sanctioned(self, net, addr):
+        if self.screening_down:
+            raise evm.EVMUnreachable("oracle down")
+        return addr in self.listed
 
     def claim(self, txid):
         self.claims.append(txid)
@@ -432,7 +444,50 @@ class TestPaying:
         assert txid not in w.worker.tracker.requests
 
 
+class TestSanctions:
+    def test_a_listed_destination_is_not_claimed(self, w):
+        w.io.listed = {DEST}
+        w.request()
+        w.step()
+        assert w.io.claims == []
+
+    def test_it_will_not_claim_when_it_cannot_screen(self, w):
+        w.io.screening_down = True
+        w.request()
+        w.step()
+        assert w.io.claims == []
+
+    def test_a_destination_listed_after_the_claim_is_not_paid(self, w):
+        txid = settled_world(w, [ME])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        w.mine_until(r.close + 1)
+        w.io.listed = {DEST}
+        w.step()
+        assert w.io.paid == [] and w.done()[txid]["state"] == "refused"
+
+    def test_an_oracle_outage_at_payment_time_retries_instead_of_giving_up(self, w):
+        txid = settled_world(w, [ME])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        w.mine_until(r.close + 1)
+        w.io.screening_down = True
+        w.step()
+        assert w.io.paid == [] and txid not in w.done()
+        w.io.screening_down = False
+        w.mine(); w.step()
+        assert len(w.io.paid) == 1
+
+
 class TestLiveIO:
+    def test_only_evm_destinations_are_screened(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(gas_io.sanctions, "is_sanctioned", lambda a: calls.append(a) or True)
+        io = gas_worker.LiveIO(SimpleNamespace(settings=None))
+        assert io.sanctioned(gas.NETWORKS["optimism"], DEST) is True
+        assert io.sanctioned(gas.NETWORKS["solana"], "DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK") is False
+        assert calls == [DEST]
+
     def test_dest_balance_reads_solana_with_its_own_call(self, monkeypatch):
         calls = []
         monkeypatch.setattr(evm, "rpc", lambda url, m, p=None: calls.append((url, m, p)) or {"value": 7})

@@ -24,6 +24,7 @@ block after the first claim.
 """
 
 import crypto
+import params
 import tx as tx_mod
 from params import TICKS_PER_LAPSE
 
@@ -39,11 +40,19 @@ def escrow_outputs(tx_dict):
     return [o for o in tx_dict.get("outputs", []) if o.get("to") == esc]
 
 
-def check_lock(tx_dict):
+def active(height):
+    """Whether the lock rules apply to a block at this height."""
+    return height >= params.GAS_LOCK_ACTIVATION_HEIGHT
+
+
+def check_lock(tx_dict, next_height):
     """Consensus validity of a transaction's lock, or (True, None) when it
-    has none. Structure only: whether the network, target and addresses in
-    the memo make sense is node policy, because the chain has no business
-    deciding which networks a node may pay on."""
+    has none. `next_height` is the height of the block it would go into.
+    Structure only: whether the network, target and addresses in the memo
+    make sense is node policy, because the chain has no business deciding
+    which networks a node may pay on."""
+    if not active(next_height):
+        return True, None
     if tx_dict.get("from") == crypto.escrow_address():
         return False, "the escrow address can never be a sender"
     outs = escrow_outputs(tx_dict)
@@ -84,6 +93,8 @@ def process_block(state, blk):
     transactions. Order matters and is fixed: claims for locks from earlier
     blocks first, then this block's new requests, then settlement."""
     height = blk["height"]
+    if not active(height):
+        return
     txs = [t for t in blk.get("transactions", []) if isinstance(t, dict)]
 
     for t in txs:
