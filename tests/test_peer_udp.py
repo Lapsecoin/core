@@ -13,6 +13,9 @@ import socket
 import sys
 import threading
 import time
+
+import pytest
+
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -523,6 +526,73 @@ def test_our_own_ping_advertises_the_protocol():
     assert peer_udp._protocol_ok({"proto": peer_udp.PROTOCOL_VERSION})
     assert not peer_udp._protocol_ok({})
     assert not peer_udp._protocol_ok({"proto": "nonsense"})
+
+
+class TestAutomaticProtocolFloor:
+    """After the activation height a node refuses peers on an older major
+    version by itself; nothing is raised by hand when the first digit moves."""
+
+    ACT = 1000
+
+    @pytest.fixture(autouse=True)
+    def activation(self, monkeypatch):
+        monkeypatch.setattr(peer_udp.params, "GAS_LOCK_ACTIVATION_HEIGHT", self.ACT)
+
+    def _on(self, monkeypatch, version):
+        monkeypatch.setattr(peer_udp, "PROTOCOL_VERSION",
+                            peer_udp._protocol_version_from(version, peer_udp.MIN_PROTOCOL_VERSION))
+
+    def test_before_activation_the_floor_is_the_manual_one(self, monkeypatch):
+        self._on(monkeypatch, "1.0.0")
+        assert peer_udp.protocol_floor(0) == peer_udp.protocol_floor(self.ACT - 1) == peer_udp.MIN_PROTOCOL_VERSION
+
+    def test_from_activation_it_is_this_releases_major(self, monkeypatch):
+        self._on(monkeypatch, "1.0.0")
+        assert peer_udp.protocol_floor(self.ACT) == 1000
+        assert peer_udp.protocol_floor(self.ACT + 50_000) == 1000
+
+    def test_a_later_minor_does_not_raise_it(self, monkeypatch):
+        self._on(monkeypatch, "1.7.3")
+        assert peer_udp.PROTOCOL_VERSION == 1007 and peer_udp.protocol_floor(self.ACT) == 1000
+
+    def test_the_next_major_raises_it_with_no_edit(self, monkeypatch):
+        self._on(monkeypatch, "2.0.0")
+        assert peer_udp.protocol_floor(self.ACT) == 2000
+
+    def test_a_release_still_on_major_zero_is_unaffected(self, monkeypatch):
+        self._on(monkeypatch, "0.8.18")
+        assert peer_udp.protocol_floor(self.ACT + 5) == peer_udp.MIN_PROTOCOL_VERSION
+
+    def test_the_manual_floor_still_wins_when_it_is_higher(self, monkeypatch):
+        self._on(monkeypatch, "1.0.0")
+        monkeypatch.setattr(peer_udp, "MIN_PROTOCOL_VERSION", 5000)
+        assert peer_udp.protocol_floor(self.ACT) == 5000
+
+    def test_an_old_major_peer_is_refused_only_once_the_chain_is_past_activation(self, monkeypatch):
+        self._on(monkeypatch, "1.0.0")
+        assert peer_udp._protocol_ok({"proto": 8}, self.ACT - 1)
+        assert not peer_udp._protocol_ok({"proto": 8}, self.ACT)
+        assert peer_udp._protocol_ok({"proto": 1000}, self.ACT)
+        assert peer_udp._protocol_ok({"proto": 1042}, self.ACT)
+        assert not peer_udp._protocol_ok({}, self.ACT)
+
+    def test_the_handshake_follows_our_own_height(self, monkeypatch):
+        self._on(monkeypatch, "1.0.0")
+        old_peer = {"genesis": None, "proto": 8}
+        for height, answered in ((self.ACT - 1, True), (self.ACT, False)):
+            udp = _make_transport(MagicMock())
+            udp._send_one = MagicMock()
+            udp.set_tip_provider(lambda h=height: (h, "ab" * 32, "1.0.0", 0))
+            old_peer["genesis"] = udp.genesis_hash
+            udp._dispatch(peer_udp.MT_PING, 1, dict(old_peer), ("9.9.9.9", 8333))
+            assert (udp._send_one.call_count == 1) is answered, height
+
+    def test_a_node_that_does_not_know_its_height_yet_uses_the_manual_floor(self, monkeypatch):
+        self._on(monkeypatch, "1.0.0")
+        udp = _make_transport(MagicMock())
+        assert udp._tip_height() == 0
+        udp.set_tip_provider(lambda: 1 / 0)
+        assert udp._tip_height() == 0
 
 
 class TestProtocolVersionDerivation:

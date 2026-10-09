@@ -79,6 +79,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import msgpack
 
+import params
 from params import BLOCK_SIZE_LIMIT
 from version import LOCAL_VERSION
 
@@ -171,6 +172,24 @@ def _protocol_version_from(version_string, floor):
         return floor
 
 PROTOCOL_VERSION = _protocol_version_from(LOCAL_VERSION, MIN_PROTOCOL_VERSION)
+
+
+def protocol_floor(height: int) -> int:
+    """The lowest protocol a peer may report, with the chain at `height`.
+
+    MIN_PROTOCOL_VERSION is still the manual floor for a wire change. On top
+    of it, once the chain reaches params.GAS_LOCK_ACTIVATION_HEIGHT a peer
+    must be on this release's major version or later: a change to the
+    consensus rules that took effect at that height cannot be followed by a
+    node on an older major, so nothing has to be raised by hand when the
+    first digit of VERSION moves. Below that height, and for a release still
+    on major 0, the floor is the manual one, so history can be synced from
+    anyone.
+    """
+    floor = MIN_PROTOCOL_VERSION
+    if height >= params.GAS_LOCK_ACTIVATION_HEIGHT:
+        floor = max(floor, PROTOCOL_VERSION // 1000 * 1000)
+    return floor
 
 MAX_CHUNK_SIZE   = 1400   # bytes, safe below MTU
 RECV_TIMEOUT     = 2.0    # seconds select/recvfrom timeout
@@ -700,14 +719,15 @@ def probe_lan_ports(genesis_hash: str, wait: float = 1.5,
     return found
 
 
-def _protocol_ok(data: dict) -> bool:
-    """Whether a handshake came from a peer we can actually talk to.
+def _protocol_ok(data: dict, height: int = 0) -> bool:
+    """Whether a handshake came from a peer we can actually talk to, with
+    our chain at `height` (see protocol_floor).
 
     A peer too old to carry the field at all reads as 0, which is the
     correct answer for it: absent means it predates the floor.
     """
     try:
-        return int(data.get("proto", 0)) >= MIN_PROTOCOL_VERSION
+        return int(data.get("proto", 0)) >= protocol_floor(height)
     except (TypeError, ValueError):
         return False
 
@@ -1442,9 +1462,10 @@ class UDPTransport:
         if msg_type == MT_PING:
             peer_genesis = data.get("genesis")
             if peer_genesis == self.genesis_hash:
-                if not _protocol_ok(data):
+                if not _protocol_ok(data, self._tip_height()):
                     log.debug("[udp] refused %s: protocol %s below floor %d",
-                              sender_addr, data.get("proto", 0), MIN_PROTOCOL_VERSION)
+                              sender_addr, data.get("proto", 0),
+                              protocol_floor(self._tip_height()))
                     return
                 if data.get("iid") == self._pool.instance_id:
                     # Our own PING looped back to us (a self-added
@@ -1487,9 +1508,10 @@ class UDPTransport:
                     self._pool.add(sender_addr, allow_private=True)
 
         elif msg_type == MT_PONG:
-            if not _protocol_ok(data):
+            if not _protocol_ok(data, self._tip_height()):
                 log.debug("[udp] ignoring PONG from %s: protocol %s below floor %d",
-                          sender_addr, data.get("proto", 0), MIN_PROTOCOL_VERSION)
+                          sender_addr, data.get("proto", 0),
+                          protocol_floor(self._tip_height()))
                 return
             if data.get("iid") == self._pool.instance_id:
                 self._pool.mark_self(sender_addr)
@@ -1848,6 +1870,13 @@ class UDPTransport:
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""
         self._get_chain_fn = fn
+
+    def _tip_height(self) -> int:
+        """Our chain's height, for the protocol floor; 0 before it is known."""
+        try:
+            return int(self._get_tip_fn()[0]) if self._get_tip_fn else 0
+        except Exception:
+            return 0
 
     def set_tip_provider(self, fn):
         """fn() -> (height, tip_hash, version, cumulative_iterations).
