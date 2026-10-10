@@ -11,7 +11,7 @@
        genuine height 0 with 0 peers doesn't read as broken on the very
        first paint. #}
     <div>
-      <a class="tip-height" id="live-height-link" href="/explorer/block/{{ info.height }}">
+      <a class="tip-height" id="live-height-link" href="/block/{{ info.height }}">
         <span class="tip-label">Block height</span>
         <span class="tip-num" id="live-height"><span class="stat-spinner"></span></span>
       </a>
@@ -35,8 +35,8 @@
       {% if recent_txs %}
         {% for height, h, t, amount in recent_txs %}
         <tr>
-          <td class="num" data-label="Height"><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
-          <td class="fill" data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+          <td class="num" data-label="Height"><a href="/block/{{ height }}">{{ height }}</a></td>
+          <td class="fill" data-label="Hash"><a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
           <td class="hide-sm dim" data-label="From">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</td>
           <td class="num" data-label="Amount">{{ fmt_lapse_dp(amount) }}</td>
         </tr>
@@ -129,7 +129,7 @@
       const info = await res.json();
 
       document.getElementById("live-height").textContent = info.height;
-      document.getElementById("live-height-link").href = "/explorer/block/" + info.height;
+      document.getElementById("live-height-link").href = "/block/" + info.height;
       document.getElementById("live-mempool").textContent = info.mempool_size;
       document.getElementById("live-peers").textContent = info.peer_count;
       const now = Date.now() / 1000;
@@ -179,8 +179,8 @@
       } else if (txs.length) {
         txBody.innerHTML = txs.map(function (tx) {
           return "<tr>" +
-            "<td class=\"num\" data-label=\"Height\"><a href=\"/explorer/block/" + tx.height + "\">" + tx.height + "</a></td>" +
-            "<td data-label=\"Hash\" class=\"fill\"><a href=\"/explorer/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
+            "<td class=\"num\" data-label=\"Height\"><a href=\"/block/" + tx.height + "\">" + tx.height + "</a></td>" +
+            "<td data-label=\"Hash\" class=\"fill\"><a href=\"/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
             "<td data-label=\"From\" class=\"hide-sm dim\">" +
               (tx.from === SELF_ADDRESS ? "self" : tx.from.slice(0, 24) + "…") +
               "</td>" +

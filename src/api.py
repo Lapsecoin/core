@@ -8,9 +8,10 @@ Two Flask apps are created by the factory functions at the bottom of this file:
 Public app  (default port 8333, externally reachable):
   UI:
     GET  /                            dashboard
-    GET  /explorer                    recent block list
-    GET  /explorer/block/<height>     block detail
-    GET  /explorer/tx/<hash>          transaction detail
+    GET  /blocks                      recent block list
+    GET  /block/<height>              block detail
+    GET  /tx/<hash>                   transaction detail
+    GET  /explorer[...]               old addresses of the three above, redirected
     GET  /address?addr=<addr>         address balance and history
     GET  /address/distribution/<n>    addresses in wealth-distribution bucket n
     GET  /whitepaper                  protocol whitepaper
@@ -375,6 +376,12 @@ def _x_ticks(rows):
             for idx in idxs]
 
 
+def url_for_blocks_query():
+    """/blocks with the same query string the old /explorer link carried."""
+    qs = request.query_string.decode("ascii", "ignore")
+    return "/blocks" + ("?" + qs if qs else "")
+
+
 def _chart_dims():
     """The chart size the page asked for (?w=&h=, in CSS pixels), so the
     chart is drawn at the size it is shown and uses the room the window has.
@@ -688,8 +695,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
             if endpoint.startswith(prefix):
                 endpoint = endpoint[len(prefix):]
         nav_active = {
-            "dashboard": "dashboard", "explorer": "explorer",
-            "block_detail": "explorer", "tx_detail": "explorer",
+            "dashboard": "dashboard", "blocks": "blocks",
+            "block_detail": "blocks", "tx_detail": "blocks",
             "address_lookup": "address", "distribution_bucket": "address",
             "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
@@ -789,8 +796,23 @@ def _shared_read_only_routes(app, node, pool, limiter,
             tx_page_window=_pagination_window(page, total_pages),
             tx_has_prev=page > 1, tx_has_next=page < total_pages)
 
-    @app.route("/explorer", endpoint=pfx+"explorer")
-    def explorer():
+    # The explorer pages moved (/explorer became /blocks, /explorer/block/N
+    # became /block/N, /explorer/tx/H became /tx/H). Old links in posts,
+    # bookmarks and other nodes' pages keep working.
+    @app.route("/explorer", endpoint=pfx+"explorer_old")
+    def explorer_old():
+        return redirect(url_for_blocks_query(), code=301)
+
+    @app.route("/explorer/block/<int:height>", endpoint=pfx+"explorer_old_block")
+    def explorer_old_block(height):
+        return redirect("/block/%d" % height, code=301)
+
+    @app.route("/explorer/tx/<tx_hash>", endpoint=pfx+"explorer_old_tx")
+    def explorer_old_tx(tx_hash):
+        return redirect("/tx/" + tx_hash, code=301)
+
+    @app.route("/blocks", endpoint=pfx+"blocks")
+    def blocks():
         chain = node.view.chain
         total = len(chain)
         total_pages = max(-(-total // BLOCKS_PER_PAGE), 1)
@@ -799,7 +821,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         start = max(end - BLOCKS_PER_PAGE, 0)
         block_times = {h: int(chain[h]["timestamp"] - chain[h - 1]["timestamp"])
                        for h in range(max(start, 1), end)}
-        return render_template("explorer.html", title="Explorer",
+        return render_template("blocks.html", title="Blocks",
             recent=chain[start:end][::-1], block_times=block_times, page=page, total_pages=total_pages,
             page_window=_pagination_window(page, total_pages),
             has_prev=page > 1, has_next=start > 0)
@@ -809,7 +831,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return render_template("mempool.html", title="Mempool",
                                transactions=_mempool_rows(node.mempool))
 
-    @app.route("/explorer/block/<int:height>", endpoint=pfx+"block_detail")
+    @app.route("/block/<int:height>", endpoint=pfx+"block_detail")
     def block_detail(height):
         chain = node.view.chain
         if height < 0 or height >= len(chain):
@@ -823,7 +845,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain),
             time_stats=block_mod.block_time_stats(chain, height), reward=reward)
 
-    @app.route("/explorer/tx/<tx_hash>", endpoint=pfx+"tx_detail")
+    @app.route("/tx/<tx_hash>", endpoint=pfx+"tx_detail")
     def tx_detail(tx_hash):
         found = found_height = None
         height = node.storage.get_tx_height(tx_hash)

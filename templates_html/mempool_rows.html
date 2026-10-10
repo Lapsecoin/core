@@ -1,7 +1,7 @@
 {% if transactions %}
   {% for row in transactions %}
   <tr data-fee="{{ row.tx.fee }}">
-    <td data-label="Hash" class="hash-short"><a href="/explorer/tx/{{ row.hash }}">{{ row.hash[:20] }}&hellip;</a></td>
+    <td data-label="Hash" class="hash-short"><a href="/tx/{{ row.hash }}">{{ row.hash[:20] }}&hellip;</a></td>
     <td data-label="From" class="hash-short">{{ row.tx.from[:24] }}&hellip;</td>
     <td data-label="Fee" class="num">{{ row.tx.fee }}</td>
     <td data-label="Outputs" class="num">{{ row.tx.outputs|length }}</td>
