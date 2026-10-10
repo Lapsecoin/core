@@ -82,7 +82,7 @@ def register(app, reader, signer, csrf_token, io, light=False):
     light client's (wallet_ui.WalletSigner); `io` reads the other networks
     (gas_io.ChainIO or a fake). In the light client the request's status comes
     from the node it talks to."""
-    after = "/fees/{}" if light else "/explorer/tx/{}"
+    after = "/fees/{}" if light else "/tx/{}"
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)

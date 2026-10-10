@@ -31,7 +31,7 @@
       {% if row.pending %}
         <span class="rc-time" title="Submitted, not yet in a block">pending&hellip;</span>
       {% else %}
-        <a class="rc-time" href="/explorer/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
+        <a class="rc-time" href="/tx/{{ row.hash }}" data-ts="{{ row.ts | int if row.ts else 0 }}" title="block {{ row.height }}, verify on the explorer">&nbsp;</a>
       {% endif %}
       {% if row.edited %}<span class="rc-time rc-edited" title="Its author edited this post. The original is still on the chain.">edited</span>{% endif %}
       <span class="rc-vote-root">

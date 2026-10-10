@@ -4,15 +4,15 @@
 <div class="ph">
   <h2>Block {{ b.height }}</h2>
   <div class="pager" data-live="pager">
-{% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">Prev</a>{% endif %}
-{% if has_next %}<a href="/explorer/block/{{ b.height + 1 }}">Next</a>{% endif %}
+{% if b.height > 0 %}<a href="/block/{{ b.height - 1 }}">Prev</a>{% endif %}
+{% if has_next %}<a href="/block/{{ b.height + 1 }}">Next</a>{% endif %}
   </div>
 </div>
 {% if b.message %}<div class="alert alert-ok">{{ b.message }}</div>{% endif %}
 <div class="panel">
   <dl class="kv">
     <div class="wide"><dt>Hash</dt><dd class="hash">{{ b.hash }}</dd></div>
-    <div class="wide"><dt>Previous</dt><dd class="hash"><a href="/explorer/block/{{ b.height - 1 }}">{{ b.previous_hash }}</a></dd></div>
+    <div class="wide"><dt>Previous</dt><dd class="hash"><a href="/block/{{ b.height - 1 }}">{{ b.previous_hash }}</a></dd></div>
     <div class="wide"><dt>Builder</dt><dd class="mono">{{ b.builder or "(none)" }}</dd></div>
     <div><dt>Reward</dt><dd class="{{ 'gain' if b.builder }}">{{ fmt_balance(reward) if b.builder else "-" }}</dd></div>
     <div><dt>Transactions</dt><dd>{{ b.transactions | length }}</dd></div>
@@ -30,7 +30,7 @@
     {% if tx_rows %}
       {% for h, t, total in tx_rows %}
       <tr>
-        <td class="fill" data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h }}</a></td>
+        <td class="fill" data-label="Hash"><a href="/tx/{{ h }}">{{ h }}</a></td>
         <td class="hide-sm dim" data-label="From">{{ t.from }}</td>
         <td class="num" data-label="Total sent">{{ total }}</td>
         <td class="num" data-label="Fee">{{ t.fee }}</td>

@@ -12,8 +12,8 @@
     {% if recent %}
       {% for b in recent %}
       <tr>
-        <td class="num" data-label="Height"><a href="/explorer/block/{{ b.height }}">{{ b.height }}</a></td>
-        <td class="fill" data-label="Hash"><a href="/explorer/block/{{ b.height }}">{{ b.hash }}</a></td>
+        <td class="num" data-label="Height"><a href="/block/{{ b.height }}">{{ b.height }}</a></td>
+        <td class="fill" data-label="Hash"><a href="/block/{{ b.height }}">{{ b.hash }}</a></td>
         <td class="num hide-sm" data-label="Block time">{% if b.height in block_times %}{{ block_times[b.height] }}s{% endif %}</td>
         <td class="num" data-label="Txs">{{ b.transactions | length }}</td>
         <td class="hide-sm dim" data-label="Builder">{{ b.builder or '' }}</td>
@@ -28,14 +28,14 @@
   <div class="panel-foot">
   <span>Page {{ page }} of {{ total_pages }}</span>
   <nav class="pager" aria-label="Pagination">
-    {% if has_prev %}<a href="/explorer?page={{ page - 1 }}">Prev</a>{% endif %}
+    {% if has_prev %}<a href="/blocks?page={{ page - 1 }}">Prev</a>{% endif %}
     {% for p in page_window %}
       {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
       {% elif p == page %}<span class="pager-current">{{ p }}</span>
-      {% else %}<a href="/explorer?page={{ p }}">{{ p }}</a>
+      {% else %}<a href="/blocks?page={{ p }}">{{ p }}</a>
       {% endif %}
     {% endfor %}
-    {% if has_next %}<a href="/explorer?page={{ page + 1 }}">Next</a>{% endif %}
+    {% if has_next %}<a href="/blocks?page={{ page + 1 }}">Next</a>{% endif %}
   </nav>
   </div>
 {% endif %}

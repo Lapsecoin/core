@@ -61,9 +61,9 @@
         <tr>
           <td class="c-height" data-label="Height">{{ height }}</td>
           {% if kind == "block" %}
-          <td class="c-hash" data-label="Hash"><a href="/explorer/block/{{ height }}">{{ h[:20] }}…</a></td>
+          <td class="c-hash" data-label="Hash"><a href="/block/{{ height }}">{{ h[:20] }}…</a></td>
           {% else %}
-          <td class="c-hash" data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+          <td class="c-hash" data-label="Hash"><a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
           {% endif %}
           <td class="c-dir {{ 'dir-block' if kind == 'block' else ('dir-sent' if direction == 'sent' else 'dir-recv') }}" data-label="Direction">{{ direction }}</td>
           <td class="c-amt num" data-label="Amount">{{ payload }}</td>

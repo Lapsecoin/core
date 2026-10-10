@@ -103,7 +103,7 @@ nav.mainnav a .ni { width: 14px; height: 14px; flex: 0 0 auto; opacity: .75; }
 nav.mainnav a:hover { color: var(--ink); background: var(--hover); text-decoration: none; }
 nav.mainnav a.active { color: var(--ink); background: rgb(var(--ink-rgb) / .07); font-weight: 600; }
 nav.mainnav a.active .ni { opacity: 1; color: var(--accent); }
-/* Chain: Explorer, Balance and Mempool under one entry */
+/* Explorer: Blocks, Balance and Mempool under one entry */
 .nav-group { position: relative; display: inline-flex; }
 .nav-group-btn {
   display: inline-flex; align-items: center; gap: .4rem; height: auto;
