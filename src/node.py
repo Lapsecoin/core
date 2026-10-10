@@ -2081,7 +2081,13 @@ class Node:
         for t in txs:
             if tx_mod.tx_hash(t) in exclude_hashes:
                 continue
-            ok, _ = tx_mod.validate(t, state)
+            # Against the state plus this sender's txs already re-queued, the
+            # same view a fresh submission gets. Against the bare state, a
+            # sender's second and third pending tx look like nonce gaps and
+            # only the first would ever come back. Blocks list a sender's txs
+            # in nonce order, so each one sees its predecessors.
+            probe = self.mempool.probe_state_for(t.get("from"), state)
+            ok, _ = tx_mod.validate(t, probe)
             if ok:
                 added, _ = self.mempool.add(t)
                 if added:

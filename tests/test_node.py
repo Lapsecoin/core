@@ -849,6 +849,57 @@ class TestReorgMempool:
 
         assert node.mempool.get(tx_mod.tx_hash(t_old)) is None
 
+    def _abandoned_branch(self, node, n_txs, new_balance=100):
+        """Old chain: one block holding n_txs sequential txs from address(0).
+        Returns (txs, new_chain, new_state) for a competing empty block."""
+        g = node.cs.chain[0]
+        st = state_mod.State()
+        st.credit(address(0), 100 * TICKS_PER_LAPSE)
+        st.total_minted += 100 * TICKS_PER_LAPSE
+        txs = []
+        for _ in range(n_txs):
+            t = make_tx(0, 1, TICKS_PER_LAPSE, st)
+            st.apply_tx(t)
+            txs.append(t)
+        node.cs = ChainState.from_genesis()
+        node.cs.chain.append(make_block(1, g["hash"], txs))
+        new_state = state_mod.State()
+        new_state.credit(address(0), new_balance * TICKS_PER_LAPSE)
+        new_state.total_minted += new_balance * TICKS_PER_LAPSE
+        return txs, [g, make_block(1, g["hash"], [], builder_index=1)], new_state
+
+    def test_a_run_of_nonces_from_one_sender_all_come_back(self, node_env):
+        """Several pending txs from one sender were all in the abandoned
+        block. Each depends on the one before, so they only validate if
+        checked in order against what has already been re-queued."""
+        node, *_ = node_env
+        txs, new_chain, new_state = self._abandoned_branch(node, 3)
+        node._reorg_mempool(fork_point=1, old_chain=node.cs.chain,
+                            new_chain=new_chain, new_state=new_state)
+        assert [node.mempool.get(tx_mod.tx_hash(t)) is not None for t in txs] == [True] * 3
+
+    def test_a_run_whose_first_tx_is_already_spent_keeps_the_rest(self, node_env):
+        """The new chain already used the first tx's nonce, so that one is
+        dropped. The ones after it follow on from the new chain's nonce and
+        still come back."""
+        node, *_ = node_env
+        txs, new_chain, new_state = self._abandoned_branch(node, 3)
+        new_state.set_nonce(address(0), txs[0]["nonce"])      # first one used there
+        node._reorg_mempool(fork_point=1, old_chain=node.cs.chain,
+                            new_chain=new_chain, new_state=new_state)
+        got = [node.mempool.get(tx_mod.tx_hash(t)) is not None for t in txs]
+        assert got == [False, True, True]
+
+    def test_re_queueing_respects_the_senders_balance(self, node_env):
+        """The new chain leaves the sender with enough for two of the three
+        sends, so the third must not come back."""
+        node, *_ = node_env
+        txs, new_chain, new_state = self._abandoned_branch(node, 3, new_balance=2)
+        node._reorg_mempool(fork_point=1, old_chain=node.cs.chain,
+                            new_chain=new_chain, new_state=new_state)
+        got = [node.mempool.get(tx_mod.tx_hash(t)) is not None for t in txs]
+        assert got == [True, True, False]
+
 
 # ---------------------------------------------------------------------------
 # 15. _run_cycle: event-driven sync and the staleness guard
