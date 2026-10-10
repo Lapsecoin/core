@@ -1,5 +1,7 @@
 """Block creation, validation, serialization. Pure functions on dicts."""
 
+import hashlib
+import hmac
 import random
 import re
 import statistics
@@ -232,7 +234,8 @@ def _machine_table(window, labels):
     groups = {}
     for h, interval, _builder in window:
         groups.setdefault(labels[h], []).append(interval)
-    rows = [{"machine": m, "blocks": len(v), "share_pct": 100.0 * len(v) / len(window),
+    rows = [{"machine": m, "name": machine_display(m), "blocks": len(v),
+             "share_pct": 100.0 * len(v) / len(window),
              "pace": statistics.median(v)} for m, v in groups.items()]
     rows.sort(key=lambda r: (-r["blocks"], r["machine"]))
     return rows
@@ -321,15 +324,27 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="
     # A builder is told apart by address and by the machine it declared (see
     # MACHINE_FIELD), so two machines behind one address each get their own
     # pace instead of sharing one. Our own blocks are the address's blocks
-    # that declared our machine, plus ones that declared none (built before
-    # machines were named); without a declared label it is the address alone.
+    # that declared our machine, exactly.
+    #
+    # A block of our address that declared nothing (built before machines were
+    # named, or by an older node) could be ours or another machine's, and
+    # nothing in it says which. Counting it as ours credited this node with
+    # other machines' blocks and skewed its pace, win share and odds, so it is
+    # left out of both our blocks and the field. A caller with no machine at
+    # all (own_machine empty) has no such distinction to make and keeps the
+    # address alone.
     labels = {h: machine_label(chain[h]) for h, _i, _b in window}
     rows = [(h, i, (b, labels[h])) for h, i, b in window]
 
     def is_ours(ident):
-        return bool(own_addr) and ident[0] == own_addr and ident[1] in ("", own_machine)
+        if not own_addr or ident[0] != own_addr:
+            return False
+        return ident[1] == own_machine if own_machine else ident[1] == ""
 
-    field = [row for row in rows if not is_ours(row[2])]
+    def is_ambiguous(ident):
+        return bool(own_machine) and ident[0] == own_addr and ident[1] == ""
+
+    field = [row for row in rows if not is_ours(row[2]) and not is_ambiguous(row[2])]
     mine  = [row for row in rows if is_ours(row[2])]
 
     # Our pace in the field's own unit: the median interval of the blocks
@@ -621,6 +636,38 @@ def machine_label(blk):
     evidence of speed."""
     value = blk.get(MACHINE_FIELD)
     return value if isinstance(value, str) else ""
+
+
+# A builder that keeps its CPU model private still declares which machine
+# built a block, as an opaque id, so its machines keep their own odds. The
+# prefix says what the value is; the rest is private_machine_id.
+PRIVATE_MACHINE_PREFIX = "private:"
+_MACHINE_ID_DOMAIN = b"lapsecoin machine id v1\0"
+
+
+def private_machine_id(address, cpu, salt):
+    """An id for one machine behind one address that reveals nothing about it.
+
+    HMAC-SHA256 keyed with `salt`, a random secret that never leaves the node
+    (so, unlike a plain hash, nobody can recover the CPU by hashing every known
+    model and comparing). Stable for the same salt, address and CPU, so a
+    machine keeps one identity across restarts. A different address gives an
+    unrelated id, so one machine running several addresses cannot be linked
+    across them. A different CPU gives a different id, which is right: a new
+    CPU is a new pace. A different machine has a different salt, so two
+    identical machines behind one address do not collide. 64 bits of output
+    keeps an accidental collision among one address's machines negligible."""
+    msg = _MACHINE_ID_DOMAIN + address.encode() + b"\0" + cpu.encode()
+    return PRIVATE_MACHINE_PREFIX + hmac.new(salt, msg, hashlib.sha256).hexdigest()[:16]
+
+
+def machine_display(label):
+    """What to call a declared machine on a page."""
+    if not label:
+        return "not declared"
+    if label.startswith(PRIVATE_MACHINE_PREFIX):
+        return "Private machine " + label[len(PRIVATE_MACHINE_PREFIX):][:6]
+    return label
 
 
 def validate(blk, state, chain):

@@ -46,8 +46,8 @@
 .lg-row:last-child { border-bottom: 0; }
 .lg-head > :nth-child(n+2), .lg-row > :nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
 .lg-row > :first-child { overflow-wrap: anywhere; }
-.odds-hw { margin-left: auto; font-size: .78rem; color: var(--ink-dim); }
-.odds-hw span { font-weight: 500; margin-right: .3rem; }
+.odds-hw { margin-left: auto; display: flex; align-items: baseline; gap: .45rem; font-size: .78rem; color: var(--ink-dim); }
+.odds-hw .stat-label { margin: 0; font-weight: 500; font-size: .78rem; }
 
 /* Chart grips (drag handles on the height axis) */
 .x-grip { cursor: ew-resize; }
