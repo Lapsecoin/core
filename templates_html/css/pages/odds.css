@@ -9,44 +9,45 @@
 .odds-page .stat-value { font-size: 1.35rem; font-weight: 600; letter-spacing: -.01em; }
 .odds-page .stats > .stat:first-child .stat-value { color: var(--accent); }
 
-/* Chart (left) and machines (right) */
+/* Chart */
 .odds-cols { align-items: start; }
 .odds-title {
   font-size: .85rem; font-weight: 650; letter-spacing: -.005em;
   color: var(--ink-dim); margin-bottom: .45rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line-strong);
 }
-.odds-main, .odds-side { min-width: 0; }
+.odds-main { min-width: 0; }
 .odds-main { margin-bottom: 1rem; }
-.odds-side { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem 2rem; align-items: start; }
-.odds-side .hw { order: 2; }
-.odds-side .machines-block { order: 1; }
 .chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
 .chart-wrap svg text { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .chart-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem; margin-top: .5rem; min-height: 1.6rem; }
 
-/* Legend doubles as the direct key for builder lines. Rebuilt by the page
-   script with inline styles, so the important flags win over those. */
-#odds-legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; }
-#odds-legend > span {
-  display: inline-flex !important; align-items: center; gap: .4rem !important;
-  font-size: .8rem !important; color: var(--ink) !important;
+/* Legend: the direct key for builder lines. Hovering or focusing an entry
+   opens the address in full and the machines behind it, fastest first. */
+#odds-legend { display: flex; flex-wrap: wrap; gap: .25rem .4rem; }
+.lg { position: relative; display: inline-flex; align-items: center; gap: .4rem; padding: .25rem .6rem; border-radius: 8px; font-size: .82rem; cursor: default; outline: none; }
+.lg:hover, .lg:focus-visible { background: var(--hover); }
+.lg-dot { width: 12px; height: 3px; border-radius: 2px; flex: 0 0 auto; }
+.lg-name { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lg .n { color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.lg-pop {
+  display: none; position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 20;
+  width: max-content; min-width: 17rem; max-width: min(26rem, 90vw);
+  padding: .7rem .85rem; border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--surface); box-shadow: 0 6px 24px rgb(var(--ink-rgb) / .14);
+  flex-direction: column; gap: .15rem; font-size: .8rem; line-height: 1.4; text-align: left;
 }
-#odds-legend > span > span:first-child {
-  width: 12px !important; height: 3px !important; border-radius: 0 !important; display: inline-block;
-}
-#odds-legend > span > span { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#odds-legend > span > span.n { color: var(--ink-dim) !important; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-
-/* Machines */
-.odds-side .hw { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); }
-.odds-side .hw .stat-value { font-size: .85rem; font-weight: 500; }
-.odds-side .table-wrap { margin: 0; padding: 0; }
-.odds-side table { min-width: 0; font-size: .86rem; }
-.odds-side th { background: none; padding: .35rem .5rem; }
-.odds-side td { padding: .4rem .5rem; }
-.odds-side th:not(:first-child), .odds-side td:not(:first-child) { text-align: right; }
-.odds-side td:first-child { white-space: normal; font-family: var(--serif); overflow-wrap: anywhere; }
-.odds-side .stat-sub { margin-top: .5rem; line-height: 1.4; }
+.lg:hover .lg-pop, .lg:focus .lg-pop, .lg:focus-within .lg-pop { display: flex; }
+.lg-who { font-weight: 650; font-size: .85rem; }
+.lg-addr { font-family: var(--mono); font-size: .75rem; color: var(--ink-dim); overflow-wrap: anywhere; }
+.lg-sub { color: var(--ink-dim); margin-bottom: .4rem; }
+.lg-head, .lg-row { display: grid; grid-template-columns: minmax(0, 1fr) 3.2rem 3.4rem; gap: .6rem; padding: .22rem 0; }
+.lg-head { color: var(--ink-dim); font-size: .74rem; border-bottom: 1px solid var(--rule); }
+.lg-row { border-bottom: 1px solid var(--rule); }
+.lg-row:last-child { border-bottom: 0; }
+.lg-head > :nth-child(n+2), .lg-row > :nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
+.lg-row > :first-child { overflow-wrap: anywhere; }
+.odds-hw { margin-left: auto; font-size: .78rem; color: var(--ink-dim); }
+.odds-hw span { font-weight: 500; margin-right: .3rem; }
 
 /* Chart grips (drag handles on the height axis) */
 .x-grip { cursor: ew-resize; }
@@ -58,25 +59,10 @@
 .x-grip:hover text, .x-grip.is-held text { fill: var(--accent); }
 .x-grip:hover .x-grip-line, .x-grip.is-held .x-grip-line { stroke: var(--accent); opacity: .45; }
 
-@media (max-width: 900px) { .odds-side { grid-template-columns: minmax(0, 1fr); } .odds-side .hw { order: 0; } }
 @media (max-width: 640px) {
   .chart-wrap { overflow-x: auto; }
   .chart-wrap svg { min-width: 560px; }
   .odds-page .stat { flex-basis: 45%; min-width: 0; }
-  .odds-side .table-wrap { overflow-x: auto; }
-  .odds-side table.stacked { display: table; width: 100%; }
-  .odds-side table.stacked thead { display: table-header-group; }
-  .odds-side table.stacked tbody { display: table-row-group; }
-  .odds-side table.stacked tr { display: table-row; border: 0; margin: 0; padding: 0; }
-  .odds-side table.stacked td { display: table-cell; width: auto; padding: .4rem .5rem; border-bottom: 1px solid var(--rule); word-break: normal; }
-  .odds-side table.stacked td::before { content: none; }
+}
 }
 
-/* Short windows (a laptop browser is often 600px tall): chart and machines go
-   side by side so the page fits without scrolling. */
-@media (min-width: 1000px) and (max-height: 780px) {
-  .odds-page { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr); gap: 0 1.25rem; align-items: start; }
-  .odds-page > * { grid-column: 1 / -1; }
-  .odds-page > .odds-main { grid-column: 1; margin-bottom: 0; }
-  .odds-page > .odds-side { grid-column: 2; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
-}

@@ -195,12 +195,12 @@ HIDE_ADDRESS_PUBLICLY = Setting(
 # It is public, permanent chain history, unlike the hardware line above.
 PUBLISH_MACHINE = Setting(
     "publish_machine", True, bool,
-    label="Name this CPU in the blocks I build",
-    help="Puts your CPU model (nothing else: no OS, host or core count) in "
-         "each block you build, so the odds page can tell machines apart, "
-         "including several that share one address. It becomes part of the "
-         "public chain. Turn off to publish nothing; your blocks are then "
-         "grouped by address alone."
+    label="Share my CPU model in the blocks I build",
+    help="On by default. Puts your CPU model (nothing else: no OS, host or "
+         "core count) in each block you build, so the odds page can tell "
+         "machines apart, including several that share one address. It "
+         "becomes part of the public chain. Turn off to share nothing; your "
+         "blocks are then grouped by address alone."
 )
 
 # Minimum race odds (percent) this node needs before it builds straight
