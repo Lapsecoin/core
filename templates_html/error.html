@@ -1,4 +1,8 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/chain.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<div class="alert alert-err">{{ message }}</div>
+<div class="panel notice">
+  <p class="alert-err">{{ message }}</p>
+  <a href="/">Back to dashboard</a>
+</div>
 {% endblock %}

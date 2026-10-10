@@ -1,17 +1,15 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/odds.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<style>
-  .odds-page { font-size: 16px; }
-</style>
 {% if not race %}
-<div class="card odds-page">
+<div class="card odds-page odds-empty">
   <div class="card-title">Race odds</div>
   <p>Not enough chain history yet, check back after a few blocks.</p>
 </div>
 {% else %}
 <div class="odds-page">
 {% if not mining_enabled %}
-<div class="card" style="border-color:var(--rule);color:var(--muted)">
+<div class="odds-note">
   Not building right now: mining is off. Still fully validating and
   syncing every block. Turn on in <a href="/settings">Settings</a>.
 </div>
@@ -50,17 +48,11 @@
       {% else %}none deeper than a tie, 30 days{% endif %}
     </div>
   </div>
-  {% if hardware %}
-  <div class="stat" style="flex-basis:100%">
-    <div class="stat-label">Hardware</div>
-    <div class="stat-value" style="font-size:.9rem">{{ hardware.cpu }} &middot; {{ hardware.os }}</div>
-  </div>
-  {% endif %}
 </div>
 
-<div class="card">
-  <div class="card-title">Block-to-block time, last {{ race.window|length }} blocks</div>
-  <div class="table-wrap">
+<div class="odds-main">
+  <div class="odds-title">Block-to-block time, last {{ race.window|length }} blocks</div>
+  <div class="chart-wrap">
   <svg id="odds-svg" viewBox="0 0 {{ chart.width }} {{ chart.height }}" width="100%" height="{{ chart.height }}"
        role="img" aria-label="Block interval over recent blocks, with self's median build time">
     <line x1="{{ chart.points[0].x if chart.points else 0 }}" y1="{{ chart.plot_top }}"
@@ -115,26 +107,33 @@
     {% endif %}
   </svg>
   </div>
-  <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.4rem 1rem;margin-top:.6rem">
-  <div id="odds-legend" style="display:flex;flex-wrap:wrap;gap:.4rem 1rem">
+  <div class="chart-foot">
+  <div id="odds-legend">
     {% for entry in chart.legend or [] %}
-    <span style="display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--ink-dim)">
-      <span style="width:9px;height:9px;border-radius:50%;background:{{ entry.color }};display:inline-block"></span>
+    <span>
+      <span style="background:{{ entry.color }}"></span>
       {% if entry.label %}
-        {% if entry.nick %}<span style="display:inline;max-width:11ch" title="{{ entry.nick }} ({{ entry.label }})">{{ entry.nick }}</span>
-        {% else %}<span class="hash-short" style="display:inline;max-width:11ch" title="{{ entry.label }}">{{ entry.label[:10] }}&hellip;</span>{% endif %}
+        {% if entry.nick %}<span title="{{ entry.nick }} ({{ entry.label }})">{{ entry.nick }}</span>
+        {% else %}<span class="hash-short" title="{{ entry.label }}">{{ entry.label[:10] }}&hellip;</span>{% endif %}
       {% else %}<span>Other</span>{% endif %}
-      <span style="color:var(--muted)">({{ entry.count }})</span>
+      <span class="n">({{ entry.count }})</span>
     </span>
     {% endfor %}
   </div>
   <button type="button" id="odds-zoom-reset" class="btn-sm" style="display:none">Reset spacing</button>
   </div>
 </div>
-<div class="card">
-  <div class="card-title">Who built the last {{ race.window|length }} blocks, by machine</div>
+<aside class="odds-side">
+{% if hardware %}
+  <div class="stat hw">
+    <div class="stat-label">Hardware</div>
+    <div class="stat-value">{{ hardware.cpu }} &middot; {{ hardware.os }}</div>
+  </div>
+{% endif %}
+  <div class="machines-block">
+  <div class="odds-title">Who built the last {{ race.window|length }} blocks, by machine</div>
   <div class="table-wrap">
-  <table class="stacked">
+  <table class="stacked machines">
     <thead><tr><th>Machine</th><th>Blocks</th><th>Share</th><th>Median interval</th></tr></thead>
     <tbody id="odds-machines">
     {% for m in race.machines %}
@@ -149,20 +148,8 @@
   </table>
   </div>
   <div class="stat-sub">Machines name themselves in the blocks they build, so this is what builders say, not something the chain checks.</div>
-</div>
-<style>
-  /* The mark is a slider thumb, so it takes the cursor and the emphasis
-     of one. Held state is set while dragging, since the pointer is
-     captured on the svg and can travel well away from the mark itself. */
-  .x-grip { cursor: ew-resize; }
-  .x-grip text { fill: var(--ink-dim); }
-  .x-grip-thumb { fill: var(--ink-dim); }
-  .x-grip-line { stroke: var(--rule-lt); stroke-width: 0.5; opacity: .6; }
-  .x-grip rect, .x-grip text, .x-grip line { transition: fill .12s, stroke .12s, opacity .12s; }
-  .x-grip:hover .x-grip-thumb, .x-grip.is-held .x-grip-thumb,
-  .x-grip:hover text, .x-grip.is-held text { fill: var(--accent); }
-  .x-grip:hover .x-grip-line, .x-grip.is-held .x-grip-line { stroke: var(--accent); opacity: .45; }
-</style>
+  </div>
+</aside>
 <script id="odds-initial" type="application/json">{{ {"chart": chart, "median": race.median}|tojson }}</script>
 <script>
 (function () {

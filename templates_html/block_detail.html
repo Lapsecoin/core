@@ -1,48 +1,45 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/chain.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<h2>Block {{ b.height }}</h2>
-{% if b.message %}<div class="alert alert-ok">{{ b.message }}</div>{% endif %}
-<div class="card">
-  <div class="card-title">Block details</div>
-  <table class="kv-table">
-    <tr><td>Hash</td><td class="hash">{{ b.hash }}</td></tr>
-    <tr><td>Previous</td><td class="hash">{{ b.previous_hash }}</td></tr>
-    <tr><td>Height</td><td>{{ b.height }}</td></tr>
-    <tr><td>Transactions</td><td>{{ b.transactions | length }}</td></tr>
-    <tr><td>Builder</td><td class="hash-short" style="word-break:break-all">{{ b.builder or "(none)" }}</td></tr>
-    <tr><td>Reward</td><td style="color:var(--green)">{{ fmt_balance(reward) if b.builder else "-" }}</td></tr>
-    {% if time_stats %}
-    <tr><td>Block time</td><td>{{ time_stats.own }}s
-      <span style="color:{{ 'var(--red)' if time_stats.diff > 0 else 'var(--green)' }}">
-        ({{ "+" if time_stats.diff > 0 }}{{ "%.1f" | format(time_stats.diff) }}s vs {{ "%.1f" | format(time_stats.median) }}s median)
-      </span></td></tr>
-    {% endif %}
-  </table>
+<div class="ph">
+  <h2>Block {{ b.height }}</h2>
+  <div class="pager" data-live="pager">
+{% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">Prev</a>{% endif %}
+{% if has_next %}<a href="/explorer/block/{{ b.height + 1 }}">Next</a>{% endif %}
+  </div>
 </div>
-<div class="card">
-  <div class="card-title">Transactions</div>
-  <div class="table-wrap">
-  <table class="stacked">
-    <thead><tr><th>Hash</th><th>From</th><th>Total sent</th><th>Fee</th></tr></thead>
+{% if b.message %}<div class="alert alert-ok">{{ b.message }}</div>{% endif %}
+<div class="panel">
+  <dl class="kv">
+    <div class="wide"><dt>Hash</dt><dd class="hash">{{ b.hash }}</dd></div>
+    <div class="wide"><dt>Previous</dt><dd class="hash"><a href="/explorer/block/{{ b.height - 1 }}">{{ b.previous_hash }}</a></dd></div>
+    <div class="wide"><dt>Builder</dt><dd class="mono">{{ b.builder or "(none)" }}</dd></div>
+    <div><dt>Reward</dt><dd class="{{ 'gain' if b.builder }}">{{ fmt_balance(reward) if b.builder else "-" }}</dd></div>
+    <div><dt>Transactions</dt><dd>{{ b.transactions | length }}</dd></div>
+    {% if time_stats %}
+    <div class="last"><dt>Block time</dt><dd>{{ time_stats.own }}s
+      <span class="{{ 'loss' if time_stats.diff > 0 else 'gain' }}">({{ "+" if time_stats.diff > 0 }}{{ "%.1f" | format(time_stats.diff) }}s vs {{ "%.1f" | format(time_stats.median) }}s median)</span></dd></div>
+    {% endif %}
+  </dl>
+</div>
+<div class="panel">
+  <div class="panel-head"><b>Transactions</b><span>{{ b.transactions | length }}</span></div>
+  <table class="dt">
+    <thead><tr><th>Hash</th><th class="hide-sm">From</th><th class="num">Total sent</th><th class="num">Fee</th></tr></thead>
     <tbody>
     {% if tx_rows %}
       {% for h, t, total in tx_rows %}
       <tr>
-        <td data-label="Hash" class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td data-label="From" class="hash-short">{{ t.from[:24] }}…</td>
-        <td data-label="Total sent">{{ total }}</td>
-        <td data-label="Fee">{{ t.fee }}</td>
+        <td class="fill" data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h }}</a></td>
+        <td class="hide-sm dim" data-label="From">{{ t.from }}</td>
+        <td class="num" data-label="Total sent">{{ total }}</td>
+        <td class="num" data-label="Fee">{{ t.fee }}</td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions</td></tr>
+      <tr class="empty"><td colspan="4">No transactions</td></tr>
     {% endif %}
     </tbody>
   </table>
-  </div>
-</div>
-<div class="pager" data-live="pager">
-{% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">Prev</a>{% endif %}
-{% if has_next %}<a href="/explorer/block/{{ b.height + 1 }}">Next</a>{% endif %}
 </div>
 {% endblock %}

@@ -1,17 +1,21 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/mempool.css?v={{ local_version }}">{% endblock %}
 {% block content %}
 <div class="mempool-page">
   <div class="mempool-heading">
-    <div>
-      <h2>Pending transactions</h2>
-      <p class="stat-sub">Transactions waiting for inclusion in a block.</p>
-    </div>
-    <div class="mempool-count" id="mempool-count">{{ transactions|length }}</div>
+    <h2>Pending transactions</h2>
+    <p class="stat-sub">Waiting for inclusion in a block, best fee rate first.</p>
+  </div>
+  <div class="mp-strip">
+    <div class="mp-stat mp-main"><div class="mp-label">Transactions</div><div class="mp-value" id="mempool-count">{{ transactions|length }}</div></div>
+    <div class="mp-stat"><div class="mp-label">Total fees</div><div class="mp-value" id="mp-total">{{ transactions|sum(attribute='tx.fee') }}</div></div>
+    <div class="mp-stat"><div class="mp-label">Median fee</div><div class="mp-value" id="mp-median">-</div></div>
+    <div class="mp-stat"><div class="mp-label">Highest fee</div><div class="mp-value" id="mp-max">-</div></div>
   </div>
   <div class="mempool-table-wrap">
     <table class="stacked mempool-table">
       <thead>
-        <tr><th>Hash</th><th>From</th><th>Fee</th><th>Outputs</th><th>Status</th></tr>
+        <tr><th>Hash</th><th>From</th><th class="num">Fee</th><th class="num">Outputs</th><th>Status</th></tr>
       </thead>
       <tbody id="mempool-rows">
         {% include "mempool_rows.html" %}
@@ -19,25 +23,22 @@
     </table>
   </div>
 </div>
-<style>
-  .mempool-page { font-size: 16px; }
-  .mempool-heading { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; margin-bottom:.5rem; }
-  .mempool-heading h2 { margin-bottom:0; }
-  .mempool-count { font-family:var(--mono); font-size:1.15rem; font-weight:bold; color:var(--accent); }
-  .mempool-table-wrap { max-height:calc(100vh - 14rem); overflow:auto; border:1px solid var(--rule); }
-  .mempool-table { margin:0; }
-  .mempool-table td, .mempool-table th { padding:.35rem .55rem; }
-  .mempool-status { color:var(--live); font-weight:bold; white-space:nowrap; }
-  @media (max-width:640px) {
-    .mempool-table-wrap { max-height:none; border-left:0; border-right:0; }
-    .mempool-table td, .mempool-table th { padding:.45rem .35rem; }
-  }
-</style>
 <script>
 (function () {
   const rows = document.getElementById("mempool-rows");
   const count = document.getElementById("mempool-count");
   let pollInFlight = false;
+
+  // Fee figures come from the data-fee attribute on each rendered row.
+  function updateStats() {
+    const fees = Array.from(rows.querySelectorAll("tr[data-fee]"))
+      .map(r => Number(r.getAttribute("data-fee")) || 0).sort((a, b) => a - b);
+    const n = fees.length;
+    const fmt = v => v.toLocaleString();
+    document.getElementById("mp-total").textContent = fmt(fees.reduce((s, v) => s + v, 0));
+    document.getElementById("mp-median").textContent = n ? fmt(fees[Math.floor(n / 2)]) : "-";
+    document.getElementById("mp-max").textContent = n ? fmt(fees[n - 1]) : "-";
+  }
 
   async function refresh() {
     if (pollInFlight) return;
@@ -48,6 +49,7 @@
       const data = await res.json();
       rows.innerHTML = data.html;
       count.textContent = data.size;
+      updateStats();
     } catch (e) {
       // Keep the last good queue visible during a temporary network failure.
     } finally {
@@ -55,6 +57,7 @@
     }
   }
 
+  updateStats();
   refresh();
   setInterval(refresh, 5000);
 })();

@@ -1,21 +1,14 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/settings.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<h2>Settings</h2>
-
-{% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
-{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
-
-<form method="POST">
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-<div class="card">
-  <div class="card-title">Node settings</div>
-  <div class="settings-grid">
-  {% for s in settings %}
+{% macro setting_row(s) %}
   <div class="setting-row {{ 'is-forced' if s.forced }}">
+    <div class="setting-text">
+      <label class="setting-label" for="{{ s.key }}">{{ s.label }}</label>
+      {% if s.help %}<p class="setting-help">{{ s.help }}</p>{% endif %}
+      {% if s.forced %}<p class="setting-forced">Set by {{ s.env_name }}, not editable here.</p>{% endif %}
+    </div>
     <div class="setting-main">
-      <label for="{{ s.key }}">{{ s.label }}</label>
-
       {% if s.is_bool %}
       <label class="switch">
         <input type="checkbox" id="{{ s.key }}" name="{{ s.key }}"
@@ -62,75 +55,42 @@
              value="{{ s.value }}" {% if s.forced %}disabled{% endif %}>
       {% endif %}
     </div>
-    {% if s.forced %}<span class="stat-sub setting-help"><strong>Set by {{ s.env_name }}.</strong></span>{% endif %}
   </div>
-  {% endfor %}
-  </div>
+{% endmacro %}
+{% set groups = [
+  ("Building and display", "Whether this node builds blocks, when it holds back, and what the odds page shows.", ["mining_enabled", "draw_window_seconds", "min_odds_pct", "show_hardware_details"]),
+  ("Privacy and publishing", "What this node shows publicly and writes into the chain.", ["hide_address_publicly", "publish_machine"]),
+] %}
+{% set grouped = groups|map(attribute=2)|sum(start=[]) %}
+
+<div class="page-head"><h2>Settings</h2></div>
+
+{% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+
+<form method="POST" class="settings-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+<div class="settings-cols">
+{% for title, blurb, keys in groups %}
+  <section class="settings-group">
+    <h3 class="group-title">{{ title }}</h3>
+    <p class="group-blurb">{{ blurb }}</p>
+    {% for s in settings if s.key in keys %}{{ setting_row(s) }}{% endfor %}
+  </section>
+{% endfor %}
+{% set rest = settings|rejectattr("key", "in", grouped)|list %}
+{% if rest %}
+  <section class="settings-group">
+    <h3 class="group-title">Other</h3>
+    {% for s in rest %}{{ setting_row(s) }}{% endfor %}
+  </section>
+{% endif %}
 </div>
 
-<button type="submit" style="margin-top:.25rem">Save</button>
+<div class="save-bar">
+  <span class="save-note">Changes apply on the next read, no restart needed.</span>
+  <button type="submit">Save</button>
+</div>
 </form>
-
-<style>
-  .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 2.5rem; }
-  @media (max-width: 900px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } }
-  .setting-row {
-    padding: .6rem 0; border-bottom: 1px solid var(--rule);
-  }
-  .setting-row.is-forced { opacity: .7; }
-  .setting-main {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 1rem; flex-wrap: wrap;
-  }
-  .setting-main label:first-child { padding-top: .3rem; }
-  .setting-main label:first-child { font-weight: 600; }
-  .setting-help { display: block; margin-top: .25rem; }
-
-  /* Toggle switch */
-  .switch { position: relative; display: inline-block; cursor: pointer; }
-  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-  .switch-track {
-    display: inline-block; width: 2.6rem; height: 1.5rem; border-radius: 1rem;
-    background: var(--rule-lt); border: 1px solid var(--rule); position: relative;
-    transition: background .15s ease;
-  }
-  .switch-thumb {
-    position: absolute; top: 1px; left: 1px; width: 1.2rem; height: 1.2rem;
-    border-radius: 50%; background: var(--paper); box-shadow: 0 1px 2px rgba(0,0,0,.3);
-    transition: transform .15s ease;
-  }
-  .switch input:checked + .switch-track { background: var(--accent); }
-  .switch input:checked + .switch-track .switch-thumb { transform: translateX(1.1rem); }
-  .switch input:disabled + .switch-track { opacity: .5; cursor: not-allowed; }
-
-  /* Slider + number pair */
-  .setting-control {
-    display: flex; align-items: center; gap: .6rem; width: 100%;
-  }
-  /* Outer wrapper when a "review manually" toggle sits below the slider
-     (see setting_control_inf's own docstring): its own row, own width
-     budget, so the slider+number row inside it doesn't have to share
-     flex-wrap ordering with a sibling that isn't part of the same line. */
-  .setting-control-inf {
-    display: flex; flex-direction: column; gap: .35rem;
-    flex: 1 1 260px; max-width: 360px;
-  }
-  .setting-main > .setting-control { flex: 1 1 260px; max-width: 360px; }
-  .setting-slider { flex: 1 1 auto; accent-color: var(--accent); }
-  .setting-number {
-    width: 5rem; flex: 0 0 auto; padding: .3rem .4rem; text-align: right;
-    font-family: var(--mono);
-  }
-  .setting-inf-toggle {
-    display: flex; align-items: center; gap: .35rem; font-size: .8rem;
-    color: var(--ink-dim);
-  }
-  .setting-inf-toggle input {
-    /* base.html's global input rule (width:100%, border, padding) is
-       meant for text fields and otherwise stretches this checkbox into
-       a big bordered box; reset it back to a normal checkbox. */
-    width: auto; flex: 0 0 auto; border: none; padding: 0; margin: 0;
-    accent-color: var(--accent);
-  }
-</style>
 {% endblock %}

@@ -1,0 +1,68 @@
+/* Wallet pages (Send, Fees, fee request status) share one system: a main
+ * panel with the form on the left and a narrower side panel with the facts
+ * that belong to it on the right. Rules here are shared; send.css and
+ * fees.css only add what is specific to their page. */
+
+.wl .alert { margin-bottom: .75rem; }
+.wl-lede { color: var(--ink-dim); font-size: .9rem; max-width: 72ch; margin: -.3rem 0 .85rem; }
+
+/* main panel (about 2/3) + side panel (fixed 340px), stacked below 900px */
+.wl-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px;
+  gap: .75rem; align-items: start;
+}
+@media (max-width: 900px) { .wl-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.panel { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); min-width: 0; }
+.panel-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: .75rem;
+  padding: .6rem 1rem; border-bottom: 1px solid var(--rule);
+  font-size: .82rem; font-weight: 600; color: var(--ink);
+}
+.panel-head span { font-weight: 400; color: var(--ink-dim); font-size: .78rem; }
+.panel-body { padding: 1rem; }
+.panel-side { background: transparent; }
+
+/* key / value rows with hairlines between them */
+.kv { margin: 0; }
+.kv > div { padding: .65rem 1rem; border-bottom: 1px solid var(--rule); }
+.kv > div:last-child { border-bottom: 0; }
+.kv dt { font-size: .78rem; color: var(--ink-dim); margin: 0 0 .2rem; }
+.kv dd { margin: 0; font-size: .88rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kv .num { font-family: var(--mono); font-size: 1.15rem; font-weight: 600; letter-spacing: -.01em; }
+.kv .num.dim { font-family: var(--serif); font-size: .9rem; font-weight: 400; color: var(--ink-dim); }
+.kv .hash { font-size: .82rem; color: var(--ink); }
+.kv .hint { margin-top: .35rem; }
+
+/* fields: label above, unit inside the field, helper text outside */
+.field { margin-bottom: .9rem; min-width: 0; }
+.field > label, .label-row label { font-size: .82rem; font-weight: 500; color: var(--ink); margin-bottom: .35rem; }
+.label-row { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; margin-bottom: .35rem; }
+.label-row label { margin: 0; }
+.hint { font-size: .78rem; color: var(--ink-dim); margin-top: .35rem; line-height: 1.45; font-variant-numeric: tabular-nums; }
+.label-row .hint { margin: 0; }
+.fields { display: grid; gap: 0 .75rem; }
+.suffix { position: relative; }
+.suffix input { padding-right: 3.4rem; }
+.suffix span {
+  position: absolute; right: .75rem; top: 50%; transform: translateY(-50%);
+  font-size: .78rem; color: var(--ink-dim); pointer-events: none;
+}
+.wl textarea {
+  height: auto; padding: .6rem .7rem; resize: vertical; line-height: 1.5; min-height: 8rem;
+}
+.wl input:focus, .wl textarea:focus, .wl select:focus { box-shadow: none; }
+
+/* passphrase field and its button share a baseline and a height */
+.submit-row { display: flex; gap: .75rem; align-items: flex-end; margin-top: 1.1rem; }
+.submit-row .field { flex: 1 1 140px; margin: 0; }
+.submit-row button { flex: 0 0 auto; height: 36px; white-space: nowrap; }
+.submit-row + .hint { margin-top: .6rem; }
+
+/* send / fees: the quiet divider between a form section and the next */
+.sect { border-top: 1px solid var(--rule); margin: 1.1rem -1rem 0; padding: 0 1rem; }
+
+/* compact variant: label left, figure right, one line per row */
+.kv-inline > div { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: .55rem 1rem; }
+.kv-inline dt { margin: 0; }
+.kv-inline .num { font-size: .95rem; }

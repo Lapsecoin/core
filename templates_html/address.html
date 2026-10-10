@@ -1,99 +1,92 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/address.css?v={{ local_version }}">{% endblock %}
 {% block content %}
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
-<div class="card">
-  <form method="GET">
-    <div class="form-group">
-      <label>Address (twelve dot-separated words) or board nickname</label>
-      <input name="addr" value="{{ addr }}" placeholder="word1.word2.word3... or a board nickname">
-      <span class="stat-sub">A nickname redirects to whichever address actually owns it (see /board).</span>
-    </div>
-    <button type="submit">Look up</button>
-  </form>
-</div>
 {% if addr == BURN_ADDRESS %}
-<div class="card" style="border-color:var(--accent)">
+<p class="addr-burn">
   This is the burn address. No key exists for it and consensus rejects any
   spend from it, so what is sent here is gone for good; emission counts it
   as unminted again and pays it out to builders over time.
-</div>
+</p>
 {% endif %}
-{% if holder_count %}
-<div class="card wealth" data-live="wealth">
-  <div class="card-title">Wealth distribution ({{ holder_count }} holder{{ 's' if holder_count != 1 }})</div>
-  <div class="histo">
-  {% for label, count in histogram %}
-  <a class="histo-row" href="/address/distribution/{{ loop.index0 }}">
-    <span class="histo-label">{{ label }}</span>
-    <div class="histo-track">
-      <div class="histo-bar" style="width:{{ '%.2f' % (count / histogram_max * 100 if histogram_max else 0) }}%"></div>
+<div class="addr-grid{% if holder_count or history is not none %} has-main{% endif %}">
+  <aside class="addr-side">
+    <form method="GET" class="addr-form">
+      <label for="addr-input">Address (twelve dot-separated words) or board nickname</label>
+      <div class="addr-form-row">
+        <input id="addr-input" name="addr" value="{{ addr }}" placeholder="word1.word2.word3... or a board nickname" autocomplete="off" spellcheck="false">
+        <button type="submit">Look up</button>
+      </div>
+      <p class="addr-hint">A nickname redirects to whichever address actually owns it (see /board).</p>
+    </form>
+    {% if history is not none %}
+    <div class="addr-summary" data-live="stats">
+      <div class="addr-balance">
+        <div class="addr-k">Balance</div>
+        <div class="addr-balance-v">{{ fmt_balance(balance) }}</div>
+      </div>
+      <dl class="addr-kv">
+        <div><dt>Txs sent</dt><dd>{{ tx_count }}</dd></div>
+        <div><dt>Transactions</dt><dd>{{ history | length }}</dd></div>
+        <div class="addr-kv-addr"><dt>Address</dt><dd class="addr-mono">{{ addr }}</dd></div>
+      </dl>
     </div>
-    <span class="histo-count">{{ count }}</span>
-  </a>
-  {% endfor %}
-  </div>
-  <div class="wealth-caption">balance buckets in whole LAPSE, log-scaled</div>
-</div>
-<style>
-  .wealth-caption { font-size:.68rem; color:var(--muted); margin-top:.4rem }
+    {% endif %}
+  </aside>
 
-  .histo { display:flex; flex-direction:column; gap:.22rem }
-  .histo-row { display:grid; grid-template-columns:11rem 1fr 2.5rem; align-items:center; gap:.6rem; font-size:.74rem; text-decoration:none; color:inherit }
-  .histo-row:hover .histo-bar { background:var(--green) }
-  .histo-label { color:var(--muted); font-family:var(--mono); text-align:right; white-space:nowrap }
-  .histo-track { background:var(--paper-2); border:1px solid var(--rule-lt); overflow:hidden; height:.95rem }
-  .histo-bar { height:100%; min-width:3px; background:var(--ink); }
-  .histo-count { text-align:right; font-family:var(--mono); color:var(--ink) }
+  {% if holder_count %}
+  <section class="addr-main addr-wealth" data-live="wealth">
+    <h2>Wealth distribution <span class="addr-sub">{{ holder_count }} holder{{ 's' if holder_count != 1 }}</span></h2>
+    <div class="histo">
+    {% for label, count in histogram %}
+    <a class="histo-row" href="/address/distribution/{{ loop.index0 }}">
+      <span class="histo-label">{{ label }}</span>
+      <span class="histo-track"><span class="histo-bar" style="width:{{ '%.2f' % (count / histogram_max * 100 if histogram_max else 0) }}%"></span></span>
+      <span class="histo-count">{{ count }}</span>
+    </a>
+    {% endfor %}
+    </div>
+    <p class="addr-hint">Balance buckets in whole LAPSE, log-scaled.</p>
+  </section>
+  {% endif %}
 
-  @media (max-width: 640px) {
-    .histo-row { grid-template-columns:6.5rem 1fr 2.25rem; font-size:.7rem }
-    .histo-label { white-space:normal }
-  }
-</style>
-{% endif %}
-{% if history is not none %}
-<div class="stats" data-live="stats">
-  <div class="stat"><div class="stat-label">Balance</div><div class="stat-value" style="color:var(--green)">{{ fmt_balance(balance) }}</div></div>
-  <div class="stat"><div class="stat-label">Txs sent</div><div class="stat-value">{{ tx_count }}</div></div>
-  <div class="stat"><div class="stat-label">Transactions</div><div class="stat-value">{{ history | length }}</div></div>
-</div>
-<div class="card"{% if page == 1 %} data-live="history"{% endif %}>
-  <div class="card-title">History</div>
-  <div class="table-wrap">
-  <table class="stacked">
-    <thead><tr><th>Height</th><th>Hash</th><th>Direction</th><th>Amount</th></tr></thead>
-    <tbody>
-    {% if history %}
-      {% for height, h, direction, payload, kind in history %}
-      <tr>
-        <td data-label="Height">{{ height }}</td>
-        {% if kind == "block" %}
-        <td data-label="Hash"><a href="/explorer/block/{{ height }}">{{ h[:20] }}…</a></td>
-        {% else %}
-        <td data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+  {% if history is not none %}
+  <section class="addr-main addr-history"{% if page == 1 %} data-live="history"{% endif %}>
+    <h2>History</h2>
+    <table class="hist">
+      <thead><tr><th>Height</th><th>Hash</th><th>Direction</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+      {% if history %}
+        {% for height, h, direction, payload, kind in history %}
+        <tr>
+          <td class="c-height" data-label="Height">{{ height }}</td>
+          {% if kind == "block" %}
+          <td class="c-hash" data-label="Hash"><a href="/explorer/block/{{ height }}">{{ h[:20] }}…</a></td>
+          {% else %}
+          <td class="c-hash" data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+          {% endif %}
+          <td class="c-dir {{ 'dir-block' if kind == 'block' else ('dir-sent' if direction == 'sent' else 'dir-recv') }}" data-label="Direction">{{ direction }}</td>
+          <td class="c-amt num" data-label="Amount">{{ payload }}</td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr class="hist-empty"><td colspan="4">No transactions</td></tr>
+      {% endif %}
+      </tbody>
+    </table>
+    {% if total_pages > 1 %}
+    <nav class="pager" aria-label="Pagination">
+      {% if has_prev %}<a href="/address?addr={{ addr }}&page={{ page - 1 }}">Prev</a>{% endif %}
+      {% for p in page_window %}
+        {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+        {% elif p == page %}<span class="pager-current">{{ p }}</span>
+        {% else %}<a href="/address?addr={{ addr }}&page={{ p }}">{{ p }}</a>
         {% endif %}
-        <td data-label="Direction" style="color:{{ 'var(--ink)' if kind == 'block' else ('var(--red)' if direction == 'sent' else 'var(--green)') }}">{{ direction }}</td>
-        <td data-label="Amount">{{ payload }}</td>
-      </tr>
       {% endfor %}
-    {% else %}
-      <tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions</td></tr>
+      {% if has_next %}<a href="/address?addr={{ addr }}&page={{ page + 1 }}">Next</a>{% endif %}
+    </nav>
     {% endif %}
-    </tbody>
-  </table>
-  </div>
+  </section>
+  {% endif %}
 </div>
-{% if total_pages > 1 %}
-<nav class="pager" aria-label="Pagination">
-  {% if has_prev %}<a href="/address?addr={{ addr }}&page={{ page - 1 }}">Prev</a>{% endif %}
-  {% for p in page_window %}
-    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
-    {% elif p == page %}<span class="pager-current">{{ p }}</span>
-    {% else %}<a href="/address?addr={{ addr }}&page={{ p }}">{{ p }}</a>
-    {% endif %}
-  {% endfor %}
-  {% if has_next %}<a href="/address?addr={{ addr }}&page={{ page + 1 }}">Next</a>{% endif %}
-</nav>
-{% endif %}
-{% endif %}
 {% endblock %}

@@ -1,37 +1,41 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/chain.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<h2>Distribution: {{ label }} LAPSE</h2>
-<div class="card"{% if page == 1 %} data-live="rows"{% endif %}>
-  <div class="card-title">{{ total }} address{{ 'es' if total != 1 }}</div>
-  <div class="table-wrap">
-  <table class="stacked">
-    <thead><tr><th>Address</th><th>Balance</th></tr></thead>
+<div class="ph">
+  <h2>Distribution: {{ label }} LAPSE</h2>
+  <a href="/address">Back to distribution</a>
+</div>
+<div class="panel"{% if page == 1 %} data-live="rows"{% endif %}>
+  <div class="panel-head"><b>{{ total }} address{{ 'es' if total != 1 }}</b></div>
+  <table class="dt">
+    <thead><tr><th>Address</th><th class="num">Balance</th></tr></thead>
     <tbody>
     {% if rows %}
       {% for addr, bal in rows %}
       <tr>
-        <td data-label="Address" class="hash-short"><a href="/address?addr={{ addr }}" title="{{ addr }}">{{ addr[:28] }}…</a></td>
-        <td data-label="Balance">{{ fmt_balance(bal) }}</td>
+        <td class="fill" data-label="Address"><a href="/address?addr={{ addr }}" title="{{ addr }}">{{ addr }}</a></td>
+        <td class="num" data-label="Balance">{{ fmt_balance(bal) }}</td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="2" style="color:var(--muted);text-align:center">No addresses in this bucket</td></tr>
+      <tr class="empty"><td colspan="2">No addresses in this bucket</td></tr>
     {% endif %}
     </tbody>
   </table>
-  </div>
-</div>
 {% if total_pages > 1 %}
-<nav class="pager" aria-label="Pagination">
-  {% if has_prev %}<a href="/address/distribution/{{ bucket }}?page={{ page - 1 }}">Prev</a>{% endif %}
-  {% for p in page_window %}
-    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
-    {% elif p == page %}<span class="pager-current">{{ p }}</span>
-    {% else %}<a href="/address/distribution/{{ bucket }}?page={{ p }}">{{ p }}</a>
-    {% endif %}
-  {% endfor %}
-  {% if has_next %}<a href="/address/distribution/{{ bucket }}?page={{ page + 1 }}">Next</a>{% endif %}
-</nav>
+  <div class="panel-foot">
+  <span>Page {{ page }} of {{ total_pages }}</span>
+  <nav class="pager" aria-label="Pagination">
+    {% if has_prev %}<a href="/address/distribution/{{ bucket }}?page={{ page - 1 }}">Prev</a>{% endif %}
+    {% for p in page_window %}
+      {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+      {% elif p == page %}<span class="pager-current">{{ p }}</span>
+      {% else %}<a href="/address/distribution/{{ bucket }}?page={{ p }}">{{ p }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if has_next %}<a href="/address/distribution/{{ bucket }}?page={{ page + 1 }}">Next</a>{% endif %}
+  </nav>
+  </div>
 {% endif %}
-<div class="pager"><a href="/address">Back to distribution</a></div>
+</div>
 {% endblock %}

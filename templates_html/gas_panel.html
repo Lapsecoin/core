@@ -1,26 +1,28 @@
-<div class="card" id="gas-card">
-  <div class="card-title">Fee request</div>
-  <ol id="gas-steps" style="display:flex;gap:.5rem;list-style:none;padding:0;margin:0 0 .6rem;flex-wrap:wrap">
-    <li data-step="mined">Mined</li>
-    <li data-step="offers">Offers</li>
-    <li data-step="sending">Sending</li>
-    <li data-step="done">Received</li>
-  </ol>
-  <div id="gas-headline" style="font-weight:bold">Checking...</div>
-  <p id="gas-why" class="stat-sub"></p>
-  <table class="kv-table" id="gas-table" style="display:none">
-    <tr><td>Network</td><td id="gas-network"></td></tr>
-    <tr><td>Address</td><td class="hash-short" id="gas-dest" style="word-break:break-all"></td></tr>
-    <tr><td>Nodes that offered</td><td id="gas-claimers"></td></tr>
-    <tr><td>Order</td><td id="gas-order"></td></tr>
-    <tr><td>Your burn</td><td id="gas-lock"></td></tr>
-  </table>
+<link rel="stylesheet" href="/css/pages/gas.css?v={{ local_version }}">
+<div id="gas-card">
+  <div class="gas-head">{{ gas_title|default("Fee request") }}</div>
+  <div class="gas-body">
+    <div class="gas-main">
+      <div id="gas-headline">Checking...</div>
+      <p id="gas-why"></p>
+      <ol id="gas-steps">
+        <li data-step="mined">Mined</li>
+        <li data-step="offers">Offers</li>
+        <li data-step="sending">Sending</li>
+        <li data-step="done">Received</li>
+      </ol>
+    </div>
+    <div class="gas-side">
+      <table class="kv-table" id="gas-table" style="display:none">
+        <tr><td>Network</td><td id="gas-network"></td></tr>
+        <tr><td>Address</td><td class="hash-short" id="gas-dest"></td></tr>
+        <tr><td>Nodes that offered</td><td id="gas-claimers"></td></tr>
+        <tr><td>Order</td><td id="gas-order"></td></tr>
+        <tr><td>Your burn</td><td id="gas-lock"></td></tr>
+      </table>
+    </div>
+  </div>
 </div>
-<style>
-  #gas-steps li { padding:.15rem .6rem; border:1px solid var(--rule-lt); color:var(--muted); font-size:.85rem; }
-  #gas-steps li.done { color:var(--ink); border-color:var(--rule); }
-  #gas-steps li.now { color:var(--paper); background:var(--accent); border-color:var(--accent); }
-</style>
 <script>
 (function () {
   const $ = id => document.getElementById(id);

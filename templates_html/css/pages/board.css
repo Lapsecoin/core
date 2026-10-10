@@ -1,0 +1,176 @@
+/* Board: a quiet, dense discussion list on the left, the compose box in a
+   sticky column on the right. Rows are separated by hairlines inside one
+   bordered list; votes sit in a narrow column at the left edge.
+   Row markup comes from board_rows.html, which the poll swaps in place, so
+   every class here is also a hook for the page script. */
+
+#board-feed {
+  --indent: 1.1rem;
+  --gutter: .75rem;
+  --vote-w: 2.1rem;
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 0 1.5rem; align-items: start;
+}
+#board-feed:not(:has(.board-compose)) { grid-template-columns: minmax(0, 1fr); }
+#board-feed [hidden] { display: none !important; }
+.board-compose { grid-column: 2; grid-row: 1; position: sticky; top: 64px; }
+.board-list { grid-column: 1; grid-row: 1; min-width: 0; }
+.board-list-title, .board-compose-title {
+  font-size: .78rem; font-weight: 600; color: var(--ink-dim);
+  letter-spacing: .02em; margin: 0 0 .45rem;
+}
+
+/* Reset the shared button look for the small ghost controls on this page. */
+#board-feed :where(.rc-replyBtn, .rc-voteButton, .board-icon-btn, .board-icon-choice,
+                   .board-link, #board-reply-cancel, #board-edit-cancel) {
+  background: none; border: 0; padding: 0; margin: 0; height: auto;
+  font: inherit; font-weight: 400; color: inherit; cursor: pointer; border-radius: 4px;
+}
+
+/* ------------------------------------------------------------ list ---- */
+#board-rows {
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--surface); overflow: hidden;
+}
+.rc-root {
+  --pad: calc(var(--gutter) + var(--vote-w) + var(--depth, 0) * var(--indent));
+  position: relative; display: block;
+  padding: .5rem var(--gutter) .55rem var(--pad);
+  border-bottom: 1px solid var(--rule); line-height: 1.4;
+}
+.rc-root:last-child { border-bottom: 0; }
+.rc-root:hover { background: var(--hover); }
+.rc-root.mine .rc-username { color: var(--accent); }
+.rc-root.pending { opacity: .6; }
+.rc-root[style*="--depth"]::before {
+  content: ""; position: absolute; top: .5rem; bottom: .55rem;
+  left: calc(var(--pad) - var(--vote-w) + .15rem); width: 1px; background: var(--rule);
+}
+.rc-deleted {
+  padding-top: .15rem; padding-bottom: .15rem; font-size: .78rem; font-style: italic;
+  color: var(--ink-dim); opacity: .8;
+}
+.rc-deleted:hover { background: none; }
+.rc-empty { color: var(--ink-dim); padding: 1.2rem var(--gutter); }
+.rc-more { color: var(--ink-dim); font-size: .78rem; padding: .6rem var(--gutter); border-top: 1px solid var(--rule); }
+#board-rows > .rc-more:first-child { border-top: 0; }
+
+.rc-info { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 .4rem; font-size: .8rem; margin-bottom: .1rem; }
+.rc-avatar { order: 0; width: auto; font-size: .95rem; line-height: 1; align-self: center; }
+.rc-username { order: 1; font-weight: 600; font-size: .85rem; color: var(--ink); text-decoration: none; }
+.rc-username:hover { color: var(--accent); text-decoration: underline; }
+.rc-username.hash-short { font-family: var(--mono); font-weight: 400; font-size: .75rem; color: var(--ink-dim); overflow-wrap: anywhere; }
+.rc-time { order: 2; color: var(--ink-dim); font-size: .75rem; text-decoration: none; font-variant-numeric: tabular-nums; }
+.rc-time:hover { color: var(--accent); text-decoration: underline; }
+.rc-edited { order: 3; font-style: italic; }
+.rc-edited:hover { text-decoration: none; color: var(--ink-dim); }
+.rc-actions { order: 4; display: flex; gap: .75rem; margin-left: auto; opacity: 0; transition: opacity .1s; }
+.rc-root:hover .rc-actions, .rc-root:focus-within .rc-actions { opacity: 1; }
+@media (hover: none) { .rc-actions { opacity: 1; } }
+.rc-replyBtn { font-size: .75rem; color: var(--ink-dim); }
+.rc-replyBtn:hover { color: var(--accent); text-decoration: underline; }
+
+.rc-body { padding: 0; }
+.rc-replyQuote {
+  display: block; max-width: 72ch; font-size: .75rem; color: var(--ink-dim);
+  text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rc-replyQuote:hover { color: var(--accent); text-decoration: underline; }
+.rc-text { max-width: 72ch; font-size: .95rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.rc-text blockquote { margin: .25rem 0; padding: 0 0 0 .6rem; border-left: 1px solid var(--line-strong); color: var(--ink-dim); }
+.rc-text code { font-family: var(--mono); font-size: .88em; background: var(--hover); padding: .05rem .3rem; border-radius: 3px; }
+.rc-text a { color: var(--link); }
+
+/* Votes: score between two small arrows, in a column at the left edge. */
+.rc-vote-root {
+  position: absolute; left: calc(var(--pad) - var(--vote-w) - .1rem); top: .3rem; width: var(--vote-w);
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 0;
+  user-select: none; font-variant-numeric: tabular-nums;
+}
+.rc-voteButton { display: flex; align-items: center; justify-content: center; width: 22px; height: 15px; color: var(--ink-dim); opacity: .45; }
+.rc-root:hover .rc-voteButton, .rc-voteButton:focus-visible { opacity: 1; }
+.rc-voteButton:disabled { cursor: default; }
+.rc-upVoteButton:hover, .rc-upVoteButtonActive { color: var(--gain); opacity: 1; }
+.rc-downVoteButton:hover, .rc-downVoteButtonActive { color: var(--loss); opacity: 1; }
+.rc-votes { font-size: .8rem; font-weight: 600; line-height: 1.1; color: var(--ink-dim); min-width: 1ch; text-align: center; }
+.rc-votesPositive { color: var(--gain); }
+.rc-votesNegative { color: var(--loss); }
+.rc-votesPending { opacity: .6; }
+.rc-upVoteIcon .rc-voteIcon { transform: rotate(180deg); }
+
+/* ---------------------------------------------------------- compose ---- */
+.board-compose {
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--surface); padding: .7rem .8rem .6rem;
+}
+.board-compose:focus-within { border-color: var(--accent); }
+.board-compose-row { display: flex; gap: .4rem; align-items: center; }
+.board-compose-row + .board-compose-row { margin-top: .4rem; }
+.board-main {
+  display: grid; grid-template-columns: auto 1fr; grid-template-areas: "msg msg" "icon send";
+  gap: .5rem; align-items: center;
+}
+#board-message {
+  grid-area: msg; width: 100%; min-width: 0; min-height: 7.5rem; max-height: 14rem; height: auto;
+  padding: .45rem .55rem; font-family: var(--serif); font-size: .95rem; line-height: 1.45;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--paper);
+  color: var(--ink); resize: none; overflow-y: auto; outline: none; box-shadow: none;
+}
+#board-message:focus { border-color: var(--accent); box-shadow: none; }
+#board-message::placeholder { color: var(--ink-dim); opacity: .6; }
+.board-icon-btn { grid-area: icon; justify-self: start; font-size: 1.15rem; line-height: 1; padding: .25rem .35rem; border: 1px solid var(--rule); }
+#board-feed .board-icon-btn:hover { background: var(--hover); }
+#board-send {
+  grid-area: send; justify-self: end; height: 32px; padding: 0 1.2rem;
+  font-size: .88rem; border-radius: var(--radius);
+}
+#board-send:hover:not(:disabled) { background: var(--ink-dim); }
+.board-compose-sub {
+  flex-wrap: wrap; font-size: .75rem; color: var(--ink-dim); font-variant-numeric: tabular-nums;
+  gap: .2rem .8rem; padding-top: .45rem; border-top: 1px solid var(--rule);
+}
+.board-compose-sub #board-msg-counter { margin-left: auto; }
+.board-link { font-size: .75rem; color: var(--link); text-decoration: underline; }
+#board-feed .board-link:hover { color: var(--ink-dim); }
+#board-sent { color: var(--gain); font-weight: 600; }
+#board-preview { min-height: 7.5rem; padding: .45rem .55rem; margin-bottom: .5rem; border: 1px solid var(--rule); border-radius: var(--radius); font-size: .95rem; line-height: 1.45; }
+.rc-toolbar { display: inline-flex; flex: 1 0 100%; order: 9; }
+.rc-toolbar-group { display: inline-flex; }
+.rc-toolbar-group + .rc-toolbar-group { margin-left: .4rem; padding-left: .4rem; border-left: 1px solid var(--rule); }
+.rc-toolbar-item { color: var(--ink-dim); display: inline-flex; height: 24px; width: 24px; justify-content: center; align-items: center; border-radius: 4px; cursor: pointer; }
+.rc-toolbar-item:hover { color: var(--accent); background: var(--hover); }
+.rc-toolbar-item svg { fill: currentColor; width: 12px; height: 12px; }
+
+.board-profile-panel {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin-top: .55rem;
+  padding-top: .55rem; border-top: 1px solid var(--rule); font-size: .78rem; color: var(--ink-dim);
+}
+#board-nick {
+  width: 100%; height: 30px; padding: 0 .5rem; font-family: var(--serif); font-size: .88rem;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--paper); box-shadow: none;
+}
+#board-nick:focus { border-color: var(--accent); box-shadow: none; }
+.board-icon-palette { display: flex; flex-wrap: wrap; gap: .1rem; }
+.board-icon-choice { font-size: 1.05rem; line-height: 1; padding: .2rem .25rem; }
+#board-feed .board-icon-choice:hover { background: var(--hover); }
+.board-banner {
+  justify-content: space-between; font-size: .78rem; color: var(--ink-dim);
+  border: 1px solid var(--rule); border-radius: 4px; padding: .2rem .5rem; margin-bottom: .5rem;
+}
+.board-banner span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#board-reply-cancel, #board-edit-cancel { color: var(--ink-dim); font-size: 1rem; line-height: 1; }
+#board-feed #board-reply-cancel:hover, #board-feed #board-edit-cancel:hover { color: var(--loss); }
+.board-error { margin: 0 0 .5rem; font-size: .82rem; color: var(--loss); }
+
+/* ----------------------------------------------------------- narrow ---- */
+@media (max-width: 900px) {
+  #board-feed { grid-template-columns: minmax(0, 1fr); gap: .9rem; }
+  .board-compose, .board-list { grid-column: 1; }
+  .board-compose { position: static; }
+  .board-list { grid-row: 2; }
+  .board-compose-title { display: none; }
+  #board-message { min-height: 4.5rem; }
+}
+@media (max-width: 600px) {
+  #board-feed { --indent: .55rem; --gutter: .6rem; --vote-w: 1.9rem; }
+}

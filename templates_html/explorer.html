@@ -1,37 +1,43 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/chain.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<div class="card"{% if page == 1 %} data-live="blocks"{% endif %}>
-  <div class="table-wrap">
-  <table class="stacked">
-    <thead><tr><th>Height</th><th>Hash</th><th>Block time</th><th>Txs</th><th>Builder</th></tr></thead>
+<div class="ph">
+  <h2>Blocks</h2>
+  {% if recent %}<span class="sub">{{ recent[0].height }} to {{ recent[-1].height }}</span>{% endif %}
+</div>
+<div class="panel"{% if page == 1 %} data-live="blocks"{% endif %}>
+  <table class="dt">
+    <thead><tr><th class="num">Height</th><th>Hash</th><th class="num hide-sm">Block time</th><th class="num">Txs</th><th class="hide-sm">Builder</th></tr></thead>
     <tbody>
     {% if recent %}
       {% for b in recent %}
       <tr>
-        <td data-label="Height"><a href="/explorer/block/{{ b.height }}">{{ b.height }}</a></td>
-        <td data-label="Hash" class="hash"><a href="/explorer/block/{{ b.height }}">{{ b.hash[:16] }}…</a></td>
-        <td data-label="Block time">{% if b.height in block_times %}{{ block_times[b.height] }}s{% endif %}</td>
-        <td data-label="Txs">{{ b.transactions | length }}</td>
-        <td data-label="Builder" class="hash-short">{{ (b.builder or '')[:20] }}{% if b.builder %}…{% endif %}</td>
+        <td class="num" data-label="Height"><a href="/explorer/block/{{ b.height }}">{{ b.height }}</a></td>
+        <td class="fill" data-label="Hash"><a href="/explorer/block/{{ b.height }}">{{ b.hash }}</a></td>
+        <td class="num hide-sm" data-label="Block time">{% if b.height in block_times %}{{ block_times[b.height] }}s{% endif %}</td>
+        <td class="num" data-label="Txs">{{ b.transactions | length }}</td>
+        <td class="hide-sm dim" data-label="Builder">{{ b.builder or '' }}</td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="5" style="color:var(--muted);text-align:center">No blocks yet</td></tr>
+      <tr class="empty"><td colspan="5">No blocks yet</td></tr>
     {% endif %}
     </tbody>
   </table>
-  </div>
-</div>
 {% if total_pages > 1 %}
-<nav class="pager" aria-label="Pagination">
-  {% if has_prev %}<a href="/explorer?page={{ page - 1 }}">Prev</a>{% endif %}
-  {% for p in page_window %}
-    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
-    {% elif p == page %}<span class="pager-current">{{ p }}</span>
-    {% else %}<a href="/explorer?page={{ p }}">{{ p }}</a>
-    {% endif %}
-  {% endfor %}
-  {% if has_next %}<a href="/explorer?page={{ page + 1 }}">Next</a>{% endif %}
-</nav>
+  <div class="panel-foot">
+  <span>Page {{ page }} of {{ total_pages }}</span>
+  <nav class="pager" aria-label="Pagination">
+    {% if has_prev %}<a href="/explorer?page={{ page - 1 }}">Prev</a>{% endif %}
+    {% for p in page_window %}
+      {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+      {% elif p == page %}<span class="pager-current">{{ p }}</span>
+      {% else %}<a href="/explorer?page={{ p }}">{{ p }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if has_next %}<a href="/explorer?page={{ page + 1 }}">Next</a>{% endif %}
+  </nav>
+  </div>
 {% endif %}
+</div>
 {% endblock %}

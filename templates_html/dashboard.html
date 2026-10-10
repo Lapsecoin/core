@@ -1,99 +1,91 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/chain.css?v={{ local_version }}">
+<link rel="stylesheet" href="/css/pages/dashboard.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<div class="dashboard-page">
-<div class="stats">
-  {# Height, peers and mempool share one box, each with its own label:
-     six boxes wrapped the row onto a second line and left net emission
-     stranded there alone, and one box labelled for whichever figure it
-     led with left the other two to be guessed. #}
-  <div class="stat stat-trio">
-    <div class="stat-group">
-      {# The live poll below (refresh(), called immediately on load) fills
-         these in within its first round trip; until then a spinner shows
-         rather than the server-rendered figure, so a fresh node at a
-         genuine height 0 with 0 peers doesn't read as broken on the very
-         first paint. #}
-      <a id="live-height-link" href="/explorer/block/{{ info.height }}">
-        <div class="stat-label">Height</div>
-        <div class="stat-value" id="live-height"><span class="stat-spinner"></span></div>
+<div class="dash">
+<div class="dash-main">
+  <div class="panel tip">
+    {# The live poll below (refresh(), called immediately on load) fills
+       these in within its first round trip; until then a spinner shows
+       rather than the server-rendered figure, so a fresh node at a
+       genuine height 0 with 0 peers doesn't read as broken on the very
+       first paint. #}
+    <div>
+      <a class="tip-height" id="live-height-link" href="/explorer/block/{{ info.height }}">
+        <span class="tip-label">Block height</span>
+        <span class="tip-num" id="live-height"><span class="stat-spinner"></span></span>
       </a>
-      <a href="/network">
-        <div class="stat-label">Peers</div>
-        <div class="stat-value" id="live-peers"><span class="stat-spinner"></span></div>
-      </a>
-      <div>
-        <div class="stat-label">Pending</div>
-        <div class="stat-value" id="live-mempool"><span class="stat-spinner"></span></div>
-      </div>
-      <div>
-        <div class="stat-label">Sync</div>
-        <div class="stat-value" id="live-sync"><span class="stat-spinner"></span></div>
-      </div>
-    </div>
-    {% if info.block_time_ratio is not none %}
-    <div class="stat-sub" style="color:{{ 'var(--red)' if info.block_time_ratio > 1 else 'var(--green)' }}" id="live-block-time-diff">{{ "%.1f" | format(info.block_time_ratio) }}x current median</div>
-    {% else %}
-    <div class="stat-sub" id="live-block-time-diff">no builds yet</div>
-    {% endif %}
-  </div>
-  <div class="stat">
-    <div class="stat-label">Network age</div>
-    <div class="stat-value" id="live-age">{{ fmt_duration(info.network_age_seconds) }}</div>
-    <div class="stat-sub">since genesis</div>
-  </div>
-  {# LAPSE with decimals rather than "N LAPSE M ticks": at this magnitude
-     the tick half is nine digits that wrapped the value onto three lines
-     and told nobody anything. #}
-  <div class="stat">
-    <div class="stat-label">Circulating</div>
-    <div class="stat-value" style="font-size:1rem" id="live-circulating">{{ fmt_lapse(info.circulating) }}</div>
-    <div class="stat-sub" id="live-circulating-pct">{{ "%.4f"|format(info.total_minted / supply_cap * 100) }}% of 21M cap minted{% if info.burned %}, {{ fmt_lapse(info.burned) }} burned{% endif %}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Net emission</div>
-    <div class="stat-value" style="font-size:1rem;color:var(--green)" id="live-reward">+{{ fmt_lapse_dp(info.block_reward) }}</div>
-    <div class="stat-sub">per block</div>
-  </div>
-</div>
-{% if info.address %}
-<div class="card">
-  <div class="card-title">Address{{ " (" ~ info.nick ~ ")" if info.nick }}</div>
-  <div class="hash" title="{{ (info.nick ~ ' - ') if info.nick }}{{ info.address }}">{{ info.address }}</div>
-</div>
-{% endif %}
-<div class="card" data-tx-page="{{ tx_page }}">
-  <div class="card-title">Recent transactions</div>
-  <div class="table-wrap">
-  <table class="stacked">
-    <thead><tr><th>Height</th><th>Hash</th><th>From</th><th>Amount</th></tr></thead>
-    <tbody id="live-recent-txs">
-    {% if recent_txs %}
-      {% for height, h, t, amount in recent_txs %}
-      <tr>
-        <td data-label="Height"><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
-        <td data-label="Hash" class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td data-label="From" class="hash-short">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</td>
-        <td data-label="Amount">{{ fmt_lapse_dp(amount) }}</td>
-      </tr>
-      {% endfor %}
-    {% else %}
-      <tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions yet</td></tr>
-    {% endif %}
-    </tbody>
-  </table>
-  </div>
-{% if tx_total_pages > 1 %}
-  <nav class="pager" aria-label="Recent transaction pagination">
-    {% if tx_has_prev %}<a href="/?tx_page={{ tx_page - 1 }}">Prev</a>{% endif %}
-    {% for p in tx_page_window %}
-      {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
-      {% elif p == tx_page %}<span class="pager-current">{{ p }}</span>
-      {% else %}<a href="/?tx_page={{ p }}">{{ p }}</a>
+      {% if info.block_time_ratio is not none %}
+      <span class="tip-sub {{ 'loss' if info.block_time_ratio > 1 else 'gain' }}" id="live-block-time-diff">{{ "%.1f" | format(info.block_time_ratio) }}x current median</span>
+      {% else %}
+      <span class="tip-sub" id="live-block-time-diff">no builds yet</span>
       {% endif %}
-    {% endfor %}
-    {% if tx_has_next %}<a href="/?tx_page={{ tx_page + 1 }}">Next</a>{% endif %}
-  </nav>
+    </div>
+    <div class="tip-figs">
+      <a href="/network"><span class="tip-label">Peers</span><span class="tip-fig" id="live-peers"><span class="stat-spinner"></span></span></a>
+      <div><span class="tip-label">Pending</span><span class="tip-fig" id="live-mempool"><span class="stat-spinner"></span></span></div>
+      <div><span class="tip-label">Sync</span><span class="tip-fig" id="live-sync"><span class="stat-spinner"></span></span></div>
+    </div>
+  </div>
+  <div class="panel" data-tx-page="{{ tx_page }}">
+    <div class="panel-head"><b>Recent transactions</b>{% if tx_total_pages > 1 %}<span>page {{ tx_page }} of {{ tx_total_pages }}</span>{% endif %}</div>
+    <table class="dt">
+      <thead><tr><th class="num">Block</th><th>Hash</th><th class="hide-sm">From</th><th class="num">Amount</th></tr></thead>
+      <tbody id="live-recent-txs">
+      {% if recent_txs %}
+        {% for height, h, t, amount in recent_txs %}
+        <tr>
+          <td class="num" data-label="Height"><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
+          <td class="fill" data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+          <td class="hide-sm dim" data-label="From">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</td>
+          <td class="num" data-label="Amount">{{ fmt_lapse_dp(amount) }}</td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr class="empty"><td colspan="4">No transactions yet</td></tr>
+      {% endif %}
+      </tbody>
+    </table>
+{% if tx_total_pages > 1 %}
+    <div class="panel-foot">
+    <nav class="pager" aria-label="Recent transaction pagination">
+      {% if tx_has_prev %}<a href="/?tx_page={{ tx_page - 1 }}">Prev</a>{% endif %}
+      {% for p in tx_page_window %}
+        {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+        {% elif p == tx_page %}<span class="pager-current">{{ p }}</span>
+        {% else %}<a href="/?tx_page={{ p }}">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if tx_has_next %}<a href="/?tx_page={{ tx_page + 1 }}">Next</a>{% endif %}
+    </nav>
+    </div>
 {% endif %}
+  </div>
+</div>
+<div class="dash-side">
+  {# LAPSE with decimals rather than "N LAPSE M ticks": at this magnitude
+     the tick half is nine digits that told nobody anything. #}
+  <div class="panel">
+    <div class="panel-head"><b>Supply</b></div>
+    <dl class="kv">
+      <div><dt>Circulating</dt><dd class="num"><span id="live-circulating">{{ fmt_lapse(info.circulating) }}</span>
+        <span class="side-sub" id="live-circulating-pct">{{ "%.4f"|format(info.total_minted / supply_cap * 100) }}% of 21M cap minted{% if info.burned %}, {{ fmt_lapse(info.burned) }} burned{% endif %}</span></dd></div>
+      <div><dt>Net emission</dt><dd class="num gain"><span id="live-reward">+{{ fmt_lapse_dp(info.block_reward) }}</span> <span class="side-sub">per block</span></dd></div>
+    </dl>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><b>Network</b></div>
+    <dl class="kv">
+      <div><dt>Age</dt><dd class="num"><span id="live-age">{{ fmt_duration(info.network_age_seconds) }}</span> <span class="side-sub">since genesis</span></dd></div>
+    </dl>
+  </div>
+{% if info.address %}
+  <div class="panel">
+    <div class="panel-head"><b>Address{{ " (" ~ info.nick ~ ")" if info.nick }}</b></div>
+    <dl class="kv"><div><dt>This node</dt><dd class="addr" title="{{ (info.nick ~ ' - ') if info.nick }}{{ info.address }}">{{ info.address }}</dd></div></dl>
+  </div>
+{% endif %}
+</div>
 </div>
 <script>
 (function () {
@@ -158,7 +150,7 @@
         if (sec > 3600) eta = Math.floor(sec/3600) + "h " + Math.floor((sec%3600)/60) + "m";
         else if (sec > 60) eta = Math.floor(sec/60) + "m " + (sec%60) + "s";
         else eta = sec + "s";
-        syncStr += ` <span style="font-size:0.85em;color:var(--muted)">(${eta})</span>`;
+        syncStr += ` <span class="eta">(${eta})</span>`;
       }
       document.getElementById("live-sync").innerHTML = syncStr;
       document.getElementById("live-circulating").textContent = fmtLapseWhole(info.circulating);
@@ -169,10 +161,10 @@
       const diffEl = document.getElementById("live-block-time-diff");
       if (info.block_time_ratio === null) {
         diffEl.textContent = "no builds yet";
-        diffEl.style.color = "";   // back to .stat-sub's own colour
+        diffEl.className = "tip-sub";
       } else {
         diffEl.textContent = info.block_time_ratio.toFixed(1) + "x current median";
-        diffEl.style.color = info.block_time_ratio > 1 ? "var(--red)" : "var(--green)";
+        diffEl.className = "tip-sub " + (info.block_time_ratio > 1 ? "loss" : "gain");
       }
 
       document.getElementById("live-age").textContent =
@@ -187,16 +179,16 @@
       } else if (txs.length) {
         txBody.innerHTML = txs.map(function (tx) {
           return "<tr>" +
-            "<td data-label=\"Height\"><a href=\"/explorer/block/" + tx.height + "\">" + tx.height + "</a></td>" +
-            "<td data-label=\"Hash\" class=\"hash-short\"><a href=\"/explorer/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
-            "<td data-label=\"From\" class=\"hash-short\">" +
+            "<td class=\"num\" data-label=\"Height\"><a href=\"/explorer/block/" + tx.height + "\">" + tx.height + "</a></td>" +
+            "<td data-label=\"Hash\" class=\"fill\"><a href=\"/explorer/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
+            "<td data-label=\"From\" class=\"hide-sm dim\">" +
               (tx.from === SELF_ADDRESS ? "self" : tx.from.slice(0, 24) + "…") +
               "</td>" +
-            "<td data-label=\"Amount\">" + fmtLapse(tx.amount) + "</td>" +
+            "<td class=\"num\" data-label=\"Amount\">" + fmtLapse(tx.amount) + "</td>" +
             "</tr>";
         }).join("");
       } else {
-        txBody.innerHTML = "<tr><td colspan=\"4\" style=\"color:var(--muted);text-align:center\">No transactions yet</td></tr>";
+        txBody.innerHTML = "<tr class=\"empty\"><td colspan=\"4\">No transactions yet</td></tr>";
       }
 
       statusEl.textContent = "refreshed " + new Date().toLocaleTimeString();
@@ -209,8 +201,4 @@
   setInterval(refresh, 6000);
 })();
 </script>
-<style>
-  .dashboard-page { font-size: 16px; }
-</style>
-</div>
 {% endblock %}

@@ -1,28 +1,27 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/chain.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<h2>Transaction</h2>
-<div class="card">
-  <table class="kv-table" data-live="status">
-    <tr><td>Hash</td><td class="hash">{{ tx_hash }}</td></tr>
-    <tr><td>Status</td><td>{{ location }}</td></tr>
-    <tr><td>From</td><td class="hash-short" style="word-break:break-all">{{ tx.from }}</td></tr>
-    <tr><td>Nonce</td><td>{{ tx.nonce }}</td></tr>
-    <tr><td>Fee</td><td>{{ tx.fee }}</td></tr>
-    {% if tx.memo %}<tr><td>Memo</td><td style="word-break:break-word">{{ tx.memo }}</td></tr>{% endif %}
-  </table>
+<div class="ph"><h2>Transaction</h2><span class="sub">{{ location }}</span></div>
+<div class="panel">
+  <dl class="kv" data-live="status">
+    <div class="wide"><dt>Hash</dt><dd class="hash">{{ tx_hash }}</dd></div>
+    <div class="wide"><dt>From</dt><dd class="mono">{{ tx.from }}</dd></div>
+    <div><dt>Status</dt><dd>{{ location }}</dd></div>
+    <div><dt>Nonce</dt><dd>{{ tx.nonce }}</dd></div>
+    <div{% if not tx.memo %} class="last"{% endif %}><dt>Fee</dt><dd>{{ tx.fee }}</dd></div>
+    {% if tx.memo %}<div class="wide last"><dt>Memo</dt><dd>{{ tx.memo }}</dd></div>{% endif %}
+  </dl>
 </div>
-<div class="card">
-  <div class="card-title">Outputs</div>
-  <div class="table-wrap">
-  <table class="stacked">
-    <thead><tr><th>To</th><th>Amount</th></tr></thead>
+<div class="panel">
+  <div class="panel-head"><b>Outputs</b><span>{{ tx.outputs | length }}</span></div>
+  <table class="dt">
+    <thead><tr><th>To</th><th class="num">Amount</th></tr></thead>
     <tbody>
     {% for o in tx.outputs %}
-    <tr><td data-label="To" class="hash-short">{{ o.to }}</td><td data-label="Amount">{{ o.amount }}</td></tr>
+    <tr><td class="fill" data-label="To">{{ o.to }}</td><td class="num" data-label="Amount">{{ o.amount }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
-  </div>
 </div>
 {% if gas_request %}{% set status_url = "/api/gas/" ~ tx_hash %}{% include "gas_panel.html" %}{% endif %}
 {% endblock %}

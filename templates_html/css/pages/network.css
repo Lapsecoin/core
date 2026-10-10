@@ -1,0 +1,63 @@
+/* Network page: graph left, peer table right, one screen on wide viewports. */
+.net { display: flex; flex-direction: column; gap: .6rem; }
+.net-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: .3rem 1.25rem; }
+.net-head h2 { margin: 0; font-variant-numeric: tabular-nums; }
+.net-stats { display: flex; flex-wrap: wrap; gap: .2rem 1.1rem; flex: 1 1 auto; font-size: .85rem; color: var(--ink-dim); }
+.net-stat b { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+.net-dl { margin-left: auto; }
+
+.net-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: .4rem; vertical-align: .05em; background: var(--ink-dim); }
+.net-trusted .net-dot, .net-state-trusted .net-dot { background: var(--gain); }
+.net-cooldown .net-dot, .net-state-cooldown .net-dot { background: #a8a290; }
+.net-seen .net-dot { background: transparent; border: 1px solid #8a8576; }
+.net-self .net-dot { background: var(--ink); }
+.net-state-fork .net-dot { background: var(--loss); }
+.net-state-fork { color: var(--loss); }
+
+.net-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: .75rem; height: calc(100vh - 48px - 5.6rem); min-height: 420px; }
+.net-graph { position: relative; min-height: 0; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.topology { position: absolute; inset: 0; }
+.net-legend { position: absolute; left: .75rem; bottom: .55rem; display: flex; flex-wrap: wrap; gap: .1rem .9rem; font-size: .75rem; color: var(--ink-dim); pointer-events: none; }
+
+.net-side { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.net-add { padding: .6rem .75rem; border-bottom: 1px solid var(--rule); }
+.net-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem; }
+.net-add-form { display: flex; gap: .4rem; align-items: center; }
+.net-add-form input[type="text"] { flex: 1 1 auto; min-width: 0; }
+.net-add-form input[type="number"] { flex: 0 0 5.4rem; width: 5.4rem; }
+.net-add-form .btn-sm { height: 36px; padding: 0 .9rem; background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.net-add-form .btn-sm:hover { background: var(--ink-dim); }
+.net-msg { font-size: .78rem; margin-top: .3rem; min-height: 0; }
+.net-msg:empty { display: none; }
+.net-msg.ok { color: var(--gain); }
+.net-msg.err { color: var(--loss); }
+
+.net-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 0; }
+.net-table { min-width: 0; font-size: .85rem; }
+.net-table th { position: sticky; top: 0; z-index: 1; padding: .4rem .75rem; }
+.net-table td { padding: .32rem .75rem; }
+.net-table th.num, .net-table td.num { text-align: right; }
+.net-table td.net-state { font-family: var(--serif); }
+.net-table td.net-addr a { color: var(--accent); }
+.net-empty { color: var(--ink-dim); text-align: center; font-family: var(--serif); }
+
+@media (max-width: 900px) {
+  .net-dl { margin-left: 0; }
+  .net-body { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0; }
+  .net-graph { height: 340px; }
+  .net-side { overflow: visible; }
+  .net-table-wrap { overflow: visible; }
+  .net-table th { position: static; }
+}
+@media (max-width: 640px) {
+  table.net-table td.num { text-align: left; }
+  table.net-table tr { background: transparent; }
+  table.net-table td.net-state { font-family: var(--serif); }
+}
+@media (max-width: 640px) {
+  table.net-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .75rem; border: none; border-bottom: 1px solid var(--rule); border-radius: 0; margin: 0; padding: .5rem .75rem; }
+  table.net-table td { width: auto; border: none; padding: .15rem 0; }
+  table.net-table td.net-addr, .net-table td[colspan] { grid-column: 1 / -1; }
+  table.net-table td.num { text-align: left; }
+  table.net-table td.net-empty { padding: 1rem 0; }
+}

@@ -1,0 +1,33 @@
+/* Mempool page: stats strip over a table that scrolls inside its own panel. */
+.mempool-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: .15rem 1rem; margin-bottom: .6rem; }
+.mempool-heading h2 { margin: 0; }
+
+.mp-strip { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); margin-bottom: .75rem; }
+.mp-stat { padding: .55rem 1rem; border-right: 1px solid var(--rule); min-width: 0; }
+.mp-stat:last-child { border-right: none; }
+.mp-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; }
+.mp-value { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 1.1rem; font-weight: 600; overflow-wrap: anywhere; }
+.mp-main .mp-value { font-size: 1.6rem; line-height: 1.25; color: var(--accent); }
+
+.mempool-table-wrap { max-height: calc(100vh - 48px - 11.4rem); min-height: 200px; overflow: auto; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.mempool-table { margin: 0; }
+.mempool-table th { position: sticky; top: 0; z-index: 1; }
+.mempool-table th.num, .mempool-table td.num { text-align: right; }
+.mempool-status { color: var(--live); font-family: var(--serif); }
+.mempool-empty { color: var(--ink-dim); text-align: center; font-family: var(--serif); padding: 1.5rem .7rem; }
+
+@media (max-width: 640px) {
+  .mp-strip { grid-template-columns: 1fr 1fr; }
+  .mp-stat { border-bottom: 1px solid var(--rule); }
+  .mp-stat:nth-child(2n) { border-right: none; }
+  .mp-stat:nth-last-child(-n+2) { border-bottom: none; }
+  .mempool-table-wrap { max-height: none; border: none; background: transparent; overflow: visible; }
+  .mempool-table th { position: static; }
+  table.mempool-table td.num { text-align: left; }
+  table.mempool-table tr { background: var(--surface); }
+}
+@media (max-width: 640px) {
+  table.mempool-table tr { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 .75rem; margin-bottom: .5rem; padding: .5rem .75rem; border: 1px solid var(--rule); border-radius: var(--radius); }
+  table.mempool-table td { width: auto; border: none; padding: .15rem 0; }
+  table.mempool-table td:nth-child(1), .mempool-table td:nth-child(2), .mempool-table td[colspan] { grid-column: 1 / -1; }
+}
