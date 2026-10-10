@@ -38,7 +38,7 @@
     --hover: rgb(var(--ink-rgb) / .045);
     --radius: 6px;
     --shadow: none;
-    --container: 1040px;
+    --container: 1200px;
 
     /* aliases kept so the per-page templates (unchanged) still resolve */
     --muted:  var(--ink-dim);
@@ -58,60 +58,72 @@
   a:hover { color: var(--ink-dim); }
   h1, h2, h3, p, ul, ol { margin: 0; }
 
-  /* ===================================================== masthead ======= */
+  /* ===================================================== app bar ======== */
+  /* One 48px row: brand, nav, status, links. The old two-row masthead spent
+     76px of every screen on a centered title and a lot of empty side space. */
   .masthead {
     position: sticky; top: 0; z-index: 100;
-    background: var(--paper);
-    border-bottom: 1px solid var(--rule);
-    padding: .5rem 1.25rem .35rem;
+    background: var(--ink); color: var(--paper);
+    padding: 0 1.25rem;
   }
-  .live-status {
-    position: absolute; top: .1rem; right: 0;
-    color: var(--ink-dim); font-size: .68rem; font-style: italic;
+  .masthead-inner {
+    max-width: var(--container); margin: 0 auto; min-height: 48px;
+    display: flex; align-items: center; gap: .5rem 1.25rem;
   }
-  @media (max-width: 640px) { .live-status { display: none; } }
-  .corner-links {
-    position: absolute; top: 0; left: 0;
-    display: flex; gap: .5rem;
-  }
-  .corner-links a { color: var(--ink); line-height: 0; padding: .15rem; }
-  .corner-links a:hover { color: var(--accent); }
-  @media (max-width: 640px) {
-    .masthead { padding: .35rem 1rem .25rem; }
-    .masthead-title { font-size: 1.25rem; }
-    nav.mainnav { font-size: .82rem; column-gap: .8rem; }
-    .corner-links svg { width: 18px; height: 18px; }
-  }
-  .masthead-inner { max-width: var(--container); margin: 0 auto; position: relative; }
   .masthead-title {
-    display: flex; align-items: center; justify-content: center; gap: .45rem;
-    font-size: 1.25rem; font-weight: 700; letter-spacing: -.01em; text-align: center;
-    margin-bottom: .25rem;
+    order: 1; display: flex; align-items: center; gap: .5rem; flex: 0 0 auto;
+    font-size: .95rem; font-weight: 700; letter-spacing: -.01em; white-space: nowrap;
   }
-  .masthead-title img { height: 1.35em; width: auto; }
+  .masthead-title img { height: 1.25em; width: auto; }
   nav.mainnav {
-    display: flex; flex-wrap: wrap; justify-content: center; column-gap: 1.1rem; row-gap: .3rem;
-    font-size: .92rem;
+    order: 2; flex: 1 1 auto; min-width: 0;
+    display: flex; flex-wrap: nowrap; gap: .1rem; font-size: .86rem;
+    overflow-x: auto; scrollbar-width: none;
   }
+  nav.mainnav::-webkit-scrollbar { display: none; }
+  nav.mainnav .sep { display: none; }
   nav.mainnav a {
-    color: var(--ink); text-decoration: none; padding-bottom: .2rem;
-    border-bottom: 2px solid transparent; transition: color .12s, border-color .12s;
+    color: rgb(246 243 234 / .66); text-decoration: none; white-space: nowrap;
+    padding: .38rem .65rem; border-radius: 5px; transition: color .1s, background .1s;
   }
-  nav.mainnav a:hover { color: var(--accent); }
-  nav.mainnav a.nav-disabled { color: var(--rule-lt); pointer-events: none; }
-  nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
-  nav.mainnav .sep { color: var(--rule-lt); align-self: flex-start; }
+  nav.mainnav a:hover { color: var(--paper); background: rgb(255 255 255 / .08); }
+  nav.mainnav a.active { color: var(--paper); background: rgb(255 255 255 / .14); font-weight: 600; }
+  nav.mainnav a.nav-disabled { color: rgb(246 243 234 / .3); pointer-events: none; }
+  .live-status { order: 3; flex: 0 0 auto; color: rgb(246 243 234 / .55); font-size: .72rem; white-space: nowrap; }
+  .corner-links { order: 4; flex: 0 0 auto; display: flex; gap: .4rem; }
+  .corner-links a { color: rgb(246 243 234 / .66); line-height: 0; padding: .25rem; border-radius: 5px; }
+  .corner-links a:hover { color: var(--paper); background: rgb(255 255 255 / .08); }
+  .corner-links svg { width: 17px; height: 17px; }
+  .version-alert, .masthead-inner > div:not([class]) { order: 5; }
   .version-alert {
-    display: table; margin: .35rem auto 0; padding: .15rem .65rem;
-    border: 1px solid currentcolor; border-radius: 999px; font-size: .72rem; font-weight: bold;
-    text-decoration: none;
+    flex: 0 0 auto; display: inline-block; margin: 0; padding: .15rem .6rem;
+    border: 1px solid var(--accent); border-radius: 4px; color: #ffb877;
+    font-size: .72rem; font-weight: 600; text-decoration: none; white-space: nowrap;
   }
-  .version-alert:hover { text-decoration: none; background: var(--paper-2); }
+  .version-alert:hover { background: rgb(255 255 255 / .08); color: #ffd0a3; text-decoration: none; }
+  @media (max-width: 1560px) { .live-status { display: none; } }
+  .page-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: .7rem; }
+  .page-head h2 { margin: 0; }
+  @media (max-width: 760px) {
+    .masthead { padding: 0 .75rem; }
+    .masthead-inner { flex-wrap: wrap; padding: .4rem 0 .15rem; }
+    .masthead-title { order: 1; flex: 1 1 auto; }
+    .corner-links { order: 2; }
+    .live-status { display: none; }
+    nav.mainnav { order: 3; flex: 1 0 100%; padding-bottom: .3rem; }
+  }
 
   /* ===================================================== layout ========= */
-  .page { flex: 1; width: 100%; max-width: var(--container); margin: 0 auto; padding: .65rem 1.25rem 1rem; }
+  .page { flex: 1; width: 100%; max-width: var(--container); margin: 0 auto; padding: 1rem 1.25rem 1.25rem; }
   .page > *:last-child { margin-bottom: 0; }
-  h2 { font-size: 1.05rem; font-weight: bold; margin-bottom: .4rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .15rem; }
+  h2 { font-size: 1.15rem; font-weight: 700; letter-spacing: -.01em; margin-bottom: .7rem; }
+  /* Layout helpers: put things side by side when the screen has room, so a
+     page fits without scrolling, and stack them below 900px. */
+  .cols { display: grid; gap: .75rem; grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); align-items: start; margin-bottom: .75rem; }
+  .cols > * { margin-bottom: 0; }
+  .cols-wide-left { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .cols-wide-right { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  @media (max-width: 900px) { .cols, .cols-wide-left, .cols-wide-right { grid-template-columns: minmax(0, 1fr); } }
   h3 { font-size: 1.02rem; font-weight: bold; margin-bottom: .5rem; }
 
   /* ===================================================== components ===== */
@@ -130,7 +142,7 @@
   .form-row .stat-sub { flex: 1 1 100%; margin-top: 0; }
   .card-title {
     font-size: .78rem; font-weight: bold; letter-spacing: .04em; text-transform: uppercase;
-    color: var(--ink-dim); margin-bottom: .3rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .15rem;
+    color: var(--ink-dim); margin-bottom: .5rem;
   }
 
   .stats { display: flex; flex-wrap: wrap; border: 1px solid var(--rule); border-radius: var(--radius);

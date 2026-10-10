@@ -10,6 +10,7 @@
 
 <div class="card">
   <div class="card-title">Node settings</div>
+  <div class="settings-grid">
   {% for s in settings %}
   <div class="setting-row {{ 'is-forced' if s.forced }}">
     <div class="setting-main">
@@ -64,16 +65,18 @@
     {% if s.forced %}<span class="stat-sub setting-help"><strong>Set by {{ s.env_name }}.</strong></span>{% endif %}
   </div>
   {% endfor %}
+  </div>
 </div>
 
-<button type="submit" style="margin-top:.75rem">Save</button>
+<button type="submit" style="margin-top:.25rem">Save</button>
 </form>
 
 <style>
+  .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 2.5rem; }
+  @media (max-width: 900px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } }
   .setting-row {
-    padding: .7rem 0; border-bottom: 1px solid var(--rule-lt);
+    padding: .6rem 0; border-bottom: 1px solid var(--rule);
   }
-  .setting-row:last-child { border-bottom: none; }
   .setting-row.is-forced { opacity: .7; }
   .setting-main {
     display: flex; align-items: flex-start; justify-content: space-between;
