@@ -44,6 +44,7 @@ import block as block_mod
 import crypto
 import gossip as gossip_mod
 import mempool as mempool_mod
+import mempool_store
 import hardware_info
 import settings as settings_mod
 import tx as tx_mod
@@ -156,6 +157,17 @@ SYNC_BUDGET_SECONDS = 20.0
 # started and originated something before seeing anything come back, and
 # only decides how long to wait before re-sending, so erring long costs a
 # delayed retry and erring short costs one redundant flood.
+# Pending transactions are written to disk this often when something changed,
+# and once more on a clean shutdown. A crash loses at most this much.
+MEMPOOL_SAVE_SECONDS = 30.0
+
+# Every this often the node floods some of the pending transactions it holds
+# again, least recently sent first, so a peer that restarted or joined since
+# the first flood still gets them. The cap keeps a full mempool from turning
+# into a burst: the rest go out on the next rounds.
+MEMPOOL_REBROADCAST_SECONDS = 15 * 60
+MEMPOOL_REBROADCAST_BATCH   = 100
+
 ECHO_BOOTSTRAP_SECONDS = 10.0
 ECHO_MIN_SECONDS       = 2.0
 
@@ -259,6 +271,11 @@ class Node:
         self.net_in_q     = net_in_q
         self.mempool      = mempool_mod.Mempool()
         self.storage      = Storage(db_path or DB_PATH)
+        self._mempool_file     = mempool_store.path_for(self.storage.path)
+        self._mempool_saved_at = -1       # mempool.version at the last write
+        self._mempool_save_lock = threading.Lock()
+        self._rebroadcast_last = time.monotonic()
+        self._rebroadcast_sent = {}       # tx hash -> monotonic time last flooded
         self.settings     = settings_mod.Settings(self.storage)
 
         # The height whose draw is still open, and when it closes. A draw
@@ -732,6 +749,9 @@ class Node:
             # cycle should not wait on it.
             threading.Thread(target=self._calibrate_vdf, daemon=True,
                              name="vdf-calibrate").start()
+        self._load_mempool()
+        threading.Thread(target=self._mempool_saver, daemon=True,
+                         name="mempool-save").start()
         try:
             while self.running:
                 try:
@@ -741,9 +761,92 @@ class Node:
                     time.sleep(1)
         finally:
             self._kek = None
+            self._save_mempool()
 
     def stop(self):
         self.running = False
+        self._save_mempool()
+
+    # ------------------------------------------------------------------
+    # Mempool persistence and re-flooding
+    # ------------------------------------------------------------------
+
+    def _load_mempool(self):
+        """Restore the saved pool. Runs on the node thread before the first
+        cycle. Each tx is checked like a freshly submitted one (against
+        confirmed state plus the sender's earlier pending txs), oldest nonce
+        first, so anything the chain has since moved past is dropped. The
+        original entry time is kept, so a restart does not extend a tx's
+        life."""
+        records = mempool_store.load(self._mempool_file)
+        if not records:
+            return
+        now = time.time()
+        records.sort(key=lambda r: (r[0].get("from", ""), r[0].get("nonce", 0)))
+        kept = dropped = 0
+        for t, entered in records:
+            if now - entered > mempool_mod.MEMPOOL_TTL_SECONDS:
+                dropped += 1
+                continue
+            try:
+                ok, _ = self._validate_for_mempool(t)
+            except Exception:
+                ok = False
+            if ok and self.mempool.add(t, entered=entered)[0]:
+                kept += 1
+            else:
+                dropped += 1
+        self._mempool_saved_at = -1
+        log.info("[mempool] restored %d pending transaction%s from disk%s",
+                 kept, "" if kept == 1 else "s",
+                 f", dropped {dropped} no longer valid or too old" if dropped else "")
+
+    def _save_mempool(self):
+        """Write the pool if it changed since the last write. Safe from any
+        thread: it only reads the pool and the lock keeps two writers from
+        sharing the temp file."""
+        with self._mempool_save_lock:
+            version = self.mempool.version
+            if version == self._mempool_saved_at:
+                return
+            try:
+                mempool_store.save(self._mempool_file, self.mempool.records())
+                self._mempool_saved_at = version
+            except OSError as e:
+                log.warning("[mempool] could not save pending transactions: %s", e)
+
+    def _mempool_saver(self):
+        while self.running:
+            time.sleep(MEMPOOL_SAVE_SECONDS)
+            self._save_mempool()
+
+    def _rebroadcast_mempool(self):
+        """Flood a batch of pending transactions again. Anything we originated
+        and have not seen echoed is already handled by
+        _retry_unconfirmed_spreads, so those are skipped here."""
+        now = time.monotonic()
+        if now - self._rebroadcast_last < MEMPOOL_REBROADCAST_SECONDS:
+            return
+        self._rebroadcast_last = now
+        held = self.mempool.hashes()
+        held_set = set(held)
+        self._rebroadcast_sent = {h: t for h, t in self._rebroadcast_sent.items()
+                                  if h in held_set}
+        if not held or not self.pool.count():
+            return
+        waiting = [h for h in held if h not in self._unconfirmed_spreads]
+        waiting.sort(key=lambda h: self._rebroadcast_sent.get(h, 0.0))
+        sent = 0
+        for h in waiting[:MEMPOOL_REBROADCAST_BATCH]:
+            t = self.mempool.get(h)
+            if t is None:
+                continue
+            self.gossip.force_fluff(t, gossip_mod.KIND_TX, h)
+            self._rebroadcast_sent[h] = now
+            sent += 1
+        if sent:
+            log.info("[mempool] re-sent %d of %d pending transaction%s to peers",
+                     sent, len(held), "" if len(held) == 1 else "s")
 
     def _validate_for_mempool(self, tx_dict):
         """Validate tx_dict against confirmed state plus this sender's
@@ -823,6 +926,7 @@ class Node:
         self._sync_if_triggered()
         cs = self.cs   # local alias; can change under sync
         pruned = self.mempool.prune_stale(cs.state)
+        self._rebroadcast_mempool()
         peers = self.pool.count()
         log.info("[block %d] after %s  (%d peer%s, %d transaction%s waiting%s)",
                  cs.height + 1, cs.tip["hash"][:12],
