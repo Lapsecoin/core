@@ -75,22 +75,22 @@
       <button type="button" class="nav-more-btn" id="nav-more" aria-label="More navigation" title="More" aria-haspopup="true" aria-expanded="false" aria-controls="nav-panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
     </nav>
     <div class="nav-panel" id="nav-panel" role="menu" hidden></div>
-    {% if update_checker and update_checker.severity %}
-      {% set sev_text = {'protocol': 'Protocol update required', 'critical': 'Critical update available', 'minor': 'New version available'}[update_checker.severity] %}
-      {% if is_private and updater and updater.can_self_update() %}
-      <div class="version-alert" id="update-alert"
-           title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
-        <span id="update-alert-text">{{ sev_text }}</span>
-        <button type="button" id="update-btn" class="btn-sm" style="margin-left:.5rem; vertical-align:1px;">Update now</button>
-      </div>
-      {% else %}
-      <a class="version-alert" href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
-         title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
-        {{ sev_text }}
-      </a>
-      {% endif %}
-    {% endif %}
   </div>
+  {% if update_checker and update_checker.severity %}
+    {% set sev_text = {'protocol': 'Protocol update required', 'critical': 'Critical update available', 'minor': 'New version available'}[update_checker.severity] %}
+    {% if is_private and updater and updater.can_self_update() %}
+    <div class="version-alert" id="update-alert"
+         title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
+      <span id="update-alert-text">{{ sev_text }}</span>
+      <button type="button" id="update-btn" class="btn-sm" style="margin-left:.5rem; vertical-align:1px;">Update now</button>
+    </div>
+    {% else %}
+    <a class="version-alert" href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
+       title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
+      {{ sev_text }}
+    </a>
+    {% endif %}
+  {% endif %}
 </header>
 <div class="page">
 {% block content %}{% endblock %}
