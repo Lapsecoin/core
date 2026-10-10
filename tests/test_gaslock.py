@@ -1,6 +1,7 @@
 """The fee lock, as the chain enforces it: what makes a request valid, how a
 claim shortens the window, and where the locked funds end up."""
 
+import base64
 import os
 import sys
 
@@ -9,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import crypto
+import evm
 import gaslock
 import state as state_mod
 import storage as storage_mod
@@ -24,8 +26,15 @@ REQ_MEMO = "[gas] ethereum 1000000 0x000000000000000000000000000000000000dEaD"
 START = 100 * TICKS_PER_LAPSE
 
 
-def claim_memo(txid):
-    return f"[gas-claim] {txid[:gaslock.REF_LEN]} 0x{'0' * 40} c2ln"
+KEY = bytes([7]) * 32
+
+
+def claim_memo(txid, sender=2, key=KEY):
+    """A claim by LAPSE address `sender`, signed by the Base key `key`."""
+    ref = txid[:gaslock.REF_LEN]
+    sig = evm.sign_message(gaslock.claim_message(ref, address(sender)), key)
+    sig_b64 = base64.b64encode(bytes.fromhex(sig[2:])).decode()
+    return f"[gas-claim] {ref} {evm.address_from_secret(key)} {sig_b64}"
 
 
 def after_block(minted, burned_after):
@@ -71,7 +80,7 @@ class Chain:
 
     def claim(self, sender=2, ref=None):
         t = make_tx(sender, 0, 1, self.state, fee=FEE,
-                    memo=claim_memo(ref or self.request))
+                    memo=claim_memo(ref or self.request, sender))
         self.mine([t])
         return t
 
@@ -259,6 +268,22 @@ class TestSettlement:
         c.mine([t])
         assert c.escrow["claim"] is None
 
+    def test_a_claim_not_signed_by_the_base_address_it_names_is_ignored(self):
+        c = Chain()
+        c.ask()
+        good = claim_memo(c.request)
+        forged = good.replace(evm.address_from_secret(KEY), evm.address_from_secret(bytes([8]) * 32))
+        t = make_tx(2, 0, 1, c.state, fee=FEE, memo=forged)
+        c.mine([t])
+        assert c.escrow["claim"] is None
+
+    def test_a_claim_signed_for_another_lapse_address_is_ignored(self):
+        c = Chain()
+        c.ask()
+        t = make_tx(3, 0, 1, c.state, fee=FEE, memo=claim_memo(c.request, sender=2))
+        c.mine([t])
+        assert c.escrow["claim"] is None
+
     def test_two_requests_settle_independently(self):
         c = Chain()
         a = c.ask(sender=1)
@@ -319,7 +344,7 @@ class TestStateHandling:
                       outputs_override=[{"to": ESC, "amount": small}])
         mine([ask])
         txid = tx_mod.tx_hash(ask)
-        mine([make_tx(9, 0, 1, cs.state, fee=FEE, memo=claim_memo(txid))])
+        mine([make_tx(9, 0, 1, cs.state, fee=FEE, memo=claim_memo(txid, sender=9))])
         mine()
         ask2 = make_tx(9, 0, 0, cs.state, fee=FEE, memo=REQ_MEMO,
                        outputs_override=[{"to": ESC, "amount": small}])

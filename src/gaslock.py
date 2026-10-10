@@ -24,7 +24,10 @@ The window is CLAIM_WINDOW_BLOCKS from the request's block, shortened to one
 block after the first claim.
 """
 
+import base64
+
 import crypto
+import evm
 import params
 import tx as tx_mod
 from params import TICKS_PER_LAPSE
@@ -77,14 +80,37 @@ def close_height(entry):
     return min(entry["claim"] + 1, latest)
 
 
+def claim_message(ref: str, lapse_from: str) -> bytes:
+    """What a claimer's Base address signs to show it holds the key it names."""
+    return f"LapseCoin fee claim\n{ref}\n{lapse_from}".encode()
+
+
 def claim_ref(tx_dict):
-    """The request prefix a claim transaction names, or None."""
+    """The request prefix a claim transaction names, or None. A claim only
+    counts when it is complete: a well-formed request prefix, a valid Base
+    address, and a signature by that address over the claim message, made
+    for the claiming LAPSE address. Pure data, so every node agrees; whether
+    the Base address actually holds funds is not something the chain can see."""
     memo = tx_dict.get("memo", "")
     if not memo.startswith(CLAIM_TAG):
         return None
     parts = memo[len(CLAIM_TAG):].split(" ")
-    ref = parts[0]
-    if len(parts) != 3 or len(ref) != REF_LEN or any(c not in "0123456789abcdef" for c in ref):
+    if len(parts) != 3:
+        return None
+    ref, base_addr, sig = parts
+    if len(ref) != REF_LEN or any(c not in "0123456789abcdef" for c in ref):
+        return None
+    if not evm.is_valid_address(base_addr):
+        return None
+    try:
+        raw = base64.b64decode(sig, validate=True)
+    except ValueError:
+        return None
+    if len(raw) != 65:
+        return None
+    signer = evm.recover_message_signer(
+        claim_message(ref, tx_dict.get("from", "")), "0x" + raw.hex())
+    if signer is None or signer.lower() != base_addr.lower():
         return None
     return ref
 

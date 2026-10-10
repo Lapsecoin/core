@@ -261,7 +261,7 @@ def plan(net: Network, action: Action, *, gas_price: int, price_usd: float, bala
 def claim_message(ref: str, lapse_from: str) -> bytes:
     """What a claimer's Base address signs to show it holds the funds it
     claims to pay with."""
-    return f"LapseCoin fee claim\n{ref}\n{lapse_from}".encode()
+    return gaslock.claim_message(ref, lapse_from)
 
 
 def _b64(sig_hex_or_bytes) -> str:

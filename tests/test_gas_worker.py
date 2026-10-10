@@ -183,13 +183,13 @@ class TestTracker:
         w.step()
         assert w.worker.tracker.requests == {}
 
-    def test_the_window_follows_the_chain_not_the_signatures(self, w):
+    def test_a_claim_with_a_wrong_signature_counts_for_nothing(self, w):
         txid = w.request()
         w.claim(txid, 3, bad_signature=True)             # well formed, signature wrong
         w.step()
         r = w.worker.tracker.requests[txid]
-        assert r.first_claim == 2 and r.close == 3       # the chain counts it
-        assert r.claims == []                            # but it cannot be ranked
+        assert r.first_claim is None                     # the chain ignores it
+        assert r.claims == []
 
     def test_claims_outside_the_window_are_ignored(self, w):
         txid = w.request()
