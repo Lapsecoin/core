@@ -409,13 +409,26 @@ class TestAdaptiveWindow:
         udp.get_info.return_value = {"height": 100_000, "tip_hash": ""}
         apply_fn = MagicMock(return_value=True)
 
-        with patch.object(syncer, "_find_fork_point", return_value=1):
+        # The window grows only after a page that came back fast, judged by
+        # the wall clock around the request. The request here is a mock that
+        # returns at once, so on an idle machine every page is fast, but a
+        # busy CI runner can stall a few tens of milliseconds between the two
+        # clock reads and turn "fast" into "hold" (an unchanged window), which
+        # failed this test now and then. A fake clock that moves a fixed
+        # millisecond per read makes every page equally fast, every run.
+        import itertools
+        ticks = itertools.count()
+        fake_clock = lambda: next(ticks) * 0.001
+
+        with patch("syncer.time.monotonic", side_effect=fake_clock), \
+             patch.object(syncer, "_find_fork_point", return_value=1):
             syncer.check_and_sync(local, apply_fn=apply_fn, peer=peer, max_pages=1)
         first_chunk = syncer._peer_chunk[peer]
         assert first_chunk > FETCH_CHUNK, (
             "a clean, fast page should have grown the window past its starting size")
 
-        with patch.object(syncer, "_find_fork_point", return_value=1):
+        with patch("syncer.time.monotonic", side_effect=fake_clock), \
+             patch.object(syncer, "_find_fork_point", return_value=1):
             syncer.check_and_sync(local, apply_fn=apply_fn, peer=peer, max_pages=1)
         second_chunk = syncer._peer_chunk[peer]
         assert second_chunk > first_chunk, (
