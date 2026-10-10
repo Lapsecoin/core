@@ -26,12 +26,16 @@ import gas
 import gas_status
 import relay
 import wallet_ui
+from params import TICKS_PER_LAPSE
 
 log = logging.getLogger("ec.fees")
 
 # What the lock costs, shown to the requester. The same constant the nodes
 # use to decide whether a request is worth serving.
 LOCK = gas.MIN_SERVED_LOCK
+# The same amount in LAPSE, which is what every page prints. Defined here once
+# so no template has to know how many ticks make a LAPSE.
+LOCK_LAPSE = LOCK // TICKS_PER_LAPSE
 
 DISCORD = "https://discord.gg/FP2d8JmK6r"
 
@@ -108,7 +112,7 @@ def register(app, reader, signer, csrf_token, io, light=False):
             low = False
         ctx = dict(title="Fees", csrf_token=csrf_token, form_token=f.tokens.issue(),
                    networks=network_options(), actions=action_options(),
-                   lock=LOCK, low=low, discord=DISCORD, alert_err="", form={})
+                   lock=LOCK, lock_lapse=LOCK_LAPSE, low=low, discord=DISCORD, alert_err="", form={})
         ctx.update({k: v for k, v in f.notes.take(request.args.get("note")).items()
                     if k in ("alert_err", "form")})
         return render_template("fees.html", **ctx)
