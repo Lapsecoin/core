@@ -1,0 +1,27 @@
+/* Fee request progress panel. Included by fees_status.html and tx_detail.html,
+   so it does not depend on any other page stylesheet. */
+
+#gas-card { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); margin-bottom: .75rem; }
+#gas-card .gas-head { padding: .6rem 1rem; border-bottom: 1px solid var(--rule); font-size: .82rem; font-weight: 600; }
+.gas-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.gas-main { padding: 1rem; min-width: 0; }
+.gas-side { border-left: 1px solid var(--rule); min-width: 0; }
+@media (max-width: 700px) { .gas-side { border-left: 0; border-top: 1px solid var(--rule); } }
+
+#gas-headline { font-size: 1.05rem; font-weight: 600; letter-spacing: -.01em; margin-bottom: .3rem; }
+#gas-why { color: var(--ink-dim); font-size: .88rem; line-height: 1.5; margin: 0 0 1.1rem; max-width: 60ch; }
+
+/* four segments, one per stage: finished ink, current accent, ahead faint */
+#gas-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .4rem; list-style: none; padding: 0; margin: 0; }
+#gas-steps li { border-top: 2px solid var(--rule); padding-top: .4rem; font-size: .8rem; color: var(--ink-dim); }
+#gas-steps li.done { border-top-color: var(--ink); color: var(--ink); }
+#gas-steps li.now { border-top-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+#gas-table { min-width: 0; width: 100%; font-size: .88rem; }
+#gas-table td { font-family: var(--serif); white-space: normal; padding: .6rem 1rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+#gas-table tr:last-child td { border-bottom: 0; }
+#gas-table td:first-child { width: 9rem; padding-right: .5rem; color: var(--ink-dim); white-space: nowrap; font-size: .8rem; }
+#gas-table td:last-child { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#gas-table tbody tr:hover td { background: transparent; }
+#gas-table .hash-short { font-family: var(--mono); font-size: .82rem; }
+@media (max-width: 520px) { #gas-table td:first-child { width: 6.5rem; } }

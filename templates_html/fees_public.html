@@ -1,23 +1,31 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/wallet.css?v={{ local_version }}">
+<link rel="stylesheet" href="/css/pages/fees.css?v={{ local_version }}">{% endblock %}
 {% block content %}
+<div class="wl">
 <h2>Fees</h2>
-
-<div class="card">
-  <p>Holding a token but no coin to move it? A node sends you gas on {{ networks|length }} networks,
+<p class="wl-lede">Holding a token but no coin to move it? A node sends you gas on {{ networks|length }} networks,
   including Base, Ethereum, Arbitrum and Solana, up to about ${{ "%.0f"|format(cap_usd) }} per request.</p>
-</div>
 
-<div class="card">
-  <div class="card-title">How to use it</div>
-  <ol>
-    <li>Get the wallet from the <a href="https://github.com/Lapsecoin/core/releases" target="_blank" rel="noopener">releases page</a>.</li>
-    <li>Have {{ lock }} LAPSE: mine it, or get some free on <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</li>
-    <li>Open <strong>Fees</strong> in your wallet (<code>localhost:{{ private_port }}/fees</code>), pick the network and paste the address.</li>
-  </ol>
+<div class="wl-grid">
+  <section class="panel">
+    <div class="panel-head">How to use it</div>
+    <ol class="steps">
+      <li><span>Get the wallet from the <a href="https://github.com/Lapsecoin/core/releases" target="_blank" rel="noopener">releases page</a>.</span></li>
+      <li><span>Have {{ lock }} LAPSE: mine it, or get some free on <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</span></li>
+      <li><span>Open <strong>Fees</strong> in your wallet (<code>localhost:{{ private_port }}/fees</code>), pick the network and paste the address.</span></li>
+    </ol>
+  </section>
+  <aside class="panel panel-side">
+    <div class="panel-head">Terms</div>
+    <dl class="kv kv-inline">
+      <div><dt>Networks</dt><dd class="num">{{ networks|length }}</dd></div>
+      <div><dt>Per request, up to</dt><dd class="num">${{ "%.0f"|format(cap_usd) }}</dd></div>
+      <div><dt>Deposit</dt><dd class="num">{{ lock }} LAPSE</dd></div>
+    </dl>
+    <p class="terms">The {{ lock }} LAPSE keeps fake requests out: it returns to you if no node offers to help, and is burned if one does.
+      To serve requests yourself, fund your node's Base address (shown on the Send page).</p>
+  </aside>
 </div>
-
-<div class="card">
-  <p>The {{ lock }} LAPSE keeps fake requests out: it returns to you if no node offers to help, and is burned if one does.
-  To serve requests yourself, fund your node's Base address (shown on the Send page).</p>
 </div>
 {% endblock %}

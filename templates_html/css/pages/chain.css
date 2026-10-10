@@ -1,0 +1,51 @@
+/* Shared by the chain browsing pages: explorer, block, transaction,
+   distribution and the error notice. Built on the tokens in base.css. */
+
+.ph { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .25rem 1rem; margin-bottom: .75rem; }
+.ph h2 { margin: 0; }
+.ph .sub { color: var(--ink-dim); font-size: .85rem; font-variant-numeric: tabular-nums; }
+.ph .pager { margin: 0; gap: .5rem; }
+.ph .pager a { padding: .15rem .6rem; border: 1px solid var(--line-strong); border-radius: 4px; text-decoration: none; color: var(--ink); font-size: .85rem; }
+.ph .pager a:hover { background: var(--hover); }
+
+.panel { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); margin-bottom: .75rem; overflow: hidden; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: .5rem 1rem; border-bottom: 1px solid var(--rule); font-size: .8rem; color: var(--ink-dim); }
+.panel-head b { color: var(--ink); font-weight: 600; font-size: .85rem; }
+.panel-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .4rem 1rem; padding: .45rem 1rem; border-top: 1px solid var(--rule); font-size: .85rem; }
+.panel-foot .pager { margin: 0; }
+.panel-foot .pager a, .panel-foot .pager .pager-current { padding: 0 .1rem; }
+
+.dt { min-width: 0; table-layout: auto; font-size: .82rem; }
+.dt th { background: transparent; padding: 0 1rem; height: 30px; font-size: .72rem; border-bottom: 1px solid var(--rule); }
+.dt td { padding: 0 1rem; height: 30px; }
+.dt th.num, .dt td.num { text-align: right; }
+.dt td.fill { max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.dt td.dim { color: var(--ink-dim); }
+.dt tr.empty td { text-align: center; color: var(--ink-dim); font-family: var(--serif); height: 60px; }
+.dt a { text-decoration: none; }
+.dt a:hover { text-decoration: underline; color: var(--accent); }
+
+.kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.kv > div { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: .75rem; padding: .4rem 1rem; border-bottom: 1px solid var(--rule); align-items: baseline; min-height: 32px; }
+.kv > div.wide { grid-column: 1 / -1; }
+.kv dt { color: var(--ink-dim); font-size: .8rem; }
+.kv dd { margin: 0; font-size: .88rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kv dd.hash, .kv dd.mono { font-family: var(--mono); font-size: .8rem; color: var(--ink); }
+.kv > div:last-child, .kv > div.last { border-bottom: none; }
+.kv .gain { color: var(--gain); }
+.kv .loss { color: var(--loss); }
+
+.notice { max-width: 560px; padding: 1rem 1.25rem; }
+.notice p, .notice .alert-err { color: var(--loss); font-size: .95rem; margin: 0 0 .6rem; padding: 0; border: 0; background: none; }
+.notice a { font-size: .85rem; }
+
+@media (max-width: 900px) {
+  .kv { grid-template-columns: minmax(0, 1fr); }
+  .kv > div { grid-template-columns: 6rem minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .dt th, .dt td { padding: 0 .6rem; }
+  .dt .hide-sm { display: none; }
+  .panel-head, .panel-foot { padding-left: .6rem; padding-right: .6rem; }
+  .kv > div { padding-left: .6rem; padding-right: .6rem; }
+}

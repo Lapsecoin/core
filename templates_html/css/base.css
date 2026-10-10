@@ -295,7 +295,7 @@ label:has(> input[type="radio"]) {
 }
 label:has(> input[type="radio"]:checked) { border-color: var(--ink); background: var(--panel); font-weight: 600; }
 input::placeholder, textarea::placeholder { color: var(--rule-lt); }
-input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(179,90,12,.18); }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 
 button {
   background: var(--ink); color: var(--paper); border: 1px solid var(--ink);
@@ -329,20 +329,3 @@ button:disabled, button:disabled:hover {
 .pager { display: flex; flex-wrap: wrap; gap: .8rem; align-items: baseline; margin-top: .25rem; font-size: .9rem; }
 .pager-current { font-weight: bold; text-decoration: underline; }
 .pager-ellipsis { color: var(--rule-lt); }
-
-/* Narrower than the site's general 900px container: optimal line
-   length for sustained reading is ~65-75 characters, and the
-   whitepaper is the one page meant to be read start to end rather
-   than scanned like a table. */
-.wp { max-width: 640px; margin: 0 auto; line-height: 1.65; }
-.wp h1 { font-size: 1.9rem; font-weight: bold; margin: 0 0 .5rem; text-align: center; }
-.wp h2 { font-size: 1.25rem; font-weight: bold; margin: 1.75rem 0 .55rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .3rem; }
-.wp h3 { font-size: 1.05rem; font-weight: bold; margin: 1.1rem 0 .3rem; }
-.wp p  { margin-bottom: .85rem; }
-.wp pre { background: var(--paper-2); border: 1px solid var(--rule); padding: .8rem 1rem; font-family: var(--mono); font-size: .82rem; overflow-x: auto; margin: .85rem 0; }
-.wp code { font-family: var(--mono); font-size: .88em; }
-.wp ol, .wp ul { margin: .5rem 0 .85rem 1.4rem; }
-.wp li { margin-bottom: .3rem; }
-.wp em { font-style: italic; }
-.wp strong { font-weight: bold; }
-.wp blockquote { border-left: 3px solid var(--rule); padding-left: .85rem; color: var(--ink-dim); margin: .85rem 0; }

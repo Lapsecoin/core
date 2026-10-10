@@ -1,0 +1,29 @@
+/* Fees page (the private one with the form, and the public explainer).
+   Shared panel system lives in wallet.css. */
+
+.fees-fields { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+@media (max-width: 640px) { .fees-fields { grid-template-columns: minmax(0, 1fr); } }
+.fees-note { margin: .9rem 0 0; }
+
+/* the estimate fills in as the address is typed; until then say what it waits for */
+.estimate { font-size: .9rem; line-height: 1.5; padding: .85rem 1rem; font-variant-numeric: tabular-nums; }
+.estimate:empty::before { content: "Enter an address to see what it needs."; color: var(--ink-dim); }
+.panel-side .alert { margin: 0 1rem 1rem; }
+
+.low { margin-bottom: 1rem; }
+
+@media (max-width: 520px) {
+  .submit-row.stack-sm { flex-direction: column; align-items: stretch; }
+  .submit-row.stack-sm .field { flex: 0 0 auto; }
+}
+
+/* public page */
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.steps li {
+  counter-increment: step; display: grid; grid-template-columns: 1rem minmax(0, 1fr); gap: .75rem;
+  padding: .8rem 1rem; border-bottom: 1px solid var(--rule); font-size: .92rem;
+}
+.steps li:last-child { border-bottom: 0; }
+.steps li::before { content: counter(step); color: var(--ink-dim); font-variant-numeric: tabular-nums; font-family: var(--mono); }
+.steps code { font-family: var(--mono); font-size: .85em; }
+.terms { padding: .85rem 1rem; font-size: .88rem; color: var(--ink-dim); line-height: 1.55; }

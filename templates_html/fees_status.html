@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="page-head">
 <h2>Fee request</h2>
+<a class="btn-sm" href="/fees">New request</a>
+</div>
 {% set status_url = "/api/gas/" ~ tx_hash %}
+{% set gas_title = "Progress" %}
 {% include "gas_panel.html" %}
 <p class="stat-sub hash">{{ tx_hash }}</p>
 {% endblock %}

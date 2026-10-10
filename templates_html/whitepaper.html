@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/whitepaper.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<div class="wp">{{ rendered | safe }}</div>
+<article class="wp">{{ rendered | safe }}</article>
 {% endblock %}

@@ -1,54 +1,62 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/wallet.css?v={{ local_version }}">
+<link rel="stylesheet" href="/css/pages/fees.css?v={{ local_version }}">{% endblock %}
 {% block content %}
+<div class="wl">
 <h2>Fees</h2>
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+<p class="wl-lede">Get gas on another network. Burn {{ lock // 100000000 }} LAPSE and a node operator sends it to you.</p>
 
-<div class="card">
-  <p>Get gas on another network. Burn {{ lock // 100000000 }} LAPSE and a node operator sends it to you.</p>
-  {% if low %}<p class="alert alert-err">You need {{ lock // 100000000 }} LAPSE. Mine some, or get free LAPSE on
-     <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</p>{% endif %}
+<div class="wl-grid">
+  <section class="panel">
+    <div class="panel-head">Request gas</div>
+    <form method="POST" action="/fees" id="fees-form" autocomplete="off" class="panel-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="form_token" value="{{ form_token }}">
+      {% if low %}<p class="alert alert-err low">You need {{ lock // 100000000 }} LAPSE. Mine some, or get free LAPSE on
+         <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</p>{% endif %}
 
-  <form method="POST" action="/fees" id="fees-form" autocomplete="off">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="form_token" value="{{ form_token }}">
-
-    <div class="form-group" style="display:flex;gap:.75rem;flex-wrap:wrap">
-      <div style="flex:1 1 200px">
-        <label for="network">Network</label>
-        <select id="network" name="network" style="width:100%">
-          {% for n in networks %}
-          <option value="{{ n.slug }}" data-vm="{{ n.vm }}" {% if form.get('network') == n.slug %}selected{% endif %}>{{ n.name }} ({{ n.symbol }})</option>
-          {% endfor %}
-        </select>
+      <div class="fields fees-fields">
+        <div class="field">
+          <label for="network">Network</label>
+          <select id="network" name="network">
+            {% for n in networks %}
+            <option value="{{ n.slug }}" data-vm="{{ n.vm }}" {% if form.get('network') == n.slug %}selected{% endif %}>{{ n.name }} ({{ n.symbol }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="action">What do you want to do</label>
+          <select id="action" name="action">
+            {% for a in actions %}
+            <option value="{{ a.key }}" {% if form.get('action') == a.key %}selected{% endif %}>{{ a.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
       </div>
-      <div style="flex:1 1 240px">
-        <label for="action">What do you want to do</label>
-        <select id="action" name="action" style="width:100%">
-          {% for a in actions %}
-          <option value="{{ a.key }}" {% if form.get('action') == a.key %}selected{% endif %}>{{ a.label }}</option>
-          {% endfor %}
-        </select>
+
+      <div class="field">
+        <label for="dest">Your address on that network</label>
+        <input type="text" id="dest" name="dest" value="{{ form.get('dest', '') }}"
+               placeholder="0x..." autocomplete="off" spellcheck="false">
       </div>
-    </div>
 
-    <div class="form-group">
-      <label for="dest">Your address on that network</label>
-      <input type="text" id="dest" name="dest" value="{{ form.get('dest', '') }}"
-             placeholder="0x..." autocomplete="off" spellcheck="false" style="width:100%">
-    </div>
-
-    <p id="plan-line" class="stat-sub"></p>
+      <div class="submit-row stack-sm">
+        <div class="field">
+          <label for="passphrase">Your signing passphrase</label>
+          <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" required>
+        </div>
+        <button type="submit" id="submit-btn" style="flex:0 0 auto" disabled>Burn {{ lock // 100000000 }} LAPSE and request</button>
+      </div>
+      <p class="hint fees-note">A free gift, as is. The {{ lock // 100000000 }} LAPSE comes back only if no node offers.</p>
+    </form>
+  </section>
+  <aside class="panel panel-side">
+    <div class="panel-head">What it needs</div>
+    <p id="plan-line" class="estimate"></p>
     <p id="plan-err" class="alert alert-err" style="display:none"></p>
-
-    <div class="form-group" style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
-      <div style="flex:1 1 220px">
-        <label for="passphrase">Your signing passphrase</label>
-        <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" required style="width:100%">
-      </div>
-      <button type="submit" id="submit-btn" style="flex:0 0 auto" disabled>Burn {{ lock // 100000000 }} LAPSE and request</button>
-    </div>
-    <p class="stat-sub">A free gift, as is. The {{ lock // 100000000 }} LAPSE comes back only if no node offers.</p>
-  </form>
+  </aside>
+</div>
 </div>
 
 <script>

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/board.css?v={{ local_version }}">{% endblock %}
 {% block content %}
 <div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
     {% if is_private %}
@@ -12,6 +13,7 @@
       <input type="hidden" name="reply_ref" id="board-reply-ref" value="">
       <input type="hidden" name="edit_ref" id="board-edit-ref" value="">
       <input type="hidden" name="edit_orig" id="board-edit-orig" value="">
+      <div class="board-compose-title">New post</div>
       <div class="board-error" id="board-compose-error" role="alert"{% if not compose_err %} hidden{% endif %}>{{ compose_err }}</div>
 
       <div class="board-compose-row board-banner" id="board-reply-banner" hidden>
@@ -62,183 +64,13 @@
     </form>
     <script type="module" src="/vendor/markdown-toolbar-element.js"></script>
     {% endif %}
-    <div id="board-rows">
-      {% include "board_rows.html" %}
-    </div>
+    <section class="board-list">
+      <h2 class="board-list-title">Recent threads</h2>
+      <div id="board-rows">
+        {% include "board_rows.html" %}
+      </div>
+    </section>
 </div>
-
-
-
-<style>
-  /* Remark42's structure/markup/spacing stays exactly as ported; only
-     the color VALUES behind its own token names are remapped here, onto
-     this site's existing palette (base.html's --paper/--ink/--accent/
-     --muted/--gain/--loss/--rule-lt), so the board reads as part of this
-     site rather than a foreign widget dropped into it. Same variable
-     names as before so nothing else in this file needs to change. */
-  #board-feed, .board-compose {
-    --color5: var(--rule-lt); --color6: var(--paper); --color9: var(--accent);
-    --color10: var(--muted); --color11: var(--muted); --color13: var(--muted);
-    --color15: var(--accent); --color16: var(--rule-lt); --color33: var(--ink-dim);
-    --color37: var(--muted); --color12: 47, 92, 51; --color30: 122, 34, 34;
-    --primary-text-color: 28, 26, 20; --primary-background-color: 246, 243, 234;
-  }
-  /* This site's global `button`/`input`/`textarea` rules (base.html) give
-     every button a bold filled site-chrome look and every input a
-     monospace/white-box look -- exactly wrong for Remark42's own mostly
-     unstyled, ghost-button components. Reset to Remark42's own
-     global.css defaults first; the specific .rc- and .board- prefixed rules
-     below then apply Remark42's OWN button/input styling on top of that,
-     never this site's. :where(#board-feed) rather than a bare #board-feed:
-     an ID plus a tag (#board-feed button) outranks a lone ID or class
-     selector (#board-send, .board-icon-btn), so a plain reset here would
-     silently beat the very overrides it exists to make room for --
-     :where() scopes it to this page without adding any specificity of
-     its own, so it only ever wins when nothing more specific says otherwise. */
-  :where(#board-feed) button {
-    background: none; border: 0; padding: 0; margin: 0; font: inherit;
-    color: inherit; font-weight: normal; cursor: pointer;
-  }
-  :where(#board-feed) button:disabled { opacity: .6; cursor: default; }
-  :where(#board-feed) input, :where(#board-feed) textarea {
-    font-family: inherit; font-size: inherit; color: inherit; background: none; border: 0;
-  }
-  :where(#board-feed) a { color: var(--color9); text-decoration: none; }
-  :where(#board-feed) a:hover { color: var(--color33); }
-
-  /* Container: Remark42's own background/text color/type, not this
-     site's paper/ink serif -- this is the actual "full identity" part,
-     not just the components inside it. */
-  #board-feed {
-    background: rgb(var(--primary-background-color)); color: rgb(var(--primary-text-color));
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 14px; display: flex; flex-direction: column; padding: .1rem 0;
-  }
-  /* Elements meant to be hidden by the `hidden` attribute must actually
-     stay hidden: a bare class selector below (e.g. `.board-icon-palette
-     { display: flex }`) has higher specificity than the browser's own
-     `[hidden] { display: none }` rule, so without this override picking
-     "icon" or "reply" would have shown a permanently-open panel instead
-     of a toggled one. */
-  #board-feed [hidden] { display: none !important; }
-
-  /* Row layout (.rc-root/.rc-info/.rc-body/.rc-avatar/.rc-username/.rc-time/
-     .rc-text), the vote widget (.rc-vote-root/.rc-voteButton/.rc-votes and
-     friends) and the compose toolbar (.rc-toolbar*) are ported from
-     Remark42's own comment.module.css, comment-votes.module.css and
-     markdown-toolbar.module.css (github.com/umputun/remark42, MIT):
-     same class shape, same color tokens, "rc-" prefixed only to stay out of
-     this project's own class namespace, and spaced much tighter than there:
-     a flat public feed wants to show many posts, not a few roomy ones. */
-  .rc-root { display: block; padding: 5px 0 4px; font-size: 15px; line-height: 1.3; border-bottom: 1px solid var(--color16); }
-  /* Indent per reply level; a phone has no width to spare, so there it is
-     narrower per level (depth is capped server-side either way). */
-  #board-feed { --indent: 1.25rem; }
-  @media (max-width: 600px) { #board-feed { --indent: .5rem; } }
-  .rc-root[style*="--depth"] {
-    margin-left: calc(var(--depth) * var(--indent));
-    border-left: 2px solid var(--color16); padding-left: .5rem;
-  }
-  .rc-root.mine { background: rgba(179,90,12,.05); }
-  .rc-root.pending { opacity: .6; }
-  /* A deleted post that still has replies under it: a line, not a post. */
-  .rc-deleted { padding: 1px 0 1px; font-size: .7rem; font-style: italic; color: var(--color11); border-bottom: 0; }
-  .rc-empty { color: var(--muted); text-align: center; margin: .8rem 0; }
-  .rc-more { text-align: center; color: var(--muted); font-size: .75rem; padding: .5rem 0; }
-  .rc-info { display: flex; align-items: center; flex-wrap: wrap; margin-bottom: 1px; font-size: 13px; position: relative; }
-  .rc-avatar { width: 18px; margin-right: 4px; font-size: 1rem; line-height: 1; }
-  .rc-username { font-weight: 700; vertical-align: middle; text-decoration: none; color: var(--color10); }
-  .rc-username:hover { opacity: .75; }
-  .rc-username.hash-short { font-family: var(--mono); font-weight: 400; font-size: .78rem; word-break: break-word; overflow-wrap: anywhere; }
-  .rc-time { margin-left: auto; font-size: .66rem; color: var(--color11); text-decoration: none; }
-  .rc-actions + .rc-time, .rc-time + .rc-time { margin-left: .5rem; }
-  .rc-time:hover { color: var(--color10); text-decoration: underline; }
-  .rc-edited { font-style: italic; }
-  .rc-edited:hover { text-decoration: none; }
-  .rc-body { padding-left: 22px; }
-  .rc-replyQuote {
-    display: block; font-size: .7rem; color: var(--color11); text-decoration: none;
-    margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .rc-replyQuote:hover { color: var(--color9); }
-  .rc-text { white-space: pre-wrap; word-break: break-word; margin: 0; }
-  .rc-text blockquote { margin: .2rem 0; padding: .1rem .2rem .1rem .5rem; border-left: 2px solid var(--rule-lt); }
-  .rc-text code { font-family: var(--mono); background: var(--rule-lt); padding: .05rem .25rem; border-radius: 3px; }
-  .rc-replyBtn {
-    font-size: .7rem; font-weight: 600; color: var(--color9); text-decoration: none;
-  }
-  .rc-replyBtn:hover { color: var(--color33); }
-  /* Reply, Edit, Delete live in the header line and show when the post is
-     pointed at, so a post is its text and nothing else until it is wanted.
-     Where there is no pointer (a phone) they are always there. */
-  .rc-actions { display: flex; gap: .6rem; margin-left: auto; opacity: 0; transition: opacity .12s; }
-  .rc-root:hover .rc-actions, .rc-root:focus-within .rc-actions { opacity: 1; }
-  @media (hover: none) { .rc-actions { opacity: 1; } }
-
-  .rc-vote-root { display: flex; flex: 0 0 auto; align-items: center; margin-left: .4rem; font-weight: 700; line-height: 14px; white-space: nowrap; user-select: none; }
-  .rc-voteButton { display: flex; align-items: center; padding: 2px; opacity: .35; color: var(--color13); transition: opacity .15s, color .15s; }
-  .rc-voteButton:disabled { cursor: default; }
-  .rc-root:hover .rc-voteButton { opacity: 1; }
-  .rc-upVoteButton:hover, .rc-upVoteButtonActive { color: rgb(var(--color12)); opacity: 1; }
-  .rc-downVoteButton:hover, .rc-downVoteButtonActive { color: rgb(var(--color30)); opacity: 1; }
-  .rc-votes { display: inline-block; flex: 0 0 auto; margin: 0 2px; padding: 1px 5px; font-size: .78rem; font-weight: 700; border-radius: 3px; min-width: 14px; text-align: center; color: var(--color11); }
-  .rc-votesNegative { color: rgb(var(--color30)); background-color: rgba(var(--color30), .1); }
-  .rc-votesPositive { color: rgb(var(--color12)); background-color: rgba(var(--color12), .1); }
-  .rc-votesPending { opacity: .6; }
-  .rc-upVoteIcon .rc-voteIcon { transform: rotate(180deg); }
-
-  /* The formatting buttons appear while you are writing and not before. */
-  .rc-toolbar { display: inline-flex; margin-left: auto; }
-  .board-compose:not(:focus-within) .rc-toolbar { display: none; }
-  .rc-toolbar-group { display: inline-block; }
-  .rc-toolbar-item {
-    color: var(--color37); display: inline-flex;
-    height: 20px; width: 20px; justify-content: center; align-items: center;
-  }
-  .rc-toolbar-item:hover { color: var(--color9); }
-  .rc-toolbar-item svg { fill: currentColor; width: 12px; height: 12px; }
-
-  /* Compose box: one line to write in, and one small line under it. The
-     icon opens the nickname and icon choices; nothing else is on show
-     until it is needed. */
-  .board-compose {
-    border: 1px solid var(--color5); border-radius: 6px; padding: 5px 6px; margin: .15rem 0 .35rem;
-  }
-  .board-compose:focus-within { border-color: var(--color16); }
-  .board-compose-row { display: flex; gap: .4rem; align-items: center; }
-  .board-compose-row + .board-compose-row { margin-top: .2rem; }
-  .board-main { align-items: flex-start; }
-  .board-compose-sub { font-size: .7rem; color: var(--color11); min-height: 20px; }
-  #board-message {
-    flex: 1; min-width: 0; padding: 3px 4px; font-size: 15px; line-height: 1.35;
-    resize: none; overflow: hidden; max-height: 8rem; overflow-y: auto; outline: none;
-  }
-  #board-send {
-    flex: 0 0 auto; height: 1.65rem; padding: 0 12px; border-radius: 4px;
-    background: var(--color15); color: var(--color6); font-weight: 600; font-size: .85rem;
-  }
-  #board-send:hover:not(:disabled) { background: var(--color33); }
-  .board-link { font-size: .7rem; color: var(--color11); }
-  .board-link:hover { color: var(--color9); text-decoration: underline; }
-  #board-sent { color: rgb(var(--color12)); font-weight: 600; }
-  #board-preview { min-height: 1.5rem; padding: .2rem .4rem; }
-  .board-icon-btn { flex: 0 0 auto; font-size: 1.05rem; line-height: 1; padding: .2rem .25rem; border-radius: 4px; }
-  .board-icon-btn:hover { background: var(--color5); }
-  .board-profile-panel { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .3rem; padding-top: .3rem; border-top: 1px solid var(--color16); font-size: .75rem; color: var(--color11); }
-  #board-nick { border-bottom: 1px solid var(--color16); padding: .15rem 0; width: 8rem; }
-  .board-icon-palette { display: flex; flex-wrap: wrap; gap: .1rem; }
-  .board-icon-choice { font-size: 1rem; padding: .1rem .2rem; border-radius: 4px; }
-  .board-icon-choice:hover { background: var(--color5); }
-  .board-banner {
-    justify-content: space-between; font-size: .72rem; color: var(--color11);
-    background: var(--color5); border-radius: 4px; padding: .15rem .4rem;
-  }
-  #board-reply-cancel, #board-edit-cancel { color: var(--color11); }
-  .board-error {
-    margin: 0 0 .25rem; padding: .2rem .5rem; font-size: .78rem; border-radius: 4px;
-    color: rgb(var(--color30)); background: rgba(var(--color30), .08);
-  }
-</style>
 <script>
 (function () {
   const PAGE = {{ page }};

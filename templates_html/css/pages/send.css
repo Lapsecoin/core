@@ -1,0 +1,28 @@
+/* Send page. Shared panel system lives in wallet.css. */
+
+/* LAPSE / ETH on Base switch: one joined control, not two buttons */
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.seg label:has(> input[type="radio"]) {
+  position: relative; border: 0; border-radius: 0; height: 32px; padding: 0 .95rem;
+  background: transparent; color: var(--ink-dim); font-size: .85rem; font-weight: 500;
+}
+.seg label:has(> input[type="radio"]) + label:has(> input[type="radio"]) { border-left: 1px solid var(--line-strong); }
+.seg label:has(> input[type="radio"]:checked) { background: var(--ink); color: var(--paper); font-weight: 600; }
+.seg label:has(> input[type="radio"]:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; margin: 0; }
+
+/* recipients: the one big field of the page */
+.upload { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .75rem; margin-top: .6rem; }
+.upload label { margin: 0; font-size: .78rem; color: var(--ink-dim); }
+.memo-field { margin-top: 1.1rem; }
+.fee-market { line-height: 1.45; }
+.fee-market strong { font-weight: 600; }
+
+/* base form: network and token side by side, amount a fixed narrow column */
+.base-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 150px; }
+#base-quote { min-height: 1.5em; margin-top: .35rem; }
+@media (max-width: 900px) { #base-quote { min-height: 2.9em; } }
+@media (max-width: 640px) {
+  .base-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .base-fields .suffix-field { grid-column: 1 / -1; }
+}

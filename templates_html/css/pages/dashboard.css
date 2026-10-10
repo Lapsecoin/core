@@ -1,0 +1,36 @@
+/* Dashboard: chain tip and recent transactions on the left, supply and
+   node facts in a narrow reference column on the right. */
+.dash { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: .75rem; align-items: start; }
+.dash-main, .dash-side { min-width: 0; }
+.dash .panel { margin-bottom: .75rem; }
+.dash-main > .panel:last-child, .dash-side > .panel:last-child { margin-bottom: 0; }
+
+.tip { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .75rem 2.5rem; padding: .85rem 1rem; }
+.tip-height { color: var(--ink); text-decoration: none; display: block; }
+.tip-height:hover { color: var(--accent); }
+.tip-label { display: block; font-size: .78rem; color: var(--ink-dim); margin-bottom: .1rem; }
+.tip-num { display: block; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 2.4rem; line-height: 1.1; font-weight: 600; letter-spacing: -.02em; }
+.tip-sub { display: block; font-size: .78rem; color: var(--ink-dim); margin-top: .2rem; font-variant-numeric: tabular-nums; }
+.tip-sub.gain, .gain { color: var(--gain); }
+.tip-sub.loss, .loss { color: var(--loss); }
+.tip-figs { display: flex; flex-wrap: wrap; gap: .5rem 2rem; margin-left: auto; padding-bottom: .1rem; }
+.tip-figs a, .tip-figs div { color: var(--ink); text-decoration: none; display: block; }
+.tip-figs .tip-label { margin-bottom: 0; }
+.tip-fig { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 1.1rem; font-weight: 600; white-space: nowrap; }
+.tip-fig .eta { font-size: .78rem; font-weight: 400; color: var(--ink-dim); }
+
+.side-sub { display: block; font-family: var(--serif); font-size: .75rem; color: var(--ink-dim); margin-top: .1rem; font-variant-numeric: tabular-nums; }
+.dash .kv { grid-template-columns: minmax(0, 1fr); }
+.dash .kv > div { grid-template-columns: 6.5rem minmax(0, 1fr); }
+.dash .kv dd.num { font-family: var(--mono); font-size: .85rem; }
+.dash .kv dd.addr { font-family: var(--mono); font-size: .78rem; word-break: break-all; }
+
+@media (max-width: 900px) {
+  .dash { grid-template-columns: minmax(0, 1fr); }
+  .tip-figs { margin-left: 0; }
+}
+@media (max-width: 640px) {
+  .tip { padding: .7rem .6rem; }
+  .tip-num { font-size: 2rem; }
+  .dash .kv > div { grid-template-columns: 5.5rem minmax(0, 1fr); }
+}

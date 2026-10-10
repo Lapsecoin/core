@@ -1,0 +1,73 @@
+/* Odds page. The chart is the primary object; the stat strip above it and
+   the machine table beside it support it. */
+.odds-empty { max-width: 32rem; }
+.odds-note { margin-bottom: .6rem; font-size: .85rem; color: var(--ink-dim); }
+
+/* Stat strip: one row, flat cells split by hairlines */
+.odds-page .stats { margin-bottom: .75rem; }
+.odds-page .stat { flex: 1 1 170px; padding: .5rem .9rem; }
+.odds-page .stat-value { font-size: 1.35rem; font-weight: 600; letter-spacing: -.01em; }
+.odds-page .stats > .stat:first-child .stat-value { color: var(--accent); }
+
+/* Chart (left) and machines (right) */
+.odds-cols { align-items: start; }
+.odds-title {
+  font-size: .78rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--ink-dim); margin-bottom: .45rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line-strong);
+}
+.odds-main, .odds-side { min-width: 0; }
+.odds-main { margin-bottom: 1rem; }
+.odds-side { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem 2rem; align-items: start; }
+.odds-side .hw { order: 2; }
+.odds-side .machines-block { order: 1; }
+.chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart-wrap svg text { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.chart-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem; margin-top: .5rem; min-height: 1.6rem; }
+
+/* Legend doubles as the direct key for builder lines. Rebuilt by the page
+   script with inline styles, so the important flags win over those. */
+#odds-legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; }
+#odds-legend > span {
+  display: inline-flex !important; align-items: center; gap: .4rem !important;
+  font-size: .8rem !important; color: var(--ink) !important;
+}
+#odds-legend > span > span:first-child {
+  width: 12px !important; height: 3px !important; border-radius: 0 !important; display: inline-block;
+}
+#odds-legend > span > span { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#odds-legend > span > span.n { color: var(--ink-dim) !important; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* Machines */
+.odds-side .hw { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.odds-side .hw .stat-value { font-size: .85rem; font-weight: 500; }
+.odds-side .table-wrap { margin: 0; padding: 0; }
+.odds-side table { min-width: 0; font-size: .86rem; }
+.odds-side th { background: none; padding: .35rem .5rem; }
+.odds-side td { padding: .4rem .5rem; }
+.odds-side th:not(:first-child), .odds-side td:not(:first-child) { text-align: right; }
+.odds-side td:first-child { white-space: normal; font-family: var(--serif); overflow-wrap: anywhere; }
+.odds-side .stat-sub { margin-top: .5rem; line-height: 1.4; }
+
+/* Chart grips (drag handles on the height axis) */
+.x-grip { cursor: ew-resize; }
+.x-grip text { fill: var(--ink-dim); }
+.x-grip-thumb { fill: var(--ink-dim); }
+.x-grip-line { stroke: var(--rule-lt); stroke-width: 0.5; opacity: .6; }
+.x-grip rect, .x-grip text, .x-grip line { transition: fill .12s, stroke .12s, opacity .12s; }
+.x-grip:hover .x-grip-thumb, .x-grip.is-held .x-grip-thumb,
+.x-grip:hover text, .x-grip.is-held text { fill: var(--accent); }
+.x-grip:hover .x-grip-line, .x-grip.is-held .x-grip-line { stroke: var(--accent); opacity: .45; }
+
+@media (max-width: 900px) { .odds-side { grid-template-columns: minmax(0, 1fr); } .odds-side .hw { order: 0; } }
+@media (max-width: 640px) {
+  .chart-wrap { overflow-x: auto; }
+  .chart-wrap svg { min-width: 560px; }
+  .odds-page .stat { flex-basis: 45%; min-width: 0; }
+  .odds-side .table-wrap { overflow-x: auto; }
+  .odds-side table.stacked { display: table; width: 100%; }
+  .odds-side table.stacked thead { display: table-header-group; }
+  .odds-side table.stacked tbody { display: table-row-group; }
+  .odds-side table.stacked tr { display: table-row; border: 0; margin: 0; padding: 0; }
+  .odds-side table.stacked td { display: table-cell; width: auto; padding: .4rem .5rem; border-bottom: 1px solid var(--rule); word-break: normal; }
+  .odds-side table.stacked td::before { content: none; }
+}

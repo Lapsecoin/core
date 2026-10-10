@@ -1,0 +1,82 @@
+/* Address: lookup and summary in a narrow left column, the wealth
+   distribution (before a lookup) or the history table (after one) in the
+   wide right column. Stacks below 900px. */
+
+.addr-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; align-items: start; max-width: 560px; }
+.addr-grid.has-main { grid-template-columns: 340px minmax(0, 1fr); max-width: none; gap: 1.5rem; }
+.addr-side { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
+.addr-main { min-width: 0; }
+.addr-main h2 { font-size: .95rem; margin-bottom: .55rem; }
+.addr-sub { font-weight: 400; color: var(--ink-dim); font-size: .82rem; margin-left: .4rem; font-variant-numeric: tabular-nums; }
+.addr-hint { font-size: .78rem; color: var(--ink-dim); margin-top: .45rem; }
+.addr-burn {
+  max-width: 80ch; margin-bottom: 1rem; padding: .6rem .8rem; font-size: .9rem; line-height: 1.5;
+  border: 1px solid var(--rule); border-left: 3px solid var(--ink-dim); border-radius: var(--radius); background: var(--surface);
+}
+
+/* lookup */
+.addr-form { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); padding: .8rem .9rem; }
+.addr-form label { margin-bottom: .45rem; }
+.addr-form-row { display: flex; gap: .5rem; }
+.addr-form-row input { flex: 1 1 auto; min-width: 0; font-size: .8rem; box-shadow: none; }
+.addr-form-row input:focus { box-shadow: none; }
+.addr-form-row button { flex: 0 0 auto; }
+
+/* summary: the balance leads, the rest is key/value rows */
+.addr-summary { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+.addr-balance { padding: .8rem .9rem .75rem; border-bottom: 1px solid var(--rule); }
+.addr-k { font-size: .78rem; color: var(--ink-dim); margin-bottom: .15rem; }
+.addr-balance-v { font-size: 1.45rem; line-height: 1.2; font-weight: 600; color: var(--gain); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.addr-kv { margin: 0; padding: .25rem .9rem; }
+.addr-kv > div { display: flex; justify-content: space-between; gap: 1rem; padding: .4rem 0; border-bottom: 1px solid var(--rule); font-size: .88rem; }
+.addr-kv > div:last-child { border-bottom: 0; }
+.addr-kv dt { color: var(--ink-dim); flex: 0 0 auto; }
+.addr-kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+.addr-kv .addr-kv-addr { display: block; }
+.addr-kv .addr-kv-addr dd { text-align: left; margin-top: .2rem; }
+.addr-mono { font-family: var(--mono); font-size: .75rem; color: var(--ink-dim); overflow-wrap: anywhere; line-height: 1.45; }
+
+/* history */
+table.hist { width: 100%; min-width: 0; border: 1px solid var(--rule); border-radius: var(--radius); border-collapse: separate; border-spacing: 0; background: var(--surface); overflow: hidden; font-size: .85rem; }
+.hist th { background: none; text-transform: none; letter-spacing: 0; font-size: .78rem; font-weight: 600; padding: .5rem .8rem; border-bottom: 1px solid var(--rule); }
+.hist td { padding: .45rem .8rem; border-bottom: 1px solid var(--rule); font-size: .82rem; }
+.hist tr:last-child td { border-bottom: 0; }
+.hist .num { text-align: right; }
+.hist td.c-dir { font-family: var(--serif); font-size: .85rem; }
+.hist .c-hash a { color: var(--link); text-decoration: none; }
+.hist .c-hash a:hover { text-decoration: underline; }
+.hist .dir-sent { color: var(--loss); }
+.hist .dir-recv { color: var(--gain); }
+.hist .dir-block { color: var(--ink); }
+.hist-empty td { color: var(--ink-dim); text-align: center; font-family: var(--serif); padding: 1.2rem; }
+.addr-history .pager { margin-top: .7rem; }
+
+/* wealth distribution */
+.histo { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); padding: .5rem .3rem; }
+.histo-row { display: grid; grid-template-columns: 11rem minmax(0, 1fr) 3rem; align-items: center; gap: .75rem; padding: .22rem .6rem; font-size: .78rem; text-decoration: none; color: inherit; border-radius: 4px; }
+.histo-row:hover { background: var(--hover); }
+.histo-label { color: var(--ink-dim); font-family: var(--mono); font-size: .74rem; text-align: right; white-space: nowrap; }
+.histo-track { display: block; height: .7rem; }
+.histo-bar { display: block; height: 100%; min-width: 2px; background: var(--ink-dim); border-radius: 2px; }
+.histo-row:hover .histo-bar { background: var(--accent); }
+.histo-count { text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 900px) {
+  .addr-grid.has-main { grid-template-columns: minmax(0, 1fr); gap: 1.1rem; }
+}
+@media (max-width: 640px) {
+  .histo-row { grid-template-columns: 6.5rem minmax(0, 1fr) 2.2rem; gap: .5rem; padding-left: .3rem; padding-right: .3rem; }
+  .histo-label { white-space: normal; font-size: .68rem; }
+  /* history rows become two lines: hash and amount, then height and direction */
+  .hist thead { display: none; }
+  .hist, .hist tbody { display: block; }
+  .hist tr { display: grid; grid-template-columns: 1fr auto; padding: .5rem .75rem; border-bottom: 1px solid var(--rule); gap: .1rem .75rem; }
+  .hist tr:last-child { border-bottom: 0; }
+  .hist td { display: block; padding: 0; border: 0; white-space: normal; }
+  .hist .c-hash { grid-column: 1; grid-row: 1; overflow-wrap: anywhere; }
+  .hist .c-amt { grid-column: 2; grid-row: 1; }
+  .hist .c-height { grid-column: 1; grid-row: 2; color: var(--ink-dim); font-size: .75rem; }
+  .hist .c-height::before { content: "height "; }
+  .hist .c-dir { grid-column: 2; grid-row: 2; font-size: .78rem; text-align: right; }
+  .hist-empty { display: block; }
+}

@@ -1,0 +1,75 @@
+/* Settings page. Every rule is scoped under .settings-form so the shared
+   input and label rules in base.css cannot override it. */
+.settings-form { display: block; }
+.settings-form .settings-cols {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 2.5rem; align-items: start;
+}
+.settings-form .settings-group { min-width: 0; margin-bottom: 1rem; }
+.settings-form .group-title {
+  font-size: .78rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--ink-dim); margin: 0 0 .1rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line-strong);
+}
+.settings-form .group-blurb { font-size: .8rem; color: var(--ink-dim); margin: .3rem 0 .2rem; }
+
+.settings-form .setting-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem 2rem; align-items: start;
+  padding: .7rem 0; border-bottom: 1px solid var(--rule);
+}
+.settings-form .setting-row.is-forced .setting-text,
+.settings-form .setting-row.is-forced .setting-main { opacity: .7; }
+.settings-form .setting-text { min-width: 0; max-width: 34rem; }
+.settings-form .setting-label { display: block; margin: 0; font-size: .92rem; font-weight: 600; color: var(--ink); }
+.settings-form .setting-help { margin: .2rem 0 0; font-size: .78rem; line-height: 1.4; color: var(--ink-dim); }
+.settings-form .setting-forced { margin: .25rem 0 0; font-size: .78rem; font-weight: 600; color: var(--accent); }
+
+.settings-form .setting-main { display: flex; justify-content: flex-end; align-items: center; min-height: 32px; }
+.settings-form .setting-main > .setting-control,
+.settings-form .setting-main > .setting-control-inf { width: 13rem; }
+.settings-form .setting-main > input.setting-number { width: 13rem; text-align: right; }
+
+/* Toggle switch (flat, no shadow) */
+.settings-form .switch { position: relative; display: inline-block; margin: 0; padding: 0; border: 0; cursor: pointer; }
+.settings-form .switch input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; }
+.settings-form .switch-track {
+  display: inline-block; width: 2.4rem; height: 1.35rem; border-radius: 1rem; position: relative;
+  background: var(--paper-2); border: 1px solid var(--line-strong); transition: background .12s, border-color .12s;
+}
+.settings-form .switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: calc(1.35rem - 6px); height: calc(1.35rem - 6px);
+  border-radius: 50%; background: var(--ink-dim); transition: transform .12s, background .12s;
+}
+.settings-form .switch input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
+.settings-form .switch input:checked + .switch-track .switch-thumb { background: var(--paper); transform: translateX(1.05rem); }
+.settings-form .switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-form .switch input:disabled + .switch-track { opacity: .5; cursor: not-allowed; }
+
+/* Slider and number pair */
+.settings-form .setting-control { display: flex; align-items: center; gap: .6rem; }
+.settings-form .setting-control-inf { display: flex; flex-direction: column; gap: .4rem; }
+.settings-form .setting-slider { flex: 1 1 auto; min-width: 0; width: auto; height: auto; accent-color: var(--accent); margin: 0; }
+.settings-form .setting-number {
+  flex: 0 0 4.5rem; width: 4.5rem; height: 32px; padding: 0 .5rem; text-align: right;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.settings-form .setting-inf-toggle {
+  display: flex; align-items: center; gap: .4rem; margin: 0; padding: 0; border: 0; background: none;
+  font-size: .8rem; font-weight: 400; color: var(--ink-dim);
+}
+.settings-form .setting-inf-toggle input { width: 1.05rem; height: 1.05rem; flex: 0 0 auto; margin: 0; padding: 0; border: 0; accent-color: var(--accent); }
+
+/* Save bar sticks to the bottom of the viewport */
+.settings-form .save-bar {
+  position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: flex-end; gap: 1rem;
+  padding: .6rem 0; background: var(--paper); border-top: 1px solid var(--line-strong);
+}
+.settings-form .save-note { font-size: .78rem; color: var(--ink-dim); }
+
+@media (max-width: 900px) {
+  .settings-form .settings-cols { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .settings-form .setting-row { grid-template-columns: minmax(0, 1fr); }
+  .settings-form .setting-main { justify-content: flex-start; }
+  .settings-form .save-note { display: none; }
+  .settings-form .save-bar button { width: 100%; }
+}
