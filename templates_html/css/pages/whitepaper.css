@@ -1,15 +1,36 @@
 /* Whitepaper: one calm reading column, about 65 characters wide, with a
    real type scale. Styles the HTML the markdown renderer produces. */
 
-.wp { max-width: 66ch; margin: 1.25rem auto 2.5rem; font-size: 1.0625rem; line-height: 1.65; color: var(--ink); }
+.wp-layout { display: grid; grid-template-columns: minmax(0, 68ch) 14rem; gap: 3.5rem; justify-content: center; align-items: start; }
+.wp { min-width: 0; margin: .5rem 0 3rem; font-size: 1rem; line-height: 1.7; color: var(--ink); }
+
+/* On this page: sticky contents list, the active section marked as you read */
+.wp-toc { position: sticky; top: 4.25rem; margin-top: .75rem; max-height: calc(100vh - 6rem); overflow-y: auto; font-size: .82rem; scrollbar-width: thin; }
+.wp-toc-title { font-size: .78rem; font-weight: 600; color: var(--ink-dim); margin-bottom: .5rem; }
+.wp-toc ol { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--rule); }
+.wp-toc li { margin: 0; }
+.wp-toc li.sub a { padding-left: 1.5rem; }
+.wp-toc a {
+  display: block; padding: .28rem .75rem; margin-left: -1px; border-left: 2px solid transparent;
+  color: var(--ink-dim); line-height: 1.35; text-decoration: none;
+}
+.wp-toc a:hover { color: var(--ink); text-decoration: none; }
+.wp-toc a.on { color: var(--ink); font-weight: 600; border-left-color: var(--accent); }
+@media (max-width: 1000px) {
+  .wp-layout { grid-template-columns: minmax(0, 68ch); }
+  .wp-toc { display: none; }
+}
+html { scroll-behavior: smooth; scroll-padding-top: 4.5rem; }
 .wp > :first-child { margin-top: 0; }
 .wp h1, .wp h2, .wp h3, .wp h4 { line-height: 1.25; letter-spacing: -.01em; color: var(--ink); }
-.wp h1 { font-size: 2.1rem; font-weight: 700; margin: 0 0 1.25rem; letter-spacing: -.02em; }
-.wp h2 { font-size: 1.45rem; font-weight: 650; margin: 2.6rem 0 .8rem; padding-top: 1.1rem; border-top: 1px solid var(--rule); }
+.wp h1 { font-size: 1.85rem; font-weight: 650; margin: 0 0 .5rem; letter-spacing: -.025em; }
+.wp h1 + p { color: var(--ink-dim); font-size: .92rem; margin-bottom: 1.5rem; }
+.wp h1 + p em { font-style: normal; }
+.wp h2 { font-size: 1.3rem; font-weight: 650; margin: 2.2rem 0 .7rem; padding-top: 1.4rem; border-top: 1px solid var(--rule); }
 .wp h1 + h2, .wp h1 + p + h2 { border-top: 0; padding-top: 0; }
-.wp h3 { font-size: 1.15rem; font-weight: 650; margin: 1.9rem 0 .5rem; }
+.wp h3 { font-size: 1.05rem; font-weight: 650; margin: 1.6rem 0 .4rem; }
 .wp h4 { font-size: 1rem; font-weight: 650; margin: 1.5rem 0 .4rem; color: var(--ink-dim); }
-.wp p { margin: 0 0 1.05rem; }
+.wp p { margin: 0 0 1rem; }
 .wp strong { font-weight: 650; }
 .wp em { font-style: italic; }
 .wp a { color: var(--link); text-decoration: underline; text-underline-offset: .15em; text-decoration-thickness: 1px; }
@@ -34,7 +55,6 @@
 .wp img { max-width: 100%; height: auto; }
 
 @media (max-width: 640px) {
-  .wp { font-size: 1rem; margin-top: .5rem; }
-  .wp h1 { font-size: 1.7rem; }
-  .wp h2 { font-size: 1.28rem; margin-top: 2.1rem; }
+  .wp h1 { font-size: 1.55rem; }
+  .wp h2 { font-size: 1.2rem; margin-top: 1.8rem; }
 }

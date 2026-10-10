@@ -1,5 +1,52 @@
 {% extends "base.html" %}
 {% block head %}<link rel="stylesheet" href="/css/pages/whitepaper.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<article class="wp">{{ rendered | safe }}</article>
+<div class="wp-layout">
+  <article class="wp" id="wp">{{ rendered | safe }}</article>
+  <nav class="wp-toc" id="wp-toc" aria-label="On this page" hidden>
+    <div class="wp-toc-title">On this page</div>
+    <ol id="wp-toc-list"></ol>
+  </nav>
+</div>
+<script>
+(function () {
+  var article = document.getElementById("wp");
+  var toc = document.getElementById("wp-toc");
+  var list = document.getElementById("wp-toc-list");
+  var heads = article.querySelectorAll("h2, h3");
+  if (!heads.length) return;
+  var used = {};
+  var links = [];
+  heads.forEach(function (h) {
+    if (!h.id) {
+      var base = h.textContent.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "section";
+      var id = base, n = 2;
+      while (used[id] || document.getElementById(id)) id = base + "-" + n++;
+      h.id = id;
+    }
+    used[h.id] = true;
+    var li = document.createElement("li");
+    li.className = h.tagName === "H3" ? "sub" : "";
+    var a = document.createElement("a");
+    a.href = "#" + h.id;
+    a.textContent = h.textContent;
+    li.appendChild(a);
+    list.appendChild(li);
+    links.push({ head: h, a: a });
+  });
+  toc.hidden = false;
+  function spy() {
+    var line = 90, current = links[0];
+    links.forEach(function (l) { if (l.head.getBoundingClientRect().top <= line) current = l; });
+    links.forEach(function (l) { l.a.classList.toggle("on", l === current); });
+  }
+  var ticking = false;
+  window.addEventListener("scroll", function () {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () { spy(); ticking = false; });
+  }, { passive: true });
+  spy();
+})();
+</script>
 {% endblock %}
