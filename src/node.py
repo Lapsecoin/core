@@ -82,6 +82,8 @@ _rng = _secrets.SystemRandom()
 # block below it is the draw settling a tie, which happens constantly and
 # is not what anyone is looking for when they ask how deep reorgs go.
 REORG_NOTABLE_DEPTH = 2
+# Reorg stats on the Odds page only look this far back.
+REORG_WINDOW_DAYS = 30
 
 SILENCE_MULTIPLE = 3.0
 
@@ -2014,29 +2016,32 @@ class Node:
         """
         if discarded < REORG_NOTABLE_DEPTH:
             return
-        count = int(self.storage.get_meta("reorg_count", 0) or 0) + 1
-        previous_deepest = int(self.storage.get_meta("reorg_deepest", 0) or 0)
-        deepest = max(previous_deepest, discarded)
-        self.storage.set_meta("reorg_count", count)
-        self.storage.set_meta("reorg_deepest", deepest)
-        # Strictly deeper, compared against the previous record rather than
-        # against the one just updated to include this reorg. Against the
-        # latter every reorg that merely equals the standing record passed,
-        # and rewrote the date to say the record was set today when it was
-        # not.
-        if discarded > previous_deepest:
-            self.storage.set_meta("reorg_deepest_at", int(time.time()))
+        now = int(time.time())
+        events = self._reorg_events(now)
+        events.append([now, discarded])
+        self.storage.set_meta("reorg_events", json.dumps(events))
+        deepest = max(d for _, d in events)
         log.warning("[sync] that was a deep reorg: %d blocks replaced "
-                    "(deepest this node has seen: %d, %d in total)",
-                    discarded, deepest, count)
+                    "(deepest in the last %d days: %d, %d in total)",
+                    discarded, REORG_WINDOW_DAYS, deepest, len(events))
+
+    def _reorg_events(self, now):
+        """[timestamp, depth] of each notable reorg in the last
+        REORG_WINDOW_DAYS days. Older ones are dropped."""
+        try:
+            events = json.loads(self.storage.get_meta("reorg_events", "[]") or "[]")
+        except ValueError:
+            events = []
+        cutoff = now - REORG_WINDOW_DAYS * 86400
+        return [e for e in events if e[0] >= cutoff]
 
     def reorg_stats(self):
-        """Deepest reorg seen and how many, for display."""
-        return {
-            "deepest": int(self.storage.get_meta("reorg_deepest", 0) or 0),
-            "count":   int(self.storage.get_meta("reorg_count", 0) or 0),
-            "deepest_at": int(self.storage.get_meta("reorg_deepest_at", 0) or 0),
-        }
+        """Deepest reorg and how many in the last REORG_WINDOW_DAYS days."""
+        events = self._reorg_events(int(time.time()))
+        if not events:
+            return {"deepest": 0, "count": 0, "deepest_at": 0}
+        at, deepest = max(events, key=lambda e: (e[1], -e[0]))
+        return {"deepest": deepest, "count": len(events), "deepest_at": at}
 
     def _reorg_mempool(self, fork_point, old_chain, new_chain, new_state):
         """Re-add unconfirmed txs from the abandoned local branch, validated

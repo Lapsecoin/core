@@ -758,8 +758,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
         page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
         end   = max(total - (page - 1) * BLOCKS_PER_PAGE, 0)
         start = max(end - BLOCKS_PER_PAGE, 0)
+        block_times = {h: int(chain[h]["timestamp"] - chain[h - 1]["timestamp"])
+                       for h in range(max(start, 1), end)}
         return render_template("explorer.html", title="Explorer",
-            recent=chain[start:end][::-1], page=page, total_pages=total_pages,
+            recent=chain[start:end][::-1], block_times=block_times, page=page, total_pages=total_pages,
             page_window=_pagination_window(page, total_pages),
             has_prev=page > 1, has_next=start > 0)
 

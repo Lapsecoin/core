@@ -3,19 +3,20 @@
 <div class="card">
   <div class="table-wrap">
   <table class="stacked">
-    <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th></tr></thead>
+    <thead><tr><th>Height</th><th>Hash</th><th>Block time</th><th>Txs</th><th>Builder</th></tr></thead>
     <tbody>
     {% if recent %}
       {% for b in recent %}
       <tr>
         <td data-label="Height"><a href="/explorer/block/{{ b.height }}">{{ b.height }}</a></td>
-        <td data-label="Hash" class="hash"><a href="/explorer/block/{{ b.height }}">{{ b.hash[:32] }}…</a></td>
+        <td data-label="Hash" class="hash"><a href="/explorer/block/{{ b.height }}">{{ b.hash[:16] }}…</a></td>
+        <td data-label="Block time">{% if b.height in block_times %}{{ block_times[b.height] }}s{% endif %}</td>
         <td data-label="Txs">{{ b.transactions | length }}</td>
         <td data-label="Builder" class="hash-short">{{ (b.builder or '')[:20] }}{% if b.builder %}…{% endif %}</td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="4" style="color:var(--muted);text-align:center">No blocks yet</td></tr>
+      <tr><td colspan="5" style="color:var(--muted);text-align:center">No blocks yet</td></tr>
     {% endif %}
     </tbody>
   </table>
