@@ -5,7 +5,7 @@
 <div class="wl">
 <h2>Fees</h2>
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
-<p class="wl-lede">Get gas on another network. Burn {{ lock // 100000000 }} LAPSE and a node operator sends it to you.</p>
+<p class="wl-lede">Get gas on another network. Burn {{ lock_lapse }} LAPSE and a node operator sends it to you.</p>
 
 <div class="wl-grid">
   <section class="panel">
@@ -13,7 +13,7 @@
     <form method="POST" action="/fees" id="fees-form" autocomplete="off" class="panel-body">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="form_token" value="{{ form_token }}">
-      {% if low %}<p class="alert alert-err low">You need {{ lock // 100000000 }} LAPSE. Mine some, or get free LAPSE on
+      {% if low %}<p class="alert alert-err low">You need {{ lock_lapse }} LAPSE. Mine some, or get free LAPSE on
          <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</p>{% endif %}
 
       <div class="fields fees-fields">
@@ -46,9 +46,9 @@
           <label for="passphrase">Your signing passphrase</label>
           <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" required>
         </div>
-        <button type="submit" id="submit-btn" style="flex:0 0 auto" disabled>Burn {{ lock // 100000000 }} LAPSE and request</button>
+        <button type="submit" id="submit-btn" style="flex:0 0 auto" disabled>Burn {{ lock_lapse }} LAPSE and request</button>
       </div>
-      <p class="hint fees-note">A free gift, as is. The {{ lock // 100000000 }} LAPSE comes back only if no node offers.</p>
+      <p class="hint fees-note">A free gift, as is. The {{ lock_lapse }} LAPSE comes back only if no node offers.</p>
     </form>
   </section>
   <aside class="panel panel-side">

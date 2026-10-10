@@ -1458,7 +1458,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
     @app.route("/fees", endpoint="fees_public")
     def fees_public():
         return render_template("fees_public.html", title="Fees",
-            networks=fees_ui.network_options(), lock=fees_ui.LOCK // TICKS_PER_LAPSE,
+            networks=fees_ui.network_options(), lock_lapse=fees_ui.LOCK_LAPSE,
             cap_usd=gas.NODE_CAP_USD, discord=fees_ui.DISCORD, private_port=private_port)
 
     # Send disabled on public port; show locked page

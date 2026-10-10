@@ -12,7 +12,7 @@
     <div class="panel-head">How to use it</div>
     <ol class="steps">
       <li><span>Get the wallet from the <a href="https://github.com/Lapsecoin/core/releases" target="_blank" rel="noopener">releases page</a>.</span></li>
-      <li><span>Have {{ lock }} LAPSE: mine it, or get some free on <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</span></li>
+      <li><span>Have {{ lock_lapse }} LAPSE: mine it, or get some free on <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</span></li>
       <li><span>Open <strong>Fees</strong> in your wallet (<code>localhost:{{ private_port }}/fees</code>), pick the network and paste the address.</span></li>
     </ol>
   </section>
@@ -21,9 +21,9 @@
     <dl class="kv kv-inline">
       <div><dt>Networks</dt><dd class="num">{{ networks|length }}</dd></div>
       <div><dt>Per request, up to</dt><dd class="num">${{ "%.0f"|format(cap_usd) }}</dd></div>
-      <div><dt>Deposit</dt><dd class="num">{{ lock }} LAPSE</dd></div>
+      <div><dt>Deposit</dt><dd class="num">{{ lock_lapse }} LAPSE</dd></div>
     </dl>
-    <p class="terms">The {{ lock }} LAPSE keeps fake requests out: it returns to you if no node offers to help, and is burned if one does.
+    <p class="terms">The {{ lock_lapse }} LAPSE keeps fake requests out: it returns to you if no node offers to help, and is burned if one does.
       To serve requests yourself, fund your node's Base address (shown on the Send page).</p>
   </aside>
 </div>
