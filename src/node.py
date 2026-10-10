@@ -417,11 +417,33 @@ class Node:
     # Public interface
     # ------------------------------------------------------------------
 
+    _MACHINE_SALT_META_KEY = "machine_salt"
+
+    def _machine_salt(self):
+        """A random secret that stays on this node, created on first use. It
+        keys the private machine id (block.private_machine_id), which is why
+        the id cannot be turned back into a CPU model. Never sent anywhere,
+        never part of a setting, so it is not on the settings page or API."""
+        raw = self.storage.get_meta(self._MACHINE_SALT_META_KEY)
+        try:
+            salt = bytes.fromhex(raw) if raw else b""
+        except ValueError:
+            salt = b""
+        if len(salt) < 16:
+            salt = _secrets.token_bytes(32)
+            self.storage.set_meta(self._MACHINE_SALT_META_KEY, salt.hex())
+        return salt
+
     def machine_label(self):
-        """The CPU label this node declares in its blocks, or "" if it does not."""
-        if not self.settings.get(settings_mod.PUBLISH_MACHINE):
-            return ""
-        return hardware_info.machine_label(block_mod.MACHINE_LABEL_CHARS)
+        """What this node declares in its blocks to say which machine built
+        them: its CPU model when it shares it, otherwise an opaque id that
+        identifies the machine without revealing the CPU. Never empty, so the
+        odds can always tell this node's blocks from other machines' behind
+        the same address."""
+        cpu = hardware_info.machine_label(block_mod.MACHINE_LABEL_CHARS)
+        if cpu and self.settings.get(settings_mod.PUBLISH_MACHINE):
+            return cpu
+        return block_mod.private_machine_id(self.addr, cpu, self._machine_salt())
 
     def block_extra(self):
         label = self.machine_label()

@@ -127,14 +127,14 @@
         {% if entry.machines %}
         <span class="lg-head"><span>Machine, fastest first</span><span>Blocks</span><span>Median</span></span>
         {% for m in entry.machines %}
-        <span class="lg-row"><span>{{ m.machine or "not declared" }}</span><span>{{ m.blocks }}</span><span>{{ "%.0f"|format(m.pace) }}s</span></span>
+        <span class="lg-row"><span>{{ m.name }}</span><span>{{ m.blocks }}</span><span>{{ "%.0f"|format(m.pace) }}s</span></span>
         {% endfor %}
         {% endif %}
       </span>
     </span>
     {% endfor %}
   </div>
-  {% if hardware %}<div class="odds-hw"><span>Your hardware</span> {{ hardware.cpu }} &middot; {{ hardware.os }}</div>{% endif %}
+  {% if hardware %}<div class="odds-hw"><div class="stat-label">Hardware</div><div class="odds-hw-val">{{ hardware.cpu }} &middot; {{ hardware.os }}</div></div>{% endif %}
   <button type="button" id="odds-zoom-reset" class="btn-sm" style="display:none">Reset spacing</button>
   </div>
 </div>
@@ -388,7 +388,7 @@
       }
       const who = entry.label ? escapeHtml(entry.nick || "Builder") : "All other builders";
       const rows = (entry.machines || []).map(function (m) {
-        return `<span class="lg-row"><span>${escapeHtml(m.machine || "not declared")}</span>` +
+        return `<span class="lg-row"><span>${escapeHtml(m.name)}</span>` +
                `<span>${m.blocks}</span><span>${Math.round(m.pace)}s</span></span>`;
       }).join("");
       const head = rows ? `<span class="lg-head"><span>Machine, fastest first</span><span>Blocks</span><span>Median</span></span>` : "";

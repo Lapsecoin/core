@@ -484,7 +484,8 @@ def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
         for h, seconds, builder in rows:
             if builder and pick(builder):
                 groups.setdefault(machine_of.get(h, ""), []).append(seconds)
-        out = [{"machine": m, "blocks": len(v), "pace": statistics.median(v)}
+        out = [{"machine": m, "name": block_mod.machine_display(m),
+                "blocks": len(v), "pace": statistics.median(v)}
                for m, v in groups.items()]
         out.sort(key=lambda r: (r["pace"], -r["blocks"], r["machine"]))
         return out

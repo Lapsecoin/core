@@ -1157,13 +1157,61 @@ class TestMachinesInTheOdds:
         assert slow["own_pace"] == pytest.approx(160)
         assert fast["odds_pct"] > slow["odds_pct"]
 
-    def test_blocks_from_before_machines_were_named_still_count_as_ours(self):
+    def test_blocks_of_our_address_that_name_no_machine_are_not_counted_as_ours(self):
+        # They could be ours or another machine's behind the same address,
+        # so they are not used: crediting them to us inflated win share and
+        # skewed pace and odds.
         chain = self._chain([(0, "", 100)] * 3 + [(0, "BOX", 100)] * 3)
         race = block_mod.race_odds(chain, None, address(0), own_machine="BOX")
+        assert race["own_blocks"] == 3
+        assert race["field_blocks"] == 0           # and not the field either
+        assert race["win_share_pct"] == pytest.approx(50.0)
+
+    def test_another_machine_behind_our_address_is_the_field_not_us(self):
+        chain = self._chain([(0, "MINE", 100), (0, "OTHER", 200)] * 6)
+        race = block_mod.race_odds(chain, None, address(0), own_machine="MINE")
         assert race["own_blocks"] == 6
+        assert race["field_blocks"] == 6
+        assert race["own_pace"] == pytest.approx(100)
+
+    def test_no_machine_at_all_keeps_the_address_alone(self):
+        chain = self._chain([(0, "", 100)] * 4)
+        race = block_mod.race_odds(chain, None, address(0))
+        assert race["own_blocks"] == 4
 
     def test_the_machine_table_groups_by_declared_label(self):
         chain = self._chain([(0, "A", 100), (1, "B", 100), (2, "A", 100), (3, "", 100)])
         rows = block_mod.race_odds(chain, None, address(0))["machines"]
         assert [(r["machine"], r["blocks"]) for r in rows] == [("A", 2), ("", 1), ("B", 1)]
         assert sum(r["share_pct"] for r in rows) == pytest.approx(100.0)
+
+
+class TestPrivateMachineId:
+    SALT = bytes(range(32))
+
+    def test_stable_for_the_same_machine(self):
+        a = block_mod.private_machine_id("addr1", "Some CPU", self.SALT)
+        assert a == block_mod.private_machine_id("addr1", "Some CPU", self.SALT)
+        assert a.startswith(block_mod.PRIVATE_MACHINE_PREFIX)
+
+    def test_reveals_nothing_about_the_cpu(self):
+        i = block_mod.private_machine_id("addr1", "Intel(R) Xeon(R) Platinum 8259CL", self.SALT)
+        assert "Xeon" not in i and "Intel" not in i
+        # A plain hash of the model is not what is published, so hashing every
+        # known CPU and comparing finds nothing.
+        import hashlib
+        plain = hashlib.sha256(b"Intel(R) Xeon(R) Platinum 8259CL").hexdigest()[:16]
+        assert plain not in i
+
+    def test_varies_with_address_cpu_and_salt(self):
+        base = block_mod.private_machine_id("addr1", "CPU A", self.SALT)
+        assert block_mod.private_machine_id("addr2", "CPU A", self.SALT) != base   # not linkable across addresses
+        assert block_mod.private_machine_id("addr1", "CPU B", self.SALT) != base   # a new CPU is a new pace
+        assert block_mod.private_machine_id("addr1", "CPU A", bytes(32)) != base   # identical machines do not collide
+
+    def test_fits_the_extra_field_and_displays_readably(self):
+        i = block_mod.private_machine_id("addr1", "CPU", self.SALT)
+        assert len(i) <= block_mod.MACHINE_LABEL_CHARS and i.isprintable()
+        assert block_mod.machine_display(i).startswith("Private machine ")
+        assert block_mod.machine_display("") == "not declared"
+        assert block_mod.machine_display("AMD Ryzen") == "AMD Ryzen"

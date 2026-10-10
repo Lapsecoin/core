@@ -199,8 +199,11 @@ PUBLISH_MACHINE = Setting(
     help="On by default. Puts your CPU model (nothing else: no OS, host or "
          "core count) in each block you build, so the odds page can tell "
          "machines apart, including several that share one address. It "
-         "becomes part of the public chain. Turn off to share nothing; your "
-         "blocks are then grouped by address alone."
+         "becomes part of the public chain. Turn off and your blocks carry "
+         "an opaque id instead: a keyed hash of your CPU and address, made "
+         "with a secret that stays on this node. It names no CPU and cannot "
+         "be reversed into one, but stays the same for this machine, so your "
+         "odds stay separate from other machines behind your address."
 )
 
 # Minimum race odds (percent) this node needs before it builds straight
