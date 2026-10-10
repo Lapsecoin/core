@@ -68,7 +68,7 @@ class TestCheckQuote:
         ("tx from another wallet", ["steps", 0, "items", 0, "data", "from"], "0x" + "5" * 40, "not from this wallet"),
         ("tx value differs from cost", ["steps", 0, "items", 0, "data", "value"], "999999999999999999",
          "value does not match"),
-        ("too much gas", ["steps", 0, "items", 0, "data", "gas"], "9999999", "too much gas"),
+        ("too much gas", ["steps", 0, "items", 0, "data", "gas"], "9999999", "no usable gas limit"),
         ("no destination", ["steps", 0, "items", 0, "data", "to"], "nothing", "no destination"),
         ("not a transaction", ["steps", 0, "kind"], "signature", "more than one deposit"),
     ])

@@ -110,8 +110,8 @@ def _common(q, net, token_address, recipient, sender):
         raise RelayError("quote's transaction is not from this wallet on Base")
     if int(tx["value"]) != int(cin["amount"]):
         raise RelayError("quote's transaction value does not match its cost")
-    if int(tx.get("gas", 0)) > MAX_DEPOSIT_GAS:
-        raise RelayError("quote's transaction asks for too much gas")
+    if not 0 < int(tx["gas"]) <= MAX_DEPOSIT_GAS:
+        raise RelayError("quote's transaction has no usable gas limit")
     if not evm.is_valid_address(tx["to"]):
         raise RelayError("quote's transaction has no destination")
     return d, tx

@@ -40,11 +40,12 @@ def create(path: str, kek: bytes) -> str:
     ciphertext = box.encrypt(secret)
     del secret
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    # Created 0600 from the start, so the file is never readable by others.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump({"type": "base_gas_wallet",
                    "address": address,
                    "ciphertext": base64.b64encode(ciphertext).decode()}, f, indent=2)
-    os.chmod(tmp, 0o600)
     # Renamed into place: a crash partway through a direct write leaves a
     # truncated key file and the wallet is gone.
     os.replace(tmp, path)
