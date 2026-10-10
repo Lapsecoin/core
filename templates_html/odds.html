@@ -36,7 +36,7 @@
   <div class="stat">
     <div class="stat-label">Self pace</div>
     <div class="stat-value" id="own-median-val">{{ ("%.1f"|format(race.own_pace) ~ "s") if race.own_pace is not none else "--" }}</div>
-    <div class="stat-sub" id="own-median-sub">{{ "median interval of blocks we built" if race.own_pace_measured else ("estimated from calibration, no build finished yet" if own_is_estimate else "VDF clock: no block of ours in this window") }}</div>
+    <div class="stat-sub" id="own-median-sub">{{ "median interval of blocks we built" if race.own_pace_measured else ("estimated from calibration, no build finished yet" if own_is_estimate else "VDF clock plus the draw-window gap, no block of ours here") }}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Window median</div>
@@ -461,7 +461,7 @@
       document.getElementById("own-median-sub").textContent =
         data.own_pace_measured ? "median interval of blocks we built"
           : (data.own_is_estimate ? "estimated from calibration, no build finished yet"
-                                  : "VDF clock: no block of ours in this window");
+                                  : "VDF clock plus the draw-window gap, no block of ours here");
       document.getElementById("window-median-val").textContent = fmt1(data.median) + "s";
       document.getElementById("window-count").textContent = data.window_len + " blocks";
 

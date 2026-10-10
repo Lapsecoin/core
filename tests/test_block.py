@@ -701,13 +701,14 @@ class TestRaceOddsUsesTheDrawWindow:
         assert race["own_pace_measured"]
 
     def test_a_node_with_no_blocks_yet_falls_back_to_its_vdf_clock(self):
-        # Wrong unit, and the only figure such a node has. Flagged as not
-        # measured so the page can say so.
+        # The only figure such a node has, brought into the interval unit by
+        # the draw-window gap (half the window until one has been learned).
+        # Flagged as not measured so the page can say so.
         chain = self._chain([(1, 200)] * 4)
         race = block_mod.race_odds(chain, 90.0, address(0), draw_window=10.0)
-        assert race["own_pace"] == 90.0
+        assert race["own_pace"] == 95.0
         assert not race["own_pace_measured"]
-        assert race["odds_pct"] == pytest.approx(100.0)
+        assert race["odds_pct"] == pytest.approx(100.0)   # 105s clear of a 200s field
 
     def test_one_fast_block_buys_a_rival_a_share_not_the_window(self):
         """A builder is credited at the rate its own record shows.
@@ -1215,3 +1216,45 @@ class TestPrivateMachineId:
         assert block_mod.machine_display(i).startswith("Private machine ")
         assert block_mod.machine_display("") == "not declared"
         assert block_mod.machine_display("AMD Ryzen") == "AMD Ryzen"
+
+
+class TestOddsWithoutBlocksOfOurOwn:
+    """No block of ours in the window is no reason for a wild answer: the
+    stopwatch is brought into the interval unit before it is compared."""
+
+    def _field_only(self):
+        helper = TestMachinesInTheOdds()
+        return helper._chain([(1, "THEIRS", 105)] * 12)
+
+    def test_the_bare_stopwatch_reads_as_always_winning(self):
+        race = block_mod.race_odds(self._field_only(), 92.0, address(0), draw_window=10.0,
+                                   own_machine="MINE", own_offset=0.0)
+        assert race["odds_pct"] == 100.0
+
+    def test_by_default_the_gap_is_half_the_draw_window(self):
+        race = block_mod.race_odds(self._field_only(), 92.0, address(0), draw_window=10.0,
+                                   own_machine="MINE")
+        assert race["own_pace"] == pytest.approx(97.0)
+        assert race["own_offset"] == pytest.approx(5.0)
+        assert not race["own_offset_learned"]
+        assert race["own_pace_measured"] is False
+        assert 0 < race["odds_pct"] < 100          # a draw against the field, not a sure win
+
+    def test_a_learned_gap_replaces_the_default(self):
+        race = block_mod.race_odds(self._field_only(), 92.0, address(0), draw_window=10.0,
+                                   own_machine="MINE", own_offset=13.0)
+        assert race["own_pace"] == pytest.approx(105.0)
+        assert race["own_offset_learned"]
+
+    def test_blocks_of_ours_in_the_window_still_decide_the_pace(self):
+        helper = TestMachinesInTheOdds()
+        chain = helper._chain([(0, "MINE", 100), (1, "THEIRS", 105)] * 6)
+        race = block_mod.race_odds(chain, 50.0, address(0), draw_window=10.0,
+                                   own_machine="MINE", own_offset=13.0)
+        assert race["own_pace"] == pytest.approx(100.0)
+        assert race["own_offset"] is None and race["own_pace_measured"]
+
+    def test_no_stopwatch_either_means_no_pace(self):
+        race = block_mod.race_odds(self._field_only(), None, address(0), draw_window=10.0,
+                                   own_machine="MINE")
+        assert race["own_pace"] is None and race["own_offset"] is None

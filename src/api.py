@@ -1067,12 +1067,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # sees the page that explains it change too.
         window = node.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
         key = (tip.get("hash"), tip.get("height"), len(node.view.chain),
-               node.addr, window, node.own_vdf_median(), _machine_of(node))
+               node.addr, window, node.own_vdf_median(), _machine_of(node),
+               getattr(node, "interval_offset", lambda: None)())
         with odds_lock:
             if odds_cache.get("key") == key:
                 return odds_cache["race"]
         race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
-                                   node.addr, window, own_machine=_machine_of(node))
+                                   node.addr, window, own_machine=_machine_of(node),
+                                   own_offset=getattr(node, "interval_offset", lambda: None)())
         with odds_lock:
             odds_cache["key"], odds_cache["race"] = key, race
         return race
