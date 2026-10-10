@@ -358,7 +358,10 @@
           const data = await res.json();
           if (seq !== feeSeq) return;  // a newer keystroke already superseded this one
           feeEl.textContent = "fee: " + data.fee + " ticks";
-          setSendState(!data.ok, data.reason || "");
+          // The quote also runs for an empty box (so the real fee shows from
+          // the start), and an empty box can never post.
+          const empty = msgInput.value.trim() === "";
+          setSendState(!data.ok || empty, empty ? "Write something to post." : (data.reason || ""));
         } catch (e) {
           // Quiet failure: the floor shown at page load is still a safe
           // (if stale) lower bound, not a broken page.
@@ -380,6 +383,7 @@
       counter.style.color = over ? "var(--red, #c0392b)" : "var(--muted)";
       if (empty) {
         setSendState(true, "Write something to post.");
+        refreshFee(0);  // quote what a post would cost now, not the page-load floor
       } else if (unchanged) {
         setSendState(true, "Nothing changed.");
       } else if (over) {
