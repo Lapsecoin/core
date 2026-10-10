@@ -115,30 +115,48 @@ nav.mainnav a.active .ni { opacity: 1; color: var(--accent); }
 .nav-group.active .nav-group-btn .ni { opacity: 1; color: var(--accent); }
 .nav-group-btn .ni { width: 14px; height: 14px; opacity: .75; }
 .nav-group-btn .nc { width: 9px; height: 6px; opacity: .6; transition: transform .15s; }
-.nav-group.open .nc, .nav-group:hover .nc { transform: rotate(180deg); }
+.nav-group.open .nc { transform: rotate(180deg); }
+@media (hover: hover) { .nav-group:hover .nc { transform: rotate(180deg); } }
 .nav-menu {
   display: none; position: absolute; top: 100%; left: 0; z-index: 120; min-width: 15rem;
   padding: .35rem; margin-top: .35rem; border: 1px solid var(--rule); border-radius: var(--radius);
   background: var(--surface); box-shadow: 0 8px 28px rgb(var(--ink-rgb) / .14);
 }
 .nav-menu::before { content: ""; position: absolute; left: 0; right: 0; top: -.4rem; height: .4rem; }
-.nav-group:hover .nav-menu, .nav-group.open .nav-menu, .nav-group:focus-within .nav-menu { display: block; }
+.nav-group.open .nav-menu { display: block; }
+@media (hover: hover) and (min-width: 761px) { .nav-group:hover .nav-menu { display: block; } }
 nav.mainnav .nav-menu a { display: flex; align-items: center; gap: .65rem; padding: .5rem .6rem; border-radius: var(--radius-sm); }
 nav.mainnav .nav-menu a .ni { width: 16px; height: 16px; }
 .nav-menu a span { display: flex; flex-direction: column; line-height: 1.25; }
 .nav-menu a b { font-weight: 600; font-size: .86rem; color: var(--ink); }
 .nav-menu a small { font-size: .76rem; color: var(--ink-dim); font-weight: 400; }
 nav.mainnav .nav-menu a.active { background: rgb(var(--ink-rgb) / .07); }
+.nav-more-btn { display: none; }
 @media (min-width: 761px) { nav.mainnav { overflow: visible; } }
 @media (max-width: 760px) {
-  /* The strip scrolls sideways here and would clip a dropdown, so the group
-     lays its three links out inline instead. */
+  /* Phones: the main entries stay in the bar, everything else sits behind a
+     More button and opens as a second row of links. The Explorer group
+     flattens into that second row. */
+  nav.mainnav { overflow: visible; flex-wrap: wrap; row-gap: .15rem; }
+  nav.mainnav a { padding: .5rem .65rem; }
   .nav-group { display: contents; }
   .nav-group-btn { display: none; }
   .nav-menu { display: contents; }
   nav.mainnav .nav-menu a small { display: none; }
   nav.mainnav .nav-menu a b { color: inherit; font-weight: 500; font-size: inherit; }
   nav.mainnav .nav-menu a.active b { font-weight: 600; }
+  nav.mainnav .nav-menu a .ni { width: 14px; height: 14px; }
+  nav.mainnav a.nav-secondary { display: none; order: 10; }
+  nav.mainnav.more-open a.nav-secondary { display: inline-flex; }
+  .nav-more-btn {
+    display: inline-flex; align-items: center; gap: .4rem; order: 5; height: auto;
+    background: none; border: 0; color: var(--ink-dim); font: inherit; font-weight: 500; letter-spacing: 0;
+    padding: .5rem .65rem; border-radius: var(--radius-sm); cursor: pointer;
+  }
+  .nav-more-btn.active { color: var(--ink); background: rgb(var(--ink-rgb) / .07); font-weight: 600; }
+  .nav-more-btn .nc { width: 9px; height: 6px; opacity: .6; transition: transform .15s; }
+  nav.mainnav.more-open .nav-more-btn { color: var(--ink); background: var(--hover); }
+  nav.mainnav.more-open .nav-more-btn .nc { transform: rotate(180deg); }
 }
 nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: none; }
 .live-status { order: 3; flex: 0 0 auto; color: var(--ink-dim); font-size: .72rem; white-space: nowrap; }

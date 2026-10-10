@@ -239,7 +239,7 @@ class TestLightPages:
 
     def test_nav_offers_only_what_the_light_client_has(self, world):
         html = self._light(world).get("/board").get_data(as_text=True)
-        nav = html[html.index('<nav class="mainnav">'):html.index("</nav>")]
+        nav = html[html.index('<nav class="mainnav" id="mainnav">'):html.index("</nav>")]
         for present in ("/address", "/send", "/board"):
             assert f'href="{present}"' in nav
         for absent in ("/explorer", "/blocks", "/network", "/mempool", "/settings", "/odds"):

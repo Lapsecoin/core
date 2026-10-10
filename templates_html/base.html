@@ -44,7 +44,7 @@
       </a>
     </div>
     <div class="masthead-title"><img src="/favicon.svg" alt="" width="24" height="24">LapseCoin v{{ local_version }}</div>
-    <nav class="mainnav">
+    <nav class="mainnav" id="mainnav">
       {% if light %}
       <a href="/board" class="{{ 'active' if nav_active == 'board' }}"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg>Board</a><span class="sep">&middot;</span>
       <a href="/address" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg>Balance</a><span class="sep">&middot;</span>
@@ -59,18 +59,19 @@
       <div class="nav-group {{ 'active' if nav_active in ('blocks', 'address', 'mempool') }}">
         <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-explorer"/></svg>Explorer<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="nav-menu" role="menu">
-          <a href="/blocks" role="menuitem" class="{{ 'active' if nav_active == 'blocks' }}"><svg class="ni" aria-hidden="true"><use href="#i-blocks"/></svg><span><b>Blocks</b><small>Recent blocks and transactions</small></span></a>
-          <a href="/address" role="menuitem" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
-          <a href="/mempool" role="menuitem" class="{{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
+          <a href="/blocks" role="menuitem" class="nav-secondary {{ 'active' if nav_active == 'blocks' }}"><svg class="ni" aria-hidden="true"><use href="#i-blocks"/></svg><span><b>Blocks</b><small>Recent blocks and transactions</small></span></a>
+          <a href="/address" role="menuitem" class="nav-secondary {{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
+          <a href="/mempool" role="menuitem" class="nav-secondary {{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
         </div>
       </div><span class="sep">&middot;</span>
       <a href="/board" class="{{ 'active' if nav_active == 'board' }}"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg>Board</a><span class="sep">&middot;</span>
-      <a href="/network" class="{{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg>Network</a><span class="sep">&middot;</span>
-      <a href="/odds" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg>Odds</a><span class="sep">&middot;</span>
-      <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg>Whitepaper</a>
+      <a href="/network" class="nav-secondary {{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg>Network</a><span class="sep">&middot;</span>
+      <a href="/odds" class="nav-secondary {{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg>Odds</a><span class="sep">&middot;</span>
+      <a href="/whitepaper" class="nav-secondary {{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg>Whitepaper</a>
       {% if is_private %}
-      <span class="sep">&middot;</span><a href="/settings" class="{{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
+      <span class="sep">&middot;</span><a href="/settings" class="nav-secondary {{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
       {% endif %}
+      <button type="button" class="nav-more-btn {{ 'active' if nav_active in ('blocks', 'address', 'mempool', 'network', 'odds', 'whitepaper', 'settings') }}" aria-expanded="false" aria-controls="mainnav">More<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       {% endif %}
     </nav>
     {% if update_checker and update_checker.severity %}
@@ -94,16 +95,40 @@
 {% block content %}{% endblock %}
 </div>
 <script>
-// The Explorer menu: opens on click or keyboard (touch has no hover), closes on
-// an outside click or Escape. Hover also opens it, in the stylesheet.
+// Explorer menu (wide screens) and the More button (phones). Both open on
+// click or keyboard, close on an outside click or Escape. Hover opening lives
+// in the stylesheet and only applies to devices that really hover.
 (function () {
+  var nav = document.getElementById("mainnav");
   var group = document.querySelector(".nav-group");
-  if (!group) return;
-  var btn = group.querySelector(".nav-group-btn");
-  function set(open) { group.classList.toggle("open", open); btn.setAttribute("aria-expanded", open ? "true" : "false"); }
-  btn.addEventListener("click", function (e) { e.stopPropagation(); set(!group.classList.contains("open")); });
-  document.addEventListener("click", function (e) { if (!group.contains(e.target)) set(false); });
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { set(false); btn.focus(); } });
+  var more = document.querySelector(".nav-more-btn");
+  function setGroup(open) {
+    if (!group) return;
+    group.classList.toggle("open", open);
+    group.querySelector(".nav-group-btn").setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  function setMore(open) {
+    if (!more) return;
+    nav.classList.toggle("more-open", open);
+    more.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  if (group) {
+    group.querySelector(".nav-group-btn").addEventListener("click", function (e) {
+      e.stopPropagation(); setGroup(!group.classList.contains("open"));
+    });
+  }
+  if (more) {
+    more.addEventListener("click", function (e) {
+      e.stopPropagation(); setMore(!nav.classList.contains("more-open"));
+    });
+  }
+  document.addEventListener("click", function (e) {
+    if (group && !group.contains(e.target)) setGroup(false);
+    if (more && !nav.contains(e.target)) setMore(false);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { setGroup(false); setMore(false); }
+  });
 })();
 </script>
 <script>
