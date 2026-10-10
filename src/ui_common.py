@@ -7,7 +7,7 @@ import os
 import re
 import sys
 
-from flask import Flask, send_file
+from flask import Flask, send_file, send_from_directory
 from markupsafe import Markup, escape
 
 import crypto as crypto_mod
@@ -235,6 +235,15 @@ def register_static_routes(app, pfx=""):
         # whatever the file on disk currently looks like.
         return send_file(os.path.join(_base_dir(), "lapsecoin.svg"),
                          mimetype="image/svg+xml", max_age=3600)
+
+    @app.route("/css/<path:name>", endpoint=pfx + "css")
+    def css(name):
+        # Stylesheets ship inside templates_html/css; send_from_directory
+        # refuses any path that escapes that folder.
+        if not name.endswith(".css"):
+            return ("", 404)
+        return send_from_directory(os.path.join(_base_dir(), "templates_html", "css"),
+                                   name, mimetype="text/css", max_age=3600)
 
     @app.route("/vendor/markdown-toolbar-element.js", endpoint=pfx + "vendor_markdown_toolbar")
     def vendor_markdown_toolbar():
