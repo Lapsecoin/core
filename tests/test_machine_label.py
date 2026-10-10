@@ -82,3 +82,33 @@ def test_a_damaged_salt_is_replaced_not_trusted(monkeypatch):
     first = _node(False, meta=meta).label()
     assert first == _node(False, meta=meta).label()          # replaced once, then stable
     assert len(bytes.fromhex(meta.get_meta("machine_salt"))) >= 16
+
+
+def _store_node():
+    meta = _Meta()
+    fake = SimpleNamespace(storage=meta,
+                           _INTERVAL_OFFSET_META_KEY=node_mod.Node._INTERVAL_OFFSET_META_KEY)
+    fake.interval_offset = lambda: node_mod.Node.interval_offset(fake)
+    fake.learn = lambda race: node_mod.Node.learn_interval_offset(fake, race)
+    return fake
+
+
+def test_no_gap_is_known_until_one_has_been_measured():
+    assert _store_node().interval_offset() is None
+
+
+def test_the_gap_is_learned_from_measured_blocks_only():
+    n = _store_node()
+    n.learn({"own_pace_measured": False, "own_pace": 105.0, "own_seconds": 92.0})
+    assert n.interval_offset() is None
+    n.learn({"own_pace_measured": True, "own_pace": 105.0, "own_seconds": 92.0})
+    assert n.interval_offset() == 13.0
+    n.learn(None)
+    assert n.interval_offset() == 13.0
+
+
+def test_an_absurd_gap_is_not_kept():
+    n = _store_node()
+    n.learn({"own_pace_measured": True, "own_pace": 20.0, "own_seconds": 92.0})     # negative
+    n.learn({"own_pace_measured": True, "own_pace": 400.0, "own_seconds": 92.0})    # a stall
+    assert n.interval_offset() is None

@@ -241,7 +241,8 @@ def _machine_table(window, labels):
     return rows
 
 
-def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine=""):
+def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="",
+              own_offset=None):
     """Race-odds page data: recent block intervals (a proxy for builder
     build time) and how this node's own pace compares to the field.
 
@@ -366,8 +367,28 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="
     # same window, and the mismatch cancels instead of being estimated.
     # Two identical machines read 50, which is the correct answer and one
     # the old form could only reach by luck.
-    own_pace = (statistics.median(i for _, i, _ in mine) if mine
-                else own_seconds)
+    window_s = (settings_mod.DRAW_WINDOW_SECONDS.default if draw_window is None
+                else draw_window)
+
+    # With no block of ours in the window there is no interval of ours to
+    # read, and own_seconds (a VDF stopwatch) cannot stand in for one as it
+    # is: a height stays open for the whole draw window after its first
+    # candidate (Node.open_draw), so the interval to the next block is the
+    # build time plus up to that much waiting. Comparing the bare stopwatch
+    # with the field's intervals makes this node look faster by about the
+    # draw window itself, and the draw window is the whole width of the
+    # question being asked, so the answer flipped to 100%. own_offset is that
+    # gap as this node measured it from blocks it did build (see
+    # Node.learn_interval_offset); until it has one, half the window, the
+    # middle of the range the rule allows.
+    offset_used = None
+    if mine:
+        own_pace = statistics.median(i for _, i, _ in mine)
+    elif own_seconds is not None:
+        offset_used = own_offset if own_offset is not None else window_s / 2.0
+        own_pace = own_seconds + offset_used
+    else:
+        own_pace = None
 
     # Each builder's observed intervals, kept whole rather than reduced to
     # one number: the spread is what decides the marginal cases below.
@@ -376,8 +397,6 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="
         field_samples.setdefault(builder, []).append(interval)
     field_paces = {b: statistics.median(v) for b, v in field_samples.items()}
 
-    window_s = (settings_mod.DRAW_WINDOW_SECONDS.default if draw_window is None
-                else draw_window)
     own_samples = [i for _h, i, _b in mine] or ([own_pace] if own_pace is not None
                                                 else [])
 
@@ -403,6 +422,8 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="
             "machine_of": labels,
             "own_seconds": own_seconds, "odds_pct": odds_pct,
             "own_pace": own_pace, "own_pace_measured": bool(mine),
+            "own_offset": offset_used,
+            "own_offset_learned": offset_used is not None and own_offset is not None,
             "entrants": entrants, "in_draw_pct": in_draw_pct,
             "draw_window": window_s,
             "field_builders": len(field_paces),
