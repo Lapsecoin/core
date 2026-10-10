@@ -21,7 +21,7 @@
 
 .net-side { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
 .net-add { padding: .6rem .75rem; border-bottom: 1px solid var(--rule); }
-.net-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem; }
+.net-label { font-size: .78rem; font-weight: 500; color: var(--ink-dim); margin-bottom: .35rem; }
 .net-add-form { display: flex; gap: .4rem; align-items: center; }
 .net-add-form input[type="text"] { flex: 1 1 auto; min-width: 0; }
 .net-add-form input[type="number"] { flex: 0 0 5.4rem; width: 5.4rem; }

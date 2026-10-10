@@ -240,10 +240,12 @@ def register_static_routes(app, pfx=""):
     def css(name):
         # Stylesheets ship inside templates_html/css; send_from_directory
         # refuses any path that escapes that folder.
-        if not name.endswith(".css"):
+        kinds = {".css": "text/css", ".woff2": "font/woff2"}
+        ext = os.path.splitext(name)[1]
+        if ext not in kinds:
             return ("", 404)
         return send_from_directory(os.path.join(_base_dir(), "templates_html", "css"),
-                                   name, mimetype="text/css", max_age=3600)
+                                   name, mimetype=kinds[ext], max_age=3600)
 
     @app.route("/vendor/markdown-toolbar-element.js", endpoint=pfx + "vendor_markdown_toolbar")
     def vendor_markdown_toolbar():

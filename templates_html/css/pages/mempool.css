@@ -5,8 +5,8 @@
 .mp-strip { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); margin-bottom: .75rem; }
 .mp-stat { padding: .55rem 1rem; border-right: 1px solid var(--rule); min-width: 0; }
 .mp-stat:last-child { border-right: none; }
-.mp-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; }
-.mp-value { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 1.1rem; font-weight: 600; overflow-wrap: anywhere; }
+.mp-label { font-size: .78rem; font-weight: 500; color: var(--ink-dim); }
+.mp-value { font-variant-numeric: tabular-nums; font-size: 1.4rem; font-weight: 600; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .mp-main .mp-value { font-size: 1.6rem; line-height: 1.25; color: var(--accent); }
 
 .mempool-table-wrap { max-height: calc(100vh - 48px - 11.4rem); min-height: 200px; overflow: auto; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); }
