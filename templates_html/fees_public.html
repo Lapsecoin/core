@@ -3,49 +3,21 @@
 <h2>Fees</h2>
 
 <div class="card">
-  <div class="card-title">Gas for any network, paid by a node</div>
-  <p>Holding a token but no coin to move it? Ask the network for gas. A node operator sends the
-  native coin to your address on the chain you pick, so your transaction can go through.
-  Available on {{ networks|length }} networks, including
-  {% for n in networks[:6] %}{{ n.name }}{{ ", " if not loop.last }}{% endfor %}
-  and Solana. A request covers one action, up to about ${{ "%.0f"|format(cap_usd) }} of gas.</p>
+  <p>Holding a token but no coin to move it? A node sends you gas on {{ networks|length }} networks,
+  including Base, Ethereum, Arbitrum and Solana, up to about ${{ "%.0f"|format(cap_usd) }} per request.</p>
 </div>
 
 <div class="card">
   <div class="card-title">How to use it</div>
   <ol>
-    <li>Get the wallet from the <a href="https://github.com/Lapsecoin/core/releases" target="_blank" rel="noopener">releases page</a>
-        (a full node, or the light client).</li>
-    <li>Have {{ lock }} LAPSE. Mine it by running a node, or get some free on
-        <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</li>
-    <li>Open <strong>Fees</strong> in your wallet (<code>http://localhost:{{ private_port }}/fees</code> on a full node).
-        Pick the network, what you want to do, and paste the address that needs gas.</li>
-    <li>Confirm with your passphrase. Within a few blocks a node sends the gas, and the page shows where it stands.</li>
+    <li>Get the wallet from the <a href="https://github.com/Lapsecoin/core/releases" target="_blank" rel="noopener">releases page</a>.</li>
+    <li>Have {{ lock }} LAPSE: mine it, or get some free on <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</li>
+    <li>Open <strong>Fees</strong> in your wallet (<code>localhost:{{ private_port }}/fees</code>), pick the network and paste the address.</li>
   </ol>
 </div>
 
 <div class="card">
-  <div class="card-title">About the {{ lock }} LAPSE</div>
-  <p>The LAPSE is a lock that keeps the service from being flooded by fake requests: asking costs
-  something real, and LAPSE is earned by mining or given away on Discord. If no node offers to help
-  within a few blocks, the lock returns to you. If a node offers, it is burned, and the burned
-  coins flow back to block builders over time. Nobody is paid directly for a request.</p>
-</div>
-
-<div class="card">
-  <div class="card-title">Help others</div>
-  <p>Any full node can serve requests. Send some ETH on Base to the address shown on the
-  <strong>Send</strong> page of your wallet (Base tab) and your node starts answering them.
-  Leave it empty and it never does.</p>
-</div>
-
-<div class="card">
-  <div class="card-title">Links</div>
-  <ul>
-    <li><a href="https://github.com/Lapsecoin/core" target="_blank" rel="noopener">Source and README</a></li>
-    <li><a href="https://github.com/Lapsecoin/core/releases" target="_blank" rel="noopener">Downloads</a></li>
-    <li><a href="{{ discord }}" target="_blank" rel="noopener">Discord</a></li>
-    <li><a href="https://github.com/Lapsecoin/core#support" target="_blank" rel="noopener">Donate Bitcoin</a></li>
-  </ul>
+  <p>The {{ lock }} LAPSE keeps fake requests out: it returns to you if no node offers to help, and is burned if one does.
+  To serve requests yourself, fund your node's Base address (shown on the Send page).</p>
 </div>
 {% endblock %}
