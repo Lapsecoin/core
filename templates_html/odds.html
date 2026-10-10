@@ -15,7 +15,7 @@
 </div>
 {% endif %}
 <div class="stats">
-  <div class="stat">
+  <div class="stat" id="odds-tile" title="{{ ('Your pace %.1fs, %s. Fastest other builder %s. Draw window %gs.'|format(race.own_pace, 'from your own blocks' if race.own_pace_measured else ('estimated from calibration' if own_is_estimate else 'your VDF clock'), ('%.1fs'|format(race.field_fastest) if race.field_fastest is not none else 'none in this window'), race.draw_window)) if race.own_pace is not none else '' }}">
     <div class="stat-label">Odds</div>
     {% if waiting_zero_odds %}
     <div class="stat-value" id="odds-pct-val">Not mining</div>
@@ -24,8 +24,8 @@
     <div class="stat-value" id="odds-pct-val">Off</div>
     <div class="stat-sub" id="odds-pct-sub">mining is off, so no odds to speak of</div>
     {% else %}
-    <div class="stat-value" id="odds-pct-val">{{ (("~" if not race.own_pace_measured else "") ~ "%.1f"|format(race.odds_pct) ~ "%") if race.odds_pct is not none else "--" }}</div>
-    <div class="stat-sub" id="odds-pct-sub">{% set w = "%g"|format(race.draw_window) %}{% if race.odds_pct is none %}no blocks to judge from yet{% elif not race.own_pace_measured %}estimate: none of our blocks in this window yet{% elif race.odds_pct == 0 %}never inside the {{ w }}s draw window{% elif race.in_draw_pct < 95 %}in the {{ w }}s draw window on {{ "%.0f"|format(race.in_draw_pct) }}% of heights{% elif race.entrants < 1.05 %}only builder inside the {{ w }}s draw window{% else %}{{ "%.1f"|format(race.entrants) }} builders inside the {{ w }}s draw window{% endif %}</div>
+    <div class="stat-value" id="odds-pct-val">{{ (("~" if own_is_estimate and not race.own_pace_measured else "") ~ "%.1f"|format(race.odds_pct) ~ "%") if race.odds_pct is not none else "--" }}</div>
+    <div class="stat-sub" id="odds-pct-sub">{% set w = "%g"|format(race.draw_window) %}{% if race.odds_pct is none %}no blocks to judge from yet{% elif own_is_estimate and not race.own_pace_measured %}estimate: our pace is not measured yet{% elif race.odds_pct == 0 %}never inside the {{ w }}s draw window{% elif race.in_draw_pct < 95 %}in the {{ w }}s draw window on {{ "%.0f"|format(race.in_draw_pct) }}% of heights{% elif race.entrants < 1.05 %}only builder inside the {{ w }}s draw window{% else %}{{ "%.1f"|format(race.entrants) }} builders inside the {{ w }}s draw window{% endif %}</div>
     {% endif %}
   </div>
   <div class="stat">
@@ -36,7 +36,7 @@
   <div class="stat">
     <div class="stat-label">Self pace</div>
     <div class="stat-value" id="own-median-val">{{ ("%.1f"|format(race.own_pace) ~ "s") if race.own_pace is not none else "--" }}</div>
-    <div class="stat-sub" id="own-median-sub">{{ "median interval of blocks we built" if race.own_pace_measured else ("estimated from calibration, no build finished yet" if own_is_estimate else "VDF clock plus the draw-window gap, no block of ours here") }}</div>
+    <div class="stat-sub" id="own-median-sub">{{ "median interval of blocks we built" if race.own_pace_measured else ("estimated from calibration, no build finished yet" if own_is_estimate else "VDF clock: no block of ours in this window") }}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Window median</div>
@@ -441,17 +441,24 @@
         document.getElementById("odds-pct-sub").textContent = "mining is off, so no odds to speak of";
       } else {
         document.getElementById("odds-pct-val").textContent =
-          data.odds_pct !== null ? (data.own_pace_measured ? "" : "~") + fmt1(data.odds_pct) + "%" : "--";
+          data.odds_pct !== null ? ((data.own_is_estimate && !data.own_pace_measured) ? "~" : "") + fmt1(data.odds_pct) + "%" : "--";
         const win = data.draw_window + "s draw window";
         document.getElementById("odds-pct-sub").textContent =
           data.odds_pct === null ? "no blocks to judge from yet"
-            : !data.own_pace_measured ? "estimate: none of our blocks in this window yet"
+            : (data.own_is_estimate && !data.own_pace_measured) ? "estimate: our pace is not measured yet"
             : data.odds_pct === 0 ? "never inside the " + win
             : data.in_draw_pct < 95
                 ? "in the " + win + " on " + Math.round(data.in_draw_pct) + "% of heights"
             : data.entrants < 1.05 ? "only builder inside the " + win
             : fmt1(data.entrants) + " builders inside the " + win;
       }
+      document.getElementById("odds-tile").title = data.own_pace === null ? "" :
+        "Your pace " + fmt1(data.own_pace) + "s, " +
+        (data.own_pace_measured ? "from your own blocks"
+          : (data.own_is_estimate ? "estimated from calibration" : "your VDF clock")) +
+        ". Fastest other builder " +
+        (data.field_fastest === null ? "none in this window" : fmt1(data.field_fastest) + "s") +
+        ". Draw window " + data.draw_window + "s.";
       document.getElementById("win-share-val").textContent =
         data.win_share_pct !== null ? fmt1(data.win_share_pct) + "%" : "--";
       document.getElementById("win-share-sub").textContent =
@@ -461,7 +468,7 @@
       document.getElementById("own-median-sub").textContent =
         data.own_pace_measured ? "median interval of blocks we built"
           : (data.own_is_estimate ? "estimated from calibration, no build finished yet"
-                                  : "VDF clock plus the draw-window gap, no block of ours here");
+                                  : "VDF clock: no block of ours in this window");
       document.getElementById("window-median-val").textContent = fmt1(data.median) + "s";
       document.getElementById("window-count").textContent = data.window_len + " blocks";
 

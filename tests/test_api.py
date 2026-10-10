@@ -299,7 +299,7 @@ class TestOddsPage:
 
     def test_a_measured_clock_without_our_blocks_says_it_is_a_clock(self):
         html = self._client(False, own_blocks=False).get("/odds").get_data(as_text=True)
-        assert self._sub(html) == "VDF clock plus the draw-window gap, no block of ours here"
+        assert self._sub(html) == "VDF clock: no block of ours in this window"
 
     def test_the_page_says_who_is_in_the_draw(self):
         # The number is a share of a draw, so the page has to say how many
