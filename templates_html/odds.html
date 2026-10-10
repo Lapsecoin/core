@@ -95,14 +95,17 @@
     <line x1="{{ chart.points[0].x if chart.points else 0 }}" y1="{{ chart.median_y }}"
           x2="{{ chart.width }}" y2="{{ chart.median_y }}"
           stroke="var(--ink-dim)" stroke-width="1.25" stroke-dasharray="4,3"/>
-    <text x="{{ chart.width - 4 }}" y="{{ chart.median_y - 4 }}" font-size="10" font-weight="600"
+    {# When the two reference lines sit within 14px of each other, the upper
+       one labels above its line and the lower one below, so the labels never overlap. #}
+    {% set close = chart.own_y is not none and (chart.own_y - chart.median_y)|abs < 14 %}
+    <text x="{{ chart.width - 4 }}" y="{{ chart.median_y + 11 if close and chart.median_y > chart.own_y else chart.median_y - 4 }}" font-size="10" font-weight="600"
           fill="var(--ink-dim)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">window median {{ "%.0f"|format(race.median) }}s</text>
 
     {% if chart.own_y is not none %}
     <line x1="{{ chart.points[0].x if chart.points else 0 }}" y1="{{ chart.own_y }}"
           x2="{{ chart.width }}" y2="{{ chart.own_y }}"
           stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5,4"/>
-    <text x="{{ chart.width - 4 }}" y="{{ chart.own_y - 4 }}" font-size="10" font-weight="600"
+    <text x="{{ chart.width - 4 }}" y="{{ chart.own_y + 11 if close and chart.own_y >= chart.median_y else chart.own_y - 4 }}" font-size="10" font-weight="600"
           fill="var(--accent)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">self pace{{ " (off scale)" if chart.own_clipped }}</text>
     {% endif %}
   </svg>
@@ -306,10 +309,13 @@
     // Reference lines/labels last, on top of the data lines, see the
     // matching comment in the server-rendered SVG above.
     s += `<line x1="${x0}" y1="${chart.median_y}" x2="${chart.width}" y2="${chart.median_y}" stroke="var(--ink-dim)" stroke-width="1.25" stroke-dasharray="4,3"/>`;
-    s += `<text x="${chart.width - 4}" y="${chart.median_y - 4}" font-size="10" font-weight="600" fill="var(--ink-dim)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">window median ${fmt0(medianVal)}s</text>`;
+    const close = chart.own_y !== null && Math.abs(chart.own_y - chart.median_y) < 14;
+    const medianLabelY = close && chart.median_y > chart.own_y ? chart.median_y + 11 : chart.median_y - 4;
+    const ownLabelY = close && chart.own_y >= chart.median_y ? chart.own_y + 11 : chart.own_y - 4;
+    s += `<text x="${chart.width - 4}" y="${medianLabelY}" font-size="10" font-weight="600" fill="var(--ink-dim)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">window median ${fmt0(medianVal)}s</text>`;
     if (chart.own_y !== null) {
       s += `<line x1="${x0}" y1="${chart.own_y}" x2="${chart.width}" y2="${chart.own_y}" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5,4"/>`;
-      s += `<text x="${chart.width - 4}" y="${chart.own_y - 4}" font-size="10" font-weight="600" fill="var(--accent)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">self median${chart.own_clipped ? " (off scale)" : ""}</text>`;
+      s += `<text x="${chart.width - 4}" y="${ownLabelY}" font-size="10" font-weight="600" fill="var(--accent)" text-anchor="end" paint-order="stroke" stroke="var(--paper)" stroke-width="3">self median${chart.own_clipped ? " (off scale)" : ""}</text>`;
     }
     return s;
   }
@@ -320,7 +326,12 @@
       grips = loadGrips(chart);
     }
     const svg = document.getElementById("odds-svg");
-    if (svg) svg.innerHTML = renderChart(chart, medianVal);
+    if (svg) {
+      // The chart is drawn at the size it is shown, so the box follows it.
+      svg.setAttribute("viewBox", "0 0 " + chart.width + " " + chart.height);
+      svg.setAttribute("height", chart.height);
+      svg.innerHTML = renderChart(chart, medianVal);
+    }
     const reset = document.getElementById("odds-zoom-reset");
     if (reset) reset.style.display = (draggable(chart) && !isDefault(chart)) ? "" : "none";
   }
@@ -398,9 +409,22 @@
     });
   }
 
+  // Ask for a chart drawn at the size it is shown: the container width and
+  // whatever height is left in the window below it, so the chart fills the
+  // page instead of sitting at a fixed size.
+  function chartDims() {
+    const wrap = document.querySelector(".chart-wrap");
+    if (!wrap) return "";
+    const r = wrap.getBoundingClientRect();
+    const top = r.top + window.scrollY;
+    const w = Math.max(Math.round(r.width), 560);
+    const h = Math.round(window.innerHeight - top - 74);
+    return "?w=" + w + "&h=" + Math.max(190, Math.min(h, 560));
+  }
+
   async function refresh() {
     try {
-      const res = await fetch("/api/odds", {cache: "no-store"});
+      const res = await fetch("/api/odds" + chartDims(), {cache: "no-store"});
       if (!res.ok) throw new Error("bad status " + res.status);
       const data = await res.json();
       if (!data) return;
@@ -459,6 +483,11 @@
   } catch (e) { /* the fetch below covers it */ }
   refresh();
   setInterval(refresh, 6000);
+  let resizeTimer = null;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(refresh, 250);
+  });
 })();
 </script>
 </div>

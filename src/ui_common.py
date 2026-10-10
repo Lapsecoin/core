@@ -244,8 +244,14 @@ def register_static_routes(app, pfx=""):
         ext = os.path.splitext(name)[1]
         if ext not in kinds:
             return ("", 404)
+        # Fonts never change under the same name, so they cache for a month.
+        # Stylesheets revalidate on every load (an ETag, so an unchanged file
+        # costs a 304): the ?v= on the link is the app version, which does not
+        # move between releases of the same version, and a stale stylesheet
+        # under fresh markup breaks a page.
+        age = 2592000 if ext == ".woff2" else 0
         return send_from_directory(os.path.join(_base_dir(), "templates_html", "css"),
-                                   name, mimetype=kinds[ext], max_age=3600)
+                                   name, mimetype=kinds[ext], max_age=age)
 
     @app.route("/vendor/markdown-toolbar-element.js", endpoint=pfx + "vendor_markdown_toolbar")
     def vendor_markdown_toolbar():
