@@ -16,6 +16,7 @@ import os
 import sys
 import queue
 import threading
+import json
 import time
 from unittest.mock import MagicMock
 
@@ -1898,6 +1899,14 @@ class TestReorgStats:
         node._record_reorg(2)
         assert node.reorg_stats() == {"deepest": 9, "count": 2,
                                       "deepest_at": node.reorg_stats()["deepest_at"]}
+
+    def test_reorgs_older_than_a_month_are_forgotten(self, node_env):
+        node, *_ = node_env
+        old = int(time.time()) - (node_mod.REORG_WINDOW_DAYS + 1) * 86400
+        node.storage.set_meta("reorg_events", json.dumps([[old, 12]]))
+        assert node.reorg_stats() == {"deepest": 0, "count": 0, "deepest_at": 0}
+        node._record_reorg(3)
+        assert node.reorg_stats()["deepest"] == 3 and node.reorg_stats()["count"] == 1
 
     def test_it_survives_a_restart(self, node_env):
         """A deep reorg may happen once in a node's life, so a counter that
