@@ -1,16 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="page-head">
 <h2>Send</h2>
+{% if base_enabled %}
+  <div style="display:flex;gap:.4rem">
+  <label><input type="radio" name="asset-picker" value="lapse" {% if asset != 'base' %}checked{% endif %}> LAPSE</label>
+  <label><input type="radio" name="asset-picker" value="base" {% if asset == 'base' %}checked{% endif %}> ETH on Base</label>
+  </div>
+{% endif %}
+</div>
+
 {% if alert_ok_tx %}<div class="alert alert-ok">{{ alert_ok_verb }} tx: <span class="hash">{{ alert_ok_tx }}</span></div>{% endif %}
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 {% if alert_err_lines %}<div class="alert alert-err">{% for line in alert_err_lines %}{{ line }}<br>{% endfor %}</div>{% endif %}
-
-{% if base_enabled %}
-<div class="form-group" style="display:flex;gap:1rem;margin-bottom:.5rem">
-  <label><input type="radio" name="asset-picker" value="lapse" {% if asset != 'base' %}checked{% endif %}> LAPSE</label>
-  <label><input type="radio" name="asset-picker" value="base" {% if asset == 'base' %}checked{% endif %}> ETH on Base</label>
-</div>
-{% endif %}
 
 <div id="lapse-panel">
 <div class="stats">
@@ -37,29 +39,31 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="form_token" value="{{ form_token }}">
     <input type="hidden" name="asset" value="lapse">
-    <div class="form-group">
-      <label>CSV outputs (address,amount). Only lines changed to a nonzero amount get sent.
-        Use <code>burn</code> in place of an address to destroy it instead of paying anyone.</label>
-      <textarea name="outputs" rows="2" placeholder="word1.word2...word12,1000&#10;burn,500">{{ outputs_value }}</textarea>
-    </div>
-    <div class="form-group" style="display:flex;gap:.75rem;flex-wrap:wrap">
-      <div style="flex:0 0 auto">
-        <label for="csv_file">Or upload CSV</label>
-        <input type="file" id="csv_file" name="csv_file" accept=".csv,.txt">
+    <div class="cols cols-wide-left" style="margin-bottom:0">
+      <div class="form-group">
+        <label for="outputs">CSV outputs (address,amount). Only lines changed to a nonzero amount get sent.
+          Use <code>burn</code> in place of an address to destroy it instead of paying anyone.</label>
+        <textarea name="outputs" id="outputs" rows="7" style="height:auto;padding:.6rem .75rem;resize:vertical" placeholder="word1.word2...word12,1000&#10;burn,500">{{ outputs_value }}</textarea>
+        <div style="margin-top:.5rem">
+          <label for="csv_file">Or upload a CSV file</label>
+          <input type="file" id="csv_file" name="csv_file" accept=".csv,.txt">
+        </div>
       </div>
-      <div style="flex:3 1 240px">
-        <label for="memo-input" title="Plaintext, permanent, visible to everyone; not encrypted.">Memo, optional</label>
-        <input type="text" name="memo" id="memo-input" value="{{ memo_value }}"
-               placeholder="What this payment is for" style="width:100%">
-        <div class="stat-sub" id="memo-counter" style="margin-top:.15rem"></div>
+      <div>
+        <div class="form-group">
+          <label for="memo-input" title="Plaintext, permanent, visible to everyone; not encrypted.">Memo, optional</label>
+          <input type="text" name="memo" id="memo-input" value="{{ memo_value }}"
+                 placeholder="What this payment is for" style="width:100%">
+          <div class="stat-sub" id="memo-counter" style="margin-top:.15rem"></div>
+        </div>
+        <div class="form-group" style="display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:0">
+          <div style="flex:1 1 160px">
+            <label for="passphrase" title="Fee is set automatically to whatever clears the next block, never more (see fee market above).">Your signing passphrase</label>
+            <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
+          </div>
+          <button type="submit" id="lapse-send" style="flex:0 0 auto">Sign &amp; Send</button>
+        </div>
       </div>
-    </div>
-    <div class="form-group" style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
-      <div style="flex:1 1 220px">
-        <label for="passphrase" title="Fee is set automatically to whatever clears the next block, never more (see fee market above).">Your signing passphrase</label>
-        <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" style="width:100%">
-      </div>
-      <button type="submit" id="lapse-send" style="flex:0 0 auto">Sign &amp; Send</button>
     </div>
   </form>
 </div>
