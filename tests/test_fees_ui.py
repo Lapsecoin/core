@@ -92,7 +92,9 @@ class TestPage:
 
     def test_nothing_asks_the_user_to_sign_anything(self, app):
         html = app.client.get("/fees").get_data(as_text=True)
-        assert html.count("<button") == 1
+        # The page itself has the one button; the menu in the header has its own
+        # (it opens a list of links and signs nothing).
+        assert html.split('<div class="page">')[1].count("<button") == 1
         for word in ("personal_sign", "signMessage", "ethereum.request", "eth_requestAccounts", 'name="signature"'):
             assert word not in html
 
