@@ -56,37 +56,25 @@
       <a href="/send" class="{{ 'active' if nav_active == 'send' }}"><svg class="ni" aria-hidden="true"><use href="#i-send"/></svg>Send</a><span class="sep">&middot;</span>
       {% endif %}
       <a href="/fees" class="{{ 'active' if nav_active == 'fees' }}"><svg class="ni" aria-hidden="true"><use href="#i-fees"/></svg>Fees</a><span class="sep">&middot;</span>
+      <a href="/board" class="{{ 'active' if nav_active == 'board' }}"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg>Board</a><span class="sep">&middot;</span>
       <div class="nav-group {{ 'active' if nav_active in ('blocks', 'address', 'mempool') }}">
         <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-explorer"/></svg>Explorer<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="nav-menu" role="menu">
-          <a href="/blocks" role="menuitem" class="nav-secondary {{ 'active' if nav_active == 'blocks' }}"><svg class="ni" aria-hidden="true"><use href="#i-blocks"/></svg><span><b>Blocks</b><small>Recent blocks and transactions</small></span></a>
-          <a href="/address" role="menuitem" class="nav-secondary {{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
-          <a href="/mempool" role="menuitem" class="nav-secondary {{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
+          <a href="/blocks" role="menuitem" class="{{ 'active' if nav_active == 'blocks' }}"><svg class="ni" aria-hidden="true"><use href="#i-blocks"/></svg><span><b>Blocks</b><small>Recent blocks and transactions</small></span></a>
+          <a href="/address" role="menuitem" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
+          <a href="/mempool" role="menuitem" class="{{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
         </div>
       </div><span class="sep">&middot;</span>
-      <a href="/board" class="{{ 'active' if nav_active == 'board' }}"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg>Board</a><span class="sep">&middot;</span>
-      <a href="/network" class="nav-secondary {{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg>Network</a><span class="sep">&middot;</span>
-      <a href="/odds" class="nav-secondary {{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg>Odds</a><span class="sep">&middot;</span>
-      <a href="/whitepaper" class="nav-secondary {{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg>Whitepaper</a>
+      <a href="/network" class="{{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg>Network</a><span class="sep">&middot;</span>
+      <a href="/odds" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg>Odds</a><span class="sep">&middot;</span>
+      <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg>Whitepaper</a>
       {% if is_private %}
-      <span class="sep">&middot;</span><a href="/settings" class="nav-secondary {{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
+      <span class="sep">&middot;</span><a href="/settings" class="{{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
       {% endif %}
-      <button type="button" class="nav-more-btn {{ 'active' if nav_active in ('blocks', 'address', 'mempool', 'network', 'odds', 'whitepaper', 'settings') }}" aria-expanded="false" aria-controls="nav-panel"><span>More</span><svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       {% endif %}
+      <button type="button" class="nav-more-btn" id="nav-more" aria-label="More navigation" title="More" aria-haspopup="true" aria-expanded="false" aria-controls="nav-panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
     </nav>
-    {% if not light %}
-    <div class="nav-panel" id="nav-panel" hidden>
-      <div class="nav-panel-label">Explorer</div>
-      <a href="/blocks" class="{{ 'active' if nav_active == 'blocks' }}"><svg class="ni" aria-hidden="true"><use href="#i-blocks"/></svg><span><b>Blocks</b><small>Recent blocks and transactions</small></span></a>
-      <a href="/address" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
-      <a href="/mempool" class="{{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
-      <div class="nav-panel-label">More</div>
-      <a href="/network" class="{{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg><span><b>Network</b></span></a>
-      <a href="/odds" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg><span><b>Odds</b></span></a>
-      <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg><span><b>Whitepaper</b></span></a>
-      {% if is_private %}<a href="/settings" class="{{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg><span><b>Settings</b></span></a>{% endif %}
-    </div>
-    {% endif %}
+    <div class="nav-panel" id="nav-panel" role="menu" hidden></div>
     {% if update_checker and update_checker.severity %}
       {% set sev_text = {'protocol': 'Protocol update required', 'critical': 'Critical update available', 'minor': 'New version available'}[update_checker.severity] %}
       {% if is_private and updater and updater.can_self_update() %}
@@ -114,36 +102,84 @@
 (function () {
   var nav = document.getElementById("mainnav");
   var group = document.querySelector(".nav-group");
-  var more = document.querySelector(".nav-more-btn");
+  var more = document.getElementById("nav-more");
+  var panel = document.getElementById("nav-panel");
   function setGroup(open) {
     if (!group) return;
     group.classList.toggle("open", open);
     group.querySelector(".nav-group-btn").setAttribute("aria-expanded", open ? "true" : "false");
-  }
-  var panel = document.getElementById("nav-panel");
-  function setMore(open) {
-    if (!more) return;
-    panel.hidden = !open;
-    more.classList.toggle("open", open);
-    more.setAttribute("aria-expanded", open ? "true" : "false");
   }
   if (group) {
     group.querySelector(".nav-group-btn").addEventListener("click", function (e) {
       e.stopPropagation(); setGroup(!group.classList.contains("open"));
     });
   }
-  if (more) {
-    more.addEventListener("click", function (e) {
-      e.stopPropagation(); setMore(panel.hidden);
-    });
+  function setMore(open) {
+    panel.hidden = !open;
+    more.classList.toggle("open", open);
+    more.setAttribute("aria-expanded", open ? "true" : "false");
   }
+  more.addEventListener("click", function (e) {
+    e.stopPropagation(); setMore(panel.hidden);
+  });
   document.addEventListener("click", function (e) {
     if (group && !group.contains(e.target)) setGroup(false);
-    if (more && !panel.contains(e.target)) setMore(false);
+    if (!panel.hidden && !panel.contains(e.target) && !more.contains(e.target)) setMore(false);
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") { setGroup(false); setMore(false); }
   });
+
+  // Priority+ layout: every entry is shown while it fits. When the bar runs
+  // out of room, the entries from the end move into the panel behind the
+  // button, so wider screens show more and nothing is hidden just to tidy up.
+  function entries() {
+    var out = [];
+    Array.prototype.forEach.call(nav.children, function (el) {
+      if (el === more || el.classList.contains("sep")) return;
+      if (el.classList.contains("nav-group") && getComputedStyle(el).display === "contents") {
+        Array.prototype.forEach.call(el.querySelectorAll(".nav-menu a"), function (a) { out.push(a); });
+      } else out.push(el);
+    });
+    return out;
+  }
+  function overflows() { return nav.scrollWidth > nav.clientWidth + 1; }
+  function layout() {
+    var list = entries();
+    list.forEach(function (el) { el.classList.remove("nav-hidden"); });
+    more.classList.remove("on");
+    var hidden = [];
+    if (overflows()) {
+      more.classList.add("on");
+      for (var i = list.length - 1; i >= 0 && overflows(); i--) {
+        list[i].classList.add("nav-hidden");
+        hidden.unshift(list[i]);
+      }
+    }
+    panel.textContent = "";
+    var activeInside = false;
+    hidden.forEach(function (el) {
+      var links = el.classList.contains("nav-group") ? el.querySelectorAll(".nav-menu a") : [el];
+      Array.prototype.forEach.call(links, function (a) {
+        var use = a.querySelector("use");
+        var b = a.querySelector("b");
+        var small = a.querySelector("small");
+        var item = document.createElement("a");
+        item.href = a.getAttribute("href");
+        item.setAttribute("role", "menuitem");
+        if (a.classList.contains("active")) { item.className = "active"; activeInside = true; }
+        item.innerHTML = '<svg class="ni" aria-hidden="true"><use href="' + (use ? use.getAttribute("href") : "") + '"/></svg><span><b></b>' + (small ? "<small></small>" : "") + "</span>";
+        item.querySelector("b").textContent = b ? b.textContent : a.textContent.trim();
+        if (small) item.querySelector("small").textContent = small.textContent;
+        panel.appendChild(item);
+      });
+    });
+    more.classList.toggle("active", activeInside);
+    if (!hidden.length) setMore(false);
+  }
+  layout();
+  if (window.ResizeObserver) new ResizeObserver(layout).observe(nav); else window.addEventListener("resize", layout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
 })();
 </script>
 <script>
