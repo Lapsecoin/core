@@ -137,6 +137,7 @@ import hardware_info
 import settings as settings_mod
 from base_send import BaseSend
 import fees_ui
+import gas
 from gas_io import ChainIO
 import gaslock
 import storage as storage_mod
@@ -659,7 +660,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "address_lookup": "address", "distribution_bucket": "address",
             "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
-            "settings": "settings", "fees": "fees", "fees_submit": "fees",
+            "settings": "settings", "fees": "fees", "fees_public": "fees", "fees_submit": "fees",
             "fees_status": "fees",
         }.get(endpoint)
         return {"is_private": is_private,
@@ -1381,6 +1382,14 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                              private_port, public_port, is_private=False,
                              update_checker=update_checker, updater=updater,
                              public_url=public_url, oblivious=oblivious)
+
+    # The public face of the fee service: what it is and how to use it. The
+    # form itself signs with the wallet, so it only exists on the private port.
+    @app.route("/fees", endpoint="fees_public")
+    def fees_public():
+        return render_template("fees_public.html", title="Fees",
+            networks=fees_ui.network_options(), lock=fees_ui.LOCK // TICKS_PER_LAPSE,
+            cap_usd=gas.NODE_CAP_USD, discord=fees_ui.DISCORD, private_port=private_port)
 
     # Send disabled on public port; show locked page
     @app.route("/send")

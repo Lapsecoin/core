@@ -123,9 +123,10 @@ class TestPage:
                             lambda self, a: (_ for _ in ()).throw(RuntimeError("down")))
         assert app.client.get("/fees").status_code == 200
 
-    def test_the_public_app_has_no_fees_page_but_has_the_status(self, app):
+    def test_the_public_app_explains_the_service_and_has_the_status(self, app):
         public = api.create_app(app.node, peerpool_mod.PeerPool()).test_client()
-        assert public.get("/fees").status_code == 404
+        page = public.get("/fees")
+        assert page.status_code == 200 and b"fees-form" not in page.data
         assert public.get("/api/gas/" + "ab" * 32).get_json() == {"stage": "none"}
 
 

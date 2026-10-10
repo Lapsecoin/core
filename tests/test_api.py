@@ -1490,3 +1490,25 @@ class TestBoardCachingAndQuotes:
         html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
         assert html.count('class="rc-replyQuote"') == 1
         assert "&#8627; an earlier post" in html
+
+
+class TestPublicFeesPage:
+    def test_the_public_port_explains_the_service_without_a_form(self):
+        node, _ = fresh()
+        html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
+        assert "How to use it" in html and "releases" in html and "<form" not in html
+
+    def test_it_is_in_the_public_menu(self):
+        node, _ = fresh()
+        html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
+        assert '<a href="/fees" class="active">Fees</a>' in html
+
+    def test_the_private_port_still_has_the_request_form(self):
+        node, _ = fresh()
+        html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
+        assert 'id="fees-form"' in html
+
+    def test_every_page_carries_the_bitcoin_donation_link(self):
+        node, _ = fresh()
+        html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
+        assert 'title="Donate Bitcoin"' in html and "Lapsecoin/core#support" in html
