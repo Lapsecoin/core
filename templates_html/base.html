@@ -10,8 +10,10 @@
     --paper:    #f6f3ea;
     --paper-2:  #efeadb;
     --ink:      #1c1a14;
-    --ink-dim:  #4a4638;
-    --rule:     #dcd6c3;
+    --ink-dim:  #5a5547;
+    --ink-rgb:  28 26 20;
+    --panel:    #efeadc;
+    --rule:     rgb(var(--ink-rgb) / .14);
     --rule-lt:  #b9b29b;
     --accent:   #b35a0c;
     --link:     var(--accent);
@@ -31,10 +33,12 @@
     --series-other: var(--rule-lt);
     --serif: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    --surface: #fffdf8;
-    --radius: 10px;
-    --shadow: 0 1px 2px rgba(28,26,20,.06), 0 2px 8px rgba(28,26,20,.04);
-    --container: 900px;
+    --surface: #fbf9f3;
+    --line-strong: rgb(var(--ink-rgb) / .24);
+    --hover: rgb(var(--ink-rgb) / .045);
+    --radius: 6px;
+    --shadow: none;
+    --container: 1040px;
 
     /* aliases kept so the per-page templates (unchanged) still resolve */
     --muted:  var(--ink-dim);
@@ -47,7 +51,7 @@
   html, body { margin: 0; padding: 0; }
   body {
     background: var(--paper); color: var(--ink); font-family: var(--serif);
-    font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+    font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased;
     display: flex; flex-direction: column; min-height: 100vh;
   }
   a { color: var(--link); text-decoration: underline; }
@@ -59,8 +63,7 @@
     position: sticky; top: 0; z-index: 100;
     background: var(--paper);
     border-bottom: 1px solid var(--rule);
-    box-shadow: 0 1px 6px rgba(28,26,20,.06);
-    padding: .5rem 1.25rem .4rem;
+    padding: .5rem 1.25rem .35rem;
   }
   .live-status {
     position: absolute; top: .1rem; right: 0;
@@ -113,8 +116,8 @@
 
   /* ===================================================== components ===== */
   .card {
-    border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: var(--shadow);
-    padding: .75rem 1rem; margin-bottom: .75rem; background: var(--surface);
+    border: 1px solid var(--rule); border-radius: var(--radius);
+    padding: .7rem 1rem; margin-bottom: .75rem; background: var(--surface);
   }
   .form-row {
     display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .75rem;
@@ -130,15 +133,15 @@
     color: var(--ink-dim); margin-bottom: .3rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .15rem;
   }
 
-  .stats { display: flex; flex-wrap: wrap; border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: var(--shadow);
+  .stats { display: flex; flex-wrap: wrap; border: 1px solid var(--rule); border-radius: var(--radius);
     background: var(--surface); overflow: hidden; margin-bottom: .75rem; }
   .stat {
-    flex: 1 1 150px; min-width: 130px; padding: .55rem 1rem; border-right: 1px solid var(--rule-lt);
-    border-bottom: 1px solid var(--rule-lt);
+    flex: 1 1 150px; min-width: 130px; padding: .55rem 1rem; border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
   }
   .stat:last-child { border-right: none; }
   .stat-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .2rem; }
-  .stat-value { font-size: 1.1rem; font-weight: bold; font-family: var(--mono); overflow-wrap: break-word; }
+  .stat-value { font-size: 1.1rem; font-weight: 600; font-family: var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
   .stat-sub { color: var(--ink-dim); font-size: .78rem; margin-top: .2rem; }
   /* Scoped to a stat tile specifically (not every .stat-sub, some are
      form hint text elsewhere and should keep wrapping normally): label +
@@ -178,10 +181,11 @@
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -1.15rem; padding: 0 1.15rem; }
   table { width: 100%; min-width: 460px; border-collapse: collapse; font-size: .92rem; }
   th {
-    text-align: left; padding: .4rem .6rem; font-weight: 600; color: var(--ink-dim); font-size: .78rem;
-    letter-spacing: .03em; text-transform: uppercase; border-bottom: 1px solid var(--rule-lt); white-space: nowrap;
+    text-align: left; padding: .45rem .7rem; font-weight: 600; color: var(--ink-dim); background: var(--panel); font-size: .78rem;
+    letter-spacing: .03em; text-transform: uppercase; border-bottom: 1px solid var(--rule); white-space: nowrap;
   }
-  td { padding: .38rem .6rem; border-bottom: 1px solid var(--rule-lt); font-family: var(--mono); white-space: nowrap; }
+  td { padding: .4rem .7rem; border-bottom: 1px solid var(--rule); font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tbody tr:hover td { background: var(--hover); }
   tr:last-child td { border-bottom: none; }
 
   /* Fixed layout plus an explicit colgroup (in peers.html) stops the
@@ -255,28 +259,30 @@
   .form-group { margin-bottom: .5rem; }
   label { display: block; font-size: .85rem; font-weight: 500; color: var(--ink-dim); margin-bottom: .3rem; }
   :where(input:not([type="radio"], [type="checkbox"], [type="file"], [type="hidden"], [type="range"]), textarea, select) {
-    width: 100%; background: #fff; border: 1px solid #cfc8b2; border-radius: 8px; color: var(--ink);
-    padding: .5rem .75rem; font-family: var(--mono); font-size: .9rem;
+    width: 100%; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); color: var(--ink);
+    padding: 0 .7rem; height: 36px; font-family: var(--mono); font-size: .9rem;
     transition: border-color .12s, box-shadow .12s;
   }
   :where(input[type="radio"], input[type="checkbox"]) { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; margin: 0 .4rem 0 0; vertical-align: -.2em; }
+  select { appearance: none; padding-right: 2rem !important; cursor: pointer;
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235a5547' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right .75rem center; }
   input[type="file"] { font-family: var(--serif); font-size: .85rem; max-width: 100%; }
   input[type="file"]::file-selector-button {
-    background: var(--paper-2); color: var(--ink); border: 1px solid #cfc8b2; border-radius: 8px;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius);
     padding: .35rem .8rem; margin-right: .6rem; font: inherit; font-weight: 600; cursor: pointer;
   }
   label:has(> input[type="radio"]) {
     display: inline-flex; align-items: center; margin: 0; padding: .35rem .8rem; cursor: pointer;
-    font-size: .92rem; background: var(--surface); border: 1px solid var(--rule); border-radius: 999px;
+    font-size: .9rem; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius);
   }
-  label:has(> input[type="radio"]:checked) { border-color: var(--accent); background: #fbeedd; }
+  label:has(> input[type="radio"]:checked) { border-color: var(--ink); background: var(--panel); font-weight: 600; }
   input::placeholder, textarea::placeholder { color: var(--rule-lt); }
   input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(179,90,12,.18); }
 
   button {
     background: var(--ink); color: var(--paper); border: 1px solid var(--ink);
-    padding: .5rem 1.25rem; font-size: .92rem; font-family: var(--serif); font-weight: 600; cursor: pointer;
-    border-radius: 8px; transition: background .12s, transform .06s;
+    padding: 0 1.1rem; height: 36px; font-size: .9rem; font-family: var(--serif); font-weight: 600; cursor: pointer;
+    border-radius: var(--radius); transition: background .12s, transform .06s;
   }
   button:active:not(:disabled) { transform: translateY(1px); }
   button:hover { background: var(--ink-dim); }
@@ -289,13 +295,13 @@
 
   .btn-sm {
     display: inline-block; background: var(--paper); color: var(--ink);
-    border: 1px solid #cfc8b2; border-radius: 6px; padding: .2rem .6rem; font-size: .7rem;
+    border: 1px solid var(--line-strong); border-radius: 4px; padding: .2rem .6rem; font-size: .7rem;
     font-family: var(--serif); font-weight: bold; text-transform: uppercase;
     letter-spacing: .03em; text-decoration: none; white-space: nowrap;
   }
   .btn-sm:hover { background: var(--paper-2); text-decoration: none; }
 
-  .alert { padding: .7rem 1rem; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); font-size: .9rem; margin-bottom: 1rem; }
+  .alert { padding: .65rem 1rem; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); font-size: .9rem; margin-bottom: 1rem; }
   .alert-ok  { border-left: 4px solid var(--gain); color: var(--gain); }
   .alert-err { border-left: 4px solid var(--loss); color: var(--loss); }
 
