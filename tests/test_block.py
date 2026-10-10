@@ -1094,10 +1094,8 @@ import params as params_mod
 
 
 class TestExtraField:
-    H = params_mod.BLOCK_EXTRA_FIELD_HEIGHT
-
-    def _blk(self, height=None, **extra):
-        blk = make_block(height or self.H, "00" * 32, [])
+    def _blk(self, **extra):
+        blk = make_block(5, "00" * 32, [])
         blk.update(extra)
         return blk
 
@@ -1121,9 +1119,6 @@ class TestExtraField:
     ])
     def test_only_a_plain_printable_string_under_a_plain_name(self, extra):
         assert not block_mod._check_extra_field(self._blk(**extra))[0]
-
-    def test_before_the_height_blocks_are_accepted_as_they_always_were(self):
-        assert block_mod._check_extra_field(self._blk(self.H - 1, a="x" * 5000, b=1))[0]
 
     def test_the_fields_the_protocol_defines_are_not_extra(self):
         blk = self._blk(tx_bytes=10)

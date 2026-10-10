@@ -878,11 +878,19 @@ def _shared_read_only_routes(app, node, pool, limiter,
         except AttributeError:
             return None
 
+    # A peer whose claimed tip differs from our block at that height is only
+    # called a fork when it is at least this many blocks behind our tip. The
+    # draw settles ties between sibling blocks as a matter of routine and a
+    # reorg of one or two blocks is ordinary (and a peer's claim is a cached
+    # snapshot), so anything shallower is a node not yet converged, not a fork.
+    FORK_MIN_DEPTH = 3
+
     def _peer_fork_info(chain, height, tip_hash):
         """(is_fork, depth) for a peer claiming (height, tip_hash) as its
         tip, against our own chain. is_fork is True only when we can
-        actually check: we have a block of our own at that height and its
-        hash disagrees with the peer's claim. depth is how many blocks
+        actually check: we have a block of our own at that height, its
+        hash disagrees with the peer's claim, and that height is at least
+        FORK_MIN_DEPTH blocks behind our tip. depth is how many blocks
         behind our own tip that claimed height is (our_height - height),
         the same number the height column already implies, not a real
         common-ancestor search: nothing here walks the chain looking for
@@ -897,7 +905,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         our_height = len(chain) - 1
         if height > our_height:
             return False, None
-        is_fork = chain[height]["hash"] != tip_hash
+        is_fork = (our_height - height >= FORK_MIN_DEPTH
+                   and chain[height]["hash"] != tip_hash)
         return is_fork, (our_height - height) if is_fork else None
 
     def _peer_dicts(rows):
