@@ -1501,7 +1501,8 @@ class TestPublicFeesPage:
     def test_it_is_in_the_public_menu(self):
         node, _ = fresh()
         html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
-        assert '<a href="/fees" class="active">Fees</a>' in html
+        # The nav items carry a small icon in front of the label.
+        assert re.search(r'<a href="/fees" class="active">(?:<svg.*?</svg>)?Fees</a>', html, re.S)
 
     def test_the_private_port_still_has_the_request_form(self):
         node, _ = fresh()
