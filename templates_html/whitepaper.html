@@ -2,11 +2,11 @@
 {% block head %}<link rel="stylesheet" href="/css/pages/whitepaper.css?v={{ local_version }}">{% endblock %}
 {% block content %}
 <div class="wp-layout">
-  <article class="wp" id="wp">{{ rendered | safe }}</article>
   <nav class="wp-toc" id="wp-toc" aria-label="On this page" hidden>
     <div class="wp-toc-title">On this page</div>
     <ol id="wp-toc-list"></ol>
   </nav>
+  <article class="wp" id="wp">{{ rendered | safe }}</article>
 </div>
 <script>
 (function () {
