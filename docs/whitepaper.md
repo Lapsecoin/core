@@ -4,53 +4,47 @@
 
 ## Abstract
 
-LapseCoin keeps Bitcoin's consensus model: the chain with the most proven work wins. Proof-of-work is replaced with a Verifiable Delay Function (VDF), tying block production to real elapsed time rather than a race for a lucky hash. Transactions are ordinary and plaintext, with sender-bid fees, much like Bitcoin's own. The VDF is believed to have a much smaller hardware advantage gap than proof-of-work, so it does not push the network toward the same resource-consumption spiral.
+LapseCoin keeps Bitcoin's consensus model: the chain with the most proven work wins. Proof-of-work is replaced with a Verifiable Delay Function (VDF), tying block production to real elapsed time rather than a race for a lucky hash. Transactions are ordinary and plaintext, with sender-bid fees. The VDF is believed to have a much smaller hardware advantage gap than proof-of-work, so it does not push the network toward the same resource-consumption spiral.
 
 ## 1. Consensus: Verifiable Delay Functions
 
-Each block requires a VDF proof computed over the hash of the previous block and the builder's address. The VDF takes about 120 seconds of strictly sequential computation, and no amount of parallel hardware speeds it up. Binding the builder's address into the challenge stops anyone from copying a broadcast proof and claiming it under their own address: each builder evaluates a different VDF, so a stolen proof verifies against nobody else's challenge.
+Each block requires a VDF proof computed over the hash of the previous block and the builder's address. The VDF takes about 120 seconds of strictly sequential computation, and no amount of parallel hardware speeds it up. Binding the builder's address into the challenge means a broadcast proof cannot be copied and claimed under another address.
 
-The transaction list is not part of the VDF challenge. A block rejected for a transaction problem can be fixed and rebroadcast without redoing the 120 seconds of work.
+The transaction list is not part of the challenge, so a block rejected for a transaction problem can be fixed and rebroadcast without redoing the 120 seconds.
 
-When two chains compete, the one with more cumulative proven VDF iterations wins, not the one with more blocks. An iteration count only counts if the proof verifies for that many, so it can't be inflated by lying.
+When two chains compete, the one with more cumulative proven VDF iterations wins, not the one with more blocks. An iteration count only counts if the proof verifies for that many, so it cannot be inflated by lying. Rewriting old history means redoing every VDF since that point, sequentially, while the honest chain keeps advancing.
 
-Ties are routine rather than rare: two builders at the same height do the same protocol-set iteration count, so a plain fork ties exactly, and a tie can run many blocks deep if a competing chain matches the honest one's work all the way down. Ties break on VDF output, never on the block hash: the block hash covers the transaction list, which is not part of the VDF challenge, so a builder could swap transactions for free after the real work and grind hash variants at nearly zero cost, while VDF output can't be moved without redoing the 120 seconds, which keeps the tie-break's cost real. For a single contested height, that height stays open to a lower-output block for a short window after one is adopted, otherwise whatever arrived first wins as soon as anything is built on it and the tie-break decides nothing; work on the next height continues throughout. A tie spanning more than one height is settled the same way at every diverged height, not just the last one: whichever chain has the lower output at more of those heights wins. Deciding a multi-block tie from its final block alone, no matter how deep the tie ran, would have let matching a rival's work over many blocks be undone by out-grinding it at just the last one; requiring a majority of the diverged heights instead means undoing N blocks of tied work costs an advantage sustained over all N of them, the same assumption longest-chain systems already rest on.
+**Ties.** Two builders at the same height do the same protocol-set iteration count, so a plain fork ties exactly, and a tie can run many blocks deep.
 
-Rewriting old history means redoing every VDF since that point, sequentially, in as much real time as the honest chain took to produce them. The honest chain keeps advancing the whole time, so the gap only grows.
+- Ties break on VDF output, never on the block hash. The hash covers the transaction list, so a builder could grind hash variants at nearly zero cost, while the VDF output cannot be moved without redoing the 120 seconds.
+- A contested height stays open to a lower-output block for a short window after one is adopted. Otherwise whatever arrived first would win and the tie-break would decide nothing.
+- A tie spanning several heights is settled at every diverged height: the chain with the lower output at more of them wins. Undoing N blocks of tied work therefore costs an advantage sustained over all N.
 
 ## 2. Why a VDF instead of proof-of-work
 
-**Proof-of-work has no ceiling; a VDF has a floor instead.** Hash rate buys share without limit, which is what took Bitcoin from CPUs to ASICs and a growing energy bill. A VDF challenge is one sequential computation, about 120 seconds here, that no amount of hardware shrinks below. Building a block is not about running more attempts in parallel but about how fast a single chain of steps evaluates, and the arithmetic sets a hard floor on that.
+**Proof-of-work has no ceiling; a VDF has a floor.** Hash rate buys share without limit, which took Bitcoin from CPUs to ASICs and a growing energy bill. A block here is one sequential computation that no hardware shrinks below its floor, so building a block is about how fast a single chain of steps evaluates, not how many attempts run in parallel.
 
-**The floor still leaves a hardware gap, just a bounded one.** Chia Network's 2019 competition on the same class-group VDF construction found specialized implementations beating commodity software by roughly 3 to 10 times. Unlike ASICs, which widened the lead every generation, that gap caps it. Below the top band a builder does not win a smaller proportional share the way lower hash rate does: it loses outright to any faster builder, having never finished in time to be compared.
+**The floor still leaves a hardware gap, but a bounded one.** Chia Network's 2019 competition on the same class-group construction found specialized implementations beating commodity software by roughly 3 to 10 times. That gap is capped rather than widening each generation. A builder below the top band does not win a smaller share; it loses outright, having never finished in time.
 
-**Inside the top band it is a lottery, by design.** Builders that finish close together tie, and the tie goes to the lowest VDF output, a value fixed by the previous hash and the builder's address but indistinguishable from random across addresses. Each address completing a full evaluation gets exactly one draw.
+**Inside the top band it is a lottery, by design.** Builders that finish close together tie, and the tie goes to the lowest VDF output, which is indistinguishable from random across addresses. Each address completing a full evaluation gets exactly one draw, with no way to grind for a better one. N addresses at the top tier win N times the single-address share, and splitting one machine across several addresses does worse, since each fragment runs too slow to compete.
 
-Nothing limits how many addresses an operator runs, and each needs its own real evaluation with no way to grind for a better one, so N addresses at the top tier win exactly N times the single-address share. Splitting one machine across several addresses does worse, since each fragment then runs too slow to compete. Both results were checked against a Monte Carlo model.
-
-**That draw is where Sybil resistance is priced, not a coin fee.** An extra draw costs a full VDF of real machine-time, so participation and its energy scale linearly with spending, as Bitcoin's hash rate does, but without the arms race: a capped hardware gap means spending more mostly buys more whole machines. A coin-denominated registration fee was rejected because the economics track hardware and machine count, not balance, and a fee payable only from a balance would lock out the empty-handed new node this design means to admit.
-
-**One Sybil surface sits outside this analysis: eclipse attacks on peer discovery**, where a node's view of the network is crowded out by attacker-controlled addresses. That is handled by capping how many peers from one address subnet a node admits, not by anything priced in coin.
+**That draw is where Sybil resistance is priced, not a coin fee.** An extra draw costs a full VDF of real machine-time, so participation scales linearly with spending, as Bitcoin's hash rate does, but without the arms race: a capped hardware gap means spending more mostly buys more whole machines. A coin-denominated registration fee was rejected because it would lock out the empty-handed new node this design means to admit.
 
 ## 3. Transactions
 
 The base unit is the tick. One LAPSE equals 100,000,000 ticks.
 
-A transaction is a plain, visible dict: a sender address, a public key, a list of outputs (recipient and amount), a sequential per-sender nonce, a fee, and a signature, plus an optional short plaintext memo. Nothing about it is encrypted or hidden, the memo included: it is a public note, not a private message.
+A transaction is plaintext and public: a sender address, a public key, a list of outputs (recipient and amount), a per-sender nonce, a fee, a signature, and an optional short memo. The memo is a public note, not a private message.
 
-Nonces are sequential per sender, starting from zero: a transaction's nonce must be exactly one more than the sender's last confirmed nonce. This is the standard replay-protection scheme, the same one Bitcoin-style account models use.
+A transaction's nonce must be exactly one more than the sender's last confirmed nonce, starting from zero, which prevents replay. It is valid as long as the sender's balance covers every output plus the fee. Fees are chosen by the sender, and builders prioritize the highest payers, the same market mechanism Bitcoin uses.
 
-Fees are chosen by the sender, not fixed by the protocol, with one exception noted in §4. A transaction is valid as long as the sender's balance covers every output plus the fee. Builders are free to prioritize whichever pending transactions pay the most per byte, the same market-based mechanism Bitcoin uses to clear its mempool under load.
-
-A block is capped at 2 MB. Bitcoin's own cap is sized for a ten-minute block; this chain's is a fifth of that, so the two carry the same bytes of chain growth per second, not a smaller one.
-
-Blocks apply their listed transactions in order, checking each one against the state as it stands after the transactions before it in the same block. There is no required canonical ordering across transactions; a block's builder can list them however it likes, as long as each one is individually valid at the point it is applied.
+A block is capped at 2 MB. Blocks apply their transactions in the listed order, each checked against the state left by the ones before it.
 
 ## 4. Fees and block rewards
 
-The builder receives the full block reward for every block, unconditionally, plus every transaction fee in that block. There is no split, and no separate party to pay out to.
+The builder receives the full block reward plus every transaction fee in the block, with no split.
 
-One kind of transaction carries a protocol-enforced minimum on top of the usual sender-bid fee: a post to the public on-chain board, tagged by its memo, must clear a floor that rises in steps as more posts confirm, network-wide, over the board's lifetime, so it cannot be spammed indefinitely at a flat cost. The floor rises slowly enough, relative to how many posts a single block can carry, that it cannot invalidate a block's-worth of already-broadcast posts at once.
+Posts to the public on-chain board carry a protocol-enforced minimum fee that rises in steps as more posts confirm over the board's lifetime, so they cannot be spammed at a flat cost. The floor rises slowly enough that it cannot invalidate a block's worth of already-broadcast posts at once.
 
 ## 5. Supply
 
@@ -58,38 +52,29 @@ One kind of transaction carries a protocol-enforced minimum on top of the usual 
 reward(block) = floor((21,000,000 LAPSE - (total minted - burned)) * (1 - 0.5^(1/5,000,000)))
 ```
 
-Burned is what the burn address holds, counted back into the pool from block 25,800.
-
-The halflife is about 5,000,000 blocks, roughly 20 years at 2 minutes per block. This smooth curve avoids the instability a hard halving schedule can cause.
+Burned is what the burn address holds, counted back into the pool. The halflife is about 5,000,000 blocks, roughly 20 years at 2 minutes per block. This smooth curve avoids the instability of a hard halving schedule.
 
 ## 6. Privacy and networking
 
-Transactions and blocks both propagate through Dandelion routing, so no observer can reliably tell which peer first broadcast a given item. A block's builder address is public by construction, since that is who gets paid, but which machine produced it need not be. The originator re-sends anything that never comes back, so handing an item to one peer is not a gamble.
+Transactions and blocks propagate through Dandelion routing, so no observer can reliably tell which peer first broadcast an item. A block's builder address is public, since that is who gets paid, but the machine that produced it need not be. Nodes do not announce which address they hold.
 
-A node tells its peers nothing about which address it holds. It used to, so that peers could pay it, and that made every peer table a directory mapping an address to the machine that reported it. Where to pay a node now travels as a small note relayed on the same path as everything else, so the peer handing it over is almost never its author and no address is attributable to a machine.
+Signatures use FALCON-512, a lattice-based scheme designed to resist quantum computers. Addresses are twelve-word phrases derived from the public key. Peers find each other through the BitTorrent DHT and only connect to peers sharing their genesis block hash. Eclipse attacks are limited by capping how many peers from one address subnet a node admits.
 
-Signatures use FALCON-512, a lattice-based scheme designed to resist quantum computers. Addresses are twelve-word phrases derived from the public key.
+## 7. Security and censorship
 
-Peers find each other through the BitTorrent DHT. A node only connects to peers sharing its genesis block hash. The full chain is kept forever, so balances can always be recomputed from scratch.
+Consensus is longest-chain, exactly like Bitcoin's, measured in proven VDF iterations instead of hashes. That inherits Bitcoin's security model in full, including its limits.
 
-## 7. Security and censorship: what this design does and does not solve
+A single non-majority actor refusing to include a transaction is defeated as it always has been: any other participant can include it, and confirmation depth protects against a brief refusal becoming permanent.
 
-Consensus here is longest-chain, exactly like Bitcoin's, just measured in proven VDF iterations instead of hashes. That inherits Bitcoin's security model in full, including its limits.
-
-Ordinary transaction censorship, a single non-majority actor refusing to include some transaction, is defeated the same way it always has been: any other willing participant can include it instead, and ordinary confirmation-depth economics protect against a brief refusal turning into a permanent one.
-
-A sustained majority attacker is a different matter, and this design does not claim to beat Bitcoin there. Fork choice sees only cumulative proven work, and, on an exact tie, which side won more of the diverged heights; it never looks at what a chain contains, so a majority attacker can fork from before a transaction confirmed and build a history that never confirms it, at the cost of an ordinary reorg. No block-level or transaction-level rule stops that, because the attacker breaks no rule; it simply declines to extend the branch it dislikes. That is a property of longest-chain consensus generally, not a gap specific to this design.
+A sustained majority attacker is different, and this design does not claim to beat Bitcoin there. Fork choice sees only cumulative proven work (and, on an exact tie, which side won more diverged heights). It never looks at what a chain contains, so a majority attacker can fork from before a transaction confirmed and build a history that never confirms it, at the cost of an ordinary reorg. That is a property of longest-chain consensus generally.
 
 Other inherited limitations:
 
-- As with Bitcoin, a node syncing from scratch cannot cryptographically distinguish the honest chain from an attacker's alternative on its own; it has to trust the network it connects to at least once.
-- Whether VDF-solving hardware availability keeps pace with the network's needs is a market question the protocol cannot guarantee, the same as mining hardware availability is for Bitcoin.
-
-## 8. Conclusion
-
-LapseCoin keeps Bitcoin's core guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function, which is believed to narrow the hardware-advantage gap that drove proof-of-work's runaway energy use, without needing a separate rule bolted on to achieve that. Transactions stay ordinary and plaintext, with sender-bid fees. Supply is capped at 21 million LAPSE with smooth decay and no halvings. Censorship resistance beyond ordinary confirmation-depth security is not claimed, because no rule at the block or transaction level can give it against a genuine majority attacker in a longest-chain system.
+- A node syncing from scratch cannot cryptographically tell the honest chain from an attacker's alternative; it must trust the network it connects to at least once.
+- Whether VDF hardware availability keeps pace with the network's needs is a market question the protocol cannot guarantee, as with mining hardware for Bitcoin.
 
 ## References
+
 
 1. S. Nakamoto, "Bitcoin: A Peer-to-Peer Electronic Cash System," 2008.
 2. NIST, "FIPS 206 (Draft): FN-DSA (FALCON)," 2025.
