@@ -55,10 +55,15 @@
       <a href="/send" class="{{ 'active' if nav_active == 'send' }}"><svg class="ni" aria-hidden="true"><use href="#i-send"/></svg>Send</a><span class="sep">&middot;</span>
       {% endif %}
       <a href="/fees" class="{{ 'active' if nav_active == 'fees' }}"><svg class="ni" aria-hidden="true"><use href="#i-fees"/></svg>Fees</a><span class="sep">&middot;</span>
-      <a href="/explorer" class="{{ 'active' if nav_active == 'explorer' }}"><svg class="ni" aria-hidden="true"><use href="#i-explorer"/></svg>Explorer</a><span class="sep">&middot;</span>
-      <a href="/address" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg>Balance</a><span class="sep">&middot;</span>
+      <div class="nav-group {{ 'active' if nav_active in ('explorer', 'address', 'mempool') }}">
+        <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-explorer"/></svg>Chain<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="nav-menu" role="menu">
+          <a href="/explorer" role="menuitem" class="{{ 'active' if nav_active == 'explorer' }}"><svg class="ni" aria-hidden="true"><use href="#i-explorer"/></svg><span><b>Explorer</b><small>Blocks and transactions</small></span></a>
+          <a href="/address" role="menuitem" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
+          <a href="/mempool" role="menuitem" class="{{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
+        </div>
+      </div><span class="sep">&middot;</span>
       <a href="/board" class="{{ 'active' if nav_active == 'board' }}"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg>Board</a><span class="sep">&middot;</span>
-      <a href="/mempool" class="{{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg>Mempool</a><span class="sep">&middot;</span>
       <a href="/network" class="{{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg>Network</a><span class="sep">&middot;</span>
       <a href="/odds" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg>Odds</a><span class="sep">&middot;</span>
       <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg>Whitepaper</a>
@@ -87,6 +92,19 @@
 <div class="page">
 {% block content %}{% endblock %}
 </div>
+<script>
+// The Chain menu: opens on click or keyboard (touch has no hover), closes on
+// an outside click or Escape. Hover also opens it, in the stylesheet.
+(function () {
+  var group = document.querySelector(".nav-group");
+  if (!group) return;
+  var btn = group.querySelector(".nav-group-btn");
+  function set(open) { group.classList.toggle("open", open); btn.setAttribute("aria-expanded", open ? "true" : "false"); }
+  btn.addEventListener("click", function (e) { e.stopPropagation(); set(!group.classList.contains("open")); });
+  document.addEventListener("click", function (e) { if (!group.contains(e.target)) set(false); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { set(false); btn.focus(); } });
+})();
+</script>
 <script>
 // Parts of a page marked data-live stay current without a reload: the page
 // is fetched again in the background and only those parts are swapped in.
