@@ -5,7 +5,12 @@ import time
 import tx as tx_mod
 from params import BLOCK_SIZE_LIMIT
 
-MEMPOOL_TTL_SECONDS = 30 * 60
+# How long a pending tx may wait. Local policy, not consensus: a tx carries no
+# timestamp and each node counts from when it first saw one, so nodes can
+# differ without forking. It is long on purpose. A small network can go hours
+# without a block, and a tx has to outlast that; memory is bounded by the byte
+# cap below, not by this.
+MEMPOOL_TTL_SECONDS = 24 * 60 * 60
 
 # Hard cap on total pending tx bytes (fee-basis size, signature excluded,
 # same measure block.assemble() prioritizes by). ~10x BLOCK_SIZE_LIMIT: room
@@ -94,9 +99,11 @@ class _Entry:
 
     __slots__ = ("tx", "entered", "size", "fee_rate")
 
-    def __init__(self, tx_dict):
+    def __init__(self, tx_dict, entered=None):
         self.tx       = tx_dict
-        self.entered  = time.monotonic()
+        # Wall-clock seconds, not time.monotonic(): this survives a restart
+        # (see Mempool.records and mempool_store), a monotonic reading does not.
+        self.entered  = time.time() if entered is None else entered
         self.size     = tx_mod.tx_size(tx_dict)
         self.fee_rate = tx_dict.get("fee", 0) / max(self.size, 1)
 
@@ -117,13 +124,18 @@ class Mempool:
         # exists.
         self._pool: dict = {}
         self._total_bytes = 0
+        # Bumped on every change, so a snapshotter can tell whether anything
+        # moved since it last wrote without comparing contents.
+        self.version = 0
 
-    def add(self, tx_dict) -> tuple:
+    def add(self, tx_dict, entered=None) -> tuple:
+        """entered: wall-clock time the tx was first seen, only passed when
+        restoring a saved pool so the original age is kept."""
         h = tx_mod.tx_hash(tx_dict)
         if h in self._pool:
             return False, "duplicate"
 
-        entry = _Entry(tx_dict)
+        entry = _Entry(tx_dict, entered)
         overflow = self._total_bytes + entry.size - MEMPOOL_MAX_BYTES
         to_evict = []
         if overflow > 0:
@@ -143,12 +155,14 @@ class Mempool:
         self.remove_many(to_evict)
         self._pool[h] = entry
         self._total_bytes += entry.size
+        self.version += 1
         return True, h
 
     def remove(self, tx_hash):
         entry = self._pool.pop(tx_hash, None)
         if entry:
             self._total_bytes -= entry.size
+            self.version += 1
 
     def remove_many(self, tx_hashes):
         for h in tx_hashes:
@@ -163,6 +177,15 @@ class Mempool:
 
     def all_txs(self):
         return [e.tx for e in self._pool.values()]
+
+    def records(self):
+        """[(tx, entered)] oldest first. What a snapshot stores: the entry
+        time travels with the tx so a restart does not reset its age."""
+        entries = sorted(list(self._pool.values()), key=lambda e: e.entered)
+        return [(e.tx, e.entered) for e in entries]
+
+    def hashes(self):
+        return list(self._pool)
 
     def pending_nonce(self, addr):
         """Highest nonce in the mempool for addr, or 0 if none. Lets a
@@ -206,8 +229,8 @@ class Mempool:
     def prune_stale(self, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
         """Evict txs that can never become valid: a nonce already superseded
         on chain, or simply too old. Returns list of pruned hashes."""
-        now = time.monotonic()
-        pruned = [h for h, e in self._pool.items()
+        now = time.time()
+        pruned = [h for h, e in list(self._pool.items())
                   if e.tx["nonce"] <= state.get_nonce(e.tx["from"])
                   or now - e.entered > ttl_seconds]
         self.remove_many(pruned)

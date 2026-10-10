@@ -7,6 +7,7 @@ pending_nonce, prune_stale.
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -168,9 +169,8 @@ class TestPruneStale:
         s = fresh_state()
         seed_balance(s, 0, 100.0)
         t = make_tx(0, 1, TICKS_PER_LAPSE, s)
-        mp.add(t)
-        # Force very short TTL
-        pruned = mp.prune_stale(state=s, ttl_seconds=0)
+        mp.add(t, entered=time.time() - 5)
+        pruned = mp.prune_stale(state=s, ttl_seconds=1)
         assert len(pruned) == 1
 
     def test_prune_valid_tx_stays(self):
