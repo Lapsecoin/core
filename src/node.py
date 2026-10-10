@@ -44,6 +44,7 @@ import block as block_mod
 import crypto
 import gossip as gossip_mod
 import mempool as mempool_mod
+import hardware_info
 import settings as settings_mod
 import tx as tx_mod
 import vdf as vdf_mod
@@ -415,6 +416,16 @@ class Node:
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
+
+    def machine_label(self):
+        """The CPU label this node declares in its blocks, or "" if it does not."""
+        if not self.settings.get(settings_mod.PUBLISH_MACHINE):
+            return ""
+        return hardware_info.machine_label(block_mod.MACHINE_LABEL_CHARS)
+
+    def block_extra(self):
+        label = self.machine_label()
+        return {block_mod.MACHINE_FIELD: label} if label else None
 
     def own_vdf_median(self):
         """How long a full evaluation takes on this machine, in seconds.
@@ -834,7 +845,8 @@ class Node:
                 return
             pre_cycle_blocks = []
         window = self.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
-        race = block_mod.race_odds(cs.chain, self.own_vdf_median(), self.addr, window)
+        race = block_mod.race_odds(cs.chain, self.own_vdf_median(), self.addr, window,
+                                   own_machine=self.machine_label())
         min_odds = self.settings.get(settings_mod.MIN_ODDS_PCT)
         odds = race["odds_pct"] if race is not None else None
         if odds is not None and odds <= min_odds:
@@ -985,7 +997,8 @@ class Node:
 
         board_floor = tx_mod.board_fee_floor(cs.state.total_board_posts)
         candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr,
-                                        iterations, board_fee_floor=board_floor)
+                                        iterations, board_fee_floor=board_floor,
+                                        extra=self.block_extra())
         candidate["vdf_output"]    = vdf_out
         candidate["vdf_proof"]     = vdf_proof
         candidate["vdf_iterations"] = iterations

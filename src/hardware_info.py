@@ -23,6 +23,14 @@ def _cpu_model() -> str:
     return platform.processor() or platform.machine() or "unknown"
 
 
+def machine_label(max_chars: int = 120) -> str:
+    """The CPU model alone, tidied for publishing in a block: nothing about
+    the OS, host or core count. Empty when it cannot be determined."""
+    model = " ".join(_cpu_model().split())
+    model = "".join(c for c in model if c.isprintable())[:max_chars]
+    return "" if model.lower() == "unknown" else model
+
+
 def describe() -> dict:
     """{"cpu": str, "os": str}."""
     return {

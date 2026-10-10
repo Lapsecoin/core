@@ -519,6 +519,11 @@ def _peers_for_download(known_addrs, self_addr):
 
 
 
+def _machine_of(node):
+    """The CPU label the node declares in its blocks, "" when none."""
+    return getattr(node, "machine_label", lambda: "")()
+
+
 def _gas_io(node):
     """How the pages read other networks. Tests put a fake on the node."""
     return getattr(node, "gas_io", None) or ChainIO()
@@ -984,12 +989,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # sees the page that explains it change too.
         window = node.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
         key = (tip.get("hash"), tip.get("height"), len(node.view.chain),
-               node.addr, window, node.own_vdf_median())
+               node.addr, window, node.own_vdf_median(), _machine_of(node))
         with odds_lock:
             if odds_cache.get("key") == key:
                 return odds_cache["race"]
         race = block_mod.race_odds(node.view.chain, node.own_vdf_median(),
-                                   node.addr, window)
+                                   node.addr, window, own_machine=_machine_of(node))
         with odds_lock:
             odds_cache["key"], odds_cache["race"] = key, race
         return race
@@ -1052,6 +1057,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "in_draw_pct": race["in_draw_pct"],
             "draw_window": race["draw_window"],
             "field_builders": race["field_builders"],
+            "machines": race["machines"],
             "window_len": len(race["window"]), "chart": _race_chart(race, _builder_nicknames_for()),
             "reorgs": node.reorg_stats(),
             "mining_enabled": node.settings.get(settings_mod.MINING_ENABLED),

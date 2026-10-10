@@ -178,3 +178,13 @@ BEP44_SLOT_COUNT = 256
 # node still on old code at this height falls off the chain. The chain was at
 # 25,644 on 2026-10-09 (about 145 s per block).
 GAS_LOCK_ACTIVATION_HEIGHT = 25_800
+
+
+# From this height a block may carry at most one field beyond the ones the
+# protocol defines (block.KNOWN_FIELDS), and that field's name plus value
+# may take at most BLOCK_EXTRA_FIELD_MAX_BYTES. Before it, blocks are
+# accepted as they always were. The slot is deliberately generic: using it
+# for something new (the machine label is the first use) is not a rule
+# change.
+BLOCK_EXTRA_FIELD_HEIGHT = 28_000
+BLOCK_EXTRA_FIELD_MAX_BYTES = 200

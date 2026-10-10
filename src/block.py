@@ -1,10 +1,12 @@
 """Block creation, validation, serialization. Pure functions on dicts."""
 
 import random
+import re
 import statistics
 import time as _time
 
 import crypto
+import params
 from crypto import canonical_json
 import settings as settings_mod
 import tx as tx_mod
@@ -223,7 +225,20 @@ def _field_recency_presence(field, tip_height):
             for builder, h in last_win.items()}
 
 
-def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
+def _machine_table(window, labels):
+    """Who built the window, grouped by declared machine: rows of
+    {"machine", "blocks", "share_pct", "pace"} most blocks first, builders
+    that declared nothing together as ""."""
+    groups = {}
+    for h, interval, _builder in window:
+        groups.setdefault(labels[h], []).append(interval)
+    rows = [{"machine": m, "blocks": len(v), "share_pct": 100.0 * len(v) / len(window),
+             "pace": statistics.median(v)} for m, v in groups.items()]
+    rows.sort(key=lambda r: (-r["blocks"], r["machine"]))
+    return rows
+
+
+def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine=""):
     """Race-odds page data: recent block intervals (a proxy for builder
     build time) and how this node's own pace compares to the field.
 
@@ -303,8 +318,19 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
         return None
     median = statistics.median(i for _, i, _ in window)
 
-    field = [row for row in window if row[2] != own_addr] if own_addr else window
-    mine  = [row for row in window if row[2] == own_addr] if own_addr else []
+    # A builder is told apart by address and by the machine it declared (see
+    # MACHINE_FIELD), so two machines behind one address each get their own
+    # pace instead of sharing one. Our own blocks are the address's blocks
+    # that declared our machine, plus ones that declared none (built before
+    # machines were named); without a declared label it is the address alone.
+    labels = {h: machine_label(chain[h]) for h, _i, _b in window}
+    rows = [(h, i, (b, labels[h])) for h, i, b in window]
+
+    def is_ours(ident):
+        return bool(own_addr) and ident[0] == own_addr and ident[1] in ("", own_machine)
+
+    field = [row for row in rows if not is_ours(row[2])]
+    mine  = [row for row in rows if is_ours(row[2])]
 
     # Our pace in the field's own unit: the median interval of the blocks
     # we built, taken from this same window.
@@ -358,6 +384,7 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None):
             field_presence=field_presence)
 
     return {"window": window, "median": median,
+            "machines": _machine_table(window, labels),
             "own_seconds": own_seconds, "odds_pct": odds_pct,
             "own_pace": own_pace, "own_pace_measured": bool(mine),
             "entrants": entrants, "in_draw_pct": in_draw_pct,
@@ -552,6 +579,52 @@ def _apply_transactions(blk, state):
     return True, None
 
 
+# What the protocol defines a block to contain. Anything else is the single
+# optional extra field (see _check_extra_field).
+KNOWN_FIELDS = frozenset({
+    "height", "previous_hash", "timestamp", "transactions", "builder",
+    "vdf_output", "vdf_proof", "vdf_iterations", "hash", "tx_bytes", "message",
+})
+
+# The extra field a builder uses to name its CPU, so the odds can tell two
+# machines that share an address apart. Display and odds only, never
+# trusted for anything else.
+MACHINE_FIELD = "machine"
+MACHINE_LABEL_CHARS = 120
+
+_EXTRA_NAME = re.compile(r"[a-z][a-z0-9_]{0,23}")
+
+
+def _check_extra_field(blk):
+    """From params.BLOCK_EXTRA_FIELD_HEIGHT a block has at most one field the
+    protocol does not define: a short lowercase name, a printable string
+    value, and no more than BLOCK_EXTRA_FIELD_MAX_BYTES for the two
+    together."""
+    if blk.get("height", 0) < params.BLOCK_EXTRA_FIELD_HEIGHT:
+        return True, None
+    extra = [k for k in blk if k not in KNOWN_FIELDS]
+    if not extra:
+        return True, None
+    if len(extra) > 1:
+        return False, "block has more than one extra field"
+    name, value = extra[0], blk[extra[0]]
+    if not isinstance(name, str) or not _EXTRA_NAME.fullmatch(name):
+        return False, "extra field has an unusable name"
+    if not isinstance(value, str) or not value.isprintable():
+        return False, "extra field must be printable text"
+    if len(name.encode()) + len(canonical_json(value)) > params.BLOCK_EXTRA_FIELD_MAX_BYTES:
+        return False, "extra field is larger than %d bytes" % params.BLOCK_EXTRA_FIELD_MAX_BYTES
+    return True, None
+
+
+def machine_label(blk):
+    """The CPU label a block's builder declared, or "" when it declared none.
+    Self-reported and unverifiable: a grouping key and a description, never
+    evidence of speed."""
+    value = blk.get(MACHINE_FIELD)
+    return value if isinstance(value, str) else ""
+
+
 def validate(blk, state, chain):
     """Full block validation. Returns (True, None) or (False, error_string).
 
@@ -565,6 +638,7 @@ def validate(blk, state, chain):
 
     for check, args in (
         (_check_hash,            (blk,)),
+        (_check_extra_field,     (blk,)),
         (_check_parent,          (blk, chain)),
         (_check_timestamp,       (blk, chain)),
         (_check_builder_and_vdf, (blk, chain)),
@@ -576,7 +650,7 @@ def validate(blk, state, chain):
     return True, None
 
 
-def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0):
+def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None):
     """Assemble a candidate block from a mempool snapshot.
 
     Pure function: does not touch node state. Groups candidate transactions
@@ -638,6 +712,8 @@ def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0):
         vdf_iterations=iterations,
         timestamp=timestamp,
     )
+    if extra:
+        skeleton.update(extra)         # counted in base_size, so the block still fits
     # "[" + "]" = 2 bytes for empty list; we'll add ", ".join(tx_jsons) inside
     base_size   = block_size(skeleton)
     running     = base_size
