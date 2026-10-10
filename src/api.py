@@ -120,6 +120,7 @@ import collections
 import logging
 import os
 import re
+import statistics
 import secrets
 import socket
 import sys
@@ -315,7 +316,7 @@ def _committed_tx_count(chain):
 # rest of the site's self-contained, offline-friendly UI)
 # ---------------------------------------------------------------------------
 
-_CHART_W, _CHART_H = 860, 220
+_CHART_W, _CHART_H = 860, 255
 # The bottom padding was already empty space under the plot; the height
 # axis moves into it rather than making the chart taller, so the page
 # still fits without scrolling.
@@ -452,12 +453,30 @@ def _race_chart(race, nicknames_by_addr=None):
                "color": color_by_builder.get(builder, _OTHER_COLOR)}
               for idx, (h, seconds, builder) in enumerate(rows)]
 
+    machine_of = race.get("machine_of") or {}
+
+    def machines_of(pick):
+        """What the chosen builders ran, fastest first: one row per declared
+        machine with its block count and median interval. An address can sit
+        behind several machines of different speeds, so the hover lists each."""
+        groups = {}
+        for h, seconds, builder in rows:
+            if builder and pick(builder):
+                groups.setdefault(machine_of.get(h, ""), []).append(seconds)
+        out = [{"machine": m, "blocks": len(v), "pace": statistics.median(v)}
+               for m, v in groups.items()]
+        out.sort(key=lambda r: (r["pace"], -r["blocks"], r["machine"]))
+        return out
+
     legend = [{"label": b, "nick": nicknames_by_addr.get(b),
-               "color": color_by_builder[b], "count": builder_counts[b]}
+               "color": color_by_builder[b], "count": builder_counts[b],
+               "total": n, "machines": machines_of(lambda x, b=b: x == b)}
               for b in top_builders]
     other_count = sum(c for b, c in builder_counts.items() if b not in color_by_builder)
     if other_count:
-        legend.append({"label": None, "color": _OTHER_COLOR, "count": other_count})
+        legend.append({"label": None, "color": _OTHER_COLOR, "count": other_count,
+                       "total": n,
+                       "machines": machines_of(lambda x: x not in color_by_builder)})
 
     own_y = own_clipped = None
     if own_seconds is not None:

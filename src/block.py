@@ -385,6 +385,7 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="
 
     return {"window": window, "median": median,
             "machines": _machine_table(window, labels),
+            "machine_of": labels,
             "own_seconds": own_seconds, "odds_pct": odds_pct,
             "own_pace": own_pace, "own_pace_measured": bool(mine),
             "entrants": entrants, "in_draw_pct": in_draw_pct,
