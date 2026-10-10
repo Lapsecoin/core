@@ -596,12 +596,9 @@ _EXTRA_NAME = re.compile(r"[a-z][a-z0-9_]{0,23}")
 
 
 def _check_extra_field(blk):
-    """From params.BLOCK_EXTRA_FIELD_HEIGHT a block has at most one field the
-    protocol does not define: a short lowercase name, a printable string
-    value, and no more than BLOCK_EXTRA_FIELD_MAX_BYTES for the two
-    together."""
-    if blk.get("height", 0) < params.BLOCK_EXTRA_FIELD_HEIGHT:
-        return True, None
+    """A block has at most one field the protocol does not define: a short
+    lowercase name, a printable string value, and no more than
+    BLOCK_EXTRA_FIELD_MAX_BYTES for the two together."""
     extra = [k for k in blk if k not in KNOWN_FIELDS]
     if not extra:
         return True, None

@@ -9,6 +9,8 @@ import re
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import api
@@ -19,7 +21,7 @@ from chainstate import ChainState
 from node import NodeView
 import params
 from params import TICKS_PER_LAPSE
-from tests.fixtures import address, make_tx, seed_balance
+from tests.fixtures import address, make_block, make_tx, seed_balance
 
 
 class _MemoryMeta:
@@ -419,16 +421,30 @@ class TestPeersPage:
         assert peer["is_fork"] is False
         assert peer["fork_depth"] is None
 
-    def test_peer_claiming_a_different_hash_at_a_height_we_hold_is_a_fork(self):
-        node, cs = fresh()
+    def _peer_at(self, behind, tip_hash="not-our-block"):
+        """The peers-API entry for a peer claiming a different block that is
+        `behind` blocks below a chain of height 6."""
+        _, cs = fresh()
+        for h in range(1, 7):
+            cs = cs.apply_block(make_block(h, cs.tip["hash"], [], builder_index=1))
         pool = peerpool_mod.PeerPool()
         pool.add("1.2.3.4:9000")
-        pool.update_info("1.2.3.4:9000", height=0, tip_hash="not-our-genesis-hash")
-        app = api.create_private_app(node, pool)
-        data = app.test_client().get("/api/peers").get_json()
-        peer = next(p for p in data["graph_peers"] if p["address"] == "1.2.3.4:9000")
+        pool.update_info("1.2.3.4:9000", height=6 - behind, tip_hash=tip_hash)
+        data = api.create_private_app(_FakeNode(cs), pool).test_client().get("/api/peers").get_json()
+        return next(p for p in data["graph_peers"] if p["address"] == "1.2.3.4:9000")
+
+    def test_peer_claiming_a_different_block_well_behind_our_tip_is_a_fork(self):
+        peer = self._peer_at(behind=3)
         assert peer["is_fork"] is True
-        assert peer["fork_depth"] == 0  # our own tip is also height 0 here
+        assert peer["fork_depth"] == 3
+
+    @pytest.mark.parametrize("behind", [0, 1, 2])
+    def test_a_difference_of_a_block_or_two_is_the_draw_not_a_fork(self, behind):
+        """Ties between sibling blocks and one or two block reorgs are
+        routine, and a peer's claim is a cached snapshot."""
+        peer = self._peer_at(behind=behind)
+        assert peer["is_fork"] is False
+        assert peer["fork_depth"] is None
 
     def test_peer_claiming_a_height_past_our_own_tip_is_never_flagged(self):
         """We have nothing of our own to compare a claim past our tip
