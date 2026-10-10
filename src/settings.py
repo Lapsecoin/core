@@ -191,6 +191,18 @@ HIDE_ADDRESS_PUBLICLY = Setting(
          "setting. Turn off to go back to showing it publicly too.",
 )
 
+# Whether the blocks this node builds name its CPU model (block.MACHINE_FIELD).
+# It is public, permanent chain history, unlike the hardware line above.
+PUBLISH_MACHINE = Setting(
+    "publish_machine", True, bool,
+    label="Name this CPU in the blocks I build",
+    help="Puts your CPU model (nothing else: no OS, host or core count) in "
+         "each block you build, so the odds page can tell machines apart, "
+         "including several that share one address. It becomes part of the "
+         "public chain. Turn off to publish nothing; your blocks are then "
+         "grouped by address alone."
+)
+
 # Minimum race odds (percent) this node needs before it builds straight
 # away. At or below it, the node waits for the field first, the same wait
 # a measured 0% always got (see Node._wait_for_field_or_own_pace). Zero,
@@ -201,7 +213,7 @@ MIN_ODDS_PCT = Setting(
 )
 
 ALL = [DRAW_WINDOW_SECONDS,
-       SHOW_HARDWARE_DETAILS, MINING_ENABLED, MIN_ODDS_PCT,
+       SHOW_HARDWARE_DETAILS, PUBLISH_MACHINE, MINING_ENABLED, MIN_ODDS_PCT,
        HIDE_ADDRESS_PUBLICLY]
 
 

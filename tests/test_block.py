@@ -1084,3 +1084,91 @@ class TestTimestampRulesAreSeparate:
         ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is False
         assert "future" in err
+
+
+# ---------------------------------------------------------------------------
+# The one optional extra field, and machines told apart in the odds
+# ---------------------------------------------------------------------------
+
+import params as params_mod
+
+
+class TestExtraField:
+    H = params_mod.BLOCK_EXTRA_FIELD_HEIGHT
+
+    def _blk(self, height=None, **extra):
+        blk = make_block(height or self.H, "00" * 32, [])
+        blk.update(extra)
+        return blk
+
+    def test_no_extra_field_is_fine(self):
+        assert block_mod._check_extra_field(self._blk())[0]
+
+    def test_one_short_text_field_is_fine(self):
+        assert block_mod._check_extra_field(self._blk(machine="Intel(R) Xeon(R) CPU @ 2.50GHz"))[0]
+
+    def test_a_second_extra_field_is_refused(self):
+        assert not block_mod._check_extra_field(self._blk(machine="a", other="b"))[0]
+
+    def test_the_field_is_limited_to_200_bytes_name_and_value_together(self):
+        room = params_mod.BLOCK_EXTRA_FIELD_MAX_BYTES - len("machine") - 2   # the quotes
+        assert block_mod._check_extra_field(self._blk(machine="x" * room))[0]
+        assert not block_mod._check_extra_field(self._blk(machine="x" * (room + 1)))[0]
+
+    @pytest.mark.parametrize("extra", [
+        {"machine": 5}, {"machine": ["a"]}, {"machine": "line\nbreak"}, {"Bad-Name": "x"},
+        {"x" * 30: "x"},
+    ])
+    def test_only_a_plain_printable_string_under_a_plain_name(self, extra):
+        assert not block_mod._check_extra_field(self._blk(**extra))[0]
+
+    def test_before_the_height_blocks_are_accepted_as_they_always_were(self):
+        assert block_mod._check_extra_field(self._blk(self.H - 1, a="x" * 5000, b=1))[0]
+
+    def test_the_fields_the_protocol_defines_are_not_extra(self):
+        blk = self._blk(tx_bytes=10)
+        assert block_mod._check_extra_field(blk)[0]
+
+    def test_assemble_carries_the_field_and_it_is_in_the_hash(self):
+        tip = make_block(1, genesis()["hash"], [])
+        blk = block_mod.assemble(tip, [], address(0), 1000, extra={"machine": "Some CPU"})
+        assert blk["machine"] == "Some CPU"
+        blk["hash"] = block_mod.block_hash(blk)
+        other = dict(blk, machine="Another CPU")
+        assert block_mod.block_hash(other) != blk["hash"]
+
+
+class TestMachinesInTheOdds:
+    def _chain(self, rows):
+        """rows: (builder_index, machine, interval_seconds), oldest first."""
+        chain = [genesis()]
+        offset = 0
+        for h, (idx, machine, secs) in enumerate(rows, start=1):
+            offset = (secs - 240) if h == 1 else offset + secs - 120
+            blk = make_block(h, chain[-1]["hash"], [], builder_index=idx, timestamp_offset=offset)
+            if machine:
+                blk["machine"] = machine
+            chain.append(blk)
+        return chain
+
+    def test_two_machines_behind_one_address_get_their_own_pace(self):
+        # Same address, a fast box (100s) and a slow one (160s). Each node
+        # reads its own machine's blocks, so the two no longer agree.
+        rows = [(0, "FAST", 100), (0, "SLOW", 160)] * 6
+        chain = self._chain(rows)
+        fast = block_mod.race_odds(chain, None, address(0), draw_window=10.0, own_machine="FAST")
+        slow = block_mod.race_odds(chain, None, address(0), draw_window=10.0, own_machine="SLOW")
+        assert fast["own_pace"] == pytest.approx(100)
+        assert slow["own_pace"] == pytest.approx(160)
+        assert fast["odds_pct"] > slow["odds_pct"]
+
+    def test_blocks_from_before_machines_were_named_still_count_as_ours(self):
+        chain = self._chain([(0, "", 100)] * 3 + [(0, "BOX", 100)] * 3)
+        race = block_mod.race_odds(chain, None, address(0), own_machine="BOX")
+        assert race["own_blocks"] == 6
+
+    def test_the_machine_table_groups_by_declared_label(self):
+        chain = self._chain([(0, "A", 100), (1, "B", 100), (2, "A", 100), (3, "", 100)])
+        rows = block_mod.race_odds(chain, None, address(0))["machines"]
+        assert [(r["machine"], r["blocks"]) for r in rows] == [("A", 2), ("", 1), ("B", 1)]
+        assert sum(r["share_pct"] for r in rows) == pytest.approx(100.0)

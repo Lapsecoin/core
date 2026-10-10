@@ -131,6 +131,25 @@
   <button type="button" id="odds-zoom-reset" class="btn-sm" style="display:none">Reset spacing</button>
   </div>
 </div>
+<div class="card">
+  <div class="card-title">Who built the last {{ race.window|length }} blocks, by machine</div>
+  <div class="table-wrap">
+  <table class="stacked">
+    <thead><tr><th>Machine</th><th>Blocks</th><th>Share</th><th>Median interval</th></tr></thead>
+    <tbody id="odds-machines">
+    {% for m in race.machines %}
+      <tr>
+        <td data-label="Machine">{{ m.machine or "not declared" }}</td>
+        <td data-label="Blocks">{{ m.blocks }}</td>
+        <td data-label="Share">{{ "%.1f"|format(m.share_pct) }}%</td>
+        <td data-label="Median interval">{{ "%.0f"|format(m.pace) }}s</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="stat-sub">Machines name themselves in the blocks they build, so this is what builders say, not something the chain checks.</div>
+</div>
 <style>
   /* The mark is a slider thumb, so it takes the cursor and the emphasis
      of one. Held state is set while dragging, since the pointer is
@@ -435,6 +454,15 @@
       document.getElementById("window-median-val").textContent = fmt1(data.median) + "s";
       document.getElementById("window-count").textContent = data.window_len + " blocks";
 
+      const machines = document.getElementById("odds-machines");
+      if (machines && data.machines) {
+        const esc = t => String(t).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+        machines.innerHTML = data.machines.map(m =>
+          "<tr><td data-label=\"Machine\">" + esc(m.machine || "not declared") + "</td>" +
+          "<td data-label=\"Blocks\">" + m.blocks + "</td>" +
+          "<td data-label=\"Share\">" + m.share_pct.toFixed(1) + "%</td>" +
+          "<td data-label=\"Median interval\">" + Math.round(m.pace) + "s</td></tr>").join("");
+      }
       const r = data.reorgs || {deepest: 0, count: 0};
       document.getElementById("reorg-deepest").textContent = r.deepest || "none";
       document.getElementById("reorg-count").textContent = r.count

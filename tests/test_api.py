@@ -579,7 +579,7 @@ class TestSettingsValidation:
         client, _ = self._client()
         html = client.get("/settings").get_data(as_text=True)
         assert html.count('type="range"') == 2
-        assert html.count('class="switch"') == 3
+        assert html.count('class="switch"') == 4
 
 
 class TestAddressLookupBurnAlias:
