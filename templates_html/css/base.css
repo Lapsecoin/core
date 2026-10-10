@@ -131,32 +131,42 @@ nav.mainnav .nav-menu a .ni { width: 16px; height: 16px; }
 .nav-menu a b { font-weight: 600; font-size: .86rem; color: var(--ink); }
 .nav-menu a small { font-size: .76rem; color: var(--ink-dim); font-weight: 400; }
 nav.mainnav .nav-menu a.active { background: rgb(var(--ink-rgb) / .07); }
-.nav-more-btn { display: none; }
+.nav-more-btn, .nav-panel { display: none; }
 @media (min-width: 761px) { nav.mainnav { overflow: visible; } }
 @media (max-width: 760px) {
-  /* Phones: the main entries stay in the bar, everything else sits behind a
-     More button and opens as a second row of links. The Explorer group
-     flattens into that second row. */
-  nav.mainnav { overflow: visible; flex-wrap: wrap; row-gap: .15rem; }
+  /* Phones: Dashboard, Send, Fees and Board stay in the bar. A labelled More
+     button at the end opens a panel under the bar with everything else. */
+  nav.mainnav { overflow: visible; }
   nav.mainnav a { padding: .5rem .65rem; }
-  .nav-group { display: contents; }
-  .nav-group-btn { display: none; }
-  .nav-menu { display: contents; }
-  nav.mainnav .nav-menu a small { display: none; }
-  nav.mainnav .nav-menu a b { color: inherit; font-weight: 500; font-size: inherit; }
-  nav.mainnav .nav-menu a.active b { font-weight: 600; }
-  nav.mainnav .nav-menu a .ni { width: 14px; height: 14px; }
-  nav.mainnav a.nav-secondary { display: none; order: 10; }
-  nav.mainnav.more-open a.nav-secondary { display: inline-flex; }
-  .nav-more-btn {
-    display: inline-flex; align-items: center; gap: .4rem; order: 5; height: auto;
-    background: none; border: 0; color: var(--ink-dim); font: inherit; font-weight: 500; letter-spacing: 0;
-    padding: .5rem .65rem; border-radius: var(--radius-sm); cursor: pointer;
+  nav.mainnav a.nav-secondary, nav.mainnav .nav-group { display: none; }
+  .masthead .nav-more-btn {
+    display: inline-flex; align-items: center; gap: .35rem; margin-left: auto; flex: 0 0 auto;
+    height: auto; padding: .5rem .65rem; border: 0; border-radius: var(--radius-sm);
+    background: none; color: var(--ink-dim); font: inherit; font-weight: 500; letter-spacing: 0;
   }
-  .nav-more-btn.active { color: var(--ink); background: rgb(var(--ink-rgb) / .07); font-weight: 600; }
+  .masthead .nav-more-btn:hover, .masthead .nav-more-btn:active { background: none; color: var(--ink-dim); transform: none; }
+  .masthead .nav-more-btn.active { color: var(--ink); font-weight: 600; background: rgb(var(--ink-rgb) / .07); }
+  .masthead .nav-more-btn.open { color: var(--ink); background: var(--hover); }
+  .masthead .nav-more-btn, .nav-panel a, nav.mainnav a { -webkit-tap-highlight-color: transparent; }
+  .masthead .nav-more-btn:focus { outline: none; }
+  .masthead .nav-more-btn:focus-visible { outline: 2px solid rgb(194 87 12 / .45); outline-offset: 1px; }
   .nav-more-btn .nc { width: 9px; height: 6px; opacity: .6; transition: transform .15s; }
-  nav.mainnav.more-open .nav-more-btn { color: var(--ink); background: var(--hover); }
-  nav.mainnav.more-open .nav-more-btn .nc { transform: rotate(180deg); }
+  .nav-more-btn.open .nc { transform: rotate(180deg); }
+  .nav-panel:not([hidden]) {
+    display: block; position: absolute; left: 0; right: 0; top: 100%; z-index: 120;
+    max-height: calc(100vh - 7rem); overflow-y: auto; padding: .35rem .75rem .75rem;
+    background: var(--surface); border-bottom: 1px solid var(--rule);
+    box-shadow: 0 12px 24px rgb(var(--ink-rgb) / .14);
+  }
+  .nav-panel-label { padding: .6rem .5rem .25rem; font-size: .7rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-dim); }
+  .nav-panel a { display: flex; align-items: center; gap: .75rem; padding: .65rem .5rem; border-radius: var(--radius-sm); color: var(--ink); text-decoration: none; }
+  .nav-panel a:hover, .nav-panel a:active { background: var(--hover); text-decoration: none; }
+  .nav-panel a.active { background: rgb(var(--ink-rgb) / .07); }
+  .nav-panel a.active .ni { color: var(--accent); opacity: 1; }
+  .nav-panel .ni { width: 18px; height: 18px; flex: 0 0 auto; opacity: .75; }
+  .nav-panel a span { display: flex; flex-direction: column; line-height: 1.25; }
+  .nav-panel a b { font-weight: 600; font-size: .92rem; }
+  .nav-panel a small { font-size: .78rem; color: var(--ink-dim); }
 }
 nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: none; }
 .live-status { order: 3; flex: 0 0 auto; color: var(--ink-dim); font-size: .72rem; white-space: nowrap; }

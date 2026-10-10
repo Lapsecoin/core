@@ -71,9 +71,22 @@
       {% if is_private %}
       <span class="sep">&middot;</span><a href="/settings" class="nav-secondary {{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
       {% endif %}
-      <button type="button" class="nav-more-btn {{ 'active' if nav_active in ('blocks', 'address', 'mempool', 'network', 'odds', 'whitepaper', 'settings') }}" aria-expanded="false" aria-controls="mainnav">More<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button type="button" class="nav-more-btn {{ 'active' if nav_active in ('blocks', 'address', 'mempool', 'network', 'odds', 'whitepaper', 'settings') }}" aria-expanded="false" aria-controls="nav-panel"><span>More</span><svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       {% endif %}
     </nav>
+    {% if not light %}
+    <div class="nav-panel" id="nav-panel" hidden>
+      <div class="nav-panel-label">Explorer</div>
+      <a href="/blocks" class="{{ 'active' if nav_active == 'blocks' }}"><svg class="ni" aria-hidden="true"><use href="#i-blocks"/></svg><span><b>Blocks</b><small>Recent blocks and transactions</small></span></a>
+      <a href="/address" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
+      <a href="/mempool" class="{{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
+      <div class="nav-panel-label">More</div>
+      <a href="/network" class="{{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg><span><b>Network</b></span></a>
+      <a href="/odds" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg><span><b>Odds</b></span></a>
+      <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg><span><b>Whitepaper</b></span></a>
+      {% if is_private %}<a href="/settings" class="{{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg><span><b>Settings</b></span></a>{% endif %}
+    </div>
+    {% endif %}
     {% if update_checker and update_checker.severity %}
       {% set sev_text = {'protocol': 'Protocol update required', 'critical': 'Critical update available', 'minor': 'New version available'}[update_checker.severity] %}
       {% if is_private and updater and updater.can_self_update() %}
@@ -107,9 +120,11 @@
     group.classList.toggle("open", open);
     group.querySelector(".nav-group-btn").setAttribute("aria-expanded", open ? "true" : "false");
   }
+  var panel = document.getElementById("nav-panel");
   function setMore(open) {
     if (!more) return;
-    nav.classList.toggle("more-open", open);
+    panel.hidden = !open;
+    more.classList.toggle("open", open);
     more.setAttribute("aria-expanded", open ? "true" : "false");
   }
   if (group) {
@@ -119,12 +134,12 @@
   }
   if (more) {
     more.addEventListener("click", function (e) {
-      e.stopPropagation(); setMore(!nav.classList.contains("more-open"));
+      e.stopPropagation(); setMore(panel.hidden);
     });
   }
   document.addEventListener("click", function (e) {
     if (group && !group.contains(e.target)) setGroup(false);
-    if (more && !nav.contains(e.target)) setMore(false);
+    if (more && !panel.contains(e.target)) setMore(false);
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") { setGroup(false); setMore(false); }
