@@ -396,7 +396,9 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
         acct = reader.account(signer.addr, fees=True)
         ctx = dict(title="Send", from_addr=signer.addr,
                    balance=acct["balance"], fees=acct["fees"],
-                   csrf_token=csrf_token, form_token=forms.tokens.issue(),
+                   csrf_token=csrf_token,
+                   # A background refresh must not spend a one-time token.
+                   form_token="" if request.headers.get("X-Live") else forms.tokens.issue(),
                    outputs_value="", memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
                    asset="lapse", base_enabled=base is not None,
                    alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])

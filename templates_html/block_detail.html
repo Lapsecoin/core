@@ -41,7 +41,7 @@
   </table>
   </div>
 </div>
-<div class="pager">
+<div class="pager" data-live="pager">
 {% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">Prev</a>{% endif %}
 {% if has_next %}<a href="/explorer/block/{{ b.height + 1 }}">Next</a>{% endif %}
 </div>

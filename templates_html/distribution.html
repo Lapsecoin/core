@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Distribution: {{ label }} LAPSE</h2>
-<div class="card">
+<div class="card"{% if page == 1 %} data-live="rows"{% endif %}>
   <div class="card-title">{{ total }} address{{ 'es' if total != 1 }}</div>
   <div class="table-wrap">
   <table class="stacked">
