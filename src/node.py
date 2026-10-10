@@ -417,31 +417,6 @@ class Node:
     # Public interface
     # ------------------------------------------------------------------
 
-    _INTERVAL_OFFSET_META_KEY = "interval_offset"
-
-    def interval_offset(self):
-        """How much longer, in seconds, the chain's interval after one of our
-        blocks runs than our VDF stopwatch, as measured from blocks we built.
-        None until there has been one to measure. See block.race_odds."""
-        raw = self.storage.get_meta(self._INTERVAL_OFFSET_META_KEY)
-        try:
-            return float(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    def learn_interval_offset(self, race):
-        """Keep the gap between our measured interval and our VDF stopwatch
-        whenever the window has blocks of ours to measure it from, so the
-        odds stay comparable on a day the window has none."""
-        if not race or not race.get("own_pace_measured") or race.get("own_seconds") is None:
-            return
-        offset = race["own_pace"] - race["own_seconds"]
-        if not 0.0 <= offset <= 120.0:
-            return
-        old = self.interval_offset()
-        if old is None or abs(offset - old) >= 0.25:
-            self.storage.set_meta(self._INTERVAL_OFFSET_META_KEY, repr(round(offset, 2)))
-
     _MACHINE_SALT_META_KEY = "machine_salt"
 
     def _machine_salt(self):
@@ -893,9 +868,7 @@ class Node:
             pre_cycle_blocks = []
         window = self.settings.get(settings_mod.DRAW_WINDOW_SECONDS)
         race = block_mod.race_odds(cs.chain, self.own_vdf_median(), self.addr, window,
-                                   own_machine=self.machine_label(),
-                                   own_offset=self.interval_offset())
-        self.learn_interval_offset(race)
+                                   own_machine=self.machine_label())
         min_odds = self.settings.get(settings_mod.MIN_ODDS_PCT)
         odds = race["odds_pct"] if race is not None else None
         if odds is not None and odds <= min_odds:
