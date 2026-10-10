@@ -375,7 +375,19 @@ def _x_ticks(rows):
             for idx in idxs]
 
 
-def _race_chart(race, nicknames_by_addr=None):
+def _chart_dims():
+    """The chart size the page asked for (?w=&h=, in CSS pixels), so the
+    chart is drawn at the size it is shown and uses the room the window has.
+    Clamped; anything unparsable falls back to the default size."""
+    def pick(name, default, lo, hi):
+        try:
+            return min(max(int(request.args.get(name, default)), lo), hi)
+        except (TypeError, ValueError):
+            return default
+    return pick("w", _CHART_W, 480, 1800), pick("h", _CHART_H, 170, 600)
+
+
+def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
     """Precompute SVG pixel geometry for the race-odds chart.
 
     nicknames_by_addr: addr -> nickname (built from _board_profiles_and_votes'
@@ -403,8 +415,10 @@ def _race_chart(race, nicknames_by_addr=None):
     nicknames_by_addr = nicknames_by_addr or {}
     rows = race["window"]
     n = len(rows)
-    plot_w = _CHART_W - _CHART_PAD_L
-    plot_h = _CHART_H - _CHART_PAD_T - _CHART_PAD_B
+    chart_w = width or _CHART_W
+    chart_h = height or _CHART_H
+    plot_w = chart_w - _CHART_PAD_L
+    plot_h = chart_h - _CHART_PAD_T - _CHART_PAD_B
     median = race["median"]
     # The self reference line plots own_pace, the same figure the odds are
     # computed from, so the line sits in the chart's own unit (block
@@ -513,7 +527,7 @@ def _race_chart(race, nicknames_by_addr=None):
     return {"points": points, "own_y": own_y, "own_clipped": own_clipped,
             "median_y": round(y_at(median), 1), "ticks": ticks,
             "x_ticks": _x_ticks(rows),
-            "width": _CHART_W, "height": _CHART_H,
+            "width": chart_w, "height": chart_h,
             "pad_l": _CHART_PAD_L, "plot_w": plot_w,
             "plot_top": _CHART_PAD_T, "plot_bottom": _CHART_PAD_T + plot_h,
             "axis_lo": axis_lo, "axis_hi": axis_hi, "legend": legend}
@@ -1060,7 +1074,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/odds", endpoint=pfx+"odds")
     def odds():
         race = _race_for()
-        chart = _race_chart(race, _builder_nicknames_for()) if race else None
+        chart = _race_chart(race, _builder_nicknames_for(), *_chart_dims()) if race else None
         hardware = (hardware_info.describe()
                     if node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS)
                     else None)
@@ -1099,7 +1113,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "draw_window": race["draw_window"],
             "field_builders": race["field_builders"],
             "machines": race["machines"],
-            "window_len": len(race["window"]), "chart": _race_chart(race, _builder_nicknames_for()),
+            "window_len": len(race["window"]),
+            "chart": _race_chart(race, _builder_nicknames_for(), *_chart_dims()),
             "reorgs": node.reorg_stats(),
             "mining_enabled": node.settings.get(settings_mod.MINING_ENABLED),
             "waiting_zero_odds": getattr(node, "status_line", "").startswith("waiting"),
