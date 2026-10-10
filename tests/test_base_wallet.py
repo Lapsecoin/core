@@ -164,6 +164,17 @@ class TestSendPage:
         assert page.addr in html and "0.500000 ETH" in html
         assert "ETH on Base" in html and 'id="base-panel"' in html
 
+    def test_balances_are_marked_to_refresh_without_a_reload(self, page):
+        html = page.client.get("/send").get_data(as_text=True)
+        assert 'data-live="lapse-balance"' in html and 'data-live="base-balance"' in html
+
+    def test_a_background_refresh_does_not_spend_a_form_token(self, page):
+        import re
+        def token(h):
+            return re.search(r'name="form_token" value="([^"]*)"', h).group(1)
+        assert token(page.client.get("/send").get_data(as_text=True))
+        assert token(page.client.get("/send", headers={"X-Live": "1"}).get_data(as_text=True)) == ""
+
     def test_balance_reads_unavailable_when_the_endpoint_is_down(self, page, monkeypatch):
         def down(url, a):
             raise evm.EVMUnreachable("down")

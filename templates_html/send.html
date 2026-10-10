@@ -20,7 +20,7 @@
   </div>
   <div class="stat">
     <div class="stat-label">Balance</div>
-    <div class="stat-value" style="color:var(--green);font-size:.95rem">{{ fmt_balance(balance) }}</div>
+    <div class="stat-value" data-live="lapse-balance" style="color:var(--green);font-size:.95rem">{{ fmt_balance(balance) }}</div>
   </div>
   <div class="stat" style="flex-basis:220px">
     <div class="stat-label">Fee market</div>
@@ -80,7 +80,7 @@
   </div>
   <div class="stat">
     <div class="stat-label">Balance</div>
-    <div class="stat-value" style="color:var(--green);font-size:.95rem">{% if base_balance_known %}{{ base_balance }} ETH{% else %}unavailable{% endif %}</div>
+    <div class="stat-value" data-live="base-balance" style="color:var(--green);font-size:.95rem">{% if base_balance_known %}{{ base_balance }} ETH{% else %}unavailable{% endif %}</div>
   </div>
 </div>
 <div class="card">

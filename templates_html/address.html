@@ -19,7 +19,7 @@
 </div>
 {% endif %}
 {% if holder_count %}
-<div class="card wealth">
+<div class="card wealth" data-live="wealth">
   <div class="card-title">Wealth distribution ({{ holder_count }} holder{{ 's' if holder_count != 1 }})</div>
   <div class="histo">
   {% for label, count in histogram %}
@@ -52,12 +52,12 @@
 </style>
 {% endif %}
 {% if history is not none %}
-<div class="stats">
+<div class="stats" data-live="stats">
   <div class="stat"><div class="stat-label">Balance</div><div class="stat-value" style="color:var(--green)">{{ fmt_balance(balance) }}</div></div>
   <div class="stat"><div class="stat-label">Txs sent</div><div class="stat-value">{{ tx_count }}</div></div>
   <div class="stat"><div class="stat-label">Transactions</div><div class="stat-value">{{ history | length }}</div></div>
 </div>
-<div class="card">
+<div class="card"{% if page == 1 %} data-live="history"{% endif %}>
   <div class="card-title">History</div>
   <div class="table-wrap">
   <table class="stacked">

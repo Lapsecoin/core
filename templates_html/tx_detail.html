@@ -2,7 +2,7 @@
 {% block content %}
 <h2>Transaction</h2>
 <div class="card">
-  <table class="kv-table">
+  <table class="kv-table" data-live="status">
     <tr><td>Hash</td><td class="hash">{{ tx_hash }}</td></tr>
     <tr><td>Status</td><td>{{ location }}</td></tr>
     <tr><td>From</td><td class="hash-short" style="word-break:break-all">{{ tx.from }}</td></tr>

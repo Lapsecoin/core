@@ -365,6 +365,35 @@
 <div class="page">
 {% block content %}{% endblock %}
 </div>
+<script>
+// Parts of a page marked data-live stay current without a reload: the page
+// is fetched again in the background and only those parts are swapped in.
+(function () {
+  if (!document.querySelector("[data-live]")) return;
+  var busy = false;
+  var url = new URL(location.href);
+  url.searchParams.delete("note");
+  async function tick() {
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      var res = await fetch(url, {cache: "no-store", headers: {"X-Live": "1"}});
+      if (!res.ok) return;
+      var doc = new DOMParser().parseFromString(await res.text(), "text/html");
+      document.querySelectorAll("[data-live]").forEach(function (el) {
+        var fresh = doc.querySelector('[data-live="' + el.dataset.live + '"]');
+        if (fresh && fresh.innerHTML !== el.innerHTML) el.innerHTML = fresh.innerHTML;
+      });
+    } catch (e) {
+      // Keep what is on screen during a temporary failure.
+    } finally {
+      busy = false;
+    }
+  }
+  setInterval(tick, 6000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) tick(); });
+})();
+</script>
 {% if is_private and updater and updater.can_self_update() and update_checker and update_checker.severity %}
 <script>
 (function () {

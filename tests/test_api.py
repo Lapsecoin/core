@@ -5,6 +5,7 @@ Covers: fee_estimate (the send UI's fee-market summary).
 """
 
 import os
+import re
 import sys
 from types import SimpleNamespace
 
@@ -1319,7 +1320,7 @@ class TestDashboardNickname:
         assert data["address"] is None
         assert data["nick"] is None
         html = client.get("/").get_data(as_text=True)
-        assert "Al" not in html
+        assert not re.search(r"\bAl\b", html)      # the word, not a substring of some script
 
     def test_nickname_shown_on_public_app_when_hiding_is_off(self):
         node = self._node_with_nickname(hide=False)

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
+<div class="card"{% if page == 1 %} data-live="blocks"{% endif %}>
   <div class="table-wrap">
   <table class="stacked">
     <thead><tr><th>Height</th><th>Hash</th><th>Block time</th><th>Txs</th><th>Builder</th></tr></thead>
