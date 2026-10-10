@@ -254,12 +254,12 @@
 
   .form-group { margin-bottom: .5rem; }
   label { display: block; font-size: .85rem; font-weight: 500; color: var(--ink-dim); margin-bottom: .3rem; }
-  input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"]), textarea, select {
+  :where(input:not([type="radio"], [type="checkbox"], [type="file"], [type="hidden"], [type="range"]), textarea, select) {
     width: 100%; background: #fff; border: 1px solid #cfc8b2; border-radius: 8px; color: var(--ink);
     padding: .5rem .75rem; font-family: var(--mono); font-size: .9rem;
     transition: border-color .12s, box-shadow .12s;
   }
-  input[type="radio"], input[type="checkbox"] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; margin: 0 .4rem 0 0; vertical-align: -.2em; }
+  :where(input[type="radio"], input[type="checkbox"]) { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; margin: 0 .4rem 0 0; vertical-align: -.2em; }
   input[type="file"] { font-family: var(--serif); font-size: .85rem; max-width: 100%; }
   input[type="file"]::file-selector-button {
     background: var(--paper-2); color: var(--ink); border: 1px solid #cfc8b2; border-radius: 8px;
