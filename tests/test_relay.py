@@ -455,7 +455,7 @@ class TestClientUsesTheRelay:
     def test_the_header_says_so(self, net):
         r = net.reader()
         client = create_light_app(r, net.wallet).test_client()
-        client.get("/address")
+        client.get("/balance")
         assert "via relay" in client.get("/board").get_data(as_text=True)
 
     def test_a_transaction_is_submitted_through_it_too(self, net):
@@ -470,7 +470,7 @@ class TestClientUsesTheRelay:
     def test_every_wallet_feature_works_through_it(self, net):
         r = net.reader()
         client = create_light_app(r, net.wallet).test_client()
-        for path in ("/board", "/address", "/send"):
+        for path in ("/board", "/balance", "/send"):
             assert client.get(path).status_code == 200
         n = 0
         for path, form in (("/board", {"message": "one"}), ("/send", {"outputs": f"{address(3)},1000"}),

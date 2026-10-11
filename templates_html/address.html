@@ -39,7 +39,7 @@
     <h2>Wealth distribution <span class="addr-sub">{{ holder_count }} holder{{ 's' if holder_count != 1 }}</span></h2>
     <div class="histo">
     {% for label, count in histogram %}
-    <a class="histo-row" href="/address/distribution/{{ loop.index0 }}">
+    <a class="histo-row" href="/balance/distribution/{{ loop.index0 }}">
       <span class="histo-label">{{ label }}</span>
       <span class="histo-track"><span class="histo-bar" style="width:{{ '%.2f' % (count / histogram_max * 100 if histogram_max else 0) }}%"></span></span>
       <span class="histo-count">{{ count }}</span>
@@ -76,14 +76,14 @@
     </table>
     {% if total_pages > 1 %}
     <nav class="pager" aria-label="Pagination">
-      {% if has_prev %}<a href="/address?addr={{ addr }}&page={{ page - 1 }}">Prev</a>{% endif %}
+      {% if has_prev %}<a href="/balance?addr={{ addr }}&page={{ page - 1 }}">Prev</a>{% endif %}
       {% for p in page_window %}
         {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
         {% elif p == page %}<span class="pager-current">{{ p }}</span>
-        {% else %}<a href="/address?addr={{ addr }}&page={{ p }}">{{ p }}</a>
+        {% else %}<a href="/balance?addr={{ addr }}&page={{ p }}">{{ p }}</a>
         {% endif %}
       {% endfor %}
-      {% if has_next %}<a href="/address?addr={{ addr }}&page={{ page + 1 }}">Next</a>{% endif %}
+      {% if has_next %}<a href="/balance?addr={{ addr }}&page={{ page + 1 }}">Next</a>{% endif %}
     </nav>
     {% endif %}
   </section>

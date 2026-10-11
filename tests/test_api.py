@@ -615,28 +615,39 @@ class TestAddressLookupBurnAlias:
         pool = peerpool_mod.PeerPool()
         return api.create_private_app(node, pool).test_client()
 
+    def test_the_old_address_page_redirects_to_balance_keeping_the_query(self):
+        resp = self._client().get("/address?addr=abc&page=2", follow_redirects=False)
+        assert resp.status_code == 301
+        assert resp.headers["Location"].endswith("/balance?addr=abc&page=2")
+        assert self._client().get("/address", follow_redirects=False).headers["Location"].endswith("/balance")
+
+    def test_the_old_distribution_path_redirects_too(self):
+        resp = self._client().get("/address/distribution/3?page=2", follow_redirects=False)
+        assert resp.status_code == 301
+        assert resp.headers["Location"].endswith("/balance/distribution/3?page=2")
+
     def test_burn_redirects_to_the_real_address(self):
         import crypto as crypto_mod
-        resp = self._client().get("/address?addr=burn", follow_redirects=False)
+        resp = self._client().get("/balance?addr=burn", follow_redirects=False)
         assert resp.status_code == 302
         assert f"addr={crypto_mod.burn_address()}" in resp.headers["Location"]
 
     def test_case_insensitive_and_trims_whitespace(self):
-        resp = self._client().get("/address?addr=%20BURN%20", follow_redirects=False)
+        resp = self._client().get("/balance?addr=%20BURN%20", follow_redirects=False)
         assert resp.status_code == 302
 
     def test_other_query_params_survive_the_redirect(self):
-        resp = self._client().get("/address?addr=burn&page=2", follow_redirects=False)
+        resp = self._client().get("/balance?addr=burn&page=2", follow_redirects=False)
         assert resp.status_code == 302
         assert "page=2" in resp.headers["Location"]
 
     def test_redirect_target_actually_shows_the_burn_banner(self):
-        resp = self._client().get("/address?addr=burn", follow_redirects=True)
+        resp = self._client().get("/balance?addr=burn", follow_redirects=True)
         assert resp.status_code == 200
         assert b"burn address" in resp.data
 
     def test_an_ordinary_address_is_not_treated_as_the_alias(self):
-        resp = self._client().get("/address?addr=" + address(0), follow_redirects=False)
+        resp = self._client().get("/balance?addr=" + address(0), follow_redirects=False)
         assert resp.status_code == 200  # rendered directly, no redirect
 
 
@@ -669,19 +680,19 @@ class TestAddressLookupNicknameRedirect:
 
     def test_nickname_redirects_to_its_owner(self):
         client = self._client_with_nickname(nick="Al", owner_index=0)
-        resp = client.get("/address?addr=Al", follow_redirects=False)
+        resp = client.get("/balance?addr=Al", follow_redirects=False)
         assert resp.status_code == 302
         assert f"addr={address(0)}" in resp.headers["Location"]
 
     def test_lookup_is_case_insensitive(self):
         client = self._client_with_nickname(nick="Al", owner_index=0)
-        resp = client.get("/address?addr=AL", follow_redirects=False)
+        resp = client.get("/balance?addr=AL", follow_redirects=False)
         assert resp.status_code == 302
         assert f"addr={address(0)}" in resp.headers["Location"]
 
     def test_unclaimed_name_is_not_redirected(self):
         client = self._client_with_nickname(nick="Al", owner_index=0)
-        resp = client.get("/address?addr=Nobody", follow_redirects=False)
+        resp = client.get("/balance?addr=Nobody", follow_redirects=False)
         assert resp.status_code == 200
         assert "Invalid address format" in resp.get_data(as_text=True)
 

@@ -240,13 +240,18 @@ class TestLightPages:
     def test_nav_offers_only_what_the_light_client_has(self, world):
         html = self._light(world).get("/board").get_data(as_text=True)
         nav = html[html.index('<nav class="mainnav" id="mainnav">'):html.index("</nav>")]
-        for present in ("/address", "/send", "/board"):
+        for present in ("/balance", "/send", "/board"):
             assert f'href="{present}"' in nav
         for absent in ("/explorer", "/blocks", "/network", "/mempool", "/settings", "/odds", "/benchmark"):
             assert f'href="{absent}"' not in nav
 
+    def test_the_old_address_path_redirects_to_balance(self, world):
+        resp = self._light(world).get("/address?addr=abc", follow_redirects=False)
+        assert resp.status_code == 301
+        assert resp.headers["Location"].endswith("/balance?addr=abc")
+
     def test_balance_page_shows_the_wallet(self, world):
-        html = self._light(world).get("/address").get_data(as_text=True)
+        html = self._light(world).get("/balance").get_data(as_text=True)
         assert "1000 LAPSE" in html
         assert "received" in html and ">5000<" in html
 
@@ -518,7 +523,7 @@ class TestWhatTheNodeLearns:
     def test_the_balance_page_does_name_it_because_that_is_the_question(self, world):
         client = create_light_app(world.reader, world.wallet).test_client()
         world.session.log.clear()
-        client.get("/address")
+        client.get("/balance")
         assert world.wallet.addr in self._everything_sent(world)
 
     def test_asking_for_a_profile_asks_the_node_nothing(self, world):
@@ -672,14 +677,14 @@ class TestNothingIsRefused:
         session = _OnlyAnswers(world.app.test_client(), up={"9.9.9.9:8333"})
         r = self._reader(world, session, plain=[self.PLAIN])
         client = create_light_app(r, world.wallet).test_client()
-        client.get("/address")
+        client.get("/balance")
         assert "direct, not encrypted" in client.get("/board").get_data(as_text=True)
 
     def test_every_feature_works_with_only_a_plain_node(self, world):
         session = _OnlyAnswers(world.app.test_client(), up={"9.9.9.9:8333"})
         r = self._reader(world, session, plain=[self.PLAIN])
         client = create_light_app(r, world.wallet).test_client()
-        for path in ("/board", "/api/board/fragment?page=1", "/api/fees", "/address", "/send"):
+        for path in ("/board", "/api/board/fragment?page=1", "/api/fees", "/balance", "/send"):
             assert client.get(path).status_code == 200, path
         before = len(world.node.mempool.all_txs())
         for path, form in (("/board", {"message": "hello"}),
