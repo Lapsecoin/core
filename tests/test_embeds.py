@@ -74,6 +74,22 @@ class TestWording:
         assert "2 pending transactions" in card["description"]
         assert "6.00 LAPSE moving" in card["description"]
 
+    def test_the_odds_card_says_so_when_mining_is_off(self):
+        race = {"odds_pct": 0.0, "field_builders": 4, "median": 196.0}
+        assert "mining is off" in embeds.odds(race, mining=False)["description"]
+        assert "0.0%" in embeds.odds(race, mining=True)["description"]
+
+    def test_a_board_post_card_shows_the_post_and_not_the_burn_transfer(self):
+        t = {"from": "a.b.c.d", "fee": 5, "memo": "[board] [r:abc123]hello there",
+             "outputs": [{"amount": 1, "to": "burn.burn.burn.burn"}]}
+        card = embeds.transaction("f" * 64, t, "Block 7")
+        assert card["title"] == "Board post"
+        assert "a.b.c…: hello there" in card["description"]
+
+    def test_a_tiny_amount_is_shown_in_ticks_not_as_zero(self):
+        t = {"from": "a.b.c.d", "fee": 5, "memo": "", "outputs": [{"amount": 202, "to": "x.y.z"}]}
+        assert "202 ticks from" in embeds.transaction("f" * 64, t, "Block 7")["description"]
+
     def test_the_blocks_card_lists_the_newest_first(self):
         chain = [{"height": h, "transactions": [], "timestamp": 1000 + h} for h in range(5)]
         lines = embeds.blocks(chain, now=2000)["description"].split("\n")
