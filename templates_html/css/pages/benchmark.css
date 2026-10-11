@@ -7,6 +7,10 @@
 .bench .stat { flex: 1 1 200px; padding: .5rem .9rem; }
 .bench .stat-value { font-size: 1.35rem; font-weight: 600; letter-spacing: -.01em; }
 .bench .stats > .stat:first-child .stat-value { color: var(--accent); }
+.bench-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: .15rem 1rem; margin: 0; }
+.bench-heading h2 { margin: 0; }
+.bench-heading .stat-sub { margin: 0; }
+.bench-heading .bench-since { margin-left: auto; font-variant-numeric: tabular-nums; }
 .bench-empty { max-width: 34rem; }
 
 .bench-panel {

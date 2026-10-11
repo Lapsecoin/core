@@ -117,6 +117,7 @@ Exchange / third-party integration:
 
 import base64
 import collections
+from datetime import datetime, timezone
 import logging
 import os
 import re
@@ -1032,7 +1033,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     # simulating its way to a slightly different number.
     odds_cache = {}
     odds_lock  = threading.Lock()
-    fastest_tracker = block_mod.MachineBench()
+    fastest_tracker = block_mod.MachineBench(since=block_mod.BENCHMARK_START)
 
     def _fastest_machine():
         """The fastest declared machine over the whole chain, scaled to the
@@ -1102,13 +1103,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
         node's own locally measured speed beside it."""
         with odds_lock:
             bench = fastest_tracker.update(node.view.chain)
-            rows, unranked = bench.table(), bench.unranked()
+            rows, unranked, counted = bench.table(), bench.unranked(), bench.blocks()
         speeds = [r["ips"] for r in rows]
         own_seconds = node.own_vdf_median() if hasattr(node, "own_vdf_median") else None
         own_ips = (block_mod.get_vdf_iterations(node.view.chain) / own_seconds
                    if own_seconds else None)
         return render_template(
             "benchmark.html", title="Benchmark", rows=rows, unranked=unranked,
+            started=datetime.fromtimestamp(block_mod.BENCHMARK_START, timezone.utc),
+            running_for=fmt_duration(max(node.view.chain[-1]["timestamp"] - block_mod.BENCHMARK_START, 0)),
+            counted=counted,
             min_blocks=block_mod.FASTEST_MIN_BLOCKS,
             floor=params.MIN_BLOCK_SPACING_SECONDS,
             median_ips=statistics.median(speeds) if speeds else None,

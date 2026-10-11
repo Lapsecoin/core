@@ -2,6 +2,11 @@
 {% block head %}<link rel="stylesheet" href="/css/pages/benchmark.css?v={{ local_version }}">{% endblock %}
 {% block content %}
 <div class="bench" data-live="bench">
+  <div class="bench-heading">
+    <h2>VDF benchmark</h2>
+    <p class="stat-sub">How many VDF iterations per second each declared machine computes, read from the blocks it built. Higher is faster.</p>
+    <p class="stat-sub bench-since">{% if counted %}Since {{ started.strftime("%-d %b %Y") }}, {{ running_for }}, {{ "{:,}".format(counted) }} blocks{% else %}Starts {{ started.strftime("%-d %b %Y") }}, no block counted yet{% endif %}</p>
+  </div>
   <div class="stats">
     <div class="stat">
       <div class="stat-label">Fastest</div>
@@ -23,7 +28,7 @@
   {% if not rows %}
   <div class="card bench-empty">
     <div class="card-title">Benchmark</div>
-    <p>No declared machine has {{ min_blocks }} blocks on the chain yet{% if unranked %} ({{ unranked }} seen so far){% endif %}. Machines appear here once they have built enough blocks for a median to mean something.</p>
+    <p>No declared machine has {{ min_blocks }} blocks since {{ started.strftime("%-d %b %Y") }} yet{% if unranked %} ({{ unranked }} seen so far){% endif %}. Machines appear here once they have built enough blocks for a median to mean something.</p>
   </div>
   {% else %}
   <div class="bench-panel">

@@ -1349,3 +1349,33 @@ class TestMachineBenchTable:
     def test_the_error_shrinks_with_more_blocks(self):
         noisy = [("M", 0, 90 + (i % 7) * 10) for i in range(10)]
         assert (self._table(noisy * 8)[0]["ips_err"] < self._table(noisy)[0]["ips_err"])
+
+
+class TestMachineBenchStart:
+    """Only blocks stamped from the start date on are counted."""
+
+    def _chain(self, stamps, machine="M"):
+        chain = [{"hash": "g", "timestamp": stamps[0] - 100, "vdf_iterations": 100_000}]
+        for i, ts in enumerate(stamps, start=1):
+            chain.append({"hash": "h%d" % i, "timestamp": ts, "vdf_iterations": 100_000,
+                          "builder": address(0), "machine": machine})
+        return chain
+
+    def test_earlier_blocks_are_not_counted(self):
+        stamps = [1000 + 100 * i for i in range(10)]
+        bench = block_mod.MachineBench(since=1600).update(self._chain(stamps))
+        assert bench.blocks() == 4           # stamps 1600 .. 1900
+        assert bench.table() == [] and bench.unranked() == 1
+        counted = block_mod.MachineBench(since=1500).update(self._chain(stamps))
+        assert counted.blocks() == 5 and len(counted.table()) == 1
+
+    def test_nothing_counted_before_the_start(self):
+        bench = block_mod.MachineBench(since=10**10).update(self._chain([1000, 1100]))
+        assert bench.blocks() == 0 and bench.table() == []
+
+    def test_a_reorg_below_the_first_counted_block_forgets_it(self):
+        bench = block_mod.MachineBench(since=1500)
+        chain = self._chain([1000 + 100 * i for i in range(10)])
+        bench.update(chain)
+        bench.update(chain[:4])               # tip is back before the start
+        assert bench.blocks() == 0
