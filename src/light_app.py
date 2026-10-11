@@ -13,14 +13,10 @@ from flask import jsonify, redirect, render_template, request
 import fees_ui
 from gas_io import ChainIO
 from remote_reader import RemoteError
-from ui_common import make_flask_app, register_static_routes
+from ui_common import NAV_ACTIVE, make_flask_app, register_static_routes
 from version import LOCAL_VERSION
 from wallet_ui import (WalletSigner, register_address_page, register_board_pages,
                        register_data_api, register_wallet_routes)
-
-_NAV = {"address_lookup": "address", "send": "send", "board": "board",
-        "fees": "fees", "fees_submit": "fees", "fees_status": "fees",
-        "board_post": "board", "board_vote": "board", "board_delete": "board"}
 
 
 def _format_bytes(n):
@@ -43,7 +39,7 @@ def create_light_app(reader, wallet, port=8335, gas_io=None):
                 "private_port": port, "public_port": port,
                 "update_checker": None, "updater": None,
                 "csrf_token": csrf_token,
-                "nav_active": _NAV.get((request.endpoint or "").split(".")[-1]),
+                "nav_active": NAV_ACTIVE.get((request.endpoint or "").split(".")[-1]),
                 "local_version": LOCAL_VERSION,
                 "live_status": f"{_format_bytes(usage['bytes'])} used this session, "
                                f"{usage['route']}"}

@@ -16,6 +16,7 @@
 <symbol id="i-explorer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
 <symbol id="i-blocks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
 <symbol id="i-balance" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M16 14.5h2"/></symbol>
+<symbol id="i-community" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.3c1.8.8 3 2.6 3 4.7"/></symbol>
 <symbol id="i-board" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></symbol>
 <symbol id="i-mempool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5zM3 13l9 5 9-5"/></symbol>
 <symbol id="i-network" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/></symbol>
@@ -25,6 +26,27 @@
 <symbol id="i-whitepaper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h8l4 4v14H7zM15 3v4h4M10 13h6M10 17h6"/></symbol>
 <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></symbol>
 </defs></svg>
+{#- The nav is written once. link() is a bar entry, entry() a dropdown row with
+    a one-line description, group() a dropdown. The light client and the full
+    node differ only in which of them they list. -#}
+{% macro link(key, href, icon, label) -%}
+<a href="{{ href }}" class="{{ 'active' if nav_active == key }}"><svg class="ni" aria-hidden="true"><use href="#i-{{ icon }}"/></svg>{{ label }}</a>
+{%- endmacro %}
+{% macro entry(key, href, icon, label, desc) -%}
+<a href="{{ href }}" role="menuitem" class="{{ 'active' if nav_active == key }}"><svg class="ni" aria-hidden="true"><use href="#i-{{ icon }}"/></svg><span><b>{{ label }}</b><small>{{ desc }}</small></span></a>
+{%- endmacro %}
+{% macro group(keys, icon, label) -%}
+<div class="nav-group {{ 'active' if nav_active in keys }}">
+  <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-{{ icon }}"/></svg>{{ label }}<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  <div class="nav-menu" role="menu">{{ caller() }}</div>
+</div>
+{%- endmacro %}
+{% macro community() -%}
+{% call group(('board', 'fees'), 'community', 'Community') %}
+  {{ entry('board', '/board', 'board', 'Board', 'Threads and replies') }}
+  {{ entry('fees', '/fees', 'fees', 'Fees', 'Request and track a fee') }}
+{% endcall %}
+{%- endmacro %}
 <header class="masthead">
   <div class="masthead-inner">
     <div class="live-status" id="live-status">{{ live_status or "" }}</div>
@@ -48,45 +70,28 @@
     <div class="masthead-title"><img src="/favicon.svg" alt="" width="24" height="24">LapseCoin v{{ local_version }}</div>
     <nav class="mainnav" id="mainnav">
       {% if light %}
-      <a href="/board" class="{{ 'active' if nav_active == 'board' }}"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg>Board</a><span class="sep">&middot;</span>
-      <a href="/balance" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg>Balance</a><span class="sep">&middot;</span>
-      <a href="/send" class="{{ 'active' if nav_active == 'send' }}"><svg class="ni" aria-hidden="true"><use href="#i-send"/></svg>Send</a><span class="sep">&middot;</span>
-      <a href="/fees" class="{{ 'active' if nav_active == 'fees' }}"><svg class="ni" aria-hidden="true"><use href="#i-fees"/></svg>Fees</a>
+      {{ community() }}
+      {{ link('address', '/balance', 'balance', 'Balance') }}
+      {{ link('send', '/send', 'send', 'Send') }}
       {% else %}
-      <a href="/" class="{{ 'active' if nav_active == 'dashboard' }}"><svg class="ni" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a><span class="sep">&middot;</span>
-      {% if is_private %}
-      <a href="/send" class="{{ 'active' if nav_active == 'send' }}"><svg class="ni" aria-hidden="true"><use href="#i-send"/></svg>Send</a><span class="sep">&middot;</span>
+      {{ link('dashboard', '/', 'dashboard', 'Dashboard') }}
+      {% if is_private %}{{ link('send', '/send', 'send', 'Send') }}{% endif %}
+      {{ community() }}
+      {% call group(('blocks', 'address', 'mempool'), 'explorer', 'Explorer') %}
+        {{ entry('blocks', '/blocks', 'blocks', 'Blocks', 'Recent blocks and transactions') }}
+        {{ entry('address', '/balance', 'balance', 'Balance', 'Look up an address') }}
+        {{ entry('mempool', '/mempool', 'mempool', 'Mempool', 'Pending transactions') }}
+      {% endcall %}
+      {{ link('network', '/network', 'network', 'Network') }}
+      {% call group(('odds', 'benchmark'), 'hardware', 'Hardware') %}
+        {{ entry('odds', '/odds', 'odds', 'Odds', 'Your chance in the block race') }}
+        {{ entry('benchmark', '/benchmark', 'benchmark', 'Benchmark', 'VDF speed of declared machines') }}
+      {% endcall %}
+      {{ link('whitepaper', '/whitepaper', 'whitepaper', 'Whitepaper') }}
+      {% if is_private %}{{ link('settings', '/settings', 'settings', 'Settings') }}{% endif %}
       {% endif %}
-      <div class="nav-group {{ 'active' if nav_active in ('board', 'fees') }}">
-        <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg>Community<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <div class="nav-menu" role="menu">
-          <a href="/board" role="menuitem" class="{{ 'active' if nav_active == 'board' }}"><svg class="ni" aria-hidden="true"><use href="#i-board"/></svg><span><b>Board</b><small>Threads and replies</small></span></a>
-          <a href="/fees" role="menuitem" class="{{ 'active' if nav_active == 'fees' }}"><svg class="ni" aria-hidden="true"><use href="#i-fees"/></svg><span><b>Fees</b><small>Request and track a fee</small></span></a>
-        </div>
-      </div><span class="sep">&middot;</span>
-      <div class="nav-group {{ 'active' if nav_active in ('blocks', 'address', 'mempool') }}">
-        <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-explorer"/></svg>Explorer<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <div class="nav-menu" role="menu">
-          <a href="/blocks" role="menuitem" class="{{ 'active' if nav_active == 'blocks' }}"><svg class="ni" aria-hidden="true"><use href="#i-blocks"/></svg><span><b>Blocks</b><small>Recent blocks and transactions</small></span></a>
-          <a href="/balance" role="menuitem" class="{{ 'active' if nav_active == 'address' }}"><svg class="ni" aria-hidden="true"><use href="#i-balance"/></svg><span><b>Balance</b><small>Look up an address</small></span></a>
-          <a href="/mempool" role="menuitem" class="{{ 'active' if nav_active == 'mempool' }}"><svg class="ni" aria-hidden="true"><use href="#i-mempool"/></svg><span><b>Mempool</b><small>Pending transactions</small></span></a>
-        </div>
-      </div><span class="sep">&middot;</span>
-      <a href="/network" class="{{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg>Network</a><span class="sep">&middot;</span>
-      <div class="nav-group {{ 'active' if nav_active in ('odds', 'benchmark') }}">
-        <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-hardware"/></svg>Hardware<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <div class="nav-menu" role="menu">
-          <a href="/odds" role="menuitem" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg><span><b>Odds</b><small>Your chance in the block race</small></span></a>
-          <a href="/benchmark" role="menuitem" class="{{ 'active' if nav_active == 'benchmark' }}"><svg class="ni" aria-hidden="true"><use href="#i-benchmark"/></svg><span><b>Benchmark</b><small>VDF speed of declared machines</small></span></a>
-        </div>
-      </div><span class="sep">&middot;</span>
-      <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg>Whitepaper</a>
-      {% if is_private %}
-      <span class="sep">&middot;</span><a href="/settings" class="{{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
-      {% endif %}
-      {% endif %}
-      <button type="button" class="nav-more-btn" id="nav-more" aria-label="More navigation" aria-haspopup="true" aria-expanded="false" aria-controls="nav-panel">More<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </nav>
+    <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="nav-panel"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path class="l1" d="M4 8h16"/><path class="l2" d="M4 16h16"/></svg></button>
     <div class="nav-panel" id="nav-panel" role="menu" hidden></div>
   </div>
   {% if update_checker and update_checker.severity %}
@@ -109,13 +114,14 @@
 {% block content %}{% endblock %}
 </div>
 <script>
-// Explorer, Community and Hardware menus (wide screens) and the More button (phones). Both open on
-// click or keyboard, close on an outside click or Escape. Hover opening lives
-// in the stylesheet and only applies to devices that really hover.
+// Dropdown menus (wide screens) and the menu button (when the bar runs out of
+// room). Both open on click or keyboard, close on an outside click or Escape.
+// Hover opening lives in the stylesheet and only applies to devices that hover.
 (function () {
+  var mast = document.querySelector(".masthead");
   var nav = document.getElementById("mainnav");
   var groups = Array.prototype.slice.call(document.querySelectorAll(".nav-group"));
-  var more = document.getElementById("nav-more");
+  var toggle = document.getElementById("nav-toggle");
   var panel = document.getElementById("nav-panel");
   function setGroup(group, open) {
     group.classList.toggle("open", open);
@@ -131,71 +137,57 @@
       setGroup(group, !group.classList.contains("open"));
     });
   });
-  function setMore(open) {
+  function setPanel(open) {
     panel.hidden = !open;
-    more.classList.toggle("open", open);
-    more.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.classList.toggle("open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
   }
-  more.addEventListener("click", function (e) {
-    e.stopPropagation(); setMore(panel.hidden);
-  });
+  toggle.addEventListener("click", function (e) { e.stopPropagation(); setPanel(panel.hidden); });
   document.addEventListener("click", function (e) {
     groups.forEach(function (g) { if (!g.contains(e.target)) setGroup(g, false); });
-    if (!panel.hidden && !panel.contains(e.target) && !more.contains(e.target)) setMore(false);
+    if (!panel.hidden && !panel.contains(e.target) && !toggle.contains(e.target)) setPanel(false);
   });
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { closeGroups(null); setMore(false); }
+    if (e.key === "Escape") { closeGroups(null); setPanel(false); }
   });
 
-  // Priority+ layout: every entry is shown while it fits. When the bar runs
-  // out of room, the entries from the end move into the panel behind the
-  // button, so wider screens show more and nothing is hidden just to tidy up.
-  function entries() {
-    var out = [];
-    Array.prototype.forEach.call(nav.children, function (el) {
-      if (el === more || el.classList.contains("sep")) return;
-      if (el.classList.contains("nav-group") && getComputedStyle(el).display === "contents") {
-        Array.prototype.forEach.call(el.querySelectorAll(".nav-menu a"), function (a) { out.push(a); });
-      } else out.push(el);
-    });
-    return out;
+  // The panel lists the same entries as the bar: single links first, then each
+  // group under its name, built from the bar so the two never disagree.
+  function row(a) {
+    var use = a.querySelector("use"), b = a.querySelector("b"), small = a.querySelector("small");
+    var item = document.createElement("a");
+    item.href = a.getAttribute("href");
+    item.setAttribute("role", "menuitem");
+    if (a.classList.contains("active")) item.className = "active";
+    item.innerHTML = '<svg class="ni" aria-hidden="true"><use href="' + (use ? use.getAttribute("href") : "") + '"/></svg><span><b></b>' + (small ? "<small></small>" : "") + "</span>";
+    item.querySelector("b").textContent = b ? b.textContent : a.textContent.trim();
+    if (small) item.querySelector("small").textContent = small.textContent;
+    return item;
   }
-  function overflows() { return nav.scrollWidth > nav.clientWidth + 1; }
-  function layout() {
-    var list = entries();
-    list.forEach(function (el) { el.classList.remove("nav-hidden"); });
-    more.classList.remove("on");
-    var hidden = [];
-    if (overflows()) {
-      more.classList.add("on");
-      for (var i = list.length - 1; i >= 0 && overflows(); i--) {
-        list[i].classList.add("nav-hidden");
-        hidden.unshift(list[i]);
-      }
-    }
+  function build() {
     panel.textContent = "";
-    var activeInside = false;
-    hidden.forEach(function (el) {
-      var links = el.classList.contains("nav-group") ? el.querySelectorAll(".nav-menu a") : [el];
-      Array.prototype.forEach.call(links, function (a) {
-        var use = a.querySelector("use");
-        var b = a.querySelector("b");
-        var small = a.querySelector("small");
-        var item = document.createElement("a");
-        item.href = a.getAttribute("href");
-        item.setAttribute("role", "menuitem");
-        if (a.classList.contains("active")) { item.className = "active"; activeInside = true; }
-        item.innerHTML = '<svg class="ni" aria-hidden="true"><use href="' + (use ? use.getAttribute("href") : "") + '"/></svg><span><b></b>' + (small ? "<small></small>" : "") + "</span>";
-        item.querySelector("b").textContent = b ? b.textContent : a.textContent.trim();
-        if (small) item.querySelector("small").textContent = small.textContent;
-        panel.appendChild(item);
-      });
+    var singles = Array.prototype.filter.call(nav.children, function (el) { return el.tagName === "A"; });
+    singles.forEach(function (a) { panel.appendChild(row(a)); });
+    groups.forEach(function (g) {
+      var name = document.createElement("div");
+      name.className = "sec";
+      name.textContent = g.querySelector(".nav-group-btn").textContent.trim();
+      panel.appendChild(name);
+      Array.prototype.forEach.call(g.querySelectorAll(".nav-menu a"), function (a) { panel.appendChild(row(a)); });
     });
-    more.classList.toggle("active", activeInside);
-    if (!hidden.length) setMore(false);
+  }
+  build();
+
+  // The bar is used whenever everything fits on one line, the menu button
+  // otherwise, so no entry is ever cut off or squeezed.
+  function layout() {
+    mast.classList.remove("menu-mode");
+    var tight = nav.scrollWidth > nav.clientWidth + 1;
+    mast.classList.toggle("menu-mode", tight);
+    if (!tight) setPanel(false);
   }
   layout();
-  if (window.ResizeObserver) new ResizeObserver(layout).observe(nav); else window.addEventListener("resize", layout);
+  window.addEventListener("resize", layout);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
 })();
 </script>

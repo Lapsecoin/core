@@ -15,6 +15,19 @@ import tx as tx_mod
 from params import TICKS_PER_LAPSE
 
 
+# Which nav entry a page lights up, by endpoint name. The full node and the
+# light client both read it, so a page that moves lives in one place.
+NAV_ACTIVE = {
+    "dashboard": "dashboard", "blocks": "blocks",
+    "block_detail": "blocks", "tx_detail": "blocks",
+    "address_lookup": "address", "distribution_bucket": "address",
+    "board": "board", "board_post": "board", "board_vote": "board", "board_delete": "board",
+    "mempool": "mempool", "network": "network", "odds": "odds", "benchmark": "benchmark",
+    "whitepaper": "whitepaper", "send": "send", "rewards": "rewards", "settings": "settings",
+    "fees": "fees", "fees_public": "fees", "fees_submit": "fees", "fees_status": "fees",
+}
+
+
 def fmt_balance(ticks):
     lapse = ticks // TICKS_PER_LAPSE
     rem = ticks % TICKS_PER_LAPSE
