@@ -1928,12 +1928,13 @@ class TestReorgStats:
         node, *_ = node_env
         assert node.reorg_stats() == {"deepest": 0, "count": 0, "deepest_at": 0}
 
-    def test_a_one_block_swap_is_not_counted(self, node_env):
-        """That is the draw settling a tie. It happens constantly and by
-        design, and counting it would bury the rare event this exists to
-        surface under noise from the common one."""
+    def test_a_swap_of_one_or_two_blocks_is_not_counted(self, node_env):
+        """That is the draw settling a tie or ordinary churn. It happens
+        constantly, and counting it would bury the rare event this exists
+        to surface under noise from the common one."""
         node, *_ = node_env
         node._record_reorg(1)
+        node._record_reorg(2)
         assert node.reorg_stats()["count"] == 0
         assert node.reorg_stats()["deepest"] == 0
 
@@ -1947,7 +1948,7 @@ class TestReorgStats:
     def test_it_keeps_the_deepest_not_the_latest(self, node_env):
         node, *_ = node_env
         node._record_reorg(9)
-        node._record_reorg(2)
+        node._record_reorg(3)
         assert node.reorg_stats() == {"deepest": 9, "count": 2,
                                       "deepest_at": node.reorg_stats()["deepest_at"]}
 
