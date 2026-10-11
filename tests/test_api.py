@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import api
+import block as block_mod
 import mempool as mempool_mod
 import peerpool as peerpool_mod
 import settings as settings_mod
@@ -1513,3 +1514,68 @@ class TestPublicFeesPage:
         node, _ = fresh()
         html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
         assert 'title="Donate Bitcoin"' in html and "Lapsecoin/core#support" in html
+
+
+class TestBenchmarkPage:
+    """/benchmark ranks declared machines, and the nav groups it with Odds."""
+
+    class _Node:
+        def __init__(self, machines=True):
+            self.addr = address(0)
+            self.settings = settings_mod.Settings(_MemoryMeta())
+            chain = [{"height": 0, "timestamp": 1000, "vdf_iterations": 100_000, "hash": "g"}]
+            if machines:
+                for i in range(1, 13):
+                    chain.append({
+                        "height": i, "hash": "%08x" % i, "vdf_iterations": 100_000,
+                        "timestamp": chain[-1]["timestamp"] + 100,
+                        "builder": address(i % 2), "machine": "Test CPU 9000"})
+            self.view = SimpleNamespace(chain=chain, state=SimpleNamespace(nicknames={}))
+
+        def own_vdf_median(self):
+            return 125.0
+
+        def own_vdf_is_estimate(self):
+            return False
+
+        def machine_label(self):
+            return "Test CPU 9000"
+
+        def reorg_stats(self):
+            return {"deepest": 0, "count": 0, "deepest_at": 0}
+
+    def _get(self, path, machines=True):
+        app = api.create_private_app(self._Node(machines), peerpool_mod.PeerPool())
+        return app.test_client().get(path).get_data(as_text=True)
+
+    def test_it_lists_the_machine_with_its_speed_and_marks_it_as_ours(self):
+        html = self._get("/benchmark")
+        assert "Test CPU 9000" in html
+        assert "1,000" in html                      # 100000 iterations / 100 s
+        assert 'class="bench-tag">you<' in html
+
+    def test_it_says_so_when_no_machine_has_enough_blocks(self):
+        html = self._get("/benchmark", machines=False)
+        assert "No declared machine has 5 blocks" in html
+
+    def test_this_machines_own_speed_is_shown(self):
+        node = self._Node()
+        expected = "{:,.0f}".format(block_mod.get_vdf_iterations(node.view.chain) / 125.0)
+        app = api.create_private_app(node, peerpool_mod.PeerPool())
+        assert expected + " ips" in app.test_client().get("/benchmark").get_data(as_text=True)
+
+    @staticmethod
+    def _hardware_group_open_tag(html):
+        """The opening tag of the Hardware nav group, to read its state."""
+        before = html.split("Hardware<svg", 1)[0]
+        return before[before.rindex('<div class="nav-group'):].split(">", 1)[0]
+
+    def test_hardware_groups_odds_and_benchmark(self):
+        html = self._get("/benchmark")
+        menu = html.split("Hardware<svg", 1)[1].split('role="menu">', 1)[1].split("</div>", 1)[0]
+        assert 'href="/odds"' in menu and 'href="/benchmark"' in menu
+
+    def test_the_group_is_active_on_both_of_its_pages_and_on_no_other(self):
+        for path in ("/benchmark", "/odds"):
+            assert "active" in self._hardware_group_open_tag(self._get(path))
+        assert "active" not in self._hardware_group_open_tag(self._get("/network"))
