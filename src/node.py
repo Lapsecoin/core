@@ -80,10 +80,11 @@ _rng = _secrets.SystemRandom()
 # it tracks whatever pace the network is actually running at rather than
 # a hardcoded seconds value. Above 1 so ordinary block-to-block jitter
 # doesn't read as silence.
-# A reorg that replaced this many blocks or more is worth remembering. One
-# block below it is the draw settling a tie, which happens constantly and
-# is not what anyone is looking for when they ask how deep reorgs go.
-REORG_NOTABLE_DEPTH = 2
+# A reorg that replaced this many blocks or more is worth remembering. Fewer
+# is the draw settling a tie or a block or two of ordinary churn, which
+# happens constantly and is not what anyone is looking for when they ask how
+# deep reorgs go.
+REORG_NOTABLE_DEPTH = 3
 # Reorg stats on the Odds page only look this far back.
 REORG_WINDOW_DAYS = 30
 
@@ -2147,13 +2148,14 @@ class Node:
     def _record_reorg(self, discarded):
         """Keep the deepest reorg this node has seen, and how many.
 
-        Only reorgs that replaced more than one block. A one-block swap is
-        the draw settling a tie (_reorg_to_sibling), which is routine and
-        constant by design, and counting it would bury the rare event this
-        exists to surface under noise from the common one. Filtering on
-        depth rather than on which caller it came from means there is one
-        place doing the recording, and a one-block swap from any other
-        source is judged the same way.
+        Only reorgs that replaced REORG_NOTABLE_DEPTH blocks or more. A
+        one-block swap is the draw settling a tie (_reorg_to_sibling), which
+        is routine and constant by design, and a two-block one is ordinary
+        churn; counting either would bury the rare event this exists to
+        surface under noise from the common ones. Filtering on depth rather
+        than on which caller it came from means there is one place doing the
+        recording, and a shallow swap from any other source is judged the
+        same way.
 
         Kept in storage rather than memory. A deep reorg may happen once in
         a node's life, and a counter that forgets it on restart is not

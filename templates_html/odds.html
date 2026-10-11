@@ -39,8 +39,8 @@
     <div class="stat-label">Deepest reorg</div>
     <div class="stat-value" id="reorg-deepest">{{ reorgs.deepest if reorgs.deepest else "none" }}</div>
     <div class="stat-sub" id="reorg-count">
-      {% if reorgs.count %}{{ reorgs.count }} in 30 days, ties not counted
-      {% else %}none deeper than a tie, 30 days{% endif %}
+      {% if reorgs.count %}{{ reorgs.count }} in 30 days, under 3 blocks not counted
+      {% else %}none of 3+ blocks, 30 days{% endif %}
     </div>
   </div>
 </div>
@@ -459,8 +459,8 @@
       const r = data.reorgs || {deepest: 0, count: 0};
       document.getElementById("reorg-deepest").textContent = r.deepest || "none";
       document.getElementById("reorg-count").textContent = r.count
-        ? r.count + " in 30 days, ties not counted"
-        : "none deeper than a tie, 30 days";
+        ? r.count + " in 30 days, under 3 blocks not counted"
+        : "none of 3+ blocks, 30 days";
       titleStatSubs();
 
       // A drag in progress owns the chart until it is released, so a
