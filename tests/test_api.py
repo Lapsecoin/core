@@ -1518,7 +1518,8 @@ class TestBenchmarkPage:
         def __init__(self, machines=True):
             self.addr = address(0)
             self.settings = settings_mod.Settings(_MemoryMeta())
-            chain = [{"height": 0, "timestamp": 1000, "vdf_iterations": 100_000, "hash": "g"}]
+            start = block_mod.BENCHMARK_START
+            chain = [{"height": 0, "timestamp": start, "vdf_iterations": 100_000, "hash": "g"}]
             if machines:
                 for i in range(1, 13):
                     chain.append({
@@ -1551,7 +1552,12 @@ class TestBenchmarkPage:
 
     def test_it_says_so_when_no_machine_has_enough_blocks(self):
         html = self._get("/benchmark", machines=False)
-        assert "No declared machine has 5 blocks" in html
+        assert "No declared machine has 5 blocks since 11 Oct 2026" in html
+
+    def test_it_says_what_it_measures_and_since_when(self):
+        html = self._get("/benchmark")
+        assert "VDF iterations per second" in html
+        assert "Since 11 Oct 2026, 20m, 12 blocks" in html   # 12 blocks of 100 s
 
     def test_this_machines_own_speed_is_shown(self):
         node = self._Node()

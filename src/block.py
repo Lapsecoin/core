@@ -674,6 +674,10 @@ def machine_display(label):
     return label
 
 
+# The benchmark counts blocks stamped from this moment on (11 Oct 2026, UTC).
+# Display only, like the rest of MachineBench.
+BENCHMARK_START = 1791676800
+
 # A machine needs this many blocks before it is ranked or can be the fastest:
 # one lucky interval is not a speed.
 FASTEST_MIN_BLOCKS = 5
@@ -714,7 +718,8 @@ class MachineBench:
 
     UNDO_DEPTH = 64
 
-    def __init__(self):
+    def __init__(self, since=0):
+        self._since = since        # blocks stamped before this are not counted
         self._reset()
 
     def _reset(self):
@@ -726,6 +731,7 @@ class MachineBench:
         self._capped = {}          # label -> blocks stamped at the floor
         self._medians = {}         # label -> median, for labels with enough blocks
         self._iterations = None    # the tip's, to scale to
+        self._first = None         # height of the first block counted
 
     def _refresh(self, label):
         v = self._samples.get(label, [])
@@ -738,6 +744,8 @@ class MachineBench:
     def _undo_one(self):
         _hash, label, spi, builder, capped = self._log.pop()
         self._scanned -= 1
+        if self._first == self._scanned:
+            self._first = None
         if label:
             v = self._samples[label]
             del v[bisect.bisect_left(v, spi)]
@@ -763,6 +771,11 @@ class MachineBench:
         floor = params.MIN_BLOCK_SPACING_SECONDS + CAP_TOLERANCE_SECONDS
         for h in range(self._scanned, n):
             blk = chain[h]
+            if blk["timestamp"] < self._since:
+                self._log.append((blk.get("hash"), "", None, "", False))
+                continue
+            if self._first is None:
+                self._first = h
             iterations = blk.get("vdf_iterations")
             label = machine_label(blk)
             interval = blk["timestamp"] - chain[h - 1]["timestamp"]
@@ -794,6 +807,10 @@ class MachineBench:
         return {"machine": label, "name": machine_display(label),
                 "pace": self._medians[label] * self._iterations,
                 "blocks": len(self._samples[label])}
+
+    def blocks(self):
+        """How many blocks have been counted since the benchmark began."""
+        return 0 if self._first is None else self._scanned - self._first
 
     def unranked(self):
         """Declared machines that do not have enough blocks to rank yet."""
