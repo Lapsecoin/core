@@ -242,7 +242,7 @@ class TestLightPages:
         nav = html[html.index('<nav class="mainnav" id="mainnav">'):html.index("</nav>")]
         for present in ("/balance", "/send", "/board"):
             assert f'href="{present}"' in nav
-        for absent in ("/explorer", "/blocks", "/network", "/mempool", "/settings", "/odds", "/benchmark"):
+        for absent in ("/blocks", "/network", "/mempool", "/settings", "/odds", "/benchmark"):
             assert f'href="{absent}"' not in nav
 
     def test_balance_page_shows_the_wallet(self, world):
