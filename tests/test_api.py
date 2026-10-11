@@ -751,7 +751,8 @@ class TestBoardPage:
         assert 'type="password"' not in html
 
     def test_compose_form_is_the_first_thing_in_the_feed(self):
-        html = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
+        page = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
+        html = page.split("</head>", 1)[1]   # the link card in the head quotes the post too
         assert html.index('class="board-compose"') < html.index("still pending")
 
 

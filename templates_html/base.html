@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LapseCoin {{ title }}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+{%- set card = og or og_default %}
+<meta name="description" content="{{ card.description }}">
+<meta property="og:site_name" content="LapseCoin">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ card.title }}">
+<meta property="og:description" content="{{ card.description }}">
+<meta property="og:url" content="{{ page_url }}">
+<meta property="og:image" content="{{ site_url }}/lapsecoin-512x512.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0C92F2">
 <link rel="stylesheet" href="/css/base.css?v={{ local_version }}">
 {% block head %}{% endblock %}
 </head>

@@ -38,6 +38,7 @@ from flask import jsonify, make_response, redirect, render_template, request
 
 import crypto as crypto_mod
 import tx as tx_mod
+import embeds
 from forms import ALREADY_SENT, forms_for
 from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, DELETE_TAG,
                         MAX_POST_TEXT_BYTES, REPLY_REF_LEN, VOTE_DOWN_TAG,
@@ -273,7 +274,7 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
         holder_count, rows, histogram_max = 0, [], 0
         if not addr and histogram is not None:
             holder_count, rows, histogram_max = histogram()
-        ctx = dict(title="Balance", addr=addr, alert_err="", page=page,
+        ctx = dict(title="Balance", addr=addr, alert_err="", page=page, og=None,
                    history=None, balance=0, tx_count=0, has_prev=False, has_next=False,
                    holder_count=holder_count,
                    histogram=rows, histogram_max=histogram_max)
@@ -282,6 +283,9 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
             ctx["addr"] = ""
         elif addr:
             ctx.update(address_ctx(reader, addr, page))
+            ctx["og"] = embeds.address(addr, ctx["balance"], ctx["tx_count"])
+        if ctx["og"] is None and not addr:
+            ctx["og"] = embeds.balance_lookup(holder_count)
         return render_template("address.html", **ctx)
 
 
@@ -309,6 +313,7 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
         # it is worked out here rather than asked of a node: the page is one
         # request, or none while it is held.
         ctx["board_fee_floor"] = tx_mod.board_fee_floor(ctx["post_count"])
+        ctx["og"] = embeds.board(ctx["post_count"], ctx["rows"])
         return render_template("board.html", **ctx)
 
     @app.route("/api/board/fragment", endpoint=pfx + "api_board_fragment")

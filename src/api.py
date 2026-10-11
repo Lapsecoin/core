@@ -149,6 +149,7 @@ from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from version import LOCAL_VERSION
 from local_reader import (_get_address_history, _block_reward,  # noqa: F401
                           fee_estimate, local_reader_for)
+import embeds
 from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_amount,
                        _pagination_window, _base_dir,  # noqa: F401
                        fmt_duration, render_board_text)
@@ -664,6 +665,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
                               update_checker=None, csrf_token=None,
                               updater=None, public_url=None, oblivious=None):
     """Register all read-only UI and API routes on app."""
+    app.config["PUBLIC_URL"] = public_url
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
 
@@ -778,7 +780,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         page  = min(max(request.args.get("tx_page", 1, type=int) or 1, 1), total_pages)
         offset = (page - 1) * DASHBOARD_TXS_PER_PAGE
         return render_template("dashboard.html", title="Dashboard",
-            info=info, supply_cap=SUPPLY_CAP,
+            info=info, supply_cap=SUPPLY_CAP, og=embeds.dashboard(info, SUPPLY_CAP),
             recent_txs=_recent_committed_txs(chain, DASHBOARD_TXS_PER_PAGE, offset),
             tx_page=page, tx_total_pages=total_pages,
             tx_page_window=_pagination_window(page, total_pages),
@@ -794,15 +796,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
         start = max(end - BLOCKS_PER_PAGE, 0)
         block_times = {h: int(chain[h]["timestamp"] - chain[h - 1]["timestamp"])
                        for h in range(max(start, 1), end)}
-        return render_template("blocks.html", title="Blocks",
+        return render_template("blocks.html", title="Blocks", og=embeds.blocks(chain),
             recent=chain[start:end][::-1], block_times=block_times, page=page, total_pages=total_pages,
             page_window=_pagination_window(page, total_pages),
             has_prev=page > 1, has_next=start > 0)
 
     @app.route("/mempool", endpoint=pfx+"mempool")
     def mempool_page():
-        return render_template("mempool.html", title="Mempool",
-                               transactions=_mempool_rows(node.mempool))
+        rows = _mempool_rows(node.mempool)
+        return render_template("mempool.html", title="Mempool", og=embeds.mempool(rows),
+                               transactions=rows)
 
     @app.route("/block/<int:height>", endpoint=pfx+"block_detail")
     def block_detail(height):
@@ -814,9 +817,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
         tx_rows = [(tx_mod.tx_hash(t), t, _tx_amount(t)) for t in b["transactions"]]
         reward = (_block_reward(chain, height) + block_mod.block_fees(b)
                   if b.get("builder") else 0)
+        time_stats = block_mod.block_time_stats(chain, height)
         return render_template("block_detail.html", title=f"Block {height}",
             b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain),
-            time_stats=block_mod.block_time_stats(chain, height), reward=reward)
+            time_stats=time_stats, reward=reward,
+            og=embeds.block(b, reward, time_stats))
 
     @app.route("/tx/<tx_hash>", endpoint=pfx+"tx_detail")
     def tx_detail(tx_hash):
@@ -836,9 +841,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 message="Transaction not found."), 404
         location = (f"Block {found_height}"
                     if found_height is not None else "Mempool (unconfirmed)")
+        gas_request = found.get("memo", "").startswith(gaslock.REQUEST_TAG)
         return render_template("tx_detail.html", title="Transaction",
-            tx_hash=tx_hash, tx=found, location=location,
-            gas_request=found.get("memo", "").startswith(gaslock.REQUEST_TAG))
+            tx_hash=tx_hash, tx=found, location=location, gas_request=gas_request,
+            og=embeds.transaction(tx_hash, found, location, gas_request))
 
     def _holder_histogram():
         all_balances = node.view.state.get_all_balances()
@@ -865,6 +871,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         start = (page - 1) * BLOCKS_PER_PAGE
         end = start + BLOCKS_PER_PAGE
         return render_template("distribution.html", title="Distribution",
+            og=embeds.distribution(bucket_label(bucket), total),
             label=bucket_label(bucket), bucket=bucket, rows=rows[start:end], total=total,
             page=page, total_pages=total_pages,
             page_window=_pagination_window(page, total_pages),
@@ -902,12 +909,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
                         rendered = _wp_sections(markdown.markdown(
                             f.read(), extensions=["fenced_code", "tables"]))
                     return render_template("whitepaper.html", title="Whitepaper",
-                                           rendered=rendered)
+                                           og=embeds.whitepaper(), rendered=rendered)
                 except Exception:
                     break
         rendered = "<p>whitepaper.md not found.</p>"
         return render_template("whitepaper.html", title="Whitepaper",
-                               rendered=rendered)
+                               og=embeds.whitepaper(), rendered=rendered)
 
     def _self_external_addr():
         # node.gossip (and its .udp) may not exist on every node object this
@@ -993,6 +1000,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # from here, the rest (self info, per-peer detail) comes live
         # from /api/peers.
         return render_template("network.html", title="Network",
+                               og=embeds.network(pool.count()),
                                peer_count=pool.count())
 
     @app.route("/api/board", endpoint=pfx+"api_board")
@@ -1075,6 +1083,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
                     if node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS)
                     else None)
         return render_template("odds.html", title="Race Odds", race=race,
+                               og=embeds.odds(race),
                                chart=chart, reorgs=node.reorg_stats(),
                                fastest=_fastest_machine(),
                                own_is_estimate=node.own_vdf_is_estimate(),
@@ -1099,10 +1108,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
         own_seconds = node.own_vdf_median() if hasattr(node, "own_vdf_median") else None
         own_ips = (block_mod.get_vdf_iterations(node.view.chain) / own_seconds
                    if own_seconds else None)
+        running_for = fmt_duration(max(node.view.chain[-1]["timestamp"] - block_mod.BENCHMARK_START, 0))
         return render_template(
             "benchmark.html", title="Benchmark", rows=rows, unranked=unranked,
+            og=embeds.benchmark(rows, counted, running_for),
             started=datetime.fromtimestamp(block_mod.BENCHMARK_START, timezone.utc),
-            running_for=fmt_duration(max(node.view.chain[-1]["timestamp"] - block_mod.BENCHMARK_START, 0)),
+            running_for=running_for,
             counted=counted,
             min_blocks=block_mod.FASTEST_MIN_BLOCKS,
             floor=params.MIN_BLOCK_SPACING_SECONDS,
@@ -1456,8 +1467,10 @@ def create_app(node, pool, private_port=8335, public_port=8333,
     # form itself signs with the wallet, so it only exists on the private port.
     @app.route("/fees", endpoint="fees_public")
     def fees_public():
+        networks = fees_ui.network_options()
         return render_template("fees_public.html", title="Fees",
-            networks=fees_ui.network_options(), lock_lapse=fees_ui.LOCK_LAPSE,
+            og=embeds.fees(len(networks), gas.NODE_CAP_USD, fees_ui.LOCK_LAPSE),
+            networks=networks, lock_lapse=fees_ui.LOCK_LAPSE,
             cap_usd=gas.NODE_CAP_USD, discord=fees_ui.DISCORD, private_port=private_port)
 
     # Send disabled on public port; show locked page
