@@ -231,7 +231,7 @@ def address_ctx(reader, addr, page):
 
 
 def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
-    """GET /address: look up any address, or a board nickname.
+    """GET /balance: look up any address, or a board nickname.
 
     `histogram`, when given, returns (holder_count, rows, max_count) for
     the wealth distribution shown before a lookup runs; only a full node
@@ -239,7 +239,14 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
     the address to show when none was asked for: the light client's own.
     """
 
-    @app.route("/address", methods=["GET", "POST"], endpoint=pfx + "address_lookup")
+    # The page used to live at /address. Old links in posts and bookmarks keep
+    # working, with the query string (addr, page) carried over.
+    @app.route("/address", endpoint=pfx + "address_old")
+    def address_old():
+        query = request.query_string.decode()
+        return redirect("/balance" + ("?" + query if query else ""), code=301)
+
+    @app.route("/balance", methods=["GET", "POST"], endpoint=pfx + "address_lookup")
     def address_lookup():
         addr = request.args.get("addr", "").strip()
         if not addr and default_addr is not None:
@@ -253,7 +260,7 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
         if addr.lower() == "burn":
             query = request.args.to_dict(flat=True)
             query["addr"] = crypto_mod.burn_address()
-            return redirect(f"/address?{urlencode(query)}")
+            return redirect(f"/balance?{urlencode(query)}")
         # Same redirect-to-the-real-address pattern as "burn" above: a
         # board nickname is looked up the same deterministic way every
         # node already resolves one for display (see _nickname_owned_by),
@@ -266,7 +273,7 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
             if owner is not None:
                 query = request.args.to_dict(flat=True)
                 query["addr"] = owner
-                return redirect(f"/address?{urlencode(query)}")
+                return redirect(f"/balance?{urlencode(query)}")
         page = max(request.args.get("page", 1, type=int) or 1, 1)
         # The distribution histogram is only shown before a lookup runs, so
         # skip computing it once an address has actually been submitted.

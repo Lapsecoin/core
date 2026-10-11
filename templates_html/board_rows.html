@@ -11,7 +11,7 @@
   <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}"{% if row.depth %} style="--depth: {{ row.depth }}"{% endif %}>
     <div class="rc-info">
       <span class="rc-avatar" aria-hidden="true">{{ row.icon }}</span>
-      <a href="/address?addr={{ row.from }}" class="rc-username {{ 'hash-short' if not row.nick }}"
+      <a href="/balance?addr={{ row.from }}" class="rc-username {{ 'hash-short' if not row.nick }}"
          title="{{ row.from }}{{ ' - nickname: ' + row.nick if row.nick else ' - no nickname set' }}">{{ row.nick or (row.from.split('.')[:3] | join('.')) ~ '…' }}</a>
       {% if is_private and not row.pending %}
       <span class="rc-actions">
