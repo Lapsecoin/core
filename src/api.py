@@ -878,11 +878,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     register_address_page(app, reader, pfx, histogram=_holder_histogram)
 
-    @app.route("/address/distribution/<int:bucket>", endpoint=pfx+"distribution_old")
-    def distribution_old(bucket):
-        query = request.query_string.decode()
-        return redirect("/balance/distribution/%d" % bucket + ("?" + query if query else ""), code=301)
-
     @app.route("/balance/distribution/<int:bucket>", endpoint=pfx+"distribution_bucket")
     def distribution_bucket(bucket):
         edges = HOLDER_BUCKET_EDGES

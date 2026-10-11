@@ -239,13 +239,6 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
     the address to show when none was asked for: the light client's own.
     """
 
-    # The page used to live at /address. Old links in posts and bookmarks keep
-    # working, with the query string (addr, page) carried over.
-    @app.route("/address", endpoint=pfx + "address_old")
-    def address_old():
-        query = request.query_string.decode()
-        return redirect("/balance" + ("?" + query if query else ""), code=301)
-
     @app.route("/balance", methods=["GET", "POST"], endpoint=pfx + "address_lookup")
     def address_lookup():
         addr = request.args.get("addr", "").strip()

@@ -615,17 +615,6 @@ class TestAddressLookupBurnAlias:
         pool = peerpool_mod.PeerPool()
         return api.create_private_app(node, pool).test_client()
 
-    def test_the_old_address_page_redirects_to_balance_keeping_the_query(self):
-        resp = self._client().get("/address?addr=abc&page=2", follow_redirects=False)
-        assert resp.status_code == 301
-        assert resp.headers["Location"].endswith("/balance?addr=abc&page=2")
-        assert self._client().get("/address", follow_redirects=False).headers["Location"].endswith("/balance")
-
-    def test_the_old_distribution_path_redirects_too(self):
-        resp = self._client().get("/address/distribution/3?page=2", follow_redirects=False)
-        assert resp.status_code == 301
-        assert resp.headers["Location"].endswith("/balance/distribution/3?page=2")
-
     def test_burn_redirects_to_the_real_address(self):
         import crypto as crypto_mod
         resp = self._client().get("/balance?addr=burn", follow_redirects=False)

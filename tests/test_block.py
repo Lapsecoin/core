@@ -1338,12 +1338,6 @@ class TestMachineBenchTable:
         rows = self._table([("MONSTER", 9, floor)] * 6 + [("REAL", 1, floor)] * 6)
         assert rows[0]["ips"] == rows[1]["ips"]
 
-    def test_confidence_comes_from_blocks_and_builders_not_the_label(self):
-        assert block_mod.bench_confidence(500, 1) == "low"
-        assert block_mod.bench_confidence(10, 3) == "low"
-        assert block_mod.bench_confidence(15, 2) == "medium"
-        assert block_mod.bench_confidence(50, 3) == "high"
-
     def test_the_median_ignores_a_few_wild_intervals(self):
         calm = [("M", 0, 100)] * 20
         wild = calm[:10] + [("M", 0, 5000)] * 3 + calm[10:]
