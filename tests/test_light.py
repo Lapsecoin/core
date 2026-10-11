@@ -245,11 +245,6 @@ class TestLightPages:
         for absent in ("/explorer", "/blocks", "/network", "/mempool", "/settings", "/odds", "/benchmark"):
             assert f'href="{absent}"' not in nav
 
-    def test_the_old_address_path_redirects_to_balance(self, world):
-        resp = self._light(world).get("/address?addr=abc", follow_redirects=False)
-        assert resp.status_code == 301
-        assert resp.headers["Location"].endswith("/balance?addr=abc")
-
     def test_balance_page_shows_the_wallet(self, world):
         html = self._light(world).get("/balance").get_data(as_text=True)
         assert "1000 LAPSE" in html

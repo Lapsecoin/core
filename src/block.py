@@ -684,17 +684,6 @@ FASTEST_MIN_BLOCKS = 5
 CAP_TOLERANCE_SECONDS = 0.5
 
 
-def bench_confidence(blocks, builders):
-    """How far a machine's row can be trusted. The label is a claim, so what
-    backs it is how many blocks and how many independent addresses built
-    them, never the label itself: one address can declare any CPU."""
-    if builders >= 3 and blocks >= 50:
-        return "high"
-    if builders >= 2 and blocks >= 15:
-        return "medium"
-    return "low"
-
-
 class MachineBench:
     """Speed of every declared machine over the whole chain, kept
     incrementally. Feeds the benchmark page and the fastest-machine tile.
@@ -713,7 +702,8 @@ class MachineBench:
     floor reads the floor, and is flagged. And the label is self-reported.
     The median is used throughout so a few odd intervals or a lying builder
     among honest ones move nothing, and every row carries how many blocks
-    and builders stand behind it.
+    and builders stand behind it. Builders are the confidence: one address can
+    declare any CPU, so a row several addresses agree on can be believed more.
 
     Each block is looked at once and goes into a sorted list for its machine,
     so the median is a lookup and a request costs the blocks added since the
@@ -814,7 +804,7 @@ class MachineBench:
         second, the median), ips_err (the standard error of that median, so
         'ips +/- ips_err'), blocks, builders, capped (half or more of its
         blocks sit at the timestamp floor, so ips is a lower bound),
-        confidence, rank and percentile (100 is the fastest) and bar (its
+        rank and percentile (100 is the fastest) and bar (its
         share of the fastest row's length, 0 to 1). Capped machines tie."""
         rows = []
         for label, med in self._medians.items():
@@ -828,8 +818,7 @@ class MachineBench:
                 "machine": label, "name": machine_display(label),
                 "ips": ips, "ips_err": ips * rel_err,
                 "blocks": n, "builders": builders,
-                "capped": self._capped.get(label, 0) * 2 >= n,
-                "confidence": bench_confidence(n, builders)})
+                "capped": self._capped.get(label, 0) * 2 >= n})
         # Machines held at the timestamp floor all read the same figure, the
         # best of them, so they tie instead of being ordered by noise. More
         # blocks behind a row puts it first within a tie.

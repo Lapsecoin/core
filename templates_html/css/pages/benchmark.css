@@ -43,14 +43,6 @@ tr.bench-you td { background: rgb(194 87 12 / .06); }
   display: inline-block; margin-left: .3rem; padding: 0 .4rem; border-radius: 999px;
   font-size: .68rem; font-weight: 600; color: var(--link); background: rgb(194 87 12 / .12);
 }
-.bench-conf { color: var(--ink-dim); }
-.bench-conf-high { color: var(--gain); }
-.bench-conf-low { color: var(--ink-dim); font-style: italic; }
-
-.bench-note { font-size: .8rem; color: var(--ink-dim); }
-.bench-note summary { cursor: pointer; width: max-content; }
-.bench-note summary:hover { color: var(--ink); }
-.bench-note ul { margin: .4rem 0 0; padding-left: 1.1rem; display: grid; gap: .25rem; max-width: 62rem; }
 
 @media (max-width: 640px) {
   .bench .stat { flex-basis: 45%; min-width: 0; }
@@ -58,7 +50,7 @@ tr.bench-you td { background: rgb(194 87 12 / .06); }
   .bench-table { min-width: 0; }
   .bench-table thead { display: none; }
   .bench-table tbody tr {
-    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .1rem .6rem;
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .1rem .6rem;
     padding: .5rem .75rem; border-bottom: 1px solid var(--rule);
   }
   .bench-table td { border: 0; padding: .1rem 0; white-space: normal; }
