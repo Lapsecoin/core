@@ -400,8 +400,9 @@ class TestPages:
                            ("/board/delete", {"ref": world.mine_ref}),
                            ("/board/vote", {"ref": world.their_ref, "dir": "+"})):
             submit(world.client, path, page="/board", passphrase=PASS, **data)
-        assert '<a href="/board" class="active">' in world.client.get(
-            "/board").get_data(as_text=True)
+        html = world.client.get("/board").get_data(as_text=True)
+        assert '<a href="/board" role="menuitem" class="active">' in html
+        assert '<div class="nav-group active">' in html
 
     def test_a_deleted_post_offers_no_buttons(self, world):
         world.client.post("/board/delete", data={

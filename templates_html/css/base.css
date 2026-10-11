@@ -93,7 +93,6 @@ nav.mainnav {
   overflow-x: auto; scrollbar-width: none;
 }
 nav.mainnav::-webkit-scrollbar { display: none; }
-nav.mainnav .sep { display: none; }
 nav.mainnav a {
   display: inline-flex; align-items: center; gap: .4rem;
   color: var(--ink-dim); text-decoration: none; white-space: nowrap; font-weight: 500;
@@ -134,28 +133,24 @@ nav.mainnav .nav-menu a.active { background: rgb(var(--ink-rgb) / .07); }
 /* Entries that do not fit move behind the three-dot button (see the script in
    base.html); the panel below lists them. */
 nav.mainnav { overflow: visible; }
-nav.mainnav .nav-hidden { display: none !important; }
 .masthead-inner { position: relative; }
-.masthead .nav-more-btn {
-  display: none; align-items: center; justify-content: center; gap: .4rem; flex: 0 0 auto;
-  position: relative; margin-left: auto; height: 32px; padding: 0 .7rem;
-  border: 1px solid var(--rule); border-radius: 999px; background: var(--surface);
-  color: var(--ink-dim); font: inherit; font-size: .84rem; font-weight: 500; line-height: 1;
-  -webkit-tap-highlight-color: transparent; transition: color .1s, background .1s, border-color .1s;
+/* Menu mode: when the bar cannot fit on one line, the menu button replaces it
+   and the panel lists every page, grouped. */
+.nav-toggle {
+  display: none; order: 5; flex: 0 0 auto; align-items: center; justify-content: center;
+  width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--ink); -webkit-tap-highlight-color: transparent;
+  transition: background .1s;
 }
-.masthead .nav-more-btn .nc { width: 9px; height: 6px; opacity: .6; transition: transform .15s; }
-.masthead .nav-more-btn.open .nc { transform: rotate(180deg); }
-.masthead .nav-more-btn.on { display: inline-flex; }
-.masthead .nav-more-btn:hover, .masthead .nav-more-btn:active { background: var(--hover); color: var(--ink); transform: none; }
-.masthead .nav-more-btn.active { color: var(--ink); border-color: var(--line-strong); }
-/* A small accent dot says the current page is one of the hidden ones. */
-.masthead .nav-more-btn.active::after {
-  content: ""; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px;
-  border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--paper);
-}
-.masthead .nav-more-btn.open { color: var(--ink); background: var(--hover); }
-.masthead .nav-more-btn:focus { outline: none; }
-.masthead .nav-more-btn:focus-visible { outline: 2px solid rgb(194 87 12 / .45); outline-offset: 1px; }
+.nav-toggle:hover, .nav-toggle.open { background: var(--hover); transform: none; }
+.nav-toggle:focus { outline: none; }
+.nav-toggle:focus-visible { outline: 2px solid rgb(194 87 12 / .45); outline-offset: 1px; }
+.nav-toggle path { transform-box: fill-box; transform-origin: center; transition: transform .15s; }
+.nav-toggle.open .l1 { transform: translateY(4px) rotate(45deg); }
+.nav-toggle.open .l2 { transform: translateY(-4px) rotate(-45deg); }
+.masthead.menu-mode .nav-toggle { display: inline-flex; }
+.masthead.menu-mode nav.mainnav { display: none; }
+.masthead.menu-mode .masthead-title { flex: 1 1 auto; }
 .nav-panel[hidden] { display: none; }
 .nav-panel {
   position: absolute; top: 100%; right: 0; z-index: 120; width: min(19rem, 100%); margin-top: .25rem;
@@ -167,20 +162,13 @@ nav.mainnav .nav-hidden { display: none !important; }
 .nav-panel a:hover, .nav-panel a:active { background: var(--hover); text-decoration: none; }
 .nav-panel a.active { background: rgb(var(--ink-rgb) / .07); }
 .nav-panel a.active .ni { color: var(--accent); opacity: 1; }
+.nav-panel .sec { padding: .7rem .6rem .2rem; font-size: .76rem; font-weight: 600; color: var(--ink-dim); }
+.nav-panel .sec:first-child { padding-top: .3rem; }
 .nav-panel .ni { width: 18px; height: 18px; flex: 0 0 auto; opacity: .75; }
 .nav-panel a span { display: flex; flex-direction: column; line-height: 1.25; }
 .nav-panel a b { font-weight: 600; font-size: .9rem; }
 .nav-panel a small { font-size: .76rem; color: var(--ink-dim); font-weight: 400; }
 @media (max-width: 760px) {
-  /* A group lays its links out as separate entries here, so
-     each can be shown or moved behind the button on its own. */
-  .nav-group { display: contents; }
-  .nav-group-btn { display: none; }
-  .nav-menu { display: contents; }
-  nav.mainnav .nav-menu a small { display: none; }
-  nav.mainnav .nav-menu a b { color: inherit; font-weight: 500; font-size: inherit; }
-  nav.mainnav .nav-menu a.active b { font-weight: 600; }
-  nav.mainnav .nav-menu a .ni { width: 14px; height: 14px; }
   nav.mainnav a { padding: .5rem .65rem; }
 }
 nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: none; }
@@ -219,7 +207,7 @@ nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: no
   .masthead-title { order: 1; flex: 1 1 auto; }
   .corner-links { order: 2; }
   .live-status { display: none; }
-  nav.mainnav { order: 3; flex: 1 0 100%; padding-bottom: .3rem; align-items: center; }
+  nav.mainnav { order: 3; flex: 1 0 100%; padding-bottom: .3rem; }
   .nav-panel { left: 0; right: 0; width: auto; }
 }
 

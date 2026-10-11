@@ -149,7 +149,7 @@ from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from version import LOCAL_VERSION
 from local_reader import (_get_address_history, _block_reward,  # noqa: F401
                           fee_estimate, local_reader_for)
-from ui_common import (make_flask_app, register_static_routes, _tx_amount,
+from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_amount,
                        _pagination_window, _base_dir,  # noqa: F401
                        fmt_duration, render_board_text)
 # The board names the tests and other modules still reach through api.
@@ -690,16 +690,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         for prefix in ("pub_", "priv_"):
             if endpoint.startswith(prefix):
                 endpoint = endpoint[len(prefix):]
-        nav_active = {
-            "dashboard": "dashboard", "blocks": "blocks",
-            "block_detail": "blocks", "tx_detail": "blocks",
-            "address_lookup": "address", "distribution_bucket": "address",
-            "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
-            "benchmark": "benchmark",
-            "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
-            "settings": "settings", "fees": "fees", "fees_public": "fees", "fees_submit": "fees",
-            "fees_status": "fees",
-        }.get(endpoint)
+        nav_active = NAV_ACTIVE.get(endpoint)
         return {"is_private": is_private,
                 "private_port": private_port,
                 "public_port": public_port,
