@@ -1497,8 +1497,20 @@ class TestPublicFeesPage:
     def test_it_is_in_the_public_menu(self):
         node, _ = fresh()
         html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
-        # The nav items carry a small icon in front of the label.
-        assert re.search(r'<a href="/fees" class="active">(?:<svg.*?</svg>)?Fees</a>', html, re.S)
+        # Fees sits in the Community group, next to Board, and is the active entry here.
+        group = html.split("Community<svg", 1)[1].split('role="menu">', 1)[1].split("</div>", 1)[0]
+        assert 'href="/board"' in group
+        assert re.search(r'<a href="/fees" role="menuitem" class="active">', group)
+
+    def test_community_groups_board_and_fees_and_is_active_on_both(self):
+        node, _ = fresh()
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        for path in ("/board", "/fees"):
+            html = client.get(path).get_data(as_text=True)
+            head = html.split("Community<svg", 1)[0]
+            assert "active" in head[head.rindex('<div class="nav-group'):].split(">", 1)[0]
+            menu = html.split("Community<svg", 1)[1].split('role="menu">', 1)[1].split("</div>", 1)[0]
+            assert 'href="/board"' in menu and 'href="/fees"' in menu
 
     def test_the_private_port_still_has_the_request_form(self):
         node, _ = fresh()

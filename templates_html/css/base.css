@@ -137,14 +137,22 @@ nav.mainnav { overflow: visible; }
 nav.mainnav .nav-hidden { display: none !important; }
 .masthead-inner { position: relative; }
 .masthead .nav-more-btn {
-  display: none; align-items: center; justify-content: center; flex: 0 0 auto;
-  width: 34px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-sm);
-  background: none; color: var(--ink-dim); -webkit-tap-highlight-color: transparent;
+  display: none; align-items: center; justify-content: center; gap: .4rem; flex: 0 0 auto;
+  position: relative; margin-left: auto; height: 32px; padding: 0 .7rem;
+  border: 1px solid var(--rule); border-radius: 999px; background: var(--surface);
+  color: var(--ink-dim); font: inherit; font-size: .84rem; font-weight: 500; line-height: 1;
+  -webkit-tap-highlight-color: transparent; transition: color .1s, background .1s, border-color .1s;
 }
+.masthead .nav-more-btn .nc { width: 9px; height: 6px; opacity: .6; transition: transform .15s; }
+.masthead .nav-more-btn.open .nc { transform: rotate(180deg); }
 .masthead .nav-more-btn.on { display: inline-flex; }
 .masthead .nav-more-btn:hover, .masthead .nav-more-btn:active { background: var(--hover); color: var(--ink); transform: none; }
-.masthead .nav-more-btn.active { color: var(--ink); background: rgb(var(--ink-rgb) / .07); }
-.masthead .nav-more-btn.active svg { color: var(--accent); }
+.masthead .nav-more-btn.active { color: var(--ink); border-color: var(--line-strong); }
+/* A small accent dot says the current page is one of the hidden ones. */
+.masthead .nav-more-btn.active::after {
+  content: ""; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--paper);
+}
 .masthead .nav-more-btn.open { color: var(--ink); background: var(--hover); }
 .masthead .nav-more-btn:focus { outline: none; }
 .masthead .nav-more-btn:focus-visible { outline: 2px solid rgb(194 87 12 / .45); outline-offset: 1px; }
@@ -211,7 +219,8 @@ nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: no
   .masthead-title { order: 1; flex: 1 1 auto; }
   .corner-links { order: 2; }
   .live-status { display: none; }
-  nav.mainnav { order: 3; flex: 1 0 100%; padding-bottom: .3rem; }
+  nav.mainnav { order: 3; flex: 1 0 100%; padding-bottom: .3rem; align-items: center; }
+  .nav-panel { left: 0; right: 0; width: auto; }
 }
 
 /* ===================================================== layout ========= */
