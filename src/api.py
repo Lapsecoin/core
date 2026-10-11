@@ -144,6 +144,7 @@ from gas_io import ChainIO
 import gaslock
 import storage as storage_mod
 import tx as tx_mod
+import params
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from version import LOCAL_VERSION
 from local_reader import (_get_address_history, _block_reward,  # noqa: F401
@@ -700,6 +701,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "block_detail": "blocks", "tx_detail": "blocks",
             "address_lookup": "address", "distribution_bucket": "address",
             "board": "board", "mempool": "mempool", "network": "network", "odds": "odds",
+            "benchmark": "benchmark",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
             "settings": "settings", "fees": "fees", "fees_public": "fees", "fees_submit": "fees",
             "fees_status": "fees",
@@ -1059,7 +1061,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     # simulating its way to a slightly different number.
     odds_cache = {}
     odds_lock  = threading.Lock()
-    fastest_tracker = block_mod.FastestMachine()
+    fastest_tracker = block_mod.MachineBench()
 
     def _fastest_machine():
         """The fastest declared machine over the whole chain, scaled to the
@@ -1121,6 +1123,27 @@ def _shared_read_only_routes(app, node, pool, limiter,
                                # Node._wait_for_field_or_own_pace). Only that
                                # one status_line value starts this way.
                                waiting_zero_odds=getattr(node, "status_line", "").startswith("waiting"))
+
+    @app.route("/benchmark", endpoint=pfx+"benchmark")
+    def benchmark():
+        """Declared machines ranked by how fast the chain shows them building
+        (see block.MachineBench for what the figure is and is not), with this
+        node's own locally measured speed beside it."""
+        with odds_lock:
+            bench = fastest_tracker.update(node.view.chain)
+            rows, unranked = bench.table(), bench.unranked()
+        speeds = [r["ips"] for r in rows]
+        own_seconds = node.own_vdf_median() if hasattr(node, "own_vdf_median") else None
+        own_ips = (block_mod.get_vdf_iterations(node.view.chain) / own_seconds
+                   if own_seconds else None)
+        return render_template(
+            "benchmark.html", title="Benchmark", rows=rows, unranked=unranked,
+            min_blocks=block_mod.FASTEST_MIN_BLOCKS,
+            floor=params.MIN_BLOCK_SPACING_SECONDS,
+            median_ips=statistics.median(speeds) if speeds else None,
+            median_after=len(rows) // 2 if len(rows) >= 4 else None,
+            own_machine=_machine_of(node), own_ips=own_ips,
+            own_is_estimate=node.own_vdf_is_estimate() if own_ips else False)
 
     # ---- JSON API (read-only) --------------------------------------------
 

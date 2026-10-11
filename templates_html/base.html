@@ -19,6 +19,8 @@
 <symbol id="i-board" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></symbol>
 <symbol id="i-mempool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5zM3 13l9 5 9-5"/></symbol>
 <symbol id="i-network" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/></symbol>
+<symbol id="i-hardware" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".6"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
+<symbol id="i-benchmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><rect x="5" y="11" width="3.2" height="6" rx=".6"/><rect x="10.4" y="7" width="3.2" height="10" rx=".6"/><rect x="15.8" y="4" width="3.2" height="13" rx=".6"/></symbol>
 <symbol id="i-odds" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20v-9M12 20V4M19 20v-6"/></symbol>
 <symbol id="i-whitepaper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h8l4 4v14H7zM15 3v4h4M10 13h6M10 17h6"/></symbol>
 <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></symbol>
@@ -66,7 +68,13 @@
         </div>
       </div><span class="sep">&middot;</span>
       <a href="/network" class="{{ 'active' if nav_active == 'network' }}"><svg class="ni" aria-hidden="true"><use href="#i-network"/></svg>Network</a><span class="sep">&middot;</span>
-      <a href="/odds" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg>Odds</a><span class="sep">&middot;</span>
+      <div class="nav-group {{ 'active' if nav_active in ('odds', 'benchmark') }}">
+        <button type="button" class="nav-group-btn" aria-haspopup="true" aria-expanded="false"><svg class="ni" aria-hidden="true"><use href="#i-hardware"/></svg>Hardware<svg class="nc" aria-hidden="true" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="nav-menu" role="menu">
+          <a href="/odds" role="menuitem" class="{{ 'active' if nav_active == 'odds' }}"><svg class="ni" aria-hidden="true"><use href="#i-odds"/></svg><span><b>Odds</b><small>Your chance in the block race</small></span></a>
+          <a href="/benchmark" role="menuitem" class="{{ 'active' if nav_active == 'benchmark' }}"><svg class="ni" aria-hidden="true"><use href="#i-benchmark"/></svg><span><b>Benchmark</b><small>VDF speed of declared machines</small></span></a>
+        </div>
+      </div><span class="sep">&middot;</span>
       <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}"><svg class="ni" aria-hidden="true"><use href="#i-whitepaper"/></svg>Whitepaper</a>
       {% if is_private %}
       <span class="sep">&middot;</span><a href="/settings" class="{{ 'active' if nav_active == 'settings' }}"><svg class="ni" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
@@ -96,24 +104,28 @@
 {% block content %}{% endblock %}
 </div>
 <script>
-// Explorer menu (wide screens) and the More button (phones). Both open on
+// Explorer and Hardware menus (wide screens) and the More button (phones). Both open on
 // click or keyboard, close on an outside click or Escape. Hover opening lives
 // in the stylesheet and only applies to devices that really hover.
 (function () {
   var nav = document.getElementById("mainnav");
-  var group = document.querySelector(".nav-group");
+  var groups = Array.prototype.slice.call(document.querySelectorAll(".nav-group"));
   var more = document.getElementById("nav-more");
   var panel = document.getElementById("nav-panel");
-  function setGroup(open) {
-    if (!group) return;
+  function setGroup(group, open) {
     group.classList.toggle("open", open);
     group.querySelector(".nav-group-btn").setAttribute("aria-expanded", open ? "true" : "false");
   }
-  if (group) {
-    group.querySelector(".nav-group-btn").addEventListener("click", function (e) {
-      e.stopPropagation(); setGroup(!group.classList.contains("open"));
-    });
+  function closeGroups(except) {
+    groups.forEach(function (g) { if (g !== except) setGroup(g, false); });
   }
+  groups.forEach(function (group) {
+    group.querySelector(".nav-group-btn").addEventListener("click", function (e) {
+      e.stopPropagation();
+      closeGroups(group);
+      setGroup(group, !group.classList.contains("open"));
+    });
+  });
   function setMore(open) {
     panel.hidden = !open;
     more.classList.toggle("open", open);
@@ -123,11 +135,11 @@
     e.stopPropagation(); setMore(panel.hidden);
   });
   document.addEventListener("click", function (e) {
-    if (group && !group.contains(e.target)) setGroup(false);
+    groups.forEach(function (g) { if (!g.contains(e.target)) setGroup(g, false); });
     if (!panel.hidden && !panel.contains(e.target) && !more.contains(e.target)) setMore(false);
   });
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { setGroup(false); setMore(false); }
+    if (e.key === "Escape") { closeGroups(null); setMore(false); }
   });
 
   // Priority+ layout: every entry is shown while it fits. When the bar runs

@@ -1217,7 +1217,7 @@ class TestPrivateMachineId:
         assert block_mod.machine_display("AMD Ryzen") == "AMD Ryzen"
 
 
-class TestFastestMachine:
+class TestMachineBench:
     """The fastest declared machine over the whole chain, kept incrementally."""
 
     def _chain(self, rows, iterations=100, tag=""):
@@ -1233,24 +1233,24 @@ class TestFastestMachine:
 
     def test_nothing_until_a_machine_has_enough_blocks(self):
         chain = self._chain([("A", 50)] * (block_mod.FASTEST_MIN_BLOCKS - 1))
-        assert block_mod.FastestMachine().update(chain).best() is None
+        assert block_mod.MachineBench().update(chain).best() is None
 
     def test_picks_the_lowest_median_and_ignores_undeclared(self):
         rows = [("A", 100)] * 5 + [("B", 60)] * 5 + [(None, 1)] * 20
-        best = block_mod.FastestMachine().update(self._chain(rows)).best()
+        best = block_mod.MachineBench().update(self._chain(rows)).best()
         assert best["machine"] == "B" and best["pace"] == 60 and best["blocks"] == 5
 
     def test_looks_past_the_odds_window(self):
         rows = [("FAST", 40)] * 5 + [("SLOW", 100)] * (block_mod.ODDS_WINDOW_BLOCKS + 10)
-        best = block_mod.FastestMachine().update(self._chain(rows)).best()
+        best = block_mod.MachineBench().update(self._chain(rows)).best()
         assert best["machine"] == "FAST"
 
     def test_incremental_matches_a_fresh_scan(self):
         chain = self._chain([("A", 90), ("B", 70)] * 6)
-        inc = block_mod.FastestMachine()
+        inc = block_mod.MachineBench()
         for n in range(2, len(chain) + 1):
             inc.update(chain[:n])
-        assert inc.best() == block_mod.FastestMachine().update(chain).best()
+        assert inc.best() == block_mod.MachineBench().update(chain).best()
 
     def test_older_blocks_are_scaled_to_the_current_iterations(self):
         """40s at 100 iterations is 80s at 200, so against a 100s machine at
@@ -1258,29 +1258,100 @@ class TestFastestMachine:
         old = self._chain([("OLD", 40)] * 5, iterations=100)
         chain = old + [{"hash": "n%d" % i, "timestamp": old[-1]["timestamp"] + 100 * i,
                         "vdf_iterations": 200, "machine": "NEW"} for i in range(1, 6)]
-        best = block_mod.FastestMachine().update(chain).best()
+        best = block_mod.MachineBench().update(chain).best()
         assert best["machine"] == "OLD" and best["pace"] == 80
 
     def test_a_shallow_reorg_is_undone_not_rescanned(self):
-        tracker = block_mod.FastestMachine()
+        tracker = block_mod.MachineBench()
         chain = self._chain([("A", 50)] * 8)
         tracker.update(chain)
         fork = chain[:-1] + [{"hash": "alt", "timestamp": chain[-2]["timestamp"] + 90,
                               "vdf_iterations": 100, "machine": "B"}]
         tracker.update(fork)
-        fresh = block_mod.FastestMachine().update(fork)
+        fresh = block_mod.MachineBench().update(fork)
         assert tracker.best() == fresh.best()
         assert tracker._samples == fresh._samples
 
     def test_a_reorg_deeper_than_the_undo_log_rebuilds(self):
-        tracker = block_mod.FastestMachine()
-        tracker.update(self._chain([("A", 50)] * (block_mod.FastestMachine.UNDO_DEPTH + 10)))
+        tracker = block_mod.MachineBench()
+        tracker.update(self._chain([("A", 50)] * (block_mod.MachineBench.UNDO_DEPTH + 10)))
         other = self._chain([("B", 70)] * 10, tag="x")
         assert tracker.update(other).best()["machine"] == "B"
         assert "A" not in tracker._samples or not tracker._samples["A"]
 
     def test_a_shorter_chain_drops_the_blocks_it_no_longer_has(self):
-        tracker = block_mod.FastestMachine()
+        tracker = block_mod.MachineBench()
         chain = self._chain([("A", 50)] * 10)
         tracker.update(chain)
         assert tracker.update(chain[:6]).best()["blocks"] == 5
+
+
+class TestMachineBenchTable:
+    """The ranking the Benchmark page shows."""
+
+    def _chain(self, rows, iterations=100_000):
+        """rows: (machine, builder index, interval) per block after genesis."""
+        chain = [{"hash": "g", "timestamp": 1000, "vdf_iterations": iterations}]
+        for i, (machine, who, interval) in enumerate(rows, start=1):
+            chain.append({"hash": "h%d" % i, "timestamp": chain[-1]["timestamp"] + interval,
+                          "vdf_iterations": iterations, "builder": address(who),
+                          "machine": machine})
+        return chain
+
+    def _table(self, rows, iterations=100_000):
+        return block_mod.MachineBench().update(self._chain(rows, iterations)).table()
+
+    def test_speed_is_iterations_per_second_and_ranked_fastest_first(self):
+        rows = self._table([("SLOW", 0, 200)] * 6 + [("FAST", 1, 100)] * 6)
+        assert [r["machine"] for r in rows] == ["FAST", "SLOW"]
+        assert rows[0]["ips"] == 1000 and rows[1]["ips"] == 500
+        assert [r["percentile"] for r in rows] == [100, 0]
+
+    def test_a_retarget_changes_nothing(self):
+        """Same machine, same speed, at 100k then 200k iterations: the
+        intervals double, the speed does not."""
+        chain = self._chain([("M", 0, 100)] * 6)
+        for i in range(1, 7):
+            chain.append({"hash": "r%d" % i, "timestamp": chain[-1]["timestamp"] + 200,
+                          "vdf_iterations": 200_000, "builder": address(0), "machine": "M"})
+        (row,) = block_mod.MachineBench().update(chain).table()
+        assert row["ips"] == 1000 and row["blocks"] == 12
+
+    def test_a_machine_with_too_few_blocks_is_not_ranked(self):
+        bench = block_mod.MachineBench().update(self._chain([("A", 0, 100)] * 4))
+        assert bench.table() == [] and bench.unranked() == 1
+
+    def test_machines_held_at_the_timestamp_floor_tie_and_are_marked(self):
+        floor = params_mod.MIN_BLOCK_SPACING_SECONDS
+        rows = self._table([("A", 0, floor)] * 6 + [("B", 1, floor)] * 9
+                           + [("C", 2, 120)] * 6)
+        by = {r["machine"]: r for r in rows}
+        assert by["A"]["capped"] and by["B"]["capped"] and not by["C"]["capped"]
+        assert by["A"]["rank"] == by["B"]["rank"] == 1 and by["C"]["rank"] == 3
+        assert rows[0]["machine"] == "B"          # more blocks first within a tie
+        assert by["A"]["bar"] == by["B"]["bar"] == 1.0
+
+    def test_a_lie_about_speed_is_held_by_the_floor(self):
+        """A builder cannot stamp a block earlier than the floor, so declaring
+        a monster CPU cannot read faster than the floor allows."""
+        floor = params_mod.MIN_BLOCK_SPACING_SECONDS
+        rows = self._table([("MONSTER", 9, floor)] * 6 + [("REAL", 1, floor)] * 6)
+        assert rows[0]["ips"] == rows[1]["ips"]
+
+    def test_confidence_comes_from_blocks_and_builders_not_the_label(self):
+        assert block_mod.bench_confidence(500, 1) == "low"
+        assert block_mod.bench_confidence(10, 3) == "low"
+        assert block_mod.bench_confidence(15, 2) == "medium"
+        assert block_mod.bench_confidence(50, 3) == "high"
+
+    def test_the_median_ignores_a_few_wild_intervals(self):
+        calm = [("M", 0, 100)] * 20
+        wild = calm[:10] + [("M", 0, 5000)] * 3 + calm[10:]
+        assert self._table(wild)[0]["ips"] == self._table(calm)[0]["ips"]
+
+    def test_undeclared_blocks_are_ignored(self):
+        assert self._table([(None, 0, 100)] * 20) == []
+
+    def test_the_error_shrinks_with_more_blocks(self):
+        noisy = [("M", 0, 90 + (i % 7) * 10) for i in range(10)]
+        assert (self._table(noisy * 8)[0]["ips_err"] < self._table(noisy)[0]["ips_err"])

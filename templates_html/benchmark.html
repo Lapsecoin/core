@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/benchmark.css?v={{ local_version }}">{% endblock %}
+{% block content %}
+<div class="bench" data-live="bench">
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Fastest</div>
+      <div class="stat-value">{{ (("&ge; "|safe if rows[0].capped) ~ "{:,.0f}".format(rows[0].ips) ~ " ips") if rows else "--" }}</div>
+      <div class="stat-sub" title="{{ rows[0].name if rows }}">{{ rows[0].name if rows else "no machine ranked yet" }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Median machine</div>
+      <div class="stat-value">{{ ("{:,.0f}".format(median_ips) ~ " ips") if median_ips else "--" }}</div>
+      <div class="stat-sub">{{ rows|length }} ranked{% if unranked %}, {{ unranked }} with under {{ min_blocks }} blocks{% endif %}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">This machine</div>
+      <div class="stat-value">{{ ("{:,.0f}".format(own_ips) ~ " ips") if own_ips else "--" }}</div>
+      <div class="stat-sub">{% if own_ips %}{{ "estimated from a short sample" if own_is_estimate else "measured here, one full block" }}{% else %}not measured yet{% endif %}</div>
+    </div>
+  </div>
+
+  {% if not rows %}
+  <div class="card bench-empty">
+    <div class="card-title">Benchmark</div>
+    <p>No declared machine has {{ min_blocks }} blocks on the chain yet{% if unranked %} ({{ unranked }} seen so far){% endif %}. Machines appear here once they have built enough blocks for a median to mean something.</p>
+  </div>
+  {% else %}
+  <div class="bench-panel">
+    <table class="bench-table">
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>Machine</th>
+          <th class="bench-speed-h">Speed, iterations per second</th>
+          <th class="num" title="Share of ranked machines this one is faster than. 100 is the fastest.">Pctl</th>
+          <th class="num" title="Blocks this machine built, the sample the median comes from.">Blocks</th>
+          <th class="num" title="Distinct addresses that declared this machine. One address can declare any CPU, so more is better.">Builders</th>
+          <th title="How much to trust the row. Depends on blocks and builders, never on the label.">Confidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        {% if median_after is not none and loop.index0 == median_after %}
+        <tr class="bench-median"><td colspan="7"><span>median, {{ "{:,.0f}".format(median_ips) }} ips</span></td></tr>
+        {% endif %}
+        <tr class="{{ 'bench-you' if r.machine == own_machine }}">
+          <td class="num" data-label="#">{{ r.rank }}</td>
+          <td class="bench-name" data-label="Machine" title="{{ r.name }}">{{ r.name }}{% if r.machine == own_machine %} <span class="bench-tag">you</span>{% endif %}</td>
+          <td class="bench-speed" data-label="Speed">
+            <span class="bench-bar" style="width: {{ '%.1f'|format(100 * r.bar) }}%"></span>
+            <span class="bench-val" title="{{ 'The machine is faster than the timestamp floor lets the chain show, so this is a lower bound.' if r.capped }}">{{ "&ge; "|safe if r.capped }}{{ "{:,.0f}".format(r.ips) }}{% if r.blocks > 1 and r.ips_err >= 0.5 and not r.capped %} <small>&plusmn; {{ "{:,.0f}".format(r.ips_err) }}</small>{% endif %}</span>
+          </td>
+          <td class="num" data-label="Pctl">{{ r.percentile }}</td>
+          <td class="num" data-label="Blocks">{{ r.blocks }}</td>
+          <td class="num" data-label="Builders">{{ r.builders }}</td>
+          <td class="bench-conf bench-conf-{{ r.confidence }}" data-label="Confidence" title="{{ 'Declared by a single address, so nothing but its own word backs the label.' if r.builders == 1 else '' }}">{{ r.confidence }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <details class="bench-note">
+    <summary>How to read this</summary>
+    <ul>
+      <li><b>Speed</b> is the VDF iterations a block carried divided by the time since the previous block, so a retarget changes nothing. It is the median over every block the machine built, and <b>&plusmn;</b> is the standard error of that median.</li>
+      <li><b>Machine</b> is whatever CPU a builder declared. It cannot be checked, so a row backed by one builder is marked low. A machine that declared nothing is not listed.</li>
+      <li>The figure includes the time a block takes to travel, so it sits a little under the raw VDF speed (compare <b>This machine</b>, measured here with no network). A machine only shows on blocks it won, so slower ones read a little faster than they are.</li>
+      <li><b>&ge;</b> marks a machine so fast that most of its blocks were stamped at the {{ floor }} second timestamp floor, which hides how much faster it is.</li>
+    </ul>
+  </details>
+</div>
+{% endblock %}

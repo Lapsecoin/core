@@ -4,6 +4,7 @@ import bisect
 import collections
 import hashlib
 import hmac
+import math
 import random
 import re
 import statistics
@@ -673,30 +674,52 @@ def machine_display(label):
     return label
 
 
-# A machine needs this many blocks before its pace counts as the fastest: one
-# lucky interval is not a pace.
+# A machine needs this many blocks before it is ranked or can be the fastest:
+# one lucky interval is not a speed.
 FASTEST_MIN_BLOCKS = 5
 
+# An interval this close to MIN_BLOCK_SPACING_SECONDS was stamped at the floor
+# (see build_next), not by the clock. A machine that can do better than the
+# floor reads exactly the floor, so the figure for it is a lower bound.
+CAP_TOLERANCE_SECONDS = 0.5
 
-class FastestMachine:
-    """The declared machine with the lowest median interval over the whole
-    chain, shown in seconds at the tip's current vdf_iterations.
 
-    Seconds are only comparable within one regime (iterations only ratchet
-    upward, see race_window), so each interval is kept as seconds per
-    iteration and scaled to the tip's iterations when read. That treats an
-    interval as proportional to the work, the same approximation the odds
-    page makes inside its window.
+def bench_confidence(blocks, builders):
+    """How far a machine's row can be trusted. The label is a claim, so what
+    backs it is how many blocks and how many independent addresses built
+    them, never the label itself: one address can declare any CPU."""
+    if builders >= 3 and blocks >= 50:
+        return "high"
+    if builders >= 2 and blocks >= 15:
+        return "medium"
+    return "low"
 
-    Kept incrementally: each block is looked at once and goes into a sorted
-    list for its machine, so the median is a lookup, and a request costs the
-    blocks added since the last one. The last few counted blocks are
-    remembered so a reorg (a one-block tie swap happens constantly) is
-    undone instead of rescanning the chain; only one deeper than that
-    rebuilds from the start.
 
-    Self-reported and unverifiable, like every machine label: a description
-    of who declared what, never evidence of speed.
+class MachineBench:
+    """Speed of every declared machine over the whole chain, kept
+    incrementally. Feeds the benchmark page and the fastest-machine tile.
+
+    A block's interval (its timestamp minus its parent's) divided by the
+    iterations that block carried is seconds per iteration, which does not
+    move when the chain retargets, so history never has to be thrown away or
+    rescaled: speed is 1 / seconds per iteration, in iterations per second
+    (the unit the Chia VDF benchmark reports), and a time in seconds is
+    that scaled to whatever iterations are current when it is read.
+
+    What the figure is and is not. The interval includes the hop that carries
+    the block, so it sits a little under the raw VDF speed. A machine is only
+    seen on blocks it won, so a slow one is seen on its luckier rounds and
+    reads a little better than it is. A machine faster than the timestamp
+    floor reads the floor, and is flagged. And the label is self-reported.
+    The median is used throughout so a few odd intervals or a lying builder
+    among honest ones move nothing, and every row carries how many blocks
+    and builders stand behind it.
+
+    Each block is looked at once and goes into a sorted list for its machine,
+    so the median is a lookup and a request costs the blocks added since the
+    last one. The last few counted blocks are remembered so a reorg (a
+    one-block tie swap happens constantly) is undone instead of rescanned;
+    only one deeper than that rebuilds from the start.
     """
 
     UNDO_DEPTH = 64
@@ -706,8 +729,11 @@ class FastestMachine:
 
     def _reset(self):
         self._scanned = 1          # chain[:_scanned] has been counted
-        self._log = collections.deque(maxlen=self.UNDO_DEPTH)  # (hash, label, spi)
+        # (hash, label, seconds per iteration, builder, at the floor)
+        self._log = collections.deque(maxlen=self.UNDO_DEPTH)
         self._samples = {}         # label -> sorted seconds per iteration
+        self._builders = {}        # label -> Counter of builder addresses
+        self._capped = {}          # label -> blocks stamped at the floor
         self._medians = {}         # label -> median, for labels with enough blocks
         self._iterations = None    # the tip's, to scale to
 
@@ -720,11 +746,17 @@ class FastestMachine:
             self._medians.pop(label, None)
 
     def _undo_one(self):
-        _hash, label, spi = self._log.pop()
+        _hash, label, spi, builder, capped = self._log.pop()
         self._scanned -= 1
         if label:
             v = self._samples[label]
             del v[bisect.bisect_left(v, spi)]
+            who = self._builders[label]
+            who[builder] -= 1
+            if not who[builder]:
+                del who[builder]
+            if capped:
+                self._capped[label] -= 1
             self._refresh(label)
 
     def update(self, chain):
@@ -738,16 +770,24 @@ class FastestMachine:
                 break
             self._undo_one()
         touched = set()
+        floor = params.MIN_BLOCK_SPACING_SECONDS + CAP_TOLERANCE_SECONDS
         for h in range(self._scanned, n):
             blk = chain[h]
             iterations = blk.get("vdf_iterations")
             label = machine_label(blk)
-            spi = None
-            if label and iterations:
-                spi = (blk["timestamp"] - chain[h - 1]["timestamp"]) / iterations
+            interval = blk["timestamp"] - chain[h - 1]["timestamp"]
+            if label and iterations and interval > 0:
+                spi = interval / iterations
+                builder = blk.get("builder") or ""
+                capped = interval <= floor
                 bisect.insort(self._samples.setdefault(label, []), spi)
+                self._builders.setdefault(label, collections.Counter())[builder] += 1
+                if capped:
+                    self._capped[label] = self._capped.get(label, 0) + 1
                 touched.add(label)
-            self._log.append((blk.get("hash"), label if spi is not None else "", spi))
+                self._log.append((blk.get("hash"), label, spi, builder, capped))
+            else:
+                self._log.append((blk.get("hash"), "", None, "", False))
         for label in touched:
             self._refresh(label)
         self._scanned = max(n, 1)
@@ -755,15 +795,61 @@ class FastestMachine:
         return self
 
     def best(self):
-        """{"machine", "name", "pace", "blocks"} or None when no declared
-        machine has enough blocks yet. pace is in seconds at the tip's
-        current vdf_iterations."""
+        """{"machine", "name", "pace", "blocks"} for the machine with the
+        lowest median interval, or None when none has enough blocks yet.
+        pace is in seconds at the tip's current vdf_iterations."""
         if not self._medians or not self._iterations:
             return None
         label = min(self._medians, key=lambda m: (self._medians[m], m))
         return {"machine": label, "name": machine_display(label),
                 "pace": self._medians[label] * self._iterations,
                 "blocks": len(self._samples[label])}
+
+    def unranked(self):
+        """Declared machines that do not have enough blocks to rank yet."""
+        return len(self._samples) - len(self._medians)
+
+    def table(self):
+        """Ranked machines, fastest first: machine, name, ips (iterations per
+        second, the median), ips_err (the standard error of that median, so
+        'ips +/- ips_err'), blocks, builders, capped (half or more of its
+        blocks sit at the timestamp floor, so ips is a lower bound),
+        confidence, rank and percentile (100 is the fastest) and bar (its
+        share of the fastest row's length, 0 to 1). Capped machines tie."""
+        rows = []
+        for label, med in self._medians.items():
+            v = self._samples[label]
+            n = len(v)
+            iqr = v[int(0.75 * (n - 1))] - v[int(0.25 * (n - 1))]
+            rel_err = 0.929 * iqr / math.sqrt(n) / med
+            ips = 1.0 / med
+            builders = len(self._builders[label])
+            rows.append({
+                "machine": label, "name": machine_display(label),
+                "ips": ips, "ips_err": ips * rel_err,
+                "blocks": n, "builders": builders,
+                "capped": self._capped.get(label, 0) * 2 >= n,
+                "confidence": bench_confidence(n, builders)})
+        # Machines held at the timestamp floor all read the same figure, the
+        # best of them, so they tie instead of being ordered by noise. More
+        # blocks behind a row puts it first within a tie.
+        cap = max((r["ips"] for r in rows if r["capped"]), default=None)
+        for r in rows:
+            r["_eff"] = cap if r["capped"] else r["ips"]
+        rows.sort(key=lambda r: (-r["_eff"], -r["blocks"], r["machine"]))
+        count = len(rows)
+        top = rows[0]["_eff"] if rows else 1.0
+        rank, seen = 0, None
+        for i, r in enumerate(rows):
+            if r["_eff"] != seen:
+                rank, seen = i + 1, r["_eff"]
+            r["rank"] = rank
+            r["percentile"] = (100 if count == 1
+                               else round(100 * (count - rank) / (count - 1)))
+            r["bar"] = r["_eff"] / top
+        for r in rows:
+            del r["_eff"]
+        return rows
 
 
 def validate(blk, state, chain):
