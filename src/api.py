@@ -1083,7 +1083,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
                     if node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS)
                     else None)
         return render_template("odds.html", title="Race Odds", race=race,
-                               og=embeds.odds(race),
+                               og=embeds.odds(race, node.settings.get(settings_mod.MINING_ENABLED)),
                                chart=chart, reorgs=node.reorg_stats(),
                                fastest=_fastest_machine(),
                                own_is_estimate=node.own_vdf_is_estimate(),

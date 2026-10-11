@@ -14,6 +14,8 @@ wording is testable without a chain. Light-safe: no node imports.
 import re
 import time
 
+from board_view import BOARD_MEMO_TAG, DELETE_TAG, VOTE_DOWN_TAG, VOTE_UP_TAG
+from params import TICKS_PER_LAPSE
 from ui_common import fmt_duration, fmt_lapse, fmt_lapse_dp
 
 SITE = "LapseCoin"
@@ -41,6 +43,17 @@ def _embed(title, *lines):
 
 def _count(n, one, many=None):
     return f"{n:,} {one if n == 1 else (many or one + 's')}"
+
+
+def _lapse(ticks):
+    """An amount a person can read: LAPSE to two places, or plain ticks when
+    it is too small for that to say anything ("0.00 LAPSE" for 202 ticks)."""
+    if 0 < ticks < TICKS_PER_LAPSE // 100:
+        return f"{ticks:,} ticks"
+    return fmt_lapse_dp(ticks, 2)
+
+
+_HEADERS = re.compile(r"^(\[[a-z]:[^\]]*\])+")
 
 
 def short_addr(addr):
@@ -87,20 +100,30 @@ def block(b, reward, time_stats):
 
 
 def transaction(tx_hash, tx, location, gas_request=False):
+    fee = f"fee {tx['fee']:,} ticks"
+    memo = tx.get("memo", "")
+    who = short_addr(tx["from"])
+    # Board posts, votes and deletes are one-tick payments to the burn
+    # address; what they say is the memo, not the amount.
+    if memo.startswith(BOARD_MEMO_TAG):
+        return _embed("Board post", f"{who}: {_HEADERS.sub('', memo[len(BOARD_MEMO_TAG):])}",
+                      f"{location} · {fee}")
+    if memo.startswith(VOTE_UP_TAG) or memo.startswith(VOTE_DOWN_TAG):
+        direction = "up" if memo.startswith(VOTE_UP_TAG) else "down"
+        return _embed(f"Board vote {direction}", f"{who} voted on post {memo.split(' ', 1)[1].strip()}",
+                      f"{location} · {fee}")
+    if memo.startswith(DELETE_TAG):
+        return _embed("Board post deleted", f"{who} deleted post {memo[len(DELETE_TAG):].strip()}",
+                      f"{location} · {fee}")
     outputs = tx.get("outputs", [])
     total = sum(o["amount"] for o in outputs)
-    if len(outputs) == 1:
-        dest = short_addr(outputs[0]["to"])
-    else:
-        dest = _count(len(outputs), "recipient")
-    return _embed(
-        "Fee request" if gas_request else f"Transaction {tx_hash[:12]}…",
-        f"{fmt_lapse_dp(total, 2)} from {short_addr(tx['from'])} to {dest}",
-        f"{location} · fee {tx['fee']:,} ticks")
+    dest = short_addr(outputs[0]["to"]) if len(outputs) == 1 else _count(len(outputs), "recipient")
+    return _embed("Fee request" if gas_request else f"Transaction {tx_hash[:12]}…",
+                  f"{_lapse(total)} from {who} to {dest}", f"{location} · {fee}")
 
 
 def address(addr, balance, tx_count):
-    return _embed(short_addr(addr), fmt_lapse_dp(balance, 2),
+    return _embed(short_addr(addr), _lapse(balance),
                   _count(tx_count, "transaction"))
 
 
@@ -119,7 +142,7 @@ def mempool(rows):
     if not rows:
         return _embed("Mempool", "No pending transactions.")
     return _embed("Mempool", _count(len(rows), "pending transaction"),
-                  f"{fmt_lapse_dp(total, 2)} moving")
+                  f"{_lapse(total)} moving")
 
 
 def network(peer_count):
@@ -127,14 +150,15 @@ def network(peer_count):
                   "A live map of the nodes this node talks to.")
 
 
-def odds(race):
+def odds(race, mining=True):
     if not race or race.get("odds_pct") is None:
         return _embed("Block race odds", "How likely a node is to win the next block.")
-    return _embed(
-        "Block race odds",
-        f"This node's chance of the next block: {race['odds_pct']:.1f}%",
-        f"{_count(race['field_builders'], 'builder')} in the field, "
-        f"median block {race['median']:.0f}s")
+    field = (f"{_count(race['field_builders'], 'builder')} in the field, "
+             f"median block {race['median']:.0f}s")
+    if not mining:
+        return _embed("Block race odds", "Not building right now: mining is off on this node.", field)
+    return _embed("Block race odds",
+                  f"This node's chance of the next block: {race['odds_pct']:.1f}%", field)
 
 
 def benchmark(rows, counted, running_for):
