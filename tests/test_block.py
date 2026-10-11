@@ -1379,3 +1379,60 @@ class TestMachineBenchStart:
         bench.update(chain)
         bench.update(chain[:4])               # tip is back before the start
         assert bench.blocks() == 0
+
+
+class TestMachineBenchFloorAndRetarget:
+    """Blocks held at the timestamp floor are bounds, not measurements."""
+
+    FLOOR = params_mod.MIN_BLOCK_SPACING_SECONDS
+
+    def _chain(self, groups):
+        """groups: (machine, builder, iterations, interval, count) in order."""
+        chain = [{"hash": "g", "timestamp": 1000, "vdf_iterations": groups[0][2]}]
+        i = 0
+        for machine, who, iterations, interval, count in groups:
+            for _ in range(count):
+                i += 1
+                chain.append({"hash": "h%d" % i, "timestamp": chain[-1]["timestamp"] + interval,
+                              "vdf_iterations": iterations, "builder": address(who),
+                              "machine": machine})
+        return chain
+
+    def _rows(self, groups):
+        return block_mod.MachineBench().update(self._chain(groups)).table()
+
+    def test_old_held_blocks_stop_mattering_once_the_machine_is_measurable(self):
+        """Held at the floor for 100 blocks, then a retarget lifts its build
+        time to 150s: the figure is the new measurement, not a mix."""
+        (row,) = self._rows([("M", 0, 100_000, self.FLOOR, 100),
+                             ("M", 0, 200_000, 150, 6)])
+        assert row["ips"] == 200_000 / 150
+        assert not row["capped"] and not row["approx"]
+        assert row["blocks"] == 106
+
+    def test_too_few_measurable_blocks_keeps_the_lower_bound(self):
+        (row,) = self._rows([("M", 0, 100_000, self.FLOOR, 100),
+                             ("M", 0, 200_000, 150, 4)])
+        assert row["capped"]
+
+    def test_partly_held_in_the_current_regime_is_marked_approximate(self):
+        (row,) = self._rows([("M", 0, 200_000, self.FLOOR, 2),
+                             ("M", 0, 200_000, 150, 6)])
+        assert row["approx"] and not row["capped"]
+        assert row["ips"] == 200_000 / 150
+
+    def test_held_blocks_from_an_older_regime_do_not_make_it_approximate(self):
+        (row,) = self._rows([("M", 0, 100_000, self.FLOOR, 3),
+                             ("M", 0, 200_000, 150, 6)])
+        assert not row["approx"]
+
+    def test_incremental_matches_a_fresh_scan_with_held_blocks(self):
+        chain = self._chain([("A", 0, 100_000, self.FLOOR, 30),
+                             ("A", 0, 200_000, 150, 12), ("B", 1, 200_000, 170, 9)])
+        inc = block_mod.MachineBench()
+        for n in range(2, len(chain) + 1):
+            inc.update(chain[:n])
+        fresh = block_mod.MachineBench().update(chain)
+        assert inc.table() == fresh.table()
+        inc.update(chain[:len(chain) - 3])           # a shallow reorg
+        assert inc.table() == block_mod.MachineBench().update(chain[:len(chain) - 3]).table()
