@@ -234,7 +234,7 @@
   var pollTimer = null;
   var failedPolls = 0;
 
-  function setText(s) { textEl.textContent = s; }
+  function setText(s) { textEl.textContent = s; textEl.title = s; }
 
   function poll() {
     fetch("/api/update/status", {cache: "no-store"}).then(function (res) {

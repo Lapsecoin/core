@@ -191,6 +191,14 @@ nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: no
   font-size: .78rem; font-weight: 600; text-decoration: none;
 }
 .version-alert .btn-sm { margin: 0 !important; }
+/* Progress and error text carry whole URLs and install paths: wrap them,
+   break inside a long word, and cap the height so the row never pushes the
+   button off screen or the page sideways. The full text is in the title. */
+.version-alert { flex-wrap: wrap; text-align: center; }
+#update-alert-text {
+  min-width: 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden;
+}
 @media (max-width: 760px) { .version-alert { margin: 0 -.75rem; padding: .25rem .75rem; } }
 .version-alert:hover { background: rgb(194 87 12 / .14); text-decoration: none; }
 @media (max-width: 1560px) { .live-status { display: none; } }
