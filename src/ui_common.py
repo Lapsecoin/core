@@ -7,7 +7,7 @@ import os
 import re
 import sys
 
-from flask import Flask, send_file, send_from_directory
+from flask import Flask, request, send_file, send_from_directory
 from markupsafe import Markup, escape
 
 import crypto as crypto_mod
@@ -233,6 +233,18 @@ def make_flask_app(import_name):
                                  render_board_text=render_board_text,
                                  MAX_MEMO_BYTES=tx_mod.MAX_MEMO_BYTES)
     app.logger.setLevel(logging.WARNING)
+
+    @app.context_processor
+    def embed_context():
+        import embeds   # here, not at the top: embeds itself imports this module
+        # The card a pasted link gets needs absolute addresses: this node's
+        # advertised HTTPS one when it has one (a reverse proxy often hides
+        # the scheme from the request), otherwise the address asked for.
+        base = app.config.get("PUBLIC_URL") or request.url_root.rstrip("/")
+        path = request.full_path.rstrip("?")
+        return {"site_url": base, "page_url": base + path,
+                "og_default": embeds.default()}
+
     return app
 
 
