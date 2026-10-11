@@ -1059,6 +1059,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
     # simulating its way to a slightly different number.
     odds_cache = {}
     odds_lock  = threading.Lock()
+    fastest_tracker = block_mod.FastestMachine()
+
+    def _fastest_machine():
+        """The fastest declared machine since the current regime began. Only
+        the blocks added since the last call are looked at."""
+        with odds_lock:
+            return fastest_tracker.update(node.view.chain).best()
 
     def _race_for():
         tip = node.view.chain[-1]
@@ -1103,6 +1110,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
                     else None)
         return render_template("odds.html", title="Race Odds", race=race,
                                chart=chart, reorgs=node.reorg_stats(),
+                               fastest=_fastest_machine(),
                                own_is_estimate=node.own_vdf_is_estimate(),
                                hardware=hardware,
                                mining_enabled=node.settings.get(settings_mod.MINING_ENABLED),
@@ -1137,6 +1145,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "field_builders": race["field_builders"],
             "field_fastest": race["field_fastest"],
             "machines": race["machines"],
+            "fastest_machine": _fastest_machine(),
             "window_len": len(race["window"]),
             "chart": _race_chart(race, _builder_nicknames_for(), *_chart_dims()),
             "reorgs": node.reorg_stats(),

@@ -36,6 +36,11 @@
     <div class="stat-sub" id="window-count">{{ race.window|length }} blocks</div>
   </div>
   <div class="stat">
+    <div class="stat-label">Fastest machine</div>
+    <div class="stat-value" id="fastest-val">{{ ("%.1f"|format(fastest.pace) ~ "s") if fastest else "--" }}</div>
+    <div class="stat-sub" id="fastest-sub">{% if fastest %}{{ fastest.name }}, {{ fastest.blocks }} blocks, since the last difficulty step{% else %}no declared machine has 5 blocks yet{% endif %}</div>
+  </div>
+  <div class="stat">
     <div class="stat-label">Deepest reorg</div>
     <div class="stat-value" id="reorg-deepest">{{ reorgs.deepest if reorgs.deepest else "none" }}</div>
     <div class="stat-sub" id="reorg-count">
@@ -453,6 +458,11 @@
         data.own_pace_measured ? "median interval of blocks we built"
           : (data.own_is_estimate ? "estimated from calibration, no build finished yet"
                                   : "VDF clock: no block of ours in this window");
+      const fm = data.fastest_machine;
+      document.getElementById("fastest-val").textContent = fm ? fmt1(fm.pace) + "s" : "--";
+      document.getElementById("fastest-sub").textContent = fm
+        ? fm.name + ", " + fm.blocks + " blocks, since the last difficulty step"
+        : "no declared machine has 5 blocks yet";
       document.getElementById("window-median-val").textContent = fmt1(data.median) + "s";
       document.getElementById("window-count").textContent = data.window_len + " blocks";
 

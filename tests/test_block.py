@@ -1215,3 +1215,56 @@ class TestPrivateMachineId:
         assert block_mod.machine_display(i).startswith("Private machine ")
         assert block_mod.machine_display("") == "not declared"
         assert block_mod.machine_display("AMD Ryzen") == "AMD Ryzen"
+
+
+class TestFastestMachine:
+    """The fastest declared machine over the whole regime, kept incrementally."""
+
+    def _chain(self, rows, iterations=100):
+        """rows: (machine, interval) per block after genesis."""
+        chain = [{"hash": "g", "timestamp": 1000, "vdf_iterations": iterations}]
+        for i, (machine, interval) in enumerate(rows, start=1):
+            blk = {"hash": "h%d" % i, "timestamp": chain[-1]["timestamp"] + interval,
+                   "vdf_iterations": iterations}
+            if machine:
+                blk["machine"] = machine
+            chain.append(blk)
+        return chain
+
+    def test_nothing_until_a_machine_has_enough_blocks(self):
+        chain = self._chain([("A", 50)] * (block_mod.FASTEST_MIN_BLOCKS - 1))
+        assert block_mod.FastestMachine().update(chain).best() is None
+
+    def test_picks_the_lowest_median_and_ignores_undeclared(self):
+        rows = [("A", 100)] * 5 + [("B", 60)] * 5 + [(None, 1)] * 20
+        best = block_mod.FastestMachine().update(self._chain(rows)).best()
+        assert best["machine"] == "B" and best["pace"] == 60 and best["blocks"] == 5
+
+    def test_looks_past_the_odds_window(self):
+        rows = [("FAST", 40)] * 5 + [("SLOW", 100)] * (block_mod.ODDS_WINDOW_BLOCKS + 10)
+        best = block_mod.FastestMachine().update(self._chain(rows)).best()
+        assert best["machine"] == "FAST"
+
+    def test_incremental_matches_a_fresh_scan(self):
+        rows = [("A", 90), ("B", 70)] * 6
+        chain = self._chain(rows)
+        inc = block_mod.FastestMachine()
+        for n in range(2, len(chain) + 1):
+            inc.update(chain[:n])
+        assert inc.best() == block_mod.FastestMachine().update(chain).best()
+
+    def test_a_new_regime_starts_over(self):
+        old = self._chain([("OLD", 10)] * 6, iterations=100)
+        new = old + [{"hash": "n%d" % i, "timestamp": old[-1]["timestamp"] + 80 * i,
+                      "vdf_iterations": 200, "machine": "NEW"} for i in range(1, 7)]
+        tracker = block_mod.FastestMachine()
+        tracker.update(old)
+        assert tracker.update(new).best()["machine"] == "NEW"
+
+    def test_a_reorg_rebuilds(self):
+        tracker = block_mod.FastestMachine()
+        tracker.update(self._chain([("A", 50)] * 6))
+        other = self._chain([("B", 70)] * 6)
+        for blk in other[1:]:
+            blk["hash"] = "x" + blk["hash"]
+        assert tracker.update(other).best()["machine"] == "B"
