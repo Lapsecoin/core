@@ -1218,13 +1218,13 @@ class TestPrivateMachineId:
 
 
 class TestFastestMachine:
-    """The fastest declared machine over the whole regime, kept incrementally."""
+    """The fastest declared machine over the whole chain, kept incrementally."""
 
-    def _chain(self, rows, iterations=100):
+    def _chain(self, rows, iterations=100, tag=""):
         """rows: (machine, interval) per block after genesis."""
         chain = [{"hash": "g", "timestamp": 1000, "vdf_iterations": iterations}]
         for i, (machine, interval) in enumerate(rows, start=1):
-            blk = {"hash": "h%d" % i, "timestamp": chain[-1]["timestamp"] + interval,
+            blk = {"hash": "%sh%d" % (tag, i), "timestamp": chain[-1]["timestamp"] + interval,
                    "vdf_iterations": iterations}
             if machine:
                 blk["machine"] = machine
@@ -1246,25 +1246,41 @@ class TestFastestMachine:
         assert best["machine"] == "FAST"
 
     def test_incremental_matches_a_fresh_scan(self):
-        rows = [("A", 90), ("B", 70)] * 6
-        chain = self._chain(rows)
+        chain = self._chain([("A", 90), ("B", 70)] * 6)
         inc = block_mod.FastestMachine()
         for n in range(2, len(chain) + 1):
             inc.update(chain[:n])
         assert inc.best() == block_mod.FastestMachine().update(chain).best()
 
-    def test_a_new_regime_starts_over(self):
-        old = self._chain([("OLD", 10)] * 6, iterations=100)
-        new = old + [{"hash": "n%d" % i, "timestamp": old[-1]["timestamp"] + 80 * i,
-                      "vdf_iterations": 200, "machine": "NEW"} for i in range(1, 7)]
-        tracker = block_mod.FastestMachine()
-        tracker.update(old)
-        assert tracker.update(new).best()["machine"] == "NEW"
+    def test_older_blocks_are_scaled_to_the_current_iterations(self):
+        """40s at 100 iterations is 80s at 200, so against a 100s machine at
+        200 iterations the older one is still the faster."""
+        old = self._chain([("OLD", 40)] * 5, iterations=100)
+        chain = old + [{"hash": "n%d" % i, "timestamp": old[-1]["timestamp"] + 100 * i,
+                        "vdf_iterations": 200, "machine": "NEW"} for i in range(1, 6)]
+        best = block_mod.FastestMachine().update(chain).best()
+        assert best["machine"] == "OLD" and best["pace"] == 80
 
-    def test_a_reorg_rebuilds(self):
+    def test_a_shallow_reorg_is_undone_not_rescanned(self):
         tracker = block_mod.FastestMachine()
-        tracker.update(self._chain([("A", 50)] * 6))
-        other = self._chain([("B", 70)] * 6)
-        for blk in other[1:]:
-            blk["hash"] = "x" + blk["hash"]
+        chain = self._chain([("A", 50)] * 8)
+        tracker.update(chain)
+        fork = chain[:-1] + [{"hash": "alt", "timestamp": chain[-2]["timestamp"] + 90,
+                              "vdf_iterations": 100, "machine": "B"}]
+        tracker.update(fork)
+        fresh = block_mod.FastestMachine().update(fork)
+        assert tracker.best() == fresh.best()
+        assert tracker._samples == fresh._samples
+
+    def test_a_reorg_deeper_than_the_undo_log_rebuilds(self):
+        tracker = block_mod.FastestMachine()
+        tracker.update(self._chain([("A", 50)] * (block_mod.FastestMachine.UNDO_DEPTH + 10)))
+        other = self._chain([("B", 70)] * 10, tag="x")
         assert tracker.update(other).best()["machine"] == "B"
+        assert "A" not in tracker._samples or not tracker._samples["A"]
+
+    def test_a_shorter_chain_drops_the_blocks_it_no_longer_has(self):
+        tracker = block_mod.FastestMachine()
+        chain = self._chain([("A", 50)] * 10)
+        tracker.update(chain)
+        assert tracker.update(chain[:6]).best()["blocks"] == 5

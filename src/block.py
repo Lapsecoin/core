@@ -1,6 +1,7 @@
 """Block creation, validation, serialization. Pure functions on dicts."""
 
 import bisect
+import collections
 import hashlib
 import hmac
 import random
@@ -678,71 +679,91 @@ FASTEST_MIN_BLOCKS = 5
 
 
 class FastestMachine:
-    """The declared machine with the lowest median interval since the current
-    vdf_iterations regime began, not just over the odds window.
+    """The declared machine with the lowest median interval over the whole
+    chain, shown in seconds at the tip's current vdf_iterations.
 
     Seconds are only comparable within one regime (iterations only ratchet
-    upward, see race_window), so a new regime starts the record over, which
-    also bounds the scan to one retarget interval. Kept incrementally: each
-    block is looked at once and goes into a sorted list for its machine, so
-    the median is a lookup, and a request costs the blocks added since the
-    last one. A reorg or a new regime rebuilds from the regime's start.
+    upward, see race_window), so each interval is kept as seconds per
+    iteration and scaled to the tip's iterations when read. That treats an
+    interval as proportional to the work, the same approximation the odds
+    page makes inside its window.
+
+    Kept incrementally: each block is looked at once and goes into a sorted
+    list for its machine, so the median is a lookup, and a request costs the
+    blocks added since the last one. The last few counted blocks are
+    remembered so a reorg (a one-block tie swap happens constantly) is
+    undone instead of rescanning the chain; only one deeper than that
+    rebuilds from the start.
 
     Self-reported and unverifiable, like every machine label: a description
     of who declared what, never evidence of speed.
     """
 
-    def __init__(self):
-        self._iterations = None
-        self._scanned = 0          # chain[:_scanned] has been counted
-        self._tail_hash = None     # hash of chain[_scanned - 1], to spot a reorg
-        self._samples = {}         # label -> sorted intervals
-        self._paces = {}           # label -> median, for labels with enough blocks
+    UNDO_DEPTH = 64
 
-    def _reset(self, iterations, start):
-        self._iterations, self._scanned, self._tail_hash = iterations, start, None
-        self._samples, self._paces = {}, {}
+    def __init__(self):
+        self._reset()
+
+    def _reset(self):
+        self._scanned = 1          # chain[:_scanned] has been counted
+        self._log = collections.deque(maxlen=self.UNDO_DEPTH)  # (hash, label, spi)
+        self._samples = {}         # label -> sorted seconds per iteration
+        self._medians = {}         # label -> median, for labels with enough blocks
+        self._iterations = None    # the tip's, to scale to
+
+    def _refresh(self, label):
+        v = self._samples.get(label, [])
+        if len(v) >= FASTEST_MIN_BLOCKS:
+            mid = len(v) // 2
+            self._medians[label] = v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
+        else:
+            self._medians.pop(label, None)
+
+    def _undo_one(self):
+        _hash, label, spi = self._log.pop()
+        self._scanned -= 1
+        if label:
+            v = self._samples[label]
+            del v[bisect.bisect_left(v, spi)]
+            self._refresh(label)
 
     def update(self, chain):
         """Count the blocks added since the last call. Returns self."""
         n = len(chain)
-        if n < 2:
-            self._reset(None, 1)
-            return self
-        iterations = chain[-1].get("vdf_iterations")
-        intact = (self._iterations == iterations and 0 < self._scanned <= n
-                  and (self._scanned == 1
-                       or chain[self._scanned - 1].get("hash") == self._tail_hash))
-        if not intact:
-            start = n - 1
-            while start > 1 and chain[start - 1].get("vdf_iterations") == iterations:
-                start -= 1
-            self._reset(iterations, start)
+        while self._scanned > 1 and not (
+                self._scanned <= n and self._log
+                and chain[self._scanned - 1].get("hash") == self._log[-1][0]):
+            if not self._log:
+                self._reset()
+                break
+            self._undo_one()
         touched = set()
         for h in range(self._scanned, n):
-            label = machine_label(chain[h])
-            if not label:
-                continue
-            bisect.insort(self._samples.setdefault(label, []),
-                          chain[h]["timestamp"] - chain[h - 1]["timestamp"])
-            touched.add(label)
+            blk = chain[h]
+            iterations = blk.get("vdf_iterations")
+            label = machine_label(blk)
+            spi = None
+            if label and iterations:
+                spi = (blk["timestamp"] - chain[h - 1]["timestamp"]) / iterations
+                bisect.insort(self._samples.setdefault(label, []), spi)
+                touched.add(label)
+            self._log.append((blk.get("hash"), label if spi is not None else "", spi))
         for label in touched:
-            v = self._samples[label]
-            if len(v) >= FASTEST_MIN_BLOCKS:
-                mid = len(v) // 2
-                self._paces[label] = v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
-        self._scanned = n
-        self._tail_hash = chain[n - 1].get("hash")
+            self._refresh(label)
+        self._scanned = max(n, 1)
+        self._iterations = chain[-1].get("vdf_iterations") if n else None
         return self
 
     def best(self):
         """{"machine", "name", "pace", "blocks"} or None when no declared
-        machine has enough blocks yet."""
-        if not self._paces:
+        machine has enough blocks yet. pace is in seconds at the tip's
+        current vdf_iterations."""
+        if not self._medians or not self._iterations:
             return None
-        label = min(self._paces, key=lambda m: (self._paces[m], m))
+        label = min(self._medians, key=lambda m: (self._medians[m], m))
         return {"machine": label, "name": machine_display(label),
-                "pace": self._paces[label], "blocks": len(self._samples[label])}
+                "pace": self._medians[label] * self._iterations,
+                "blocks": len(self._samples[label])}
 
 
 def validate(blk, state, chain):

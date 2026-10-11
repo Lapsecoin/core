@@ -1062,8 +1062,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
     fastest_tracker = block_mod.FastestMachine()
 
     def _fastest_machine():
-        """The fastest declared machine since the current regime began. Only
-        the blocks added since the last call are looked at."""
+        """The fastest declared machine over the whole chain, scaled to the
+        current iterations. Only the blocks added since the last call are
+        looked at."""
         with odds_lock:
             return fastest_tracker.update(node.view.chain).best()
 
