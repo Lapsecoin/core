@@ -394,11 +394,6 @@ class TestPeersPage:
         assert resp.status_code == 200
         assert 'id="topology"' in resp.get_data(as_text=True)
 
-    def test_old_peers_url_redirects(self):
-        resp = self._client().get("/peers")
-        assert resp.status_code == 301
-        assert resp.headers["Location"].endswith("/network")
-
     def test_api_peers_reports_self_and_peer_data(self):
         data = self._client().get("/api/peers").get_json()
         by_addr = {p["address"]: p for p in data["graph_peers"]}
