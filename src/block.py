@@ -674,9 +674,9 @@ def machine_display(label):
     return label
 
 
-# The benchmark counts blocks stamped from this moment on (11 Oct 2026, UTC).
+# The benchmark counts blocks stamped from this moment on (10 Oct 2026, UTC).
 # Display only, like the rest of MachineBench.
-BENCHMARK_START = 1791676800
+BENCHMARK_START = 1791590400
 
 # A machine needs this many blocks before it is ranked or can be the fastest:
 # one lucky interval is not a speed.
