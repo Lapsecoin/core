@@ -1,5 +1,6 @@
 """Block creation, validation, serialization. Pure functions on dicts."""
 
+import bisect
 import hashlib
 import hmac
 import random
@@ -669,6 +670,79 @@ def machine_display(label):
     if label.startswith(PRIVATE_MACHINE_PREFIX):
         return "Private machine " + label[len(PRIVATE_MACHINE_PREFIX):][:6]
     return label
+
+
+# A machine needs this many blocks before its pace counts as the fastest: one
+# lucky interval is not a pace.
+FASTEST_MIN_BLOCKS = 5
+
+
+class FastestMachine:
+    """The declared machine with the lowest median interval since the current
+    vdf_iterations regime began, not just over the odds window.
+
+    Seconds are only comparable within one regime (iterations only ratchet
+    upward, see race_window), so a new regime starts the record over, which
+    also bounds the scan to one retarget interval. Kept incrementally: each
+    block is looked at once and goes into a sorted list for its machine, so
+    the median is a lookup, and a request costs the blocks added since the
+    last one. A reorg or a new regime rebuilds from the regime's start.
+
+    Self-reported and unverifiable, like every machine label: a description
+    of who declared what, never evidence of speed.
+    """
+
+    def __init__(self):
+        self._iterations = None
+        self._scanned = 0          # chain[:_scanned] has been counted
+        self._tail_hash = None     # hash of chain[_scanned - 1], to spot a reorg
+        self._samples = {}         # label -> sorted intervals
+        self._paces = {}           # label -> median, for labels with enough blocks
+
+    def _reset(self, iterations, start):
+        self._iterations, self._scanned, self._tail_hash = iterations, start, None
+        self._samples, self._paces = {}, {}
+
+    def update(self, chain):
+        """Count the blocks added since the last call. Returns self."""
+        n = len(chain)
+        if n < 2:
+            self._reset(None, 1)
+            return self
+        iterations = chain[-1].get("vdf_iterations")
+        intact = (self._iterations == iterations and 0 < self._scanned <= n
+                  and (self._scanned == 1
+                       or chain[self._scanned - 1].get("hash") == self._tail_hash))
+        if not intact:
+            start = n - 1
+            while start > 1 and chain[start - 1].get("vdf_iterations") == iterations:
+                start -= 1
+            self._reset(iterations, start)
+        touched = set()
+        for h in range(self._scanned, n):
+            label = machine_label(chain[h])
+            if not label:
+                continue
+            bisect.insort(self._samples.setdefault(label, []),
+                          chain[h]["timestamp"] - chain[h - 1]["timestamp"])
+            touched.add(label)
+        for label in touched:
+            v = self._samples[label]
+            if len(v) >= FASTEST_MIN_BLOCKS:
+                mid = len(v) // 2
+                self._paces[label] = v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
+        self._scanned = n
+        self._tail_hash = chain[n - 1].get("hash")
+        return self
+
+    def best(self):
+        """{"machine", "name", "pace", "blocks"} or None when no declared
+        machine has enough blocks yet."""
+        if not self._paces:
+            return None
+        label = min(self._paces, key=lambda m: (self._paces[m], m))
+        return {"machine": label, "name": machine_display(label),
+                "pace": self._paces[label], "blocks": len(self._samples[label])}
 
 
 def validate(blk, state, chain):
