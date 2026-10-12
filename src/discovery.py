@@ -67,6 +67,10 @@ DHT_BOOTSTRAP_TIMEOUT  = 15   # max wait for DHT bootstrap before first query an
 # not again for another hour, real BitTorrent clients re-announce every
 # few minutes, not hourly.
 TORRENT_ANNOUNCE_INTERVAL = 300
+# A node with no peers is the one that most needs to be found, so it
+# re-publishes far more often than the steady-state cadence above.
+LONELY_PUT_INTERVAL      = 600
+LONELY_ANNOUNCE_INTERVAL = 60
 
 # How often to log where discovery stands. Without this, a node with zero
 # peers just goes quiet after the startup burst, indistinguishable from
@@ -256,7 +260,11 @@ class Discovery:
                 last_get = now
 
 
-            if ses is not None and (now - last_put >= PUT_REFRESH_INTERVAL
+            lonely = self.pool.count() == 0
+            if ses is not None:
+                self._dht.pump_gets(ses)
+            put_interval = LONELY_PUT_INTERVAL if lonely else PUT_REFRESH_INTERVAL
+            if ses is not None and (now - last_put >= put_interval
                                     or (self._dht.put_failed and now - last_put >= PUT_RETRY_INTERVAL)):
                 # Use external addr learned from PONG, or fall back to ipify
                 ext = self.udp.our_external_addr
@@ -267,7 +275,8 @@ class Discovery:
                     self._dht.put(ses, self._dht.slot_for(my_addr), my_addr)
                 last_put = now
 
-            if ses is not None and now - last_announce >= TORRENT_ANNOUNCE_INTERVAL:
+            announce_interval = LONELY_ANNOUNCE_INTERVAL if lonely else TORRENT_ANNOUNCE_INTERVAL
+            if ses is not None and now - last_announce >= announce_interval:
                 self._dht.torrent_announce(ses)
                 last_announce = now
 
