@@ -262,8 +262,7 @@ class Discovery:
                     ext = self._fallback_ip()
                 if ext:
                     my_addr = ext if ":" in ext else f"{ext}:{self.port}"
-                    for slot in self._dht.put_slots():
-                        self._dht.put(ses, slot, my_addr)
+                    self._dht.put(ses, my_slot, my_addr)
                 last_put = now
 
             if ses is not None and now - last_announce >= TORRENT_ANNOUNCE_INTERVAL:
