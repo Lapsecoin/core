@@ -84,7 +84,7 @@ LONELY_ANNOUNCE_INTERVAL = 60
 # hung, same problem the VDF wait had before it got a heartbeat too.
 STATUS_LOG_INTERVAL = 60
 
-PUT_RETRY_INTERVAL   = 120   # seconds before re-putting after a put reached no node
+PUT_RETRY_INTERVAL   = 150   # seconds before re-putting a put that reached no node or that no read round has seen
 PUNCH_ATTEMPTS       = 3     # how many relays to try when direct ping fails
 PUNCH_WAIT           = 2.5   # seconds to wait after punch before re-pinging
 
@@ -285,8 +285,10 @@ class Discovery:
             if ses is not None:
                 self._dht.pump_gets(ses)
             put_interval = LONELY_PUT_INTERVAL if lonely else PUT_REFRESH_INTERVAL
-            if ses is not None and (now - last_put >= put_interval
-                                    or (self._dht.put_failed and now - last_put >= PUT_RETRY_INTERVAL)):
+            put_due = (now - last_put >= put_interval
+                       or ((self._dht.put_failed or self._dht.needs_reput())
+                           and now - last_put >= PUT_RETRY_INTERVAL))
+            if ses is not None and put_due and self._dht.ready_to_put():
                 # Use external addr learned from PONG, or fall back to ipify
                 ext = self.udp.our_external_addr
                 if not ext:

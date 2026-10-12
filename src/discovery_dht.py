@@ -35,6 +35,9 @@ log = logging.getLogger("ec.discovery.dht")
 DHT_STATE_FILE       = "lapsecoin_lt_dht.dat"
 PUT_REFRESH_INTERVAL = 3600
 GET_SLOTS_PER_TICK   = 6
+PUT_AFTER_BOOTSTRAP  = 30
+PUT_BOOTSTRAP_GIVE_UP = 180
+PUT_VERIFY_ATTEMPTS  = 6
 
 
 class DHTDiscovery:
@@ -49,6 +52,11 @@ class DHTDiscovery:
         self._pk_to_slot    = None   # public key bytes -> slot index, for logging
         self.put_failed     = False  # last put reached no node, retry early
         self._candidate_log = Throttle(600)  # same address, one line per 10 min
+        self._started_at    = time.monotonic()
+        self._bootstrapped_at = None
+        self._own_slot      = None   # slot of our last put
+        self._own_visible   = False  # a read round has seen that put
+        self._put_attempts  = 0
         self._pending_gets  = []     # slots still to query in this round
         self._round_total   = 0      # slots queried this round
         self._round_done    = 0      # of those, how many have answered
@@ -135,6 +143,7 @@ class DHTDiscovery:
             elif isinstance(a, lt.dht_bootstrap_alert):
                 log.info("[dht] bootstrap complete")
                 self.bootstrapped = True
+                self._bootstrapped_at = time.monotonic()
 
     def _log_item(self, alert):
         """Fold the answers of one read round into a single line, so a
@@ -148,6 +157,8 @@ class DHTDiscovery:
                                     for i in range(BEP44_SLOT_COUNT)}
             slot = self._pk_to_slot.get(bytes(alert.key), -1)
             self._round_done += 1
+            if slot == self._own_slot and getattr(alert, "seq", 0) > 0:
+                self._own_visible = True
             if getattr(alert, "seq", 0) > 0:
                 self._round_hits.append(slot)
             if self._round_done >= self._round_total > 0:
@@ -163,7 +174,31 @@ class DHTDiscovery:
     # BEP44 put / get
     # ------------------------------------------------------------------
 
+    def ready_to_put(self):
+        """A put sent into a routing table that has only just bootstrapped
+        lands on whichever few nodes it knows, not the ones closest to the
+        slot, and then no reader's lookup ever reaches it (seen: a node's own
+        slot unreadable for 12 minutes after a put one second before
+        bootstrap finished). So wait a little after bootstrap, but never
+        longer than a few minutes if the alert does not arrive."""
+        now = time.monotonic()
+        if self._bootstrapped_at is not None:
+            return now - self._bootstrapped_at >= PUT_AFTER_BOOTSTRAP
+        return now - self._started_at >= PUT_BOOTSTRAP_GIVE_UP
+
+    def needs_reput(self):
+        """True while our last put has not shown up in a read round, up to
+        PUT_VERIFY_ATTEMPTS tries. Our own slot is read like any other, so
+        this checks the put from the outside, the way a peer would see it."""
+        return (self._own_slot is not None and not self._own_visible
+                and 0 < self._put_attempts < PUT_VERIFY_ATTEMPTS)
+
     def put(self, ses, slot_index, my_addr):
+        if slot_index == self._own_slot and not self._own_visible:
+            self._put_attempts += 1
+        else:
+            self._put_attempts = 1
+        self._own_slot, self._own_visible = slot_index, False
         sk_64, pk = self._slot_keypair(slot_index)
         value = json.dumps({"addr": my_addr, "ts": int(time.time())}).encode()
         self.put_failed = False
