@@ -200,11 +200,12 @@ class DHTDiscovery:
         return sk_64, pk
 
     def slot_for(self, addr):
-        """Deterministic slot for a published ip:port. The address is what
-        peers actually dial, so it is what identifies a node here: the same
-        ip:port always maps to the same slot, and two nodes on one ip (or
-        sharing a key) with different ports map to different ones."""
-        return int(hashlib.sha256(addr.encode()).hexdigest()[:8], 16) % BEP44_SLOT_COUNT
+        """Deterministic slot for this node's published ip:port and key.
+        Stable while the node keeps its address, and both parts matter: the
+        pubkey spreads nodes that share an address, the ip:port keeps one
+        key run from two places from landing on the same slot."""
+        ident = f"{self.node_pubkey_hex}:{addr}"
+        return int(hashlib.sha256(ident.encode()).hexdigest()[:8], 16) % BEP44_SLOT_COUNT
 
     def _my_write_offset(self):
         return int(hashlib.sha256(
