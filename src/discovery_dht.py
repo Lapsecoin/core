@@ -32,7 +32,6 @@ log = logging.getLogger("ec.discovery.dht")
 
 DHT_STATE_FILE       = "lapsecoin_lt_dht.dat"
 PUT_REFRESH_INTERVAL = 3600
-PUT_SLOT_FANOUT      = 3
 
 
 class DHTDiscovery:
@@ -200,34 +199,12 @@ class DHTDiscovery:
         sk_64  = bytes(h)
         return sk_64, pk
 
-    def put_slots(self, now=None):
-        """Slots this node publishes to for the current refresh epoch.
-
-        A slot is one shared BEP44 item, so a node whose slot index equals
-        another's silently overwrites it. A fixed pubkey-derived slot made
-        that permanent: two colliding nodes each skipped their own slot and
-        read only the other's overwritten value, so they never saw each
-        other. The index now also depends on the port and the epoch, so
-        nodes behind one address diverge and any collision lasts at most
-        one refresh, and each node writes to PUT_SLOT_FANOUT distinct slots.
-        """
-        if now is None:
-            now = time.time()
-        epoch = int(now // PUT_REFRESH_INTERVAL)
-        ident = f"{self.node_pubkey_hex}:{self.port}:{epoch}"
-        slots = []
-        i = 0
-        while len(slots) < min(PUT_SLOT_FANOUT, BEP44_SLOT_COUNT):
-            h = hashlib.sha256(f"{ident}:{i}".encode()).hexdigest()
-            slot = int(h[:8], 16) % BEP44_SLOT_COUNT
-            if slot not in slots:
-                slots.append(slot)
-            i += 1
-        return slots
-
     def _my_slot_index(self):
+        """Deterministic, one slot per node, so the table holds as many
+        distinct nodes as it can. The port is part of the key so two nodes
+        behind one address (or sharing a key) land on different slots."""
         return int(hashlib.sha256(
-            self.node_pubkey_hex.encode()
+            f"{self.node_pubkey_hex}:{self.port}".encode()
         ).hexdigest()[:8], 16) % BEP44_SLOT_COUNT
 
     def _my_write_offset(self):
