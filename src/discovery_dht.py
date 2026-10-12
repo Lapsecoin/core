@@ -242,8 +242,14 @@ class DHTDiscovery:
         settings["enable_upnp"]   = False
         settings["enable_natpmp"] = False
         settings["listen_interfaces"] = f"0.0.0.0:{self.port + 3}"
+        # dht_get_peers_reply_alert is a dht_operation alert, not a plain
+        # dht one. Without that category the genesis-torrent lookups ran
+        # but their replies were never delivered, so the one channel that
+        # has no shared slots (every node announces its own ip:port) found
+        # nobody. No log in the field ever showed a "torrent candidate".
         settings["alert_mask"] = (
             lt.alert.category_t.dht_notification
+            | lt.alert.category_t.dht_operation_notification
             | lt.alert.category_t.status_notification
         )
         settings["dht_bootstrap_nodes"] = (

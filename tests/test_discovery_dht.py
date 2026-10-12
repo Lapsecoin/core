@@ -55,7 +55,8 @@ class TestStartWithoutLibtorrent:
             default_settings=lambda: {},
             session=lambda settings: fake_session,
             alert=types.SimpleNamespace(category_t=types.SimpleNamespace(
-                dht_notification=1, status_notification=2)),
+                dht_notification=1, status_notification=2,
+                dht_operation_notification=4)),
         )
         import unittest.mock as mock
         with mock.patch.object(discovery_dht_mod, "lt", fake_lt):
