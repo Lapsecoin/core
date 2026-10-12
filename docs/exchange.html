@@ -3,176 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LapseCoin Exchange Integration</title>
-<link rel="icon" type="image/svg+xml" href="https://lapsenode.vicnas.me/favicon.svg">
-<style>
-:root {
-  --paper: #f6f3ea;
-  --paper-2: #efeadb;
-  --ink: #1c1a14;
-  --ink-dim: #4a4638;
-  --rule: #1c1a14;
-  --rule-lt: #b9b29b;
-  --accent: #b35a0c;
-  --link: var(--accent);
-  --gain: #2f5c33;
-  --loss: #7a2222;
-  --mono: "Courier New", Courier, "Liberation Mono", monospace;
-  --serif: "Times New Roman", Times, Georgia, "Liberation Serif", serif;
-  --container: 900px;
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-body {
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--serif);
-  font-size: 17px;
-  line-height: 1.5;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
-a { color: var(--link); text-decoration: underline; }
-h1, h2, h3, h4, p, ul, li { margin: 0; }
-.masthead {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: var(--paper);
-  border-bottom: 3px double var(--rule);
-  padding: 0.4rem 1.25rem 0.3rem;
-}
-.masthead-inner {
-  max-width: var(--container);
-  margin: 0 auto;
-  position: relative;
-}
-.masthead-title {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  font-size: 1.3rem;
-  font-weight: bold;
-  letter-spacing: 0.02em;
-  text-align: center;
-  margin-bottom: 0.25rem;
-}
-nav.mainnav {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  column-gap: 1.1rem;
-  row-gap: 0.3rem;
-  font-size: 0.92rem;
-}
-nav.mainnav a {
-  color: var(--ink);
-  text-decoration: none;
-  padding-bottom: 0.2rem;
-  border-bottom: 2px solid transparent;
-}
-nav.mainnav a:hover { text-decoration: underline; }
-nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
-main {
-  flex: 1;
-  max-width: var(--container);
-  margin: 0 auto;
-  padding: 1.5rem 1.25rem;
-  width: 100%;
-}
-.card {
-  background: var(--paper-2);
-  border: 1px solid var(--rule-lt);
-  border-radius: 0;
-  padding: 1rem;
-  margin-bottom: 1.5rem;
-}
-.card-title {
-  font-weight: bold;
-  font-size: 1.1rem;
-  margin-bottom: 0.75rem;
-  color: var(--accent);
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.95rem;
-}
-th, td {
-  text-align: left;
-  padding: 0.5rem;
-  border: 1px solid var(--rule-lt);
-}
-th {
-  background: var(--paper);
-  font-weight: bold;
-}
-td { background: var(--paper); }
-code {
-  font-family: var(--mono);
-  background: var(--paper);
-  padding: 0.1rem 0.3rem;
-  font-size: 0.9rem;
-}
-ul { margin-left: 1.5rem; margin-top: 0.5rem; }
-@media (max-width: 640px) {
-  .masthead { padding: 0.35rem 1rem 0.25rem; }
-  .masthead-title { font-size: 1.25rem; }
-  nav.mainnav { font-size: 0.82rem; column-gap: 0.8rem; }
-  main { padding: 1rem; }
-  table { font-size: 0.85rem; }
-  th, td { padding: 0.4rem; }
-}
-/* docs-extra */
-pre {
-  background: var(--paper);
-  border: 1px solid var(--rule-lt);
-  padding: 0.75rem;
-  overflow-x: auto;
-  font-family: "Courier New", Courier, "Liberation Mono", monospace;
-  font-size: 0.85rem;
-  line-height: 1.4;
-  margin: 0.5rem 0;
-}
-code {
-  font-family: "Courier New", Courier, "Liberation Mono", monospace;
-  background: var(--paper);
-  padding: 0.1rem 0.3rem;
-  font-size: 0.9rem;
-}
-pre code { padding: 0; background: none; }
-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin-top: 0.5rem; }
-th, td { text-align: left; padding: 0.5rem; border: 1px solid var(--rule-lt); vertical-align: top; }
-th { background: var(--paper); }
-td { background: var(--paper); }
-p + p, p + ul, p + pre, pre + p, ul + p { margin-top: 0.6rem; }
-.section-title { font-weight: bold; margin: 1rem 0 0.4rem; }
-ol { margin-left: 1.5rem; margin-top: 0.5rem; }
-</style>
+<title>Exchange integration | LapseCoin</title>
+<meta name="description" content="Integrating LapseCoin for exchanges: Bitcoin Core RPC equivalents, deposit detection, withdrawals and cold storage.">
+<link rel="icon" type="image/svg+xml" href="lapsecoin.svg">
+<link rel="canonical" href="https://lapsecoin.github.io/core/exchange.html">
+<meta property="og:site_name" content="LapseCoin">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Exchange integration | LapseCoin">
+<meta property="og:description" content="Integrating LapseCoin for exchanges: Bitcoin Core RPC equivalents, deposit detection, withdrawals and cold storage.">
+<meta property="og:url" content="https://lapsecoin.github.io/core/exchange.html">
+<meta property="og:image" content="https://lapsecoin.github.io/core/logo-512.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#f4f1ea">
+<link rel="preload" href="css/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/site.css">
 </head>
 <body>
-<header class="masthead">
-<div class="masthead-inner">
-<div class="masthead-title">LapseCoin Exchange Integration</div>
-<nav class="mainnav">
-<a href="index.html">Home</a>
-<span class="sep">|</span>
-<a href="api.html">API</a>
-<span class="sep">|</span>
-<a href="exchange.html" class="active">Exchange</a>
-<span class="sep">|</span>
-<a href="tx.html">Transactions</a>
-</nav>
-</div>
-</header>
-
-<main>
-<div class="card">
-<div class="card-title">Mapping common wallet RPC calls</div>
+<header class="bar"><div class="bar-in">
+<a class="brand" href="index.html"><img src="lapsecoin.svg" alt="" width="22" height="22">LapseCoin</a>
+<nav class="nav" aria-label="Site"><a href="index.html">Home</a><a href="api.html">API</a><a href="tx.html">Transactions</a><a href="exchange.html" aria-current="page">Exchange</a><a href="https://github.com/Lapsecoin/core/blob/main/docs/whitepaper.md">Whitepaper</a><a class="gh" href="https://github.com/Lapsecoin/core"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></nav>
+</div></header>
+<main><div class="wrap">
+<div class="page-head"><h1>Exchange integration</h1><p>How a service that already talks to Bitcoin Core maps onto a LapseCoin node.</p></div>
+<div class="doc"><div class="prose">
+<section id="mapping-common-wallet-rpc-calls">
+<h2>Mapping common wallet RPC calls</h2>
 <p>LapseCoin nodes expose an HTTP API, not a JSON-RPC wallet. This table maps familiar Bitcoin Core calls to the closest equivalent. There is no account or label system. Details are on the <a href="api.html">API</a> and <a href="tx.html">Transactions</a> pages.</p>
-<table>
+<div class="tbl"><table>
 <tr><th>Bitcoin Core call</th><th>LapseCoin equivalent</th><th>Differences</th></tr>
 <tr><td><code>getnewaddress</code></td><td>Generate a FALCON-512 keypair yourself and derive the address</td><td>No node call. An address is derived purely from the public key, so no node is needed to create one.</td></tr>
 <tr><td><code>getbalance</code></td><td><code>GET /api/address/{addr}/balance</code></td><td>Returns <code>balance_ticks</code> and <code>balance_lapse</code> from chain state</td></tr>
@@ -183,25 +42,23 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 <tr><td><code>estimatesmartfee</code></td><td><code>GET /api/fees</code></td><td>Returns <code>next_block</code>, <code>min</code>, <code>median</code>, <code>max</code> in ticks per byte</td></tr>
 <tr><td><code>getmempoolinfo</code></td><td><code>GET /api/mempool</code></td><td>Size and a summary of each pending transaction</td></tr>
 <tr><td><code>getblockcount</code>, <code>getblock</code></td><td><code>GET /api/info</code> (<code>height</code>), <code>GET /api/block/{height}</code></td><td>Blocks are addressed by height</td></tr>
-</table>
-</div>
-
-<div class="card">
-<div class="card-title">Key differences</div>
+</table></div>
+</section>
+<section id="key-differences">
+<h2>Key differences</h2>
 <ul>
 <li><strong>Integer ticks:</strong> 1 LAPSE = 100,000,000 ticks, the same precision as BTC and satoshis. Keep all amounts as integers.</li>
 <li><strong>Addresses:</strong> twelve dot-separated BIP39 words. Creating one costs nothing, so you can give each customer a unique deposit address instead of relying on memos.</li>
 <li><strong>Memo:</strong> transactions can carry an optional plaintext memo of up to 200 bytes, visible to everyone forever. It can serve as a deposit tag, but senders may omit it, so a unique address per customer is more robust.</li>
 <li><strong>Signatures:</strong> FALCON-512 (quantum-resistant), not ECDSA or Ed25519. Use liboqs.</li>
-<li><strong>Nonces:</strong> strictly sequential per sender, starting at 1. There is no nonce endpoint.</li>
+<li><strong>Nonces:</strong> strictly sequential per sender, starting at 1. Read the last used nonce from <code>GET /api/state?addr=</code>; it counts pending transactions too, and the next one is that plus one.</li>
 <li><strong>Fees:</strong> chosen by the sender and priced per byte. Block time targets about 120 seconds, and blocks are capped at 2 MB.</li>
 <li><strong>Output limits:</strong> up to 500 outputs per transaction, and a sender cannot pay its own address.</li>
 <li><strong>No CORS and rate limits:</strong> call the API from your backend, and expect per-IP limits on public nodes. Run your own node for production use.</li>
 </ul>
-</div>
-
-<div class="card">
-<div class="card-title">Implementation checklist</div>
+</section>
+<section id="implementation-checklist">
+<h2>Implementation checklist</h2>
 <ul>
 <li>Run your own node so your integration does not depend on a third-party API.</li>
 <li>Generate deposit addresses from keypairs you control and store the secret keys securely.</li>
@@ -210,17 +67,24 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 <li>For withdrawals: derive the next nonce, pick a fee using <code>/api/fees</code>, sign with FALCON-512, and POST to <code>/api/tx/send</code>. Serialize withdrawals per sending address so nonces do not collide.</li>
 <li>Check the <code>ok</code> field of the broadcast response, and confirm the transaction later by hash.</li>
 </ul>
-</div>
-
-<div class="card">
-<div class="card-title">Cold storage</div>
+</section>
+<section id="cold-storage">
+<h2>Cold storage</h2>
 <p>Because addresses are derived from public keys and <code>/api/tx/send</code> only accepts fully signed transactions, signing can happen entirely offline.</p>
 <ul>
 <li>Keep secret keys on an offline machine.</li>
 <li>Carry the nonce and fee you determined online to the offline signer, sign the transaction there, and transfer the signed JSON back.</li>
 <li>Broadcast from the online machine. The broadcast endpoint needs no authentication.</li>
 </ul>
-</div>
-</main>
+</section>
+</div><aside class="toc" aria-label="On this page"><b>On this page</b><a href="#mapping-common-wallet-rpc-calls">Mapping common wallet RPC calls</a><a href="#key-differences">Key differences</a><a href="#implementation-checklist">Implementation checklist</a><a href="#cold-storage">Cold storage</a></aside></div>
+</div></main>
+<footer><div class="wrap">
+<a href="https://github.com/Lapsecoin/core">GitHub</a>
+<a href="https://github.com/Lapsecoin/core/releases">Releases</a>
+<a href="https://lapsenode.vicnas.me/">Live node</a>
+<a href="https://discord.gg/FP2d8JmK6r">Discord</a>
+</div></footer>
+<script src="js/toc.js" defer></script>
 </body>
 </html>
