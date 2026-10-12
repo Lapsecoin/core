@@ -5,10 +5,10 @@ Owns the libtorrent session. Calls enqueue_candidate() on Discovery
 
 Public interface used by the coordinator:
   DHTDiscovery(enqueue_fn, genesis_hash, port, node_pubkey_hex)
-  .start()          create session, return (session, my_slot, my_offset)
+  .start()          create session, return (session, my_offset)
   .process_alerts(ses)
   .put(ses, slot, addr)
-  .get_all(ses, my_slot)
+  .get_all(ses)
   .torrent_announce(ses)
   .torrent_get_peers(ses)
   .save_state(ses)
