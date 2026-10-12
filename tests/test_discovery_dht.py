@@ -65,3 +65,59 @@ class TestStartWithoutLibtorrent:
                 ses, my_offset = dht.start()
 
         assert ses is fake_session
+
+
+class TestOwnSlotCheck:
+    """Our slot only counts as published when it holds our own address."""
+
+    def _dht(self):
+        dht = discovery_dht_mod.DHTDiscovery(
+            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333,
+            node_pubkey_hex="ab" * 32)
+        dht._pk_to_slot = {}
+        return dht
+
+    def _alert(self, dht, slot, seq):
+        import types
+        _, pk = dht._slot_keypair(slot)
+        dht._pk_to_slot[pk] = slot
+        return types.SimpleNamespace(authoritative=True, key=pk, seq=seq)
+
+    def _put(self, dht, addr, acked_ago):
+        import time
+        slot = dht.slot_for(addr)
+        dht._own_slot, dht._own_addr, dht._own_visible = slot, addr, False
+        dht._put_acked_at = time.monotonic() - acked_ago
+        dht._round_total = 1
+        return slot
+
+    def test_our_own_value_in_our_slot_is_visible(self):
+        dht = self._dht()
+        slot = self._put(dht, "1.2.3.4:8333", acked_ago=60)
+        dht._note_item(self._alert(dht, slot, 3), "1.2.3.4:8333")
+        assert dht._own_visible and not dht.slot_taken
+
+    def test_somebody_elses_value_in_our_slot_marks_it_taken(self):
+        dht = self._dht()
+        slot = self._put(dht, "1.2.3.4:8333", acked_ago=60)
+        dht._note_item(self._alert(dht, slot, 9), "9.9.9.9:8333")
+        assert dht.slot_taken and not dht._own_visible
+        assert dht.needs_reput()
+
+    def test_a_value_read_right_after_the_put_is_not_yet_a_conflict(self):
+        dht = self._dht()
+        slot = self._put(dht, "1.2.3.4:8333", acked_ago=5)
+        dht._note_item(self._alert(dht, slot, 9), "9.9.9.9:8333")
+        assert not dht.slot_taken
+
+    def test_moving_gives_a_different_slot_and_stops_after_the_limit(self):
+        dht = self._dht()
+        first = dht.slot_for("1.2.3.4:8333")
+        seen = {first}
+        for _ in range(discovery_dht_mod.MAX_SLOT_MOVES):
+            dht.slot_taken = True
+            assert dht.move_slot_if_taken()
+            seen.add(dht.slot_for("1.2.3.4:8333"))
+        assert len(seen) > 1
+        dht.slot_taken = True
+        assert not dht.move_slot_if_taken()
