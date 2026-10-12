@@ -128,6 +128,10 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# Windows version resource (company, description, version), written by
+# scripts/make_version_info.py. Absent on a plain local build, which is fine.
+VERSION_INFO = "version_info.txt" if os.path.exists("version_info.txt") else None
+
 if sys.platform == "win32":
     exe = EXE(
         pyz,
@@ -148,6 +152,7 @@ if sys.platform == "win32":
         upx_exclude=[],
         console=False,
         icon="favicon.ico",
+        version=VERSION_INFO,
         bootloader_ignore_signals=False,
         disable_windowed_traceback=False,
         target_arch=None,

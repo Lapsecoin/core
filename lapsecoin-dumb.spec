@@ -111,6 +111,10 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# Windows version resource (company, description, version), written by
+# scripts/make_version_info.py. Absent on a plain local build, which is fine.
+VERSION_INFO = "version_info.txt" if os.path.exists("version_info.txt") else None
+
 # One file on every platform, run from a terminal: it asks for the key's
 # passphrase there, then opens the wallet in the browser.
 exe = EXE(
@@ -127,6 +131,8 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     console=True,
+    icon="favicon.ico" if sys.platform == "win32" and os.path.exists("favicon.ico") else None,
+    version=VERSION_INFO if sys.platform == "win32" else None,
     bootloader_ignore_signals=False,
     disable_windowed_traceback=False,
     target_arch=None,
