@@ -287,7 +287,19 @@ jobs:
           echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
         shell: pwsh
 
+      # The icons only change when the SVG does, so they are cached by its
+      # hash and neither cairo nor the render step runs on a hit.
+      - name: Restore generated icons
+        id: icons-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            favicon.ico
+            lapsecoin.png
+          key: icons-${{ hashFiles('lapsecoin.svg') }}
+
       - name: Install cairo via MSYS2
+        if: steps.icons-cache.outputs.cache-hit != 'true'
         shell: cmd
         run: C:\msys64\usr\bin\bash -lc "pacman -S --noconfirm mingw-w64-x86_64-cairo"
 
@@ -350,6 +362,7 @@ jobs:
         run: python scripts/make_version_info.py
 
       - name: Generate icons
+        if: steps.icons-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
