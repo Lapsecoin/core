@@ -46,6 +46,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from discovery_dht import DHTDiscovery, PUT_REFRESH_INTERVAL
+from logthrottle import Throttle, more
 from params import PEERS_PER_MESSAGE_LIMIT
 from peerpool import is_routable_peer_addr
 
@@ -106,6 +107,7 @@ class Discovery:
         self.pool         = pool
         self.genesis_hash = genesis_hash
         self.port         = port
+        self._punch_log   = Throttle(300)  # same target, one line per 5 min
         self._candidates  = {}  # addr -> learned_from addr, or None (DHT/CLI)
         self._lock        = threading.Lock()
         # addr -> monotonic time we last sent it our peer list. Regossip
@@ -197,7 +199,10 @@ class Discovery:
 
         # When we receive PUNCH_GO, ping the target immediately while the hole is open
         def _on_punch_go(addr):
-            log.debug("[peer] punch_go received, pinging immediately  addr=%s", addr)
+            held = self._punch_log.allow(("go", addr))
+            if held is not None:
+                log.debug("[peer] punch_go received, pinging immediately  addr=%s%s",
+                          addr, more(held))
             self._executor.submit(self._ping_and_admit, addr)
 
         self.udp.set_punch_go_callback(_on_punch_go)
@@ -300,7 +305,9 @@ class Discovery:
 
             if now - last_lan >= LAN_BROADCAST_INTERVAL and not at_max:
                 self.udp.broadcast_discover()
-                log.debug("[peer] LAN broadcast sent")
+                held = self._punch_log.allow("lan")
+                if held is not None:
+                    log.debug("[peer] LAN broadcast sent%s", more(held))
                 last_lan = now
 
             if now - last_regossip >= PEX_REGOSSIP_INTERVAL:
@@ -384,12 +391,14 @@ class Discovery:
             # nodes discover each other via DHT simultaneously, so both will
             # fire toward each other at roughly the same time, which is
             # sufficient to open symmetric NAT holes without a relay.
-            log.debug("[peer] no relay, direct punch  addr=%s", addr)
             self.udp.punch_direct(addr)
             time.sleep(PUNCH_WAIT)
             if self._ping_and_admit(addr, learned_from):
                 return True
-            log.debug("[peer] unreachable (no punch)  addr=%s", addr)
+            held = self._punch_log.allow(("unreachable", addr))
+            if held is not None:
+                log.debug("[peer] unreachable after ping, relayed and direct punch  addr=%s%s",
+                          addr, more(held))
             return False
         finally:
             self.pool.unmark_attempting(addr)
@@ -442,7 +451,9 @@ class Discovery:
 
     def _punch_and_admit(self, relay: str, target: str, learned_from: str | None = None) -> bool:
         """Ask relay to coordinate hole punch to target, then re-ping."""
-        log.debug("[peer] punch attempt  relay=%s  target=%s", relay, target)
+        held = self._punch_log.allow(("attempt", target))
+        if held is not None:
+            log.debug("[peer] punch attempt  relay=%s  target=%s%s", relay, target, more(held))
         self.udp.punch_via(relay, target)
         time.sleep(PUNCH_WAIT)
         return self._ping_and_admit(target, learned_from)

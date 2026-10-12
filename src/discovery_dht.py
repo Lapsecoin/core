@@ -22,6 +22,7 @@ import time
 
 import nacl.signing
 
+from logthrottle import Throttle, more
 from params import BEP44_SLOT_COUNT
 
 try:
@@ -47,6 +48,7 @@ class DHTDiscovery:
         self._slot_keys     = {}     # slot index -> (sk_64, pk), see _slot_keypair
         self._pk_to_slot    = None   # public key bytes -> slot index, for logging
         self.put_failed     = False  # last put reached no node, retry early
+        self._candidate_log = Throttle(600)  # same address, one line per 10 min
         self._pending_gets  = []     # slots still to query in this round
         self._round_total   = 0      # slots queried this round
         self._round_done    = 0      # of those, how many have answered
@@ -105,7 +107,9 @@ class DHTDiscovery:
                     data = json.loads(raw)
                     addr = data.get("addr", "")
                     if addr and ":" in addr:
-                        log.info("[dht] BEP44 candidate  addr=%s", addr)
+                        held = self._candidate_log.allow(addr)
+                        if held is not None:
+                            log.info("[dht] BEP44 candidate  addr=%s%s", addr, more(held))
                         self._enqueue(addr)
                 except Exception:
                     pass
@@ -113,7 +117,9 @@ class DHTDiscovery:
                 try:
                     for ep in a.peers():
                         addr = f"{ep.address()}:{ep.port()}"
-                        log.info("[dht] torrent candidate  addr=%s", addr)
+                        held = self._candidate_log.allow(addr)
+                        if held is not None:
+                            log.info("[dht] torrent candidate  addr=%s%s", addr, more(held))
                         self._enqueue(addr)
                 except Exception:
                     pass
@@ -200,7 +206,6 @@ class DHTDiscovery:
     def torrent_get_peers(self, ses):
         try:
             ses.dht_get_peers(self._genesis_info_hash())
-            log.debug("[dht] torrent get_peers issued")
         except Exception:
             log.debug("[dht] torrent get_peers failed", exc_info=True)
 

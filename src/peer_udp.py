@@ -80,6 +80,7 @@ from concurrent.futures import ThreadPoolExecutor
 import msgpack
 
 import params
+from logthrottle import Throttle, more
 from params import BLOCK_SIZE_LIMIT
 from version import LOCAL_VERSION
 
@@ -212,6 +213,7 @@ PORT_BIND_RETRIES = 5   # how many ascending ports to try if the requested one i
 # The PING burst that opens a NAT hole: enough datagrams, spaced widely
 # enough, to cover the gap between when we start punching and when the
 # other side does. See UDPTransport._punch_burst.
+RECV_SUMMARY_INTERVAL = 60
 PUNCH_BURST_COUNT   = 8
 PUNCH_BURST_SPACING = 0.05
 
@@ -936,6 +938,10 @@ class UDPTransport:
         self._on_tx       = on_tx
         self._on_peers    = on_peers
         self._pool        = pool
+        self._recv_lock   = threading.Lock()
+        self._recv_counts = {}
+        self._recv_since  = time.monotonic()
+        self._relay_log   = Throttle(300)  # same pair, one line per 5 min
 
         self._sock        = None
         self._running     = False
@@ -1403,6 +1409,24 @@ class UDPTransport:
             return True
         return chunk_idx % ACK_EVERY_CHUNKS == ACK_EVERY_CHUNKS - 1
 
+    def _count_received(self, msg_type: int):
+        """One summary line a minute instead of a line per datagram, which
+        was most of a debug log and said little a count does not."""
+        if not log.isEnabledFor(logging.DEBUG):
+            return
+        now = time.monotonic()
+        with self._recv_lock:
+            self._recv_counts[msg_type] = self._recv_counts.get(msg_type, 0) + 1
+            if now - self._recv_since < RECV_SUMMARY_INTERVAL:
+                return
+            counts, self._recv_counts = self._recv_counts, {}
+            seconds, self._recv_since = int(now - self._recv_since), now
+        names = {v: k[3:] for k, v in globals().items()
+                 if k.startswith("MT_") and isinstance(v, int)}
+        parts = ", ".join(f"{names.get(t, hex(t))} {n}"
+                          for t, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+        log.debug("[udp] received in the last %ds: %s", seconds, parts)
+
     def _handle_datagram(self, data: bytes, sender: tuple):
         unpacked = _unpack(data)
         if unpacked is None:
@@ -1410,8 +1434,7 @@ class UDPTransport:
                       sender[0], sender[1], len(data), data[:16].hex())
             return
         msg_type, msg_id, chunk_idx, chunk_total, payload_bytes = unpacked
-        log.debug("[udp] recv from %s:%s  type=0x%02x  msg_id=%d  chunk=%d/%d  payload_len=%d",
-                  sender[0], sender[1], msg_type, msg_id, chunk_idx, chunk_total, len(payload_bytes))
+        self._count_received(msg_type)
 
         # Reassemble chunked messages
         if msg_type in (MT_SYNC,):
@@ -1564,7 +1587,6 @@ class UDPTransport:
         elif msg_type == MT_PUNCH_GO:
             target = data.get("target", "")
             if target:
-                log.debug("[udp] punch_go -> %s", target)
                 self._punch_burst(target)
                 if self._on_punch_go:
                     self._on_punch_go(target)
@@ -1757,7 +1779,9 @@ class UDPTransport:
 
     def _handle_punch_req(self, requester_addr: str, target_addr: str):
         """Relay: tell both peers to punch toward each other."""
-        log.debug("[udp] punch relay %s <-> %s", requester_addr, target_addr)
+        held = self._relay_log.allow((requester_addr, target_addr))
+        if held is not None:
+            log.debug("[udp] punch relay %s <-> %s%s", requester_addr, target_addr, more(held))
         # Tell target to punch toward requester
         self._send_one(MT_PUNCH_GO, self._new_msg_id(),
                        {"genesis": self.genesis_hash, "target": requester_addr},
