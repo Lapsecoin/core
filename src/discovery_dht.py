@@ -38,6 +38,9 @@ GET_SLOTS_PER_TICK   = 6
 PUT_AFTER_BOOTSTRAP  = 30
 PUT_BOOTSTRAP_GIVE_UP = 180
 PUT_VERIFY_ATTEMPTS  = 6
+STALE_ITEM_SECONDS   = 3 * 3600   # an entry older than this is a ghost
+SLOT_CONFLICT_AFTER  = 45
+MAX_SLOT_MOVES       = 6
 
 
 class DHTDiscovery:
@@ -56,6 +59,11 @@ class DHTDiscovery:
         self._bootstrapped_at = None
         self._own_slot      = None   # slot of our last put
         self._own_visible   = False  # a read round has seen that put
+        self._own_addr      = None   # what we last wrote there
+        self._put_acked_at  = None   # when a node last accepted that put
+        self._slot_nonce    = 0      # bumped to move off a slot that is taken
+        self._stale_skipped = 0
+        self.slot_taken     = False  # our slot holds somebody else's value
         self._put_attempts  = 0
         self._pending_gets  = []     # slots still to query in this round
         self._round_total   = 0      # slots queried this round
@@ -105,22 +113,30 @@ class DHTDiscovery:
     def process_alerts(self, ses):
         for a in ses.pop_alerts():
             if isinstance(a, lt.dht_mutable_item_alert):
+                addr, ts = "", 0
                 try:
                     item = a.item
-                    self._log_item(a)
                     if isinstance(item, dict):
                         raw = item.get("value") or item.get(b"value") or b"{}"
                     else:
                         raw = item or b"{}"
                     data = json.loads(raw)
                     addr = data.get("addr", "")
-                    if addr and ":" in addr:
-                        held = self._candidate_log.allow(addr)
-                        if held is not None:
-                            log.info("[dht] BEP44 candidate  addr=%s%s", addr, more(held))
-                        self._enqueue(addr)
+                    ts = int(data.get("ts", 0) or 0)
                 except Exception:
-                    pass
+                    addr = ""
+                self._note_item(a, addr)
+                if addr and ":" in addr:
+                    if ts and time.time() - ts > STALE_ITEM_SECONDS:
+                        # libtorrent keeps stored items forever by default,
+                        # so slots of nodes long gone still answer. The
+                        # entry carries the time it was written.
+                        self._stale_skipped += 1
+                        continue
+                    held = self._candidate_log.allow(addr)
+                    if held is not None:
+                        log.info("[dht] BEP44 candidate  addr=%s%s", addr, more(held))
+                    self._enqueue(addr)
             elif isinstance(a, lt.dht_get_peers_reply_alert):
                 try:
                     for ep in a.peers():
@@ -135,6 +151,7 @@ class DHTDiscovery:
                 if a.num_success > 0:
                     log.info("[dht] BEP44 put accepted by %d node(s)", a.num_success)
                     self.put_failed = False
+                    self._put_acked_at = time.monotonic()
                 else:
                     # A put that reaches nobody leaves our slot empty until
                     # the next hourly refresh, so the caller retries early.
@@ -145,10 +162,13 @@ class DHTDiscovery:
                 self.bootstrapped = True
                 self._bootstrapped_at = time.monotonic()
 
-    def _log_item(self, alert):
-        """Fold the answers of one read round into a single line, so a
-        missing peer can still be told apart (never returned by any get,
-        or returned and dropped) without a line per slot, 255 a minute."""
+    def _note_item(self, alert, addr):
+        """Track one slot answer: fold the round into a single log line, and
+        check our own slot from the outside. Our slot only counts as visible
+        when it holds OUR address. Any other value there (a node that hashed
+        to the same slot, or a ghost left by one that is gone, whose higher
+        sequence number wins every read) means readers never see us, so the
+        slot is changed and the put repeated."""
         try:
             if not getattr(alert, "authoritative", False):
                 return
@@ -156,17 +176,29 @@ class DHTDiscovery:
                 self._pk_to_slot = {self._slot_keypair(i)[1]: i
                                     for i in range(BEP44_SLOT_COUNT)}
             slot = self._pk_to_slot.get(bytes(alert.key), -1)
+            seq = getattr(alert, "seq", 0)
             self._round_done += 1
-            if slot == self._own_slot and getattr(alert, "seq", 0) > 0:
-                self._own_visible = True
-            if getattr(alert, "seq", 0) > 0:
+            if slot == self._own_slot and seq > 0:
+                if addr == self._own_addr:
+                    self._own_visible = True
+                    self.slot_taken = False
+                elif (self._put_acked_at is not None
+                      and time.monotonic() - self._put_acked_at >= SLOT_CONFLICT_AFTER):
+                    if not self.slot_taken:
+                        log.info("[dht] slot %d holds %s, not us; moving to another slot",
+                                 slot, addr or "something else")
+                    self.slot_taken = True
+            if seq > 0:
                 self._round_hits.append(slot)
             if self._round_done >= self._round_total > 0:
                 hits = ", ".join(str(i) for i in sorted(self._round_hits))
-                log.debug("[dht] BEP44 read round: %d slots answered, %d hold an address%s",
-                          self._round_done, len(self._round_hits),
+                stale = (f", {self._stale_skipped} too old to use"
+                         if self._stale_skipped else "")
+                log.debug("[dht] BEP44 read round: %d slots answered, %d hold an address%s%s",
+                          self._round_done, len(self._round_hits), stale,
                           f" (slots {hits})" if hits else "")
                 self._round_total = 0
+                self._stale_skipped = 0
         except Exception:
             pass
 
@@ -190,10 +222,23 @@ class DHTDiscovery:
         """True while our last put has not shown up in a read round, up to
         PUT_VERIFY_ATTEMPTS tries. Our own slot is read like any other, so
         this checks the put from the outside, the way a peer would see it."""
+        if self.slot_taken and self._slot_nonce < MAX_SLOT_MOVES:
+            return True
         return (self._own_slot is not None and not self._own_visible
                 and 0 < self._put_attempts < PUT_VERIFY_ATTEMPTS)
 
+    def move_slot_if_taken(self):
+        """Step to the next candidate slot when ours is held by someone
+        else. Returns True if it moved."""
+        if self.slot_taken and self._slot_nonce < MAX_SLOT_MOVES:
+            self._slot_nonce += 1
+            self.slot_taken = False
+            return True
+        return False
+
     def put(self, ses, slot_index, my_addr):
+        self._own_addr = my_addr
+        self._put_acked_at = None
         if slot_index == self._own_slot and not self._own_visible:
             self._put_attempts += 1
         else:
@@ -289,6 +334,8 @@ class DHTDiscovery:
         pubkey spreads nodes that share an address, the ip:port keeps one
         key run from two places from landing on the same slot."""
         ident = f"{self.node_pubkey_hex}:{addr}"
+        if self._slot_nonce:
+            ident += f":{self._slot_nonce}"
         return int(hashlib.sha256(ident.encode()).hexdigest()[:8], 16) % BEP44_SLOT_COUNT
 
     def _my_write_offset(self):
