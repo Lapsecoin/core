@@ -179,7 +179,7 @@ class Discovery:
         # logged why). alert_event still works as a plain 1s-timeout sleep
         # in that case, nothing ever sets it early, so it's left
         # unconditional below; every actual call into ses is guarded.
-        ses, my_slot, my_offset = self._dht.start()
+        ses, my_offset = self._dht.start()
         alert_event = threading.Event()
         if ses is not None:
             ses.set_alert_notify(alert_event.set)
@@ -262,7 +262,7 @@ class Discovery:
                     ext = self._fallback_ip()
                 if ext:
                     my_addr = ext if ":" in ext else f"{ext}:{self.port}"
-                    self._dht.put(ses, my_slot, my_addr)
+                    self._dht.put(ses, self._dht.slot_for(my_addr), my_addr)
                 last_put = now
 
             if ses is not None and now - last_announce >= TORRENT_ANNOUNCE_INTERVAL:

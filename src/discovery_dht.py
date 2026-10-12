@@ -59,18 +59,18 @@ class DHTDiscovery:
         method here entirely rather than calling into a session that
         doesn't exist.
 
-        Also returns (my_slot, my_offset) for the caller's timing loop.
+        Also returns my_offset for the caller's timing loop. The slot is
+        not known yet: it derives from our external ip:port (see slot_for).
         """
         if lt is None:
             log.warning("[dht] libtorrent not installed: DHT peer discovery "
                         "is unavailable, this node still finds peers via "
                         "LAN broadcast, its saved peer cache, and any "
                         "peers given on the command line")
-            return None, 0, 0
+            return None, 0
         ses = self._make_session()
-        my_slot   = self._my_slot_index()   if self.node_pubkey_hex else 0
         my_offset = self._my_write_offset() if self.node_pubkey_hex else 0
-        return ses, my_slot, my_offset
+        return ses, my_offset
 
     def save_state(self, ses):
         try:
@@ -199,13 +199,12 @@ class DHTDiscovery:
         sk_64  = bytes(h)
         return sk_64, pk
 
-    def _my_slot_index(self):
-        """Deterministic, one slot per node, so the table holds as many
-        distinct nodes as it can. The port is part of the key so two nodes
-        behind one address (or sharing a key) land on different slots."""
-        return int(hashlib.sha256(
-            f"{self.node_pubkey_hex}:{self.port}".encode()
-        ).hexdigest()[:8], 16) % BEP44_SLOT_COUNT
+    def slot_for(self, addr):
+        """Deterministic slot for a published ip:port. The address is what
+        peers actually dial, so it is what identifies a node here: the same
+        ip:port always maps to the same slot, and two nodes on one ip (or
+        sharing a key) with different ports map to different ones."""
+        return int(hashlib.sha256(addr.encode()).hexdigest()[:8], 16) % BEP44_SLOT_COUNT
 
     def _my_write_offset(self):
         return int(hashlib.sha256(

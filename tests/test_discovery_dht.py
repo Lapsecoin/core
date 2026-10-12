@@ -29,10 +29,9 @@ class TestStartWithoutLibtorrent:
         dht = discovery_dht_mod.DHTDiscovery(
             enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333)
 
-        ses, my_slot, my_offset = dht.start()
+        ses, my_offset = dht.start()
 
         assert ses is None
-        assert my_slot == 0
         assert my_offset == 0
 
     def test_start_logs_why_instead_of_failing_silently(self, monkeypatch, caplog):
@@ -63,6 +62,6 @@ class TestStartWithoutLibtorrent:
             dht = discovery_dht_mod.DHTDiscovery(
                 enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333)
             with mock.patch("os.path.exists", return_value=False):
-                ses, my_slot, my_offset = dht.start()
+                ses, my_offset = dht.start()
 
         assert ses is fake_session
