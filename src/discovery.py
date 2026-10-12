@@ -230,7 +230,7 @@ class Discovery:
         last_regossip = now - PEX_REGOSSIP_INTERVAL
 
         if ses is not None:
-            self._dht.get_all(ses, my_slot)
+            self._dht.get_all(ses)
             self._dht.torrent_get_peers(ses)
             self._dht.torrent_announce(ses)   # own cadence, see TORRENT_ANNOUNCE_INTERVAL
         last_get = time.monotonic()
@@ -250,7 +250,7 @@ class Discovery:
 
             get_interval = 300 if at_max else GET_INTERVAL
             if ses is not None and now - last_get >= get_interval:
-                self._dht.get_all(ses, my_slot)
+                self._dht.get_all(ses)
                 self._dht.torrent_get_peers(ses)
                 last_get = now
 
@@ -262,7 +262,8 @@ class Discovery:
                     ext = self._fallback_ip()
                 if ext:
                     my_addr = ext if ":" in ext else f"{ext}:{self.port}"
-                    self._dht.put(ses, my_slot, my_addr)
+                    for slot in self._dht.put_slots():
+                        self._dht.put(ses, slot, my_addr)
                 last_put = now
 
             if ses is not None and now - last_announce >= TORRENT_ANNOUNCE_INTERVAL:
