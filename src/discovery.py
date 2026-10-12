@@ -40,6 +40,7 @@ External public interface (called from main.py):
 
 import json
 import logging
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -67,6 +68,11 @@ DHT_BOOTSTRAP_TIMEOUT  = 15   # max wait for DHT bootstrap before first query an
 # not again for another hour, real BitTorrent clients re-announce every
 # few minutes, not hourly.
 TORRENT_ANNOUNCE_INTERVAL = 300
+# Last resort when DHT, PEX, LAN and the peer cache all found nobody: one
+# download of the public node's peer list, once per run, after this long
+# with no peers. Meant to become unnecessary, so it is deliberately rare.
+FALLBACK_PEERS_URL   = "https://lapsenode.vicnas.me/api/peers/download"
+FALLBACK_AFTER       = 600
 # A node with no peers is the one that most needs to be found, so it
 # re-publishes far more often than the steady-state cadence above.
 LONELY_PUT_INTERVAL      = 600
@@ -233,6 +239,8 @@ class Discovery:
         last_lan      = now - LAN_BROADCAST_INTERVAL
         last_status   = now - STATUS_LOG_INTERVAL
         last_regossip = now - PEX_REGOSSIP_INTERVAL
+        no_peers_since = None
+        fallback_done  = False
 
         if ses is not None:
             self._dht.get_all(ses)
@@ -261,6 +269,14 @@ class Discovery:
 
 
             lonely = self.pool.count() == 0
+            if not lonely:
+                no_peers_since = None
+            elif no_peers_since is None:
+                no_peers_since = now
+            elif not fallback_done and now - no_peers_since >= FALLBACK_AFTER:
+                fallback_done = True
+                threading.Thread(target=self._fetch_fallback_peers,
+                                 daemon=True).start()
             if ses is not None:
                 self._dht.pump_gets(ses)
             put_interval = LONELY_PUT_INTERVAL if lonely else PUT_REFRESH_INTERVAL
@@ -470,6 +486,26 @@ class Discovery:
             pass
         except Exception:
             log.debug("[peer] cache load failed", exc_info=True)
+
+    def _fetch_fallback_peers(self):
+        """One download of the public node's peer list, queued as ordinary
+        candidates. Never retried within a run, whether or not it worked."""
+        url = os.environ.get("LAPSECOIN_PEERS_URL", FALLBACK_PEERS_URL)
+        try:
+            import requests
+            r = requests.get(url, timeout=15)
+            r.raise_for_status()
+            peers = r.json()
+            if not isinstance(peers, list):
+                raise ValueError("peer list is not a JSON list")
+        except Exception:
+            log.warning("[peers] no peers for %ds and the fallback list at %s "
+                        "could not be fetched", FALLBACK_AFTER, url, exc_info=True)
+            return
+        log.info("[peers] no peers for %ds, using the fallback list from %s "
+                 "(%d address(es))", FALLBACK_AFTER, url, len(peers))
+        for addr in peers:
+            self.enqueue_candidate(addr)
 
     def _save_peer_cache(self):
         peers = self.pool.all_addrs()
