@@ -331,3 +331,15 @@ class TestKeyStorage:
         crypto.save_key(path, sk, pk, passphrase="testpass")
         with pytest.raises(ValueError, match="passphrase"):
             crypto.derive_kek(path, "")
+
+
+@pytest.mark.real_kdf
+def test_key_files_are_written_with_the_production_argon2id_cost(tmp_path):
+    """The suite lowers the key-derivation cost for speed (see conftest).
+    This one keeps the real cost, so weakening it in crypto.py is caught."""
+    import nacl.pwhash
+    path = tmp_path / "key.json"
+    crypto.save_key(str(path), b"s" * 32, b"p" * 32, "passphrase")
+    data = json.loads(path.read_text())
+    assert data["ops"] == nacl.pwhash.argon2id.OPSLIMIT_MODERATE
+    assert data["mem"] == nacl.pwhash.argon2id.MEMLIMIT_MODERATE
