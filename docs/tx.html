@@ -3,194 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LapseCoin Transactions</title>
-<link rel="icon" type="image/svg+xml" href="https://lapsenode.vicnas.me/favicon.svg">
-<style>
-:root {
-  --paper: #f6f3ea;
-  --paper-2: #efeadb;
-  --ink: #1c1a14;
-  --ink-dim: #4a4638;
-  --rule: #1c1a14;
-  --rule-lt: #b9b29b;
-  --accent: #b35a0c;
-  --link: var(--accent);
-  --gain: #2f5c33;
-  --loss: #7a2222;
-  --mono: "Courier New", Courier, "Liberation Mono", monospace;
-  --serif: "Times New Roman", Times, Georgia, "Liberation Serif", serif;
-  --container: 900px;
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-body {
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--serif);
-  font-size: 17px;
-  line-height: 1.5;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
-a { color: var(--link); text-decoration: underline; }
-h1, h2, h3, h4, p, ul, li { margin: 0; }
-.masthead {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: var(--paper);
-  border-bottom: 3px double var(--rule);
-  padding: 0.4rem 1.25rem 0.3rem;
-}
-.masthead-inner {
-  max-width: var(--container);
-  margin: 0 auto;
-  position: relative;
-}
-.masthead-title {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  font-size: 1.3rem;
-  font-weight: bold;
-  letter-spacing: 0.02em;
-  text-align: center;
-  margin-bottom: 0.25rem;
-}
-nav.mainnav {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  column-gap: 1.1rem;
-  row-gap: 0.3rem;
-  font-size: 0.92rem;
-}
-nav.mainnav a {
-  color: var(--ink);
-  text-decoration: none;
-  padding-bottom: 0.2rem;
-  border-bottom: 2px solid transparent;
-}
-nav.mainnav a:hover { text-decoration: underline; }
-nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
-main {
-  flex: 1;
-  max-width: var(--container);
-  margin: 0 auto;
-  padding: 1.5rem 1.25rem;
-  width: 100%;
-}
-.card {
-  background: var(--paper-2);
-  border: 1px solid var(--rule-lt);
-  border-radius: 0;
-  padding: 1rem;
-  margin-bottom: 1.5rem;
-}
-.card-title {
-  font-weight: bold;
-  font-size: 1.1rem;
-  margin-bottom: 0.75rem;
-  color: var(--accent);
-}
-.section-title {
-  font-weight: bold;
-  font-size: 1rem;
-  margin-top: 1rem;
-  margin-bottom: 0.5rem;
-  color: var(--ink);
-}
-code {
-  font-family: var(--mono);
-  background: var(--paper);
-  padding: 0.1rem 0.3rem;
-  font-size: 0.9rem;
-}
-pre {
-  background: var(--paper);
-  padding: 0.75rem;
-  border-radius: 0;
-  border: 1px solid var(--rule-lt);
-  overflow-x: auto;
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  line-height: 1.4;
-  margin: 0.75rem 0;
-}
-ul { margin-left: 1.5rem; margin-top: 0.5rem; }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.95rem;
-}
-th, td {
-  text-align: left;
-  padding: 0.5rem;
-  border: 1px solid var(--rule-lt);
-}
-th {
-  background: var(--paper);
-  font-weight: bold;
-}
-td { background: var(--paper); }
-@media (max-width: 640px) {
-  .masthead { padding: 0.35rem 1rem 0.25rem; }
-  .masthead-title { font-size: 1.25rem; }
-  nav.mainnav { font-size: 0.82rem; column-gap: 0.8rem; }
-  main { padding: 1rem; }
-  table { font-size: 0.85rem; }
-  th, td { padding: 0.4rem; }
-}
-/* docs-extra */
-pre {
-  background: var(--paper);
-  border: 1px solid var(--rule-lt);
-  padding: 0.75rem;
-  overflow-x: auto;
-  font-family: "Courier New", Courier, "Liberation Mono", monospace;
-  font-size: 0.85rem;
-  line-height: 1.4;
-  margin: 0.5rem 0;
-}
-code {
-  font-family: "Courier New", Courier, "Liberation Mono", monospace;
-  background: var(--paper);
-  padding: 0.1rem 0.3rem;
-  font-size: 0.9rem;
-}
-pre code { padding: 0; background: none; }
-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin-top: 0.5rem; }
-th, td { text-align: left; padding: 0.5rem; border: 1px solid var(--rule-lt); vertical-align: top; }
-th { background: var(--paper); }
-td { background: var(--paper); }
-p + p, p + ul, p + pre, pre + p, ul + p { margin-top: 0.6rem; }
-.section-title { font-weight: bold; margin: 1rem 0 0.4rem; }
-ol { margin-left: 1.5rem; margin-top: 0.5rem; }
-</style>
+<title>Transactions | LapseCoin</title>
+<meta name="description" content="LapseCoin transaction format, canonical JSON signing with FALCON-512, address derivation, nonces, fees and board memos, with a Python example.">
+<link rel="icon" type="image/svg+xml" href="lapsecoin.svg">
+<link rel="canonical" href="https://lapsecoin.github.io/core/tx.html">
+<meta property="og:site_name" content="LapseCoin">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Transactions | LapseCoin">
+<meta property="og:description" content="LapseCoin transaction format, canonical JSON signing with FALCON-512, address derivation, nonces, fees and board memos, with a Python example.">
+<meta property="og:url" content="https://lapsecoin.github.io/core/tx.html">
+<meta property="og:image" content="https://lapsecoin.github.io/core/logo-512.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#f4f1ea">
+<link rel="preload" href="css/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/site.css">
 </head>
 <body>
-<header class="masthead">
-<div class="masthead-inner">
-<div class="masthead-title">LapseCoin Transactions</div>
-<nav class="mainnav">
-<a href="index.html">Home</a>
-<span class="sep">|</span>
-<a href="api.html">API</a>
-<span class="sep">|</span>
-<a href="exchange.html">Exchange</a>
-<span class="sep">|</span>
-<a href="tx.html" class="active">Transactions</a>
-</nav>
-</div>
-</header>
-
-<main>
-<div class="card">
-<div class="card-title">Transaction format</div>
+<header class="bar"><div class="bar-in">
+<a class="brand" href="index.html"><img src="lapsecoin.svg" alt="" width="22" height="22">LapseCoin</a>
+<nav class="nav" aria-label="Site"><a href="index.html">Home</a><a href="api.html">API</a><a href="tx.html" aria-current="page">Transactions</a><a href="exchange.html">Exchange</a><a href="https://github.com/Lapsecoin/core/blob/main/docs/whitepaper.md">Whitepaper</a><a class="gh" href="https://github.com/Lapsecoin/core"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></nav>
+</div></header>
+<main><div class="wrap">
+<div class="page-head"><h1>Transactions</h1><p>The format, how to sign one, and what a node checks. A transaction is plain, visible JSON.</p></div>
+<div class="doc"><div class="prose">
+<section id="transaction-format">
+<h2>Transaction format</h2>
 <p>A transaction is a plain, visible JSON object. Nothing in it is encrypted, the memo included.</p>
-<table>
+<div class="tbl"><table>
 <tr><th>Field</th><th>Required</th><th>Description</th></tr>
 <tr><td><code>from</code></td><td>yes</td><td>Sender address (twelve dot-separated words)</td></tr>
 <tr><td><code>pubkey</code></td><td>yes</td><td>Sender's FALCON-512 public key, hex. Its derived address must equal <code>from</code>.</td></tr>
@@ -199,12 +40,11 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 <tr><td><code>fee</code></td><td>yes</td><td>Non-negative integer in ticks, chosen by the sender</td></tr>
 <tr><td><code>memo</code></td><td>no</td><td>Plaintext string, at most 200 bytes, no null bytes. Omit the key entirely when there is no memo.</td></tr>
 <tr><td><code>signature</code></td><td>yes</td><td>FALCON-512 signature over the canonical JSON of every other field, hex</td></tr>
-</table>
+</table></div>
 <p>Unknown fields are rejected. The sender's balance must cover the sum of all outputs plus the fee. 1 LAPSE = 100,000,000 ticks.</p>
-</div>
-
-<div class="card">
-<div class="card-title">Signing</div>
+</section>
+<section id="signing">
+<h2>Signing</h2>
 <ol>
 <li>Build the transaction object without <code>signature</code>.</li>
 <li>Serialize it as canonical JSON: keys sorted, no whitespace. The node uses <code>orjson</code> with sorted keys. For integers and strings, Python's <code>json.dumps(tx, sort_keys=True, separators=(",", ":"), ensure_ascii=False)</code> produces the same bytes.</li>
@@ -213,43 +53,38 @@ ol { margin-left: 1.5rem; margin-top: 0.5rem; }
 <li>POST the whole object to <code>/api/tx/send</code>.</li>
 </ol>
 <p>FALCON signing uses fresh randomness, so re-signing the same content gives a different valid signature. The transaction hash excludes the signature, so the hash stays the same.</p>
-</div>
-
-<div class="card">
-<div class="card-title">Fees</div>
+</section>
+<section id="fees">
+<h2>Fees</h2>
 <p>The fee is an absolute amount in ticks. Builders prefer higher fee per byte, where the size is the canonical JSON length of the transaction excluding the signature (and including the fee field itself). <code>GET /api/fees</code> reports the current <code>next_block</code> rate. Board posts (memo starting with <code>[board] </code>) have an additional protocol-enforced fee floor.</p>
-</div>
-
-<div class="card">
-<div class="card-title">Nonce</div>
+</section>
+<section id="nonce">
+<h2>Nonce</h2>
 <p>Nonces are sequential per sender, starting from 0 for an address that has never sent. A transaction is valid only if its nonce is exactly the last used nonce plus one, counting the sender's pending mempool transactions. <code>GET /api/state?addr=...</code> reports the highest nonce used, confirmed or pending; the next transaction uses that plus one. See <a href="api.html">the API page</a>.</p>
-</div>
-
-<div class="card">
-<div class="card-title">Board memos</div>
+</section>
+<section id="board-memos">
+<h2>Board memos</h2>
 <p>The board is made of ordinary transactions whose memo follows a few conventions. A <em>ref</em> is the first six hex characters of a post's transaction hash.</p>
-<table>
+<div class="tbl"><table>
 <tr><th>Memo</th><th>Meaning</th></tr>
 <tr><td><code>[board] </code> + text</td><td>A post. May begin with a profile header <code>[p:icon:nick]</code> and then a reply header <code>[r:ref]</code>. Pays the board fee floor and burns 1 tick.</td></tr>
 <tr><td><code>[vote+] ref</code>, <code>[vote-] ref</code></td><td>A vote on a post. Not a board post: no fee floor, 1 tick burned.</td></tr>
 <tr><td><code>[board] [e:ref:pos:ndel]text</code></td><td>An edit. In the sender's post with that ref, replace <code>ndel</code> characters at character position <code>pos</code> with <code>text</code>. It is a board post, so it pays the fee floor, burns 1 tick and counts toward the floor's staircase.</td></tr>
 <tr><td><code>[del] ref</code></td><td>Hides the sender's post with that ref. Not a board post: no fee floor, 1 tick burned.</td></tr>
-</table>
+</table></div>
 <p>Edits and deletes change nothing on the chain, and nothing could: the original text stays in its block. They are rules that readers apply the same way. An edit or delete acts only on a post by its own sender that came before it, and an edit is applied to the post as earlier edits left it, in chain order. The result must be non-empty and fit in a post (200 bytes of memo less the <code>[board] </code> tag). An edit that cannot be applied is not hidden: it shows as the ordinary post it also is. The node's validation does not check any of this, so a node will relay an edit or delete of someone else's post, and readers will ignore it.</p>
-</div>
-
-<div class="card">
-<div class="card-title">Address derivation</div>
+</section>
+<section id="address-derivation">
+<h2>Address derivation</h2>
 <ul>
 <li>Take the SHA-256 of the raw FALCON-512 public key bytes.</li>
 <li>Keep the first 132 bits and split them into twelve 11-bit indices, most significant first.</li>
 <li>Look each index up in the BIP39 English wordlist (2048 words, shipped as <code>src/bip39_english.txt</code>) and join with dots.</li>
 </ul>
 <p>Addresses are a one-way hash of the public key, so any syntactically valid word sequence passes validation. Validity does not prove that anyone holds the key.</p>
-</div>
-
-<div class="card">
-<div class="card-title">Python example</div>
+</section>
+<section id="python-example">
+<h2>Python example</h2>
 <p>Requires <code>liboqs-python</code> (module <code>oqs</code>) and <code>requests</code>. Keys come from <code>oqs.Signature("Falcon-512").generate_keypair()</code> and <code>export_secret_key()</code>.</p>
 <pre>import hashlib, json, requests, oqs
 
@@ -265,11 +100,8 @@ def canonical(obj) -&gt; bytes:
                       ensure_ascii=False).encode()
 
 def next_nonce(addr: str) -&gt; int:
-    hist = requests.get(f"{NODE}/api/address/{addr}/history").json()
-    sent = sum(1 for r in hist if r["direction"] == "sent")
-    pool = requests.get(f"{NODE}/api/mempool").json()["transactions"]
-    pending = sum(1 for t in pool if t["from"] == addr)
-    return sent + pending + 1
+    state = requests.get(f"{NODE}/api/state", params={"addr": addr}).json()
+    return state["nonce"] + 1   # highest nonce used, confirmed or pending
 
 def send(secret_key: bytes, public_key: bytes, to_addr: str,
          amount_ticks: int, fee_ticks: int, memo: str = ""):
@@ -287,10 +119,9 @@ def send(secret_key: bytes, public_key: bytes, to_addr: str,
     tx["signature"] = signature.hex()
     return requests.post(f"{NODE}/api/tx/send", json=tx).json()
     # {"ok": true, "tx_hash": "..."} or {"ok": false, "error": "..."}</pre>
-</div>
-
-<div class="card">
-<div class="card-title">Deposit detection</div>
+</section>
+<section id="deposit-detection">
+<h2>Deposit detection</h2>
 <pre>import requests
 
 def confirmed_deposits(node, addr):
@@ -306,17 +137,24 @@ def confirmations(node, tx_hash):
     t = requests.get(f"{node}/api/tx/{tx_hash}").json()
     return t.get("confirmations", 0)</pre>
 <p>Deduplicate by <code>tx_hash</code>, sum every output paying your address (one transaction can pay you more than once), and wait for the confirmation depth you are comfortable with before crediting.</p>
-</div>
-
-<div class="card">
-<div class="card-title">Notes</div>
+</section>
+<section id="notes">
+<h2>Notes</h2>
 <ul>
 <li>Amounts are integer ticks. Never use floating point for balances.</li>
 <li>The memo is optional, public and permanent.</li>
 <li>The burn address (the first twelve words of the BIP39 list) can never be a sender.</li>
 <li>Wallet keys held by a node are stored encrypted with Argon2id and a mandatory passphrase.</li>
 </ul>
-</div>
-</main>
+</section>
+</div><aside class="toc" aria-label="On this page"><b>On this page</b><a href="#transaction-format">Transaction format</a><a href="#signing">Signing</a><a href="#fees">Fees</a><a href="#nonce">Nonce</a><a href="#board-memos">Board memos</a><a href="#address-derivation">Address derivation</a><a href="#python-example">Python example</a><a href="#deposit-detection">Deposit detection</a><a href="#notes">Notes</a></aside></div>
+</div></main>
+<footer><div class="wrap">
+<a href="https://github.com/Lapsecoin/core">GitHub</a>
+<a href="https://github.com/Lapsecoin/core/releases">Releases</a>
+<a href="https://lapsenode.vicnas.me/">Live node</a>
+<a href="https://discord.gg/FP2d8JmK6r">Discord</a>
+</div></footer>
+<script src="js/toc.js" defer></script>
 </body>
 </html>
