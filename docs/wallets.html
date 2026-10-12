@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallet integration | LapseCoin</title>
+<meta name="description" content="How a wallet derives a LapseCoin key from the recovery phrase a user already has, using BIP-39, BIP-85 and seeded FALCON-512 key generation, with test vectors.">
+<link rel="icon" type="image/svg+xml" href="lapsecoin.svg">
+<link rel="canonical" href="https://lapsecoin.github.io/core/wallets.html">
+<meta property="og:site_name" content="LapseCoin">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Wallet integration | LapseCoin">
+<meta property="og:description" content="How a wallet derives a LapseCoin key from the recovery phrase a user already has, using BIP-39, BIP-85 and seeded FALCON-512 key generation, with test vectors.">
+<meta property="og:url" content="https://lapsecoin.github.io/core/wallets.html">
+<meta property="og:image" content="https://lapsecoin.github.io/core/logo-512.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#f4f1ea">
+<link rel="preload" href="css/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+<header class="bar"><div class="bar-in">
+<a class="brand" href="index.html"><img src="lapsecoin.svg" alt="" width="22" height="22">LapseCoin</a>
+<nav class="nav" aria-label="Site"><a href="index.html">Home</a><a href="api.html">API</a><a href="tx.html">Transactions</a><a href="exchange.html">Exchange</a><a href="wallets.html" aria-current="page">Wallets</a><a href="https://github.com/Lapsecoin/core/blob/main/docs/whitepaper.md">Whitepaper</a></nav>
+<div class="ext"><a href="https://discord.gg/FP2d8JmK6r"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059.05.05 0 0 0-.018-.011 8.9 8.9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066.05.05 0 0 1 .015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019m-8.198 7.307c-.789 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612m5.316 0c-.788 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612"/></svg><span>Discord</span></a><a href="https://github.com/Lapsecoin/core"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a></div>
+</div></header>
+<main><div class="wrap">
+<div class="page-head"><h1>Wallet integration</h1><p>How a wallet turns a recovery phrase the user already has into a LapseCoin key, so one phrase can be restored in any wallet that follows this page.</p></div>
+<div class="doc"><div class="prose">
+<section id="status">
+<h2>Status</h2>
+<p>This is the recommended convention for wallet developers. The LapseCoin node itself does not derive keys from a phrase yet: it creates a random key and stores it encrypted under a passphrase. Nothing on the chain depends on this page, because a wallet only ever shows the network a public key and a signature. Following it makes a phrase portable between wallets, and wallets that do not follow it simply cannot restore each other's phrases.</p>
+</section>
+<section id="two-kinds-of-words">
+<h2>Two kinds of twelve words</h2>
+<p>A LapseCoin <em>address</em> is twelve BIP-39 words, but they are a one-way hash of the public key (see <a href="tx.html#address-derivation">address derivation</a>). They cannot recreate a key and must never be treated as a backup.</p>
+<p>A <em>recovery phrase</em> is the standard 12 to 24 word BIP-39 phrase the user already holds in their other wallets. Wallets should label the two clearly, since they look alike.</p>
+</section>
+<section id="derivation">
+<h2>Derivation</h2>
+<div class="tbl"><table>
+<tr><th>Step</th><th>What happens</th></tr>
+<tr><td>1</td><td>BIP-39: the phrase and optional passphrase become a 64-byte seed (PBKDF2-HMAC-SHA512, 2048 rounds, NFKD-normalized).</td></tr>
+<tr><td>2</td><td>BIP-32: the seed becomes the master key, as for any Bitcoin wallet (HMAC-SHA512 keyed <code>"Bitcoin seed"</code>).</td></tr>
+<tr><td>3</td><td>BIP-85, HEX application: derive <code>m/83696968'/128169'/48'/{index}'</code> and take the 48 bytes of entropy. The index is <code>21000000 + account</code>, with account counting up from 0.</td></tr>
+<tr><td>4</td><td>FALCON-512 key generation with those 48 bytes as the seed (next section). This gives the public key and secret key.</td></tr>
+<tr><td>5</td><td>The address is derived from the public key as described in <a href="tx.html#address-derivation">address derivation</a>.</td></tr>
+</table></div>
+<p>The path for account 0 is <code>m/83696968'/128169'/48'/21000000'</code>.</p>
+<h3>Why BIP-85</h3>
+<ul>
+<li>It is a published standard with its own test vectors, so a wallet or device that already implements BIP-85 can supply the seed with no LapseCoin-specific code.</li>
+<li>Every level is hardened and the output passes through a one-way HMAC. A leaked LapseCoin seed does not reveal the phrase or the keys of the user's other coins.</li>
+<li>The HEX application can return up to 64 bytes. FALCON-512 key generation takes a 48-byte seed, so no extra expansion step is needed.</li>
+</ul>
+<h3>Why 48 bytes and an offset of 21000000</h3>
+<p>BIP-85 does not tie a HEX output to any coin, so two applications asking for the same length and index get the same bytes. 48 bytes is an unusual length, and starting the index at 21000000 (the supply cap in whole LAPSE) keeps LapseCoin away from the low indexes other software tends to use. Any index is cryptographically equivalent, so the choice only has to be fixed and shared, which this page does.</p>
+<h3>No public derivation</h3>
+<p>FALCON has no equivalent of BIP-32 public key derivation. There is no extended public key and no watch-only address generation. To restore a phrase, a wallet checks accounts in order (0, 1, 2, ...) and stops at the first account whose address has no history, using <a href="api.html">the address history endpoint</a>.</p>
+</section>
+<section id="key-generation">
+<h2>Key generation from the seed</h2>
+<p>This step is where wallets can disagree, so it is pinned. Use the original FALCON-512 seeded key generation, the one in the NIST round 3 submission and in PQClean, where the 48-byte seed is what the reference code would draw from its random source. Do not use the seeded key generation from the draft FN-DSA standard: the same seed gives a different key pair there.</p>
+<ul>
+<li>The public key is 897 bytes and the secret key is 1281 bytes, the same encoding the node and liboqs use.</li>
+<li>Only key generation is deterministic. Signing stays randomized, as on the <a href="tx.html#signing">Transactions page</a>.</li>
+<li>Checked: PQClean's C implementation (<code>falcon-512/clean</code>, with its random source replaced by the seed) and <code>@noble/post-quantum</code> 0.7.1 (<code>falcon512.keygen(seed)</code>) produce byte-identical public keys for all three seeds in the test vectors below. A wallet using another library should reproduce those vectors before shipping.</li>
+</ul>
+</section>
+<section id="test-vectors">
+<h2>Test vectors</h2>
+<p>All rows use the phrase below, which is public. Never put funds on a key derived from it.</p>
+<pre>abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about</pre>
+<p>BIP-39 seed with no passphrase: <code>5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4</code></p>
+<p>BIP-39 seed with passphrase <code>TREZOR</code>: <code>c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04</code></p>
+<h3>Vector 1: no passphrase, account 0</h3>
+<dl class="kv">
+<div><dt>Index</dt><dd><code>21000000</code></dd></div>
+<div><dt>FALCON seed</dt><dd><code>fb49a518faeecb48d54921bd28ad8b9cee7b0e58f856f7968cdbe874f968ba07e39ac6960e48974e6913c4d353338e95</code></dd></div>
+<div><dt>Public key SHA-256</dt><dd><code>e7f162aa47073308083eda3238a6817d53092ba55407c8e57f65df5e829ed515</code></dd></div>
+<div><dt>Address</dt><dd><code>tree.mention.pride.mix.industry.lottery.can.swap.cram.share.park.wide</code></dd></div>
+</dl>
+<h3>Vector 2: no passphrase, account 1</h3>
+<dl class="kv">
+<div><dt>Index</dt><dd><code>21000001</code></dd></div>
+<div><dt>FALCON seed</dt><dd><code>ba57d27131c984f025d2d0c5573ddee34dfc9ce0bbfe3e478613cf3269f6e379fb3c816df3252826eb726ff5b02fee0d</code></dd></div>
+<div><dt>Public key SHA-256</dt><dd><code>027b9ca53959a5e1f7b3b3c1d55b1ea2df39131b865f2a53ba544ec8a586f378</code></dd></div>
+<div><dt>Address</dt><dd><code>act.table.citizen.increase.olympic.valley.tell.island.scrub.print.sibling.east</code></dd></div>
+</dl>
+<h3>Vector 3: passphrase <code>TREZOR</code>, account 0</h3>
+<dl class="kv">
+<div><dt>Index</dt><dd><code>21000000</code></dd></div>
+<div><dt>FALCON seed</dt><dd><code>201915b01be79dc6b659521e7e69858fc5a372dfe9e4d83fd1f1de631dff4629303447f83c01acb5fa74ef81b0f48d79</code></dd></div>
+<div><dt>Public key SHA-256</dt><dd><code>da9cd9addb76ea3613dadfb9110cbbcfd4ecdf4764edd433657d406f7e8b3033</code></dd></div>
+<div><dt>Address</dt><dd><code>surround.traffic.hidden.report.huge.brand.exhaust.fossil.ribbon.mask.confirm.panic</code></dd></div>
+</dl>
+<p class="note">The BIP-85 step was checked against the official HEX vector in BIP-85 (<code>m/83696968'/128169'/64'/0'</code>), and the BIP-39 step against the standard seeds above.</p>
+</section>
+<section id="reference-code">
+<h2>Reference code</h2>
+<p>Steps 1 to 3 in Python, standard library only. It returns the seed for step 4.</p>
+<pre>import hashlib, hmac, unicodedata
+
+ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+BASE_INDEX = 21_000_000
+
+def bip39_seed(phrase: str, passphrase: str = "") -&gt; bytes:
+    nfkd = lambda s: unicodedata.normalize("NFKD", s).encode()
+    return hashlib.pbkdf2_hmac("sha512", nfkd(phrase), nfkd("mnemonic" + passphrase), 2048)
+
+def lapsecoin_falcon_seed(phrase: str, passphrase: str = "", account: int = 0) -&gt; bytes:
+    i = hmac.new(b"Bitcoin seed", bip39_seed(phrase, passphrase), hashlib.sha512).digest()
+    key, chain = int.from_bytes(i[:32], "big"), i[32:]
+    for n in (83696968, 128169, 48, BASE_INDEX + account):   # every level hardened
+        data = b"\x00" + key.to_bytes(32, "big") + (n | 0x80000000).to_bytes(4, "big")
+        i = hmac.new(chain, data, hashlib.sha512).digest()
+        key, chain = (int.from_bytes(i[:32], "big") + key) % ORDER, i[32:]
+    return hmac.new(b"bip-entropy-from-k", key.to_bytes(32, "big"), hashlib.sha512).digest()[:48]
+
+phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+lapsecoin_falcon_seed(phrase).hex()
+# fb49a518faeecb48d54921bd28ad8b9cee7b0e58f856f7968cdbe874f968ba07e39ac6960e48974e6913c4d353338e95</pre>
+<p>The code skips BIP-32's invalid-child case, which has a probability of about 2<sup>-127</sup>.</p>
+</section>
+<section id="cautions">
+<h2>Cautions</h2>
+<ul>
+<li>Anyone who knows the phrase and passphrase owns the LapseCoin key too. For large holdings, suggest a phrase used for nothing else.</li>
+<li>Pass the user's BIP-39 passphrase through unchanged. A different passphrase gives a different key.</li>
+<li>Show the phrase only on a trusted screen, and keep the derived secret key in memory only while signing.</li>
+<li>Do not change the path, the 48-byte length or the 21000000 offset. A wallet that does cannot restore other wallets' keys.</li>
+</ul>
+</section>
+</div><aside class="toc" aria-label="On this page"><b>On this page</b><a href="#status">Status</a><a href="#two-kinds-of-words">Two kinds of twelve words</a><a href="#derivation">Derivation</a><a href="#key-generation">Key generation</a><a href="#test-vectors">Test vectors</a><a href="#reference-code">Reference code</a><a href="#cautions">Cautions</a></aside></div>
+</div></main>
+<footer><div class="wrap">
+<a href="https://github.com/Lapsecoin/core">GitHub</a>
+<a href="https://github.com/Lapsecoin/core/releases">Releases</a>
+<a href="https://lapsenode.vicnas.me/">Live node</a>
+<a href="https://discord.gg/FP2d8JmK6r">Discord</a>
+</div></footer>
+<script src="js/toc.js" defer></script>
+</body>
+</html>
