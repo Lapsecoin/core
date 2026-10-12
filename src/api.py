@@ -755,9 +755,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # Cached on disk next to lapsecoin.svg after the first request; later
         # requests just serve that file instead of re-rasterizing every time.
         icon_path = os.path.join(_base_dir(), f"lapsecoin-{width}x{height}.{ext}")
-        if not os.path.exists(icon_path):
+        if os.path.exists(icon_path):
+            _touch(icon_path)   # recency, so eviction drops the least used
+        else:
             try:
-                _generate_icon(icon_path, width, height, ext)
+                with _icon_lock:
+                    if not os.path.exists(icon_path):
+                        tmp_path = icon_path + ".tmp"
+                        _generate_icon(tmp_path, width, height, ext)
+                        os.replace(tmp_path, icon_path)   # never served half written
+                        _prune_icons(_base_dir())
             except Exception as e:
                 log.warning("[api] could not generate %s: %s", icon_path, e)
                 return jsonify(error="icon generation unavailable"), 503
@@ -1388,6 +1395,50 @@ _ICON_MIMETYPES = {
 _ICON_MAX_DIM = 2048  # generous upper bound; keeps the route from being an easy way to burn CPU/disk
 
 
+# Every size and format is a file on disk, so without a bound anyone could fill
+# the disk by walking sizes. The cache keeps this many files and bytes, drops
+# the least recently served first, and never drops the sizes the app itself
+# links to. Generous: a regular node holds a handful.
+_ICON_CACHE_MAX_FILES = 200
+_ICON_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_ICON_PINNED = frozenset({"lapsecoin-200x200.png", "lapsecoin-512x512.png"})
+_ICON_NAME = re.compile(r"^lapsecoin-\d+x\d+\.(?:%s)$" % "|".join(_ICON_MIMETYPES))
+_icon_lock = threading.Lock()
+
+
+def _touch(path):
+    try:
+        os.utime(path)
+    except OSError:
+        pass
+
+
+def _prune_icons(directory):
+    """Delete the least recently served generated icons until the cache is
+    back under its file and byte caps. Called after each new one is made."""
+    entries = []
+    for name in os.listdir(directory):
+        if name in _ICON_PINNED or not _ICON_NAME.match(name):
+            continue
+        path = os.path.join(directory, name)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        entries.append((st.st_mtime, st.st_size, path))
+    entries.sort()   # oldest first
+    count, total = len(entries), sum(size for _, size, _ in entries)
+    for _, size, path in entries:
+        if count <= _ICON_CACHE_MAX_FILES and total <= _ICON_CACHE_MAX_BYTES:
+            break
+        try:
+            os.remove(path)
+        except OSError:
+            continue   # in use (Windows) or already gone, try the next
+        count -= 1
+        total -= size
+
+
 def _generate_icon(icon_path, width, height, ext):
     """Rasterize lapsecoin.svg to a transparent WxH image at icon_path.
 
@@ -1413,7 +1464,7 @@ def _generate_icon(icon_path, width, height, ext):
             flattened.paste(img, mask=img.getchannel("A"))
             img = flattened
         img.save(icon_path, format="ICO" if ext == "ico" else ext.upper())
-    log.info("[api] generated missing %s from svg", os.path.basename(icon_path))
+    log.info("[api] generated missing %s from svg", os.path.basename(icon_path).removesuffix(".tmp"))
 
 
 # Public app factory  (port 8333)
