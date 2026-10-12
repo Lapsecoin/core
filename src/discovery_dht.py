@@ -48,6 +48,9 @@ class DHTDiscovery:
         self._pk_to_slot    = None   # public key bytes -> slot index, for logging
         self.put_failed     = False  # last put reached no node, retry early
         self._pending_gets  = []     # slots still to query in this round
+        self._round_total   = 0      # slots queried this round
+        self._round_done    = 0      # of those, how many have answered
+        self._round_hits    = []     # slots that held an address
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -128,16 +131,25 @@ class DHTDiscovery:
                 self.bootstrapped = True
 
     def _log_item(self, alert):
-        """Which slot and sequence each get returned, so a missing peer can
-        be told apart: never returned by any get, or returned and dropped."""
+        """Fold the answers of one read round into a single line, so a
+        missing peer can still be told apart (never returned by any get,
+        or returned and dropped) without a line per slot, 255 a minute."""
         try:
+            if not getattr(alert, "authoritative", False):
+                return
             if self._pk_to_slot is None:
                 self._pk_to_slot = {self._slot_keypair(i)[1]: i
                                     for i in range(BEP44_SLOT_COUNT)}
             slot = self._pk_to_slot.get(bytes(alert.key), -1)
-            log.debug("[dht] BEP44 item  slot=%d  seq=%s  authoritative=%s",
-                      slot, getattr(alert, "seq", "?"),
-                      getattr(alert, "authoritative", "?"))
+            self._round_done += 1
+            if getattr(alert, "seq", 0) > 0:
+                self._round_hits.append(slot)
+            if self._round_done >= self._round_total > 0:
+                hits = ", ".join(str(i) for i in sorted(self._round_hits))
+                log.debug("[dht] BEP44 read round: %d slots answered, %d hold an address%s",
+                          self._round_done, len(self._round_hits),
+                          f" (slots {hits})" if hits else "")
+                self._round_total = 0
         except Exception:
             pass
 
@@ -161,6 +173,7 @@ class DHTDiscovery:
         plus libtorrent's 8000 B/s DHT quota meant many of them starved,
         and a fresh node's thin routing table made it worse."""
         self._pending_gets = list(range(BEP44_SLOT_COUNT))
+        self._round_total, self._round_done, self._round_hits = BEP44_SLOT_COUNT, 0, []
         random.shuffle(self._pending_gets)
         self.pump_gets(ses)
 
