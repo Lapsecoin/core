@@ -51,8 +51,10 @@ a:hover { text-decoration-color: currentColor; }
 .nav a { color: var(--ink-dim); text-decoration: none; padding: 6px 10px; border-radius: 7px; font-size: 14px; transition: background .12s, color .12s; }
 .nav a:hover { background: var(--hover); color: var(--ink); }
 .nav a[aria-current="page"] { color: var(--ink); background: rgb(var(--ink-rgb) / .06); font-weight: 550; }
-.nav .gh { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; border: 1px solid var(--line-strong); color: var(--ink); }
-.nav .gh svg { width: 15px; height: 15px; fill: currentColor; }
+.ext { display: flex; gap: 6px; }
+.ext a { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink); text-decoration: none; font-size: 14px; font-weight: 500; transition: background .12s; }
+.ext a:hover { background: var(--hover); }
+.ext svg { width: 15px; height: 15px; fill: currentColor; }
 
 /* page frame */
 .wrap { max-width: var(--container); margin: 0 auto; padding: 0 24px; width: 100%; }
@@ -151,7 +153,9 @@ footer a:hover { color: var(--ink); }
   .bar-in { gap: 8px; height: auto; min-height: 52px; flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
   .nav { margin-left: 0; width: 100%; overflow-x: auto; scrollbar-width: none; }
   .nav a { white-space: nowrap; }
-  .nav .gh { display: none; }
+  .ext { order: 2; margin-left: auto; }
+  .ext a { height: 30px; padding: 0 9px; }
+  .nav { order: 3; }
   .nav a { padding: 6px 7px; font-size: 13.5px; }
   main { padding: 20px 0 40px; }
   h1, .hero h1 { font-size: 26px; }
