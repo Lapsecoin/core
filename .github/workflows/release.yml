@@ -6,7 +6,12 @@ on:
       - main
     paths:
       - VERSION
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      full_tests:
+        description: "Run the whole test suite instead of only the tests the changes since the last release can reach"
+        type: boolean
+        default: false
 
 concurrency:
   group: release
@@ -89,17 +94,38 @@ jobs:
           git push origin main
 
   test:
-    needs: set-genesis
+    needs: [version, set-genesis]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
+
+      # Only the tests reachable from what changed since the last release
+      # (scripts/select_tests.py). Anything it cannot place, a missing
+      # previous tag, or full_tests on a manual run, falls back to the
+      # whole suite.
+      - name: Pick the tests this release can affect
+        id: pick
+        run: |
+          PREV="${{ needs.version.outputs.prev_ver }}"
+          SELECTION=ALL
+          if [ "${{ inputs.full_tests }}" != "true" ] && [ -n "$PREV" ] \
+             && git rev-parse -q --verify "refs/tags/v$PREV" >/dev/null; then
+            SELECTION=$(python scripts/select_tests.py --base "v$PREV")
+          fi
+          echo "Selection: ${SELECTION:-<nothing>}"
+          {
+            echo "tests<<EOF"
+            echo "$SELECTION"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install liboqs system dependencies
         run: |
@@ -110,7 +136,15 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: |
+          SELECTION='${{ steps.pick.outputs.tests }}'
+          if [ "$SELECTION" = "ALL" ]; then
+            pytest tests/ -v --durations=15
+          elif [ -z "$SELECTION" ]; then
+            echo "No test can be affected by the changes since the last release."
+          else
+            pytest $SELECTION -v --durations=15
+          fi
 
   build-linux:
     needs: test
