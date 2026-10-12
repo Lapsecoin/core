@@ -13,6 +13,12 @@ on:
         type: boolean
         default: false
 
+env:
+  # Pinned so the cached build below is reproducible. Keep it matched to the
+  # liboqs-python release pip installs (its version prints a warning at import
+  # when the two disagree). Bumping it rebuilds once, then caches again.
+  LIBOQS_REF: "0.16.0"
+
 concurrency:
   group: release
   cancel-in-progress: true
@@ -146,6 +152,41 @@ jobs:
             pytest $SELECTION -v --durations=15
           fi
 
+  # Ahead of the builds, which take far longer, and needs only the tests.
+  # A build failing later reverts VERSION but cannot unpublish from PyPI, so
+  # bump to a new version to ship different code after such a failure.
+  publish-pypi:
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted publishing (OIDC): PyPI checks this token against the
+      # pending publisher registered on the project page (repo + this
+      # workflow file), so there's no PYPI_API_TOKEN secret to hold or
+      # rotate. First successful publish from here claims the project
+      # under whichever PyPI account registered that pending publisher.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # PyPI never accepts the same version twice. This runs before the
+          # builds now, so if one of them fails and the release is re-run at
+          # the same version, the upload is skipped instead of failing it.
+          skip-existing: true
+
   build-linux:
     needs: test
     runs-on: ubuntu-latest
@@ -164,16 +205,31 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y cmake ninja-build libssl-dev libcairo2-dev pkg-config python3-dev python3-tk
 
-      - name: Build and install liboqs system-wide
+      # liboqs is the slowest thing to build and only changes when the
+      # pinned tag below does, so its install tree is cached and copied
+      # into place on a hit.
+      - name: Restore prebuilt liboqs
+        id: liboqs-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/liboqs-install
+          key: liboqs-linux-${{ env.LIBOQS_REF }}
+
+      - name: Build liboqs
+        if: steps.liboqs-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          git clone --depth 1 --branch "$LIBOQS_REF" https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
           cmake -S /tmp/liboqs -B /tmp/liboqs/build \
             -DOQS_ALGS_ENABLED=STD \
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr/local
+            -DCMAKE_INSTALL_PREFIX="$HOME/liboqs-install"
           cmake --build /tmp/liboqs/build -j$(nproc)
-          sudo cmake --install /tmp/liboqs/build
+          cmake --install /tmp/liboqs/build
+
+      - name: Install liboqs system-wide
+        run: |
+          sudo cp -a "$HOME/liboqs-install/." /usr/local/
           sudo ldconfig
 
       - name: Install Python dependencies
@@ -235,10 +291,18 @@ jobs:
         shell: cmd
         run: C:\msys64\usr\bin\bash -lc "pacman -S --noconfirm mingw-w64-x86_64-cairo"
 
-      - name: Build and install liboqs system-wide
+      - name: Restore prebuilt liboqs
+        id: liboqs-cache
+        uses: actions/cache@v4
+        with:
+          path: C:/liboqs/install
+          key: liboqs-windows-${{ env.LIBOQS_REF }}
+
+      - name: Build liboqs
+        if: steps.liboqs-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git C:/liboqs
+          git clone --depth 1 --branch $env:LIBOQS_REF https://github.com/open-quantum-safe/liboqs.git C:/liboqs
           cmake -S C:/liboqs -B C:/liboqs/build `
             -G Ninja `
             -DOQS_ALGS_ENABLED=STD `
@@ -247,7 +311,10 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="C:/liboqs/install"
           cmake --build C:/liboqs/build -j4
           cmake --install C:/liboqs/build
-          echo "C:\liboqs\install\bin" >> $env:GITHUB_PATH
+
+      - name: Put liboqs on PATH
+        shell: pwsh
+        run: echo "C:\liboqs\install\bin" >> $env:GITHUB_PATH
 
       - name: Install Visual C++ redistributable
         run: choco install vcredist140 --no-progress -y
@@ -261,7 +328,26 @@ jobs:
           # machines without a compiler (see git history). CI runners have
           # one by default, so it's installed here instead, purely for the
           # release binary; the app already runs fine without it either way.
-          pip install pyinstaller cairosvg Pillow miniupnpc
+          pip install cairosvg Pillow miniupnpc
+
+      # PyInstaller's prebuilt bootloader is the one part every PyInstaller
+      # program shares, malware included, and antivirus engines flag on it.
+      # Compiling it here (the runner has MSVC) gives this build a bootloader
+      # those signatures do not already match. If the compile fails, fall back
+      # to the stock wheel rather than failing the release.
+      - name: Install PyInstaller, bootloader built from source
+        shell: pwsh
+        run: |
+          pip install pyinstaller --no-binary pyinstaller --no-cache-dir
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "bootloader build failed, using the prebuilt PyInstaller"
+            pip install pyinstaller
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          pyinstaller --version
+
+      - name: Write the Windows version resource
+        run: python scripts/make_version_info.py
 
       - name: Generate icons
         shell: pwsh
@@ -321,6 +407,13 @@ jobs:
       - name: Make AppImage executable
         run: chmod +x artifacts/linux/lapsecoin artifacts/linux/lapsecoin-dumb
 
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum linux/lapsecoin linux/lapsecoin-dumb windows/lapsecoin.exe windows/lapsecoin-dumb.exe \
+            | sed 's# \(linux\|windows\)/# #' > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Generate changelog
         id: changelog
         run: |
@@ -367,36 +460,10 @@ jobs:
             artifacts/linux/lapsecoin-dumb
             artifacts/windows/lapsecoin.exe
             artifacts/windows/lapsecoin-dumb.exe
+            artifacts/SHA256SUMS
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-pypi:
-    needs: [version, release]
-    runs-on: ubuntu-latest
-    permissions:
-      # Trusted publishing (OIDC): PyPI checks this token against the
-      # pending publisher registered on the project page (repo + this
-      # workflow file), so there's no PYPI_API_TOKEN secret to hold or
-      # rotate. First successful publish from here claims the project
-      # under whichever PyPI account registered that pending publisher.
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build sdist and wheel
-        run: |
-          pip install build
-          python -m build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
 
   revert-on-failure:
     # publish-pypi deliberately isn't in this list: by the time it runs,
