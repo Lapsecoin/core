@@ -43,6 +43,8 @@ class DHTDiscovery:
         self.node_pubkey_hex = node_pubkey_hex
         self.bootstrapped   = False  # set once dht_bootstrap_alert is seen
         self._slot_keys     = {}     # slot index -> (sk_64, pk), see _slot_keypair
+        self._pk_to_slot    = None   # public key bytes -> slot index, for logging
+        self.put_failed     = False  # last put reached no node, retry early
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -89,6 +91,7 @@ class DHTDiscovery:
             if isinstance(a, lt.dht_mutable_item_alert):
                 try:
                     item = a.item
+                    self._log_item(a)
                     if isinstance(item, dict):
                         raw = item.get("value") or item.get(b"value") or b"{}"
                     else:
@@ -111,11 +114,29 @@ class DHTDiscovery:
             elif isinstance(a, lt.dht_put_alert):
                 if a.num_success > 0:
                     log.info("[dht] BEP44 put accepted by %d node(s)", a.num_success)
+                    self.put_failed = False
                 else:
-                    log.debug("[dht] BEP44 put num_success=0")
+                    # A put that reaches nobody leaves our slot empty until
+                    # the next hourly refresh, so the caller retries early.
+                    log.info("[dht] BEP44 put reached no node, will retry")
+                    self.put_failed = True
             elif isinstance(a, lt.dht_bootstrap_alert):
                 log.info("[dht] bootstrap complete")
                 self.bootstrapped = True
+
+    def _log_item(self, alert):
+        """Which slot and sequence each get returned, so a missing peer can
+        be told apart: never returned by any get, or returned and dropped."""
+        try:
+            if self._pk_to_slot is None:
+                self._pk_to_slot = {self._slot_keypair(i)[1]: i
+                                    for i in range(BEP44_SLOT_COUNT)}
+            slot = self._pk_to_slot.get(bytes(alert.key), -1)
+            log.debug("[dht] BEP44 item  slot=%d  seq=%s  authoritative=%s",
+                      slot, getattr(alert, "seq", "?"),
+                      getattr(alert, "authoritative", "?"))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # BEP44 put / get
@@ -124,6 +145,7 @@ class DHTDiscovery:
     def put(self, ses, slot_index, my_addr):
         sk_64, pk = self._slot_keypair(slot_index)
         value = json.dumps({"addr": my_addr, "ts": int(time.time())}).encode()
+        self.put_failed = False
         try:
             ses.dht_put_mutable_item(sk_64, pk, value, b"lapsecoin-v1")
             log.info("[dht] BEP44 put  slot=%d  addr=%s", slot_index, my_addr)
