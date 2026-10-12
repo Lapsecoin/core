@@ -17,6 +17,7 @@ Public interface used by the coordinator:
 import hashlib
 import json
 import logging
+import random
 import time
 
 import nacl.signing
@@ -32,6 +33,7 @@ log = logging.getLogger("ec.discovery.dht")
 
 DHT_STATE_FILE       = "lapsecoin_lt_dht.dat"
 PUT_REFRESH_INTERVAL = 3600
+GET_SLOTS_PER_TICK   = 6
 
 
 class DHTDiscovery:
@@ -45,6 +47,7 @@ class DHTDiscovery:
         self._slot_keys     = {}     # slot index -> (sk_64, pk), see _slot_keypair
         self._pk_to_slot    = None   # public key bytes -> slot index, for logging
         self.put_failed     = False  # last put reached no node, retry early
+        self._pending_gets  = []     # slots still to query in this round
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -152,17 +155,23 @@ class DHTDiscovery:
         except Exception:
             log.exception("[dht] BEP44 put error")
 
-    def get_all(self, ses, my_slot=None):
-        for i in range(BEP44_SLOT_COUNT):
-            if i == my_slot:
-                continue
+    def get_all(self, ses):
+        """Start a read round over every slot. The lookups are issued a few
+        per tick by pump_gets, not all at once: 255 simultaneous traversals
+        plus libtorrent's 8000 B/s DHT quota meant many of them starved,
+        and a fresh node's thin routing table made it worse."""
+        self._pending_gets = list(range(BEP44_SLOT_COUNT))
+        random.shuffle(self._pending_gets)
+        self.pump_gets(ses)
+
+    def pump_gets(self, ses, n=GET_SLOTS_PER_TICK):
+        for _ in range(min(n, len(self._pending_gets))):
+            i = self._pending_gets.pop()
             _, pk = self._slot_keypair(i)
             try:
                 ses.dht_get_mutable_item(pk, b"lapsecoin-v1")
             except Exception:
                 pass
-        log.debug("[dht] BEP44 get  slots=%d",
-                  BEP44_SLOT_COUNT - (1 if my_slot is not None else 0))
 
     # ------------------------------------------------------------------
     # Genesis-hash torrent (BEP 5 get_peers / announce)
