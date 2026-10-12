@@ -126,6 +126,8 @@ dl.kv { margin-top: 4px; }
 dl.kv > div { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 9px 0; border-top: 1px solid var(--rule); }
 dl.kv > div:first-child { border-top: 0; }
 dl.kv dt { color: var(--ink-dim); font-weight: 500; }
+dl.kv dd { min-width: 0; }
+dl.kv code { overflow-wrap: anywhere; }
 .links { list-style: none; padding: 0; margin-top: 4px; }
 .links li { margin: 0; border-top: 1px solid var(--rule); }
 .links li:first-child { border-top: 0; }
