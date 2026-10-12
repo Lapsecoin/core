@@ -522,6 +522,24 @@ class Discovery:
                  "(%d address(es))", FALLBACK_AFTER, url, len(peers))
         for addr in peers:
             self.enqueue_candidate(addr)
+        self._announce_to(url)
+
+    def _announce_to(self, list_url):
+        """Ask the node that gave us the list to try reaching us as well.
+        Reaching a node behind a firewall needs that node to be sent
+        something first, and a node we have been pinging for minutes is one
+        it will accept packets from, so a ping from the other side gets
+        through. Best effort, and once per run like the download."""
+        try:
+            import requests
+            from urllib.parse import urlsplit
+            u = urlsplit(list_url)
+            r = requests.post(f"{u.scheme}://{u.netloc}/api/peers/announce",
+                              json={"port": self.port}, timeout=10)
+            log.info("[peers] asked %s to reach us as well: %s", u.netloc,
+                     "queued" if r.ok else f"declined ({r.status_code})")
+        except Exception:
+            log.debug("[peers] announce failed", exc_info=True)
 
     def _save_peer_cache(self):
         peers = self.pool.all_addrs()

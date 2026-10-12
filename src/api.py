@@ -126,6 +126,7 @@ import secrets
 import socket
 import sys
 import threading
+import time
 
 import markdown
 import requests
@@ -146,6 +147,7 @@ import storage as storage_mod
 import tx as tx_mod
 import params
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
+from peerpool import is_routable_peer_addr
 from version import LOCAL_VERSION
 from local_reader import (_get_address_history, _block_reward,  # noqa: F401
                           fee_estimate, local_reader_for)
@@ -1399,6 +1401,10 @@ _ICON_MAX_DIM = 2048  # generous upper bound; keeps the route from being an easy
 # the disk by walking sizes. The cache keeps this many files and bytes, drops
 # the least recently served first, and never drops the sizes the app itself
 # links to. Generous: a regular node holds a handful.
+# /api/peers/announce: at most this many accepted across all callers per window.
+ANNOUNCE_WINDOW_SECONDS = 600
+ANNOUNCE_MAX_PER_WINDOW = 30
+
 _ICON_CACHE_MAX_FILES = 200
 _ICON_CACHE_MAX_BYTES = 64 * 1024 * 1024
 _ICON_PINNED = frozenset({"lapsecoin-200x200.png", "lapsecoin-512x512.png"})
@@ -1513,6 +1519,44 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                              private_port, public_port, is_private=False,
                              update_checker=update_checker, updater=updater,
                              public_url=public_url, oblivious=oblivious)
+
+    # A node that cannot find anyone asks one public node to try reaching it
+    # first. Behind most firewalls and NATs a node can send out but not be
+    # reached until something has been sent to it, so the request itself is
+    # what lets this node's ping through. See Discovery._fetch_fallback_peers.
+    announce_recent = collections.deque()      # times of the last accepted ones
+    announce_lock = threading.Lock()
+
+    @app.route("/api/peers/announce", methods=["POST"], endpoint="api_peers_announce")
+    @limiter.limit("2 per hour")
+    def api_peers_announce():
+        data = request.get_json(silent=True) or {}
+        port = data.get("port")
+        if not (isinstance(port, int) and 1024 <= port <= 65535):
+            return jsonify({"ok": False, "error": "need a port from 1024 to 65535"}), 400
+        # Only ever the address the request came from, never one the caller
+        # names, so this cannot be used to make a node send packets at a
+        # third party.
+        addr = f"{request.remote_addr}:{port}"
+        if not is_routable_peer_addr(addr):
+            return jsonify({"ok": False, "error": "address is not reachable from the internet"}), 400
+        now = time.monotonic()
+        with announce_lock:
+            while announce_recent and now - announce_recent[0] > ANNOUNCE_WINDOW_SECONDS:
+                announce_recent.popleft()
+            if len(announce_recent) >= ANNOUNCE_MAX_PER_WINDOW:
+                return jsonify({"ok": False, "error": "busy, try again later"}), 429
+            announce_recent.append(now)
+        try:
+            hint = node.gossip.udp._on_peer_hint
+        except AttributeError:
+            hint = None
+        if hint is None:
+            return jsonify({"ok": False, "error": "not accepting peers"}), 503
+        # The same queue every other source feeds: pinged first, and admitted
+        # only within the normal peer and per-subnet limits.
+        hint(addr)
+        return jsonify({"ok": True, "queued": True})
 
     # The public face of the fee service: what it is and how to use it. The
     # form itself signs with the wallet, so it only exists on the private port.

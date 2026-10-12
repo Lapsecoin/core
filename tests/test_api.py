@@ -1593,3 +1593,58 @@ class TestBenchmarkPage:
         for path in ("/benchmark", "/odds"):
             assert "active" in self._hardware_group_open_tag(self._get(path))
         assert "active" not in self._hardware_group_open_tag(self._get("/network"))
+
+
+class TestPeerAnnounce:
+    """POST /api/peers/announce: a node that cannot be reached asks this one
+    to try it, and only ever at the address the request came from."""
+
+    def _client(self, hint):
+        import types
+        node, _ = fresh()
+        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=hint))
+        return api.create_app(node, peerpool_mod.PeerPool()).test_client()
+
+    def _post(self, client, body, ip="8.8.8.8"):
+        return client.post("/api/peers/announce", json=body,
+                           headers={"X-Forwarded-For": ip})
+
+    def test_queues_the_address_the_request_came_from(self):
+        seen = []
+        r = self._post(self._client(seen.append), {"port": 8333})
+        assert r.status_code == 200 and r.get_json()["queued"] is True
+        assert seen == ["8.8.8.8:8333"]
+
+    def test_a_host_named_in_the_body_is_ignored(self):
+        seen = []
+        self._post(self._client(seen.append), {"port": 8333, "host": "1.1.1.1"})
+        assert seen == ["8.8.8.8:8333"]
+
+    def test_bad_ports_are_refused(self):
+        seen = []
+        c = self._client(seen.append)
+        for i, body in enumerate(({}, {"port": "8333"}, {"port": 80}, {"port": 70000})):
+            assert self._post(c, body, ip=f"8.8.4.{i + 1}").status_code == 400
+        assert seen == []
+
+    def test_a_private_address_is_refused(self):
+        seen = []
+        r = self._post(self._client(seen.append), {"port": 8333}, ip="192.168.1.5")
+        assert r.status_code == 400 and seen == []
+
+    def test_one_caller_gets_two_an_hour(self):
+        seen = []
+        c = self._client(seen.append)
+        assert self._post(c, {"port": 8333}).status_code == 200
+        assert self._post(c, {"port": 8333}).status_code == 200
+        assert self._post(c, {"port": 8333}).status_code == 429
+        assert len(seen) == 2
+
+    def test_all_callers_together_are_capped(self, monkeypatch):
+        monkeypatch.setattr(api, "ANNOUNCE_MAX_PER_WINDOW", 3)
+        seen = []
+        c = self._client(seen.append)
+        codes = [self._post(c, {"port": 8333}, ip=f"8.8.8.{i}").status_code
+                 for i in range(1, 6)]
+        assert codes == [200, 200, 200, 429, 429]
+        assert len(seen) == 3
