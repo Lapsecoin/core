@@ -81,7 +81,7 @@ a = Analysis(
     hiddenimports=_all_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=["hook_oqs.py"],
+    runtime_hooks=["scripts/hook_oqs.py"],
     excludes=["pytest", "unittest"],
     noarchive=False,
 )
