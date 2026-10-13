@@ -370,44 +370,6 @@ jobs:
           $p = Start-Process dist\lapsecoin-win\lapsecoin.exe -ArgumentList '-h' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "the program exited with $($p.ExitCode)" }
 
-      # Code signing through SignPath Foundation (free for open source).
-      # Skipped until the repository variable SIGNPATH_ORGANIZATION_ID and the
-      # secret SIGNPATH_API_TOKEN exist. The unsigned
-      # build is what ships until then.
-      - name: Collect the executables to sign
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        shell: pwsh
-        run: |
-          New-Item to-sign -ItemType Directory | Out-Null
-          Copy-Item dist\lapsecoin-win\lapsecoin.exe to-sign\lapsecoin-app.exe
-
-      - name: Upload the executables for signing
-        id: upload-exes
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-exes
-          path: to-sign/*
-
-      - name: Sign the executables
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: lapsecoin
-          signing-policy-slug: release-signing
-          artifact-configuration-slug: exes
-          github-artifact-id: ${{ steps.upload-exes.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed-exes
-
-      - name: Put the signed executables back
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        shell: pwsh
-        run: |
-          Copy-Item signed-exes\lapsecoin-app.exe    dist\lapsecoin-win\lapsecoin.exe -Force
-
       - name: Install the WiX Toolset
         run: choco install wixtoolset --no-progress -y
 
@@ -435,32 +397,6 @@ jobs:
           $u = Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait -PassThru
           if ($u.ExitCode -ne 0) { throw "uninstall exited $($u.ExitCode)" }
           if (Test-Path (Join-Path $dir 'lapsecoin.exe')) { throw "uninstall left the program behind" }
-
-      - name: Upload the installer for signing
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        id: upload-msi
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-msi
-          path: lapsecoin.msi
-
-      - name: Submit the installer for signing
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: lapsecoin
-          signing-policy-slug: release-signing
-          artifact-configuration-slug: msi
-          github-artifact-id: ${{ steps.upload-msi.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed-msi
-
-      - name: Use the signed installer
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        shell: pwsh
-        run: Copy-Item signed-msi\lapsecoin.msi lapsecoin.msi -Force
 
       - name: Stage the release files
         shell: pwsh
