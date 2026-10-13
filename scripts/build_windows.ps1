@@ -25,6 +25,7 @@ $jobs = [Environment]::ProcessorCount
 $identity = @(
     "--company-name=LapseCoin",
     "--product-name=LapseCoin",
+    "--copyright=MIT License. https://github.com/Lapsecoin/core",
     "--file-version=$fileVersion",
     "--product-version=$fileVersion",
     "--windows-icon-from-ico=favicon.ico"

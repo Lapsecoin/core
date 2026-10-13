@@ -474,6 +474,8 @@ jobs:
           echo "" >> "$GITHUB_OUTPUT"
           echo "$SEVERITY_LINE" >> "$GITHUB_OUTPUT"
           echo "" >> "$GITHUB_OUTPUT"
+          echo "Windows: the installer is not code signed, so SmartScreen may warn on first run (More info, then Run anyway). Check the download against SHA256SUMS." >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
           echo "### 10 largest commits" >> "$GITHUB_OUTPUT"
           cat /tmp/largest.txt >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
