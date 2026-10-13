@@ -45,14 +45,6 @@ RELEASE_ASSET_MSI     = "lapsecoin.msi"
 RELEASE_ASSET_SUMS    = "SHA256SUMS"
 DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
 
-# Same file discovery.py's PEER_CACHE_FILE loads on startup, and the same
-# URL scripts/install.sh / install.ps1 already fetch it from when pip
-# couldn't install libtorrent. Duplicated here rather than imported from
-# discovery.py: that module owns the live peer pool and importing it just
-# for two string constants would pull in far more than this needs.
-PEER_CACHE_FILE     = "lapsecoin_peers.json"
-DEFAULT_PEERS_URL   = "https://lapsenode.vicnas.me/api/peers/download"
-
 SELF_UPDATABLE = {"windows-msi", "linux-appimage", "pip"}
 
 # Stages, in the order a successful attempt moves through them. "restarting"
@@ -79,46 +71,6 @@ def detect_install_type():
         return "pip"
     except Exception:
         return "source"
-
-
-def _has_libtorrent():
-    """Checked in a fresh subprocess, never via an in-process import: right
-    after a pip upgrade the current interpreter's own sys.modules/import
-    caches can't be trusted to reflect what's actually on disk any more."""
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", "import libtorrent"],
-            capture_output=True, timeout=30,
-        )
-        return result.returncode == 0
-    except Exception:
-        log.debug("[updater] libtorrent probe failed", exc_info=True)
-        return False
-
-
-def _refresh_peer_cache(peers_url=None):
-    """Best-effort. Only overwrites PEER_CACHE_FILE on a successful fetch;
-    a failed fetch leaves whatever was already there alone, so a flaky
-    network on update never leaves the node with a worse peer list than
-    it started with."""
-    url = peers_url or os.environ.get("LAPSECOIN_PEERS_URL", DEFAULT_PEERS_URL)
-    try:
-        import requests
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.content
-        import json
-        json.loads(data)  # sanity-check it's real JSON before writing it
-    except Exception:
-        log.warning("[updater] could not refresh peer cache from %s", url, exc_info=True)
-        return False
-    try:
-        with open(PEER_CACHE_FILE, "wb") as f:
-            f.write(data)
-        return True
-    except OSError:
-        log.warning("[updater] could not write %s", PEER_CACHE_FILE, exc_info=True)
-        return False
 
 
 def _download(url, dest_path, on_progress=None):
@@ -236,8 +188,6 @@ class UpdateSession:
     # ---- pip ---------------------------------------------------------------
 
     def _run_pip(self):
-        had_libtorrent = _has_libtorrent()
-
         self._set("downloading", "pip install --upgrade lapsecoin")
         proc = subprocess.Popen(
             [sys.executable, "-m", "pip", "install", "--upgrade",
@@ -254,15 +204,6 @@ class UpdateSession:
         code = proc.wait()
         if code != 0:
             raise RuntimeError("pip install --upgrade failed:\n" + "\n".join(tail))
-
-        self._set("verifying", "checking libtorrent is still available")
-        now_has_libtorrent = _has_libtorrent()
-        if had_libtorrent and not now_has_libtorrent:
-            self._set("verifying",
-                      "libtorrent is no longer importable after the upgrade; "
-                      "refreshing the starter peers list so DHT discovery "
-                      "isn't relied on until that's fixed")
-            _refresh_peer_cache()
 
         self._set("restarting", "relaunching")
         self._relaunch_in_place()

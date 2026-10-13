@@ -1,8 +1,8 @@
 # One-command setup for running LapseCoin from source: makes sure the
 # build tools liboqs needs are on PATH, then installs the app via pip.
 # libtorrent (DHT peer discovery) has real wheel gaps on some platforms;
-# if it's specifically what fails, this retries without it and grabs a
-# starter peers list instead, rather than failing the whole install.
+# if it's specifically what fails, this retries without it rather than
+# failing the whole install.
 #
 # Every step here is idempotent -- re-running this is always safe, and it
 # never touches an install that already works.
@@ -32,7 +32,6 @@ $ErrorActionPreference = "Continue"
 
 function Install-LapseCoin {
     $repoRaw  = if ($env:LAPSECOIN_REPO_RAW)  { $env:LAPSECOIN_REPO_RAW }  else { "https://raw.githubusercontent.com/Lapsecoin/core/main" }
-    $peersUrl = if ($env:LAPSECOIN_PEERS_URL) { $env:LAPSECOIN_PEERS_URL } else { "https://lapsenode.vicnas.me/api/peers/download" }
     $wingetFlags = @("-e", "--silent", "--accept-package-agreements", "--accept-source-agreements")
 
     function Test-Cmd($name) {
@@ -123,7 +122,7 @@ function Install-LapseCoin {
 
     Write-Host ""
     Write-Host "libtorrent failed to install (real wheel gaps on some platforms); continuing without it."
-    Write-Host "This only disables automatic DHT peer discovery -- the node still connects using a peers list."
+    Write-Host "This only disables automatic DHT peer discovery -- peers are then found on the local network, through other peers, or with --peer."
     Write-Host ""
 
     $reqsTmp = [System.IO.Path]::GetTempFileName()
@@ -138,13 +137,6 @@ function Install-LapseCoin {
     pip install -r $reqsNoLt
     pip install lapsecoin --no-deps
     Remove-Item $reqsTmp, $reqsNoLt -ErrorAction SilentlyContinue
-
-    try {
-        Invoke-WebRequest -Uri $peersUrl -OutFile "lapsecoin_peers.json" -UseBasicParsing
-        Write-Host "Fetched a starter peers list into .\lapsecoin_peers.json."
-    } catch {
-        Write-Warning "Could not fetch a starter peers list (network issue?); lapsecoin will still run, just without any peers until you add some."
-    }
 
     Write-Host ""
     Write-Host "Installed without libtorrent. Run: lapsecoin"

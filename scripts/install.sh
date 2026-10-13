@@ -2,8 +2,8 @@
 # One-command setup for running LapseCoin from source: makes sure the
 # build tools liboqs needs are on PATH, then installs the app via pip.
 # libtorrent (DHT peer discovery) has real wheel gaps on some platforms;
-# if it's specifically what fails, this retries without it and grabs a
-# starter peers list instead, rather than failing the whole install.
+# if it's specifically what fails, this retries without it rather than
+# failing the whole install.
 #
 # Every step here is idempotent -- re-running this is always safe, and it
 # never touches an install that already works.
@@ -15,7 +15,6 @@
 set -uo pipefail
 
 REPO_RAW="${LAPSECOIN_REPO_RAW:-https://raw.githubusercontent.com/Lapsecoin/core/main}"
-PEERS_URL="${LAPSECOIN_PEERS_URL:-https://lapsenode.vicnas.me/api/peers/download}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -75,7 +74,7 @@ fi
 
 echo
 echo "libtorrent failed to install (real wheel gaps on some platforms); continuing without it."
-echo "This only disables automatic DHT peer discovery -- the node still connects using a peers list."
+echo "This only disables automatic DHT peer discovery -- peers are then found on the local network, through other peers, or with --peer."
 echo
 
 REQS_TMP="$(mktemp)"
@@ -86,12 +85,6 @@ fi
 grep -v '^libtorrent' "$REQS_TMP" | pip install -r /dev/stdin
 pip install lapsecoin --no-deps
 rm -f "$REQS_TMP"
-
-if curl -fsSL "$PEERS_URL" -o lapsecoin_peers.json; then
-  echo "Fetched a starter peers list into ./lapsecoin_peers.json."
-else
-  echo "Could not fetch a starter peers list (network issue?); lapsecoin will still run, just without any peers until you add some." >&2
-fi
 
 echo
 echo "Installed without libtorrent. Run: lapsecoin"
