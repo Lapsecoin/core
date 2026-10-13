@@ -381,6 +381,13 @@ jobs:
             if (-not (Test-Path (Join-Path $dir $f))) { $failures += "missing $f after install" }
           }
 
+          $shortcuts = @(
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\LapseCoin.lnk'),
+            (Join-Path ([Environment]::GetFolderPath('Desktop')) 'LapseCoin.lnk'))
+          foreach ($lnk in $shortcuts) {
+            if (-not (Test-Path $lnk)) { $failures += "missing shortcut $lnk" }
+          }
+
           # The program is windowed, so wait on the process for its exit code.
           if (Test-Path "$dir\lapsecoin.exe") {
             $run = Start-Process "$dir\lapsecoin.exe" -ArgumentList '-h' -Wait -PassThru
@@ -392,6 +399,9 @@ jobs:
           $u = Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait -PassThru
           if ($u.ExitCode -ne 0) { $failures += "uninstall exited $($u.ExitCode)" }
           if (Test-Path (Join-Path $dir 'lapsecoin.exe')) { $failures += "uninstall left the program behind" }
+          foreach ($lnk in $shortcuts) {
+            if (Test-Path $lnk) { $failures += "uninstall left $lnk behind" }
+          }
 
           if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
           Write-Host "install, start and uninstall all worked"
