@@ -536,8 +536,14 @@ class Discovery:
             u = urlsplit(list_url)
             r = requests.post(f"{u.scheme}://{u.netloc}/api/peers/announce",
                               json={"port": self.port}, timeout=10)
+            why = ""
+            if not r.ok:
+                try:
+                    why = ": " + str(r.json().get("error", ""))
+                except Exception:
+                    pass
             log.info("[peers] asked %s to reach us as well: %s", u.netloc,
-                     "queued" if r.ok else f"declined ({r.status_code})")
+                     "queued" if r.ok else f"declined ({r.status_code}){why}")
         except Exception:
             log.debug("[peers] announce failed", exc_info=True)
 
