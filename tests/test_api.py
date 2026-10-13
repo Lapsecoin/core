@@ -1702,7 +1702,7 @@ class TestNoDhtNotice:
 
     def test_shown_when_no_libtorrent_and_no_peers(self, monkeypatch):
         html = self._html(monkeypatch, False, 0)
-        assert 'id="no-dht-alert"' in html and "--peer" in html
+        assert 'id="no-dht-alert"' in html and 'href="/network"' in html
         assert 'id="no-dht-alert" hidden' not in html
 
     def test_hidden_until_the_poll_when_it_has_peers(self, monkeypatch):
