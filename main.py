@@ -365,8 +365,13 @@ def main():
              "nothing to a source checkout beyond printing the releases "
              "URL: never touches a git working tree.",
     )
+    parser.add_argument("--check-restart-exe", metavar="FILE", help=argparse.SUPPRESS)
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
+    if args.check_restart_exe:
+        # CI only: checks the update restart target, starts nothing.
+        import updater as _updater
+        sys.exit(_updater.restart_check(args.check_restart_exe))
     try:
         args.keyfile = key_path(args.keyfile)
     except ValueError as e:
