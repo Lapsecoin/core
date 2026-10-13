@@ -902,7 +902,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # happened to be at ./docs/whitepaper.md when the node was started
         # decided the contents of a page served on the public port. The
         # shipped file is the only one that should ever be able to do that.
-        base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+        import resources
+        base = (resources.bundle_dir() if resources.is_frozen()
+                else os.path.dirname(os.path.abspath(__file__)))
         for candidate in [
             os.path.join(base, "docs", "whitepaper.md"),
             # One level up, for a source checkout where this file is in src/.

@@ -22,8 +22,9 @@ from params import ADDRESS_WORD_COUNT, WORD_BITS
 
 def _load_wordlist():
     """Load BIP39 wordlist from disk. Called once at module import."""
-    import sys as _sys
-    base = getattr(_sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    import resources
+    base = (resources.bundle_dir() if resources.is_frozen()
+            else os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(base, "bip39_english.txt")
     with open(path) as f:
         words = [w.strip() for w in f if w.strip()]

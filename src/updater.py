@@ -67,7 +67,8 @@ _TERMINAL_STAGES = {"unsupported", "failed"}
 def detect_install_type():
     if os.environ.get("LAPSECOIN_DOCKER"):
         return "docker"
-    if getattr(sys, "frozen", False):
+    import resources
+    if resources.is_frozen():
         if os.environ.get("APPIMAGE"):
             return "linux-appimage"
         if sys.platform.startswith("win"):
