@@ -152,11 +152,13 @@ jobs:
             pytest $SELECTION -v --durations=15
           fi
 
-  # Ahead of the builds, which take far longer, and needs only the tests.
-  # A build failing later reverts VERSION but cannot unpublish from PyPI, so
-  # bump to a new version to ship different code after such a failure.
+  # The builds run alongside the tests instead of after them (the release
+  # takes as long as the slowest of the two, not the sum). Nothing is
+  # published until the tests have also passed: publish-pypi and release both
+  # need test. A failure later reverts VERSION but cannot unpublish from PyPI,
+  # so bump to a new version to ship different code after such a failure.
   build-linux:
-    needs: test
+    needs: [version, set-genesis]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -226,7 +228,7 @@ jobs:
           path: dist/lapsecoin
 
   build-windows:
-    needs: test
+    needs: [version, set-genesis]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -452,7 +454,7 @@ jobs:
           skip-existing: true
 
   release:
-    needs: [version, build-linux, build-windows]
+    needs: [version, test, build-linux, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
