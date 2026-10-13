@@ -33,17 +33,6 @@ $identity = @(
 $common = @("--assume-yes-for-downloads", "--msvc=latest", "--jobs=$jobs",
             "--nofollow-import-to=pytest", "--nofollow-import-to=unittest")
 
-# Native libraries that Python wheels place beside their extension module and
-# that dependency scanning can miss (chiavdf is a single top-level .pyd).
-$extra = @()
-foreach ($sp in (python -c "import site; print('\n'.join(site.getsitepackages()))")) {
-    foreach ($pat in "mpir*.dll", "chiavdf*.dll") {
-        foreach ($f in Get-ChildItem (Join-Path $sp $pat) -ErrorAction SilentlyContinue) {
-            $extra += "--include-data-files=$($f.FullName)=$($f.Name)"
-        }
-    }
-}
-
 # oqs looks for an install prefix with the library under bin\.
 $oqs = Join-Path $Liboqs "bin"
 $oqsDll = @("oqs.dll", "liboqs.dll") | ForEach-Object { Join-Path $oqs $_ } |
@@ -68,10 +57,26 @@ python -m nuitka --mode=standalone @common @identity `
     --include-data-dir=vendor=vendor `
     --include-data-files="$oqsDll=_oqs/bin/$(Split-Path $oqsDll -Leaf)" `
     --include-package-data=limits `
-    @extra `
     main.py
 if ($LASTEXITCODE) { throw "nuitka failed for the program" }
 New-Item dist -ItemType Directory -Force | Out-Null
 Move-Item build-nuitka\main.dist dist\lapsecoin-win
+
+# Native libraries that Python wheels place beside their extension module.
+# Nuitka finds the ones the extension links to (mpir.dll), but not the
+# CPU-specific variants that mpir loads by name at run time, so any of them
+# still missing are copied in here, after the build. Putting them on the
+# command line instead makes Nuitka stop on the ones it already found.
+foreach ($sp in (python -c "import site; print('\n'.join(site.getsitepackages()))")) {
+    foreach ($pat in "mpir*.dll", "chiavdf*.dll") {
+        foreach ($f in Get-ChildItem (Join-Path $sp $pat) -ErrorAction SilentlyContinue) {
+            $dest = Join-Path dist\lapsecoin-win $f.Name
+            if (-not (Test-Path $dest)) {
+                Copy-Item $f.FullName $dest
+                Write-Host "added $($f.Name)"
+            }
+        }
+    }
+}
 
 Write-Host "Built dist\lapsecoin-win"
