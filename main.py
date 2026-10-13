@@ -4,6 +4,11 @@
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "src"))
 
+# An installed Windows build keeps its data under %LOCALAPPDATA%, not beside
+# the program. This has to run before anything opens a relative path.
+import datadir as _datadir
+_datadir.prepare()
+
 import argparse
 import collections
 import logging

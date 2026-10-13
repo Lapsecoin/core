@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
 # Linux:   make linux   -> dist/lapsecoin            (AppImage, no extension)
-# Windows: make windows -> dist/lapsecoin.exe       (onefile)
+# Windows: make windows -> dist/lapsecoin-win/       (onedir, packaged by the MSI)
 
 import glob, os, sys
 from PyInstaller.utils.hooks import collect_all
@@ -133,23 +133,17 @@ pyz = PYZ(a.pure)
 VERSION_INFO = "version_info.txt" if os.path.exists("version_info.txt") else None
 
 if sys.platform == "win32":
+    # onedir, not onefile: the program is a folder of ordinary files that the
+    # MSI installs, so nothing unpacks itself into a temp folder at launch,
+    # which is the behaviour antivirus engines flag a onefile build for.
     exe = EXE(
         pyz,
         a.scripts,
-        a.binaries,
-        a.datas,
-        [],
+        exclude_binaries=True,
         name="lapsecoin",
         debug=False,
         strip=False,
-        # UPX-packed executables are a common heuristic trigger for AV
-        # engines (the same compression malware droppers use to evade
-        # static signatures), which was flagging this onefile build before
-        # users could even run it. Uncompressed and larger, but otherwise
-        # identical: still a single lapsecoin.exe, same distribution and
-        # update flow.
         upx=False,
-        upx_exclude=[],
         console=False,
         icon="favicon.ico",
         version=VERSION_INFO,
@@ -158,6 +152,14 @@ if sys.platform == "win32":
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        name="lapsecoin-win",
     )
 else:
     # onedir: exclude_binaries=True tells EXE not to bundle libs itself;
