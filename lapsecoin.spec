@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
 # Linux:   make linux   -> dist/lapsecoin            (AppImage, no extension)
-# Windows: make windows -> dist/lapsecoin-win/       (onedir, packaged by the MSI)
+# Windows: scripts/build_windows.ps1 (Nuitka); this spec is the Linux build
 
 import glob, os, sys
 from PyInstaller.utils.hooks import collect_all
@@ -32,47 +32,7 @@ for _root in _search_roots:
     if _liboqs_bins:
         break
 
-# Search multiple locations for MSVC runtime DLLs (no-op on Linux).
-#
-# SysWOW64 is a deliberate last resort, not an equal alternative: on a
-# 64-bit Windows box that folder holds the 32-bit copies kept for legacy
-# 32-bit apps (System32 has the 64-bit ones despite the name), so a
-# 64-bit build must stop searching the moment an earlier root has the
-# file, never fall through to it. This used to keep searching every root
-# for every pattern regardless, so on a runner where the same filename
-# existed in both System32 and SysWOW64, both copies got queued for the
-# same destination name and PyInstaller's table of contents kept
-# whichever won that collision, not necessarily the 64-bit one. That
-# shipped a real Windows build that failed for exactly this reason: a
-# 32-bit vcruntime140.dll loaded into a 64-bit process reads as chiavdf's
-# DLL failing to load, "%1 is not a valid Win32 application", rather than
-# naming the actual mismatched file.
 _msvc_dlls = []
-if sys.platform == "win32":
-    _msvc_search = [
-        os.path.dirname(sys.executable),
-        os.path.join(os.environ.get("SystemRoot", "C:/Windows"), "System32"),
-        os.path.join(os.environ.get("SystemRoot", "C:/Windows"), "SysWOW64"),
-    ]
-    for _pat in ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll",
-                 "concrt140.dll"):
-        for _root in _msvc_search:
-            _matches = [p for p in glob.glob(os.path.join(_root, _pat)) if os.path.isfile(p)]
-            if _matches:
-                if (_matches[0], ".") not in _msvc_dlls:
-                    _msvc_dlls.append((_matches[0], "."))
-                break  # stop at the first root that has it; do not also check the rest
-
-    # chiavdf installs as a single top-level .pyd (not a package directory),
-    # so collect_all/collect_dynamic_libs silently skips its native DLLs.
-    # Delvewheel places the mpir DLLs directly in site-packages next to the
-    # .pyd for top-level extension modules, so we grab them explicitly here.
-    import site
-    for _sp in site.getsitepackages():
-        for _pat in ("mpir*.dll", "chiavdf*.dll"):
-            for _p in glob.glob(os.path.join(_sp, _pat)):
-                if os.path.isfile(_p) and (_p, ".") not in _msvc_dlls:
-                    _msvc_dlls.append((_p, "."))
 
 _all_binaries = [
     *nacl_binaries, *cffi_binaries, *oqs_binaries,
@@ -128,64 +88,30 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-# Windows version resource (company, description, version), written by
-# scripts/make_version_info.py. Absent on a plain local build, which is fine.
-VERSION_INFO = "version_info.txt" if os.path.exists("version_info.txt") else None
-
-if sys.platform == "win32":
-    # onedir, not onefile: the program is a folder of ordinary files that the
-    # MSI installs, so nothing unpacks itself into a temp folder at launch,
-    # which is the behaviour antivirus engines flag a onefile build for.
-    exe = EXE(
-        pyz,
-        a.scripts,
-        exclude_binaries=True,
-        name="lapsecoin",
-        debug=False,
-        strip=False,
-        upx=False,
-        console=False,
-        icon="favicon.ico",
-        version=VERSION_INFO,
-        bootloader_ignore_signals=False,
-        disable_windowed_traceback=False,
-        target_arch=None,
-        codesign_identity=None,
-        entitlements_file=None,
-    )
-    coll = COLLECT(
-        exe,
-        a.binaries,
-        a.datas,
-        strip=False,
-        upx=False,
-        name="lapsecoin-win",
-    )
-else:
-    # onedir: exclude_binaries=True tells EXE not to bundle libs itself;
-    # COLLECT then assembles everything into dist/lapsecoin-onedir/.
-    # Named differently from the final AppImage (dist/lapsecoin, no
-    # extension) so the two don't collide on disk.
-    exe = EXE(
-        pyz,
-        a.scripts,
-        exclude_binaries=True,
-        name="lapsecoin",
-        debug=False,
-        strip=False,
-        upx=False,
-        console=True,
-        bootloader_ignore_signals=False,
-        disable_windowed_traceback=False,
-        target_arch=None,
-        codesign_identity=None,
-        entitlements_file=None,
-    )
-    coll = COLLECT(
-        exe,
-        a.binaries,
-        a.datas,
-        strip=False,
-        upx=False,
-        name="lapsecoin-onedir",
-    )
+# onedir: exclude_binaries=True tells EXE not to bundle libs itself;
+# COLLECT then assembles everything into dist/lapsecoin-onedir/.
+# Named differently from the final AppImage (dist/lapsecoin, no
+# extension) so the two don't collide on disk.
+exe = EXE(
+    pyz,
+    a.scripts,
+    exclude_binaries=True,
+    name="lapsecoin",
+    debug=False,
+    strip=False,
+    upx=False,
+    console=True,
+    bootloader_ignore_signals=False,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="lapsecoin-onedir",
+)

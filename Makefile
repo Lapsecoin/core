@@ -5,7 +5,7 @@
 #                 requires python3-tk (for the desktop GUI; falls back to
 #                 console at runtime if missing, but PyInstaller needs it
 #                 present at build time to bundle it in the first place)
-# make windows -- build dist/lapsecoin-win/ (onedir, packaged by the MSI) using pre-committed icons
+# make windows -- build dist/lapsecoin-win/ with Nuitka (packaged by the MSI); needs Visual Studio Build Tools
 # make icons   -- regenerate favicon.ico and lapsecoin.png from lapsecoin.svg
 #                 (Linux only; requires libcairo2-dev + pip install cairosvg Pillow)
 #                 Run before make linux or make windows. Output is git-ignored.
@@ -41,7 +41,7 @@ linux: icons
 	@echo "Built: $(DIST)/lapsecoin"
 
 windows:
-	pyinstaller --clean --noconfirm $(SPEC)
+	powershell -Command "& scripts/build_windows.ps1 -Version (Get-Content VERSION).Trim()"
 	@echo "Built: $(DIST)/lapsecoin-win/lapsecoin.exe"
 
 icons:
