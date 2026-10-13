@@ -73,6 +73,20 @@ def detect_install_type():
         return "source"
 
 
+def _installed_exe():
+    """The program to start again after an MSI update. Not sys.executable: in a
+    Nuitka build that names a python.exe which does not exist, and the real
+    program is lapsecoin.exe in the same folder. Checked now, before the app
+    is closed, so a wrong path stops the update with a message instead of
+    leaving the user with no app running and an error dialog."""
+    import datadir
+    exe = os.path.join(datadir.install_dir(), "lapsecoin.exe")
+    if not os.path.isfile(exe):
+        raise RuntimeError(f"cannot find the installed program at {exe}, "
+                           "so it could not be started again after the update")
+    return exe
+
+
 def _download(url, dest_path, on_progress=None):
     import requests
     with requests.get(url, stream=True, timeout=30) as r:
@@ -256,7 +270,7 @@ class UpdateSession:
         install, so no elevation) and starts the app again. The installer
         replaces the program files; the data folder is not touched."""
         import datadir
-        exe_path = os.path.realpath(sys.executable)
+        exe_path = _installed_exe()
         work = os.path.join(datadir.user_data_dir(), "update")
         os.makedirs(work, exist_ok=True)
         msi_path = os.path.join(work, f"lapsecoin-{self.target_version}.msi")
