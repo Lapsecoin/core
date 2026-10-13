@@ -31,7 +31,7 @@ def bundle_dir():
 
 def prepare_oqs():
     """Point oqs at the liboqs shipped with a frozen build, before it is
-    imported. PyInstaller does this in hook_oqs.py; a Nuitka build has no such
+    imported. PyInstaller does this in scripts/hook_oqs.py; a Nuitka build has no such
     hook, so main.py calls this. oqs expects an install prefix with the
     library under lib/ (bin/ on Windows), which is how a Nuitka build lays
     it out in _oqs/ beside the executable."""

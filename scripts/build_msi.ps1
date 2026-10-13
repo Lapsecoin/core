@@ -31,7 +31,7 @@ if ($LASTEXITCODE) { throw "heat failed" }
 
 & "$bin\candle.exe" -nologo -arch x64 `
     "-dVersion=$msiVersion" "-dSourceDir=$Source" "-dIcon=$Icon" "-dMarker=$marker" `
-    -out "$work\" installer\lapsecoin.wxs "$work\AppFiles.wxs"
+    -out "$work\" scripts\lapsecoin.wxs "$work\AppFiles.wxs"
 if ($LASTEXITCODE) { throw "candle failed" }
 
 # ICE38/64/91 complain that per-user components lack registry key paths, which

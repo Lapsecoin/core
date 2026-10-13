@@ -31,8 +31,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Anything here can change how every test behaves.
 RUN_ALL = {
-    "conftest.py", "tests/conftest.py", "pytest.ini", "pyproject.toml",
-    "requirements.txt", "VERSION", "hook_oqs.py", "Makefile",
+    "tests/conftest.py", "pyproject.toml",
+    "requirements.txt", "VERSION", "scripts/hook_oqs.py", "scripts/lapsecoin.wxs", "Makefile",
     "scripts/select_tests.py",
 }
 RUN_ALL_PREFIXES = (".github/", "tests/__init__", "vendor/")
