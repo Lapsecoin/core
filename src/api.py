@@ -1547,6 +1547,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
         if forwarded and not is_routable_peer_addr(f"{caller}:{port}"):
             caller = forwarded.split(",")[-1].strip()
         addr = f"{caller}:{port}"
+        log.info("[peers] %s asked to be reached at %s", caller or "?", addr)
         if not is_routable_peer_addr(addr):
             return jsonify({"ok": False, "seen": caller,
                             "error": f"{caller or 'that address'} is not reachable "
@@ -1567,6 +1568,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
         # The same queue every other source feeds: pinged first, and admitted
         # only within the normal peer and per-subnet limits.
         hint(addr)
+        log.info("[peers] queued %s to be pinged", addr)
         return jsonify({"ok": True, "queued": True})
 
     # The public face of the fee service: what it is and how to use it. The

@@ -73,7 +73,8 @@ TORRENT_ANNOUNCE_INTERVAL = 300
 # download of the public node's peer list, once per run, after this long
 # with no peers. Meant to become unnecessary, so it is deliberately rare.
 FALLBACK_PEERS_URL   = "https://lapsenode.vicnas.me/api/peers/download"
-FALLBACK_AFTER       = 600
+FALLBACK_AFTER       = 900
+FALLBACK_COUNTDOWN   = 60    # how often the time left is logged while waiting
 # A node with no peers is the one that most needs to be found, so it
 # re-publishes far more often than the steady-state cadence above.
 LONELY_PUT_INTERVAL      = 600
@@ -247,6 +248,7 @@ class Discovery:
         last_regossip = now - PEX_REGOSSIP_INTERVAL
         no_peers_since = None
         fallback_done  = False
+        last_countdown = 0.0
 
         if ses is not None:
             self._dht.get_all(ses)
@@ -283,6 +285,11 @@ class Discovery:
                 fallback_done = True
                 threading.Thread(target=self._fetch_fallback_peers,
                                  daemon=True).start()
+            elif not fallback_done and now - last_countdown >= FALLBACK_COUNTDOWN:
+                last_countdown = now
+                left = int(FALLBACK_AFTER - (now - no_peers_since))
+                log.info("[peers] no peers yet, falling back to the public list "
+                         "in %d:%02d", left // 60, left % 60)
             if ses is not None:
                 self._dht.pump_gets(ses)
             put_interval = LONELY_PUT_INTERVAL if lonely else PUT_REFRESH_INTERVAL
@@ -534,8 +541,14 @@ class Discovery:
             import requests
             from urllib.parse import urlsplit
             u = urlsplit(list_url)
+            # The port other nodes see us on, which a NAT may have changed
+            # from the one we listen on.
+            port = self.port
+            ext = self.udp.our_external_addr or ""
+            if ":" in ext and ext.rsplit(":", 1)[1].isdigit():
+                port = int(ext.rsplit(":", 1)[1])
             r = requests.post(f"{u.scheme}://{u.netloc}/api/peers/announce",
-                              json={"port": self.port}, timeout=10)
+                              json={"port": port}, timeout=10)
             why = ""
             if not r.ok:
                 try:
