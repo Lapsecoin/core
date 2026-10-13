@@ -163,6 +163,27 @@ def _open_path(path):
         log.warning("[gui] could not open %s: %s", path, e)
 
 
+# What the Linux tray icon is flattened onto: a dark neutral square, which
+# sits quietly on the default dark panels.
+TRAY_FLAT_BG = "#1c1f26"
+
+
+def _tray_image(raw, platform):
+    """The 32px tray icon, from the full-size RGBA logo.
+
+    Windows and macOS composite a transparent icon onto the taskbar
+    themselves, so it keeps its transparency and takes the taskbar's own
+    colour, light or dark. Some AppIndicator/Ayatana implementations on Linux
+    do not composite transparency and draw it as solid black, so there the
+    icon is flattened onto an opaque square instead."""
+    from PIL import Image
+    if platform.startswith("linux"):
+        flat = Image.new("RGBA", raw.size, TRAY_FLAT_BG)
+        flat.paste(raw, (0, 0), raw)
+        raw = flat
+    return raw.resize((32, 32), Image.LANCZOS)
+
+
 def _make_tray_icon(node, on_open, on_quit):
     """Build a pystray icon so the window can fully vanish (no taskbar
     entry) while the node keeps running, with a way back in. Returns None
@@ -195,15 +216,7 @@ def _make_tray_icon(node, on_open, on_quit):
         # a Windows build.
         raw = Image.open(theme.ICON_PNG).convert("RGBA")
 
-        # Some AppIndicator/Ayatana implementations don't composite true
-        # transparency correctly and render it as solid black instead of the
-        # panel's own background. Rather than leaving the icon transparent
-        # and hoping the backend handles it, flatten it onto an opaque
-        # square in the window colour, worst case it's a small paper-
-        # coloured square with the logo, not a broken black one.
-        flattened = Image.new("RGBA", raw.size, theme.PAPER)
-        flattened.paste(raw, (0, 0), raw)
-        img = flattened.resize((32, 32), Image.LANCZOS)
+        img = _tray_image(raw, sys.platform)
 
         # Note: AppIndicator/Ayatana-based trays (GNOME/Ubuntu default) don't
         # have a separate "left click to open" action the way Windows does,
