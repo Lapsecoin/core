@@ -1544,10 +1544,10 @@ def create_app(node, pool, private_port=8335, public_port=8333,
                              update_checker=update_checker, updater=updater,
                              public_url=public_url, oblivious=oblivious)
 
-    # A node that cannot find anyone asks one public node to try reaching it
-    # first. Behind most firewalls and NATs a node can send out but not be
-    # reached until something has been sent to it, so the request itself is
-    # what lets this node's ping through. See Discovery._fetch_fallback_peers.
+    # Lets a node that cannot be reached ask this one to ping it first.
+    # Behind most firewalls and NATs a node can send out but not be reached
+    # until something has been sent to it, so the request itself is what
+    # lets this node's ping through.
     announce_recent = collections.deque()      # times of the last accepted ones
     announce_lock = threading.Lock()
 

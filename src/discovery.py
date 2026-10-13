@@ -40,7 +40,6 @@ External public interface (called from main.py):
 
 import json
 import logging
-import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -69,12 +68,6 @@ DHT_BOOTSTRAP_TIMEOUT  = 15   # max wait for DHT bootstrap before first query an
 # not again for another hour, real BitTorrent clients re-announce every
 # few minutes, not hourly.
 TORRENT_ANNOUNCE_INTERVAL = 300
-# Last resort when DHT, PEX, LAN and the peer cache all found nobody: one
-# download of the public node's peer list, once per run, after this long
-# with no peers. Meant to become unnecessary, so it is deliberately rare.
-FALLBACK_PEERS_URL   = "https://lapsenode.vicnas.me/api/peers/download"
-FALLBACK_AFTER       = 900
-FALLBACK_COUNTDOWN   = 60    # how often the time left is logged while waiting
 # A node with no peers is the one that most needs to be found, so it
 # re-publishes far more often than the steady-state cadence above.
 LONELY_PUT_INTERVAL      = 600
@@ -246,9 +239,6 @@ class Discovery:
         last_lan      = now - LAN_BROADCAST_INTERVAL
         last_status   = now - STATUS_LOG_INTERVAL
         last_regossip = now - PEX_REGOSSIP_INTERVAL
-        no_peers_since = None
-        fallback_done  = False
-        last_countdown = 0.0
 
         if ses is not None:
             self._dht.get_all(ses)
@@ -277,19 +267,6 @@ class Discovery:
 
 
             lonely = self.pool.count() == 0
-            if not lonely:
-                no_peers_since = None
-            elif no_peers_since is None:
-                no_peers_since = now
-            elif not fallback_done and now - no_peers_since >= FALLBACK_AFTER:
-                fallback_done = True
-                threading.Thread(target=self._fetch_fallback_peers,
-                                 daemon=True).start()
-            elif not fallback_done and now - last_countdown >= FALLBACK_COUNTDOWN:
-                last_countdown = now
-                left = int(FALLBACK_AFTER - (now - no_peers_since))
-                log.info("[peers] no peers yet, falling back to the public list "
-                         "in %d:%02d", left // 60, left % 60)
             if ses is not None:
                 self._dht.pump_gets(ses)
             put_interval = LONELY_PUT_INTERVAL if lonely else PUT_REFRESH_INTERVAL
@@ -509,64 +486,6 @@ class Discovery:
             pass
         except Exception:
             log.debug("[peer] cache load failed", exc_info=True)
-
-    def _fetch_fallback_peers(self):
-        """One download of the public node's peer list, queued as ordinary
-        candidates. Never retried within a run, whether or not it worked."""
-        url = os.environ.get("LAPSECOIN_PEERS_URL", FALLBACK_PEERS_URL)
-        try:
-            import requests
-            r = requests.get(url, timeout=15)
-            r.raise_for_status()
-            peers = r.json()
-            if not isinstance(peers, list):
-                raise ValueError("peer list is not a JSON list")
-        except Exception:
-            log.warning("[peers] no peers for %ds and the fallback list at %s "
-                        "could not be fetched", FALLBACK_AFTER, url, exc_info=True)
-            return
-        log.info("[peers] no peers for %ds, using the fallback list from %s "
-                 "(%d address(es))", FALLBACK_AFTER, url, len(peers))
-        for addr in peers:
-            self.enqueue_candidate(addr)
-        self._announce_to(url)
-
-    def _announce_to(self, list_url):
-        """Ask the node that gave us the list to try reaching us as well.
-        Reaching a node behind a firewall needs that node to be sent
-        something first, and a node we have been pinging for minutes is one
-        it will accept packets from, so a ping from the other side gets
-        through. Best effort, and once per run like the download."""
-        try:
-            import requests
-            from urllib.parse import urlsplit
-            u = urlsplit(list_url)
-            # The port other nodes see us on, which a NAT may have changed
-            # from the one we listen on.
-            port = self.port
-            ext = self.udp.our_external_addr or ""
-            if ":" in ext and ext.rsplit(":", 1)[1].isdigit():
-                port = int(ext.rsplit(":", 1)[1])
-            r = requests.post(f"{u.scheme}://{u.netloc}/api/peers/announce",
-                              json={"port": port}, timeout=30)
-            why = ""
-            if not r.ok:
-                try:
-                    why = ": " + str(r.json().get("error", ""))
-                except Exception:
-                    pass
-            if r.ok:
-                try:
-                    body = r.json()
-                    result = body.get("detail", "")
-                except Exception:
-                    result = ""
-                log.info("[peers] asked %s to reach us as well: %s", u.netloc, result or "sent")
-            else:
-                log.info("[peers] asked %s to reach us as well: declined (%d)%s",
-                         u.netloc, r.status_code, why)
-        except Exception:
-            log.debug("[peers] announce failed", exc_info=True)
 
     def _save_peer_cache(self):
         peers = self.pool.all_addrs()
