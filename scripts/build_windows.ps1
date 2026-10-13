@@ -30,8 +30,12 @@ $identity = @(
     "--product-version=$fileVersion",
     "--windows-icon-from-ico=favicon.ico"
 )
-$common = @("--assume-yes-for-downloads", "--msvc=latest", "--jobs=$jobs",
-            "--nofollow-import-to=pytest", "--nofollow-import-to=unittest")
+# --lto=no: no link-time optimisation pass over ~900 files, which the
+# program's own Python does not need (the heavy maths is in native libraries).
+# pygments is only an optional import of other packages; nothing here uses it.
+$common = @("--assume-yes-for-downloads", "--msvc=latest", "--jobs=$jobs", "--lto=no",
+            "--nofollow-import-to=pytest", "--nofollow-import-to=unittest",
+            "--nofollow-import-to=pygments")
 
 # oqs looks for an install prefix with the library under bin\.
 $oqs = Join-Path $Liboqs "bin"

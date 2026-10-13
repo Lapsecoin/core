@@ -131,6 +131,15 @@ class TestPrepare:
         finally:
             os.chdir(before)
 
+    def test_asking_for_help_does_not_ask_or_copy(self, monkeypatch, tmp_path):
+        env = self._installed(monkeypatch, tmp_path)
+        home = tmp_path / "home"
+        _write(str(home / "Downloads"), "lapsecoin_key.json", "key")
+        monkeypatch.setattr(sys, "argv", ["lapsecoin", "-h"])
+        dst, asked = self._run(env, str(home), ("use", str(home / "Downloads")))
+        assert asked == []
+        assert not os.path.exists(os.path.join(dst, "lapsecoin_key.json"))
+
     def test_a_data_folder_with_a_key_is_never_asked_about(self, monkeypatch, tmp_path):
         env = self._installed(monkeypatch, tmp_path)
         _write(str(tmp_path / "Local" / "LapseCoin"), "lapsecoin_key.json", "mine")

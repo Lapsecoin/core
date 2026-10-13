@@ -158,7 +158,9 @@ def prepare(environ=None, home=None, ask=None):
         return None
     dst = user_data_dir(environ)
     os.makedirs(dst, exist_ok=True)
-    if not _has_data(dst):
+    # Asking for help is not starting the node: no question, nothing copied.
+    asking_for_help = any(a in ("-h", "--help") for a in sys.argv[1:])
+    if not _has_data(dst) and not asking_for_help:
         import migrate_ui
         suggestions = find_legacy_folders(home)
         kind, folder = (ask or migrate_ui.ask)(suggestions)
