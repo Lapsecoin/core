@@ -9,6 +9,10 @@ _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 
 import datadir as _datadir
 _datadir.prepare()
 
+import resources as _resources
+if _resources.is_frozen():
+    _resources.prepare_oqs()
+
 import argparse
 import collections
 import logging
