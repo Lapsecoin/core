@@ -27,3 +27,24 @@ def bundle_dir():
         # where its compiled modules report themselves to be.
         return here
     return os.path.dirname(here)
+
+
+def prepare_oqs():
+    """Load the liboqs shipped beside a frozen build before oqs is imported,
+    so it is found whatever the search path. PyInstaller does the same in
+    hook_oqs.py; a Nuitka build has no such hook, so main.py calls this."""
+    import ctypes
+    import glob
+    base = bundle_dir()
+    patterns = ["oqs.dll", "liboqs.dll"] if sys.platform == "win32" else ["liboqs.so*"]
+    for pat in patterns:
+        for lib in sorted(glob.glob(os.path.join(base, pat))):
+            if not os.path.isfile(lib):
+                continue
+            try:
+                ctypes.CDLL(lib)
+            except OSError:
+                continue
+            os.environ["OQS_INSTALL_PATH"] = base
+            return True
+    return False
