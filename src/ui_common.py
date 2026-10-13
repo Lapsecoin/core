@@ -205,10 +205,9 @@ def _reword_insufficient_balance(msg):
 
 def _base_dir():
     """Return the directory that contains templates_html/, working both from
-    source (repo root) and inside a PyInstaller bundle (sys._MEIPASS)."""
-    if getattr(sys, "frozen", False):
-        return sys._MEIPASS
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    source (repo root) and inside a frozen build."""
+    import resources
+    return resources.bundle_dir()
 
 
 

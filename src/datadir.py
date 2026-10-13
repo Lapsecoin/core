@@ -41,7 +41,8 @@ def install_dir():
 
 
 def is_msi_install():
-    return (bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win")
+    import resources
+    return (resources.is_frozen() and sys.platform.startswith("win")
             and os.path.exists(os.path.join(install_dir(), MSI_MARKER)))
 
 

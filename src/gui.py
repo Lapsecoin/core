@@ -31,9 +31,9 @@ def _resource_dir():
     flat alongside it), and the AppImage wrapping step in the Makefile
     adds another layer on top of that."""
     candidates = []
-    if getattr(sys, "frozen", False):
-        if hasattr(sys, "_MEIPASS"):
-            candidates.append(sys._MEIPASS)
+    import resources
+    if resources.is_frozen():
+        candidates.append(resources.bundle_dir())
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         candidates.append(exe_dir)
         candidates.append(os.path.join(exe_dir, "_internal"))
