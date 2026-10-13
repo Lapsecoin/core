@@ -44,8 +44,5 @@ lapsecoin.lock
 build-nuitka/
 nuitka-cache/
 msi-work/
-to-sign/
-signed-exes/
-signed-msi/
 stage/
 *.msi
