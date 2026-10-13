@@ -32,7 +32,7 @@ jobs:
       severity: ${{ steps.read.outputs.severity }}
       title:    ${{ steps.read.outputs.title }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 2
 
@@ -84,7 +84,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -103,12 +103,12 @@ jobs:
     needs: [version, set-genesis]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -159,11 +159,11 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -178,7 +178,7 @@ jobs:
       # into place on a hit.
       - name: Restore prebuilt liboqs
         id: liboqs-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/liboqs-install
           key: liboqs-linux-${{ env.LIBOQS_REF }}
@@ -220,7 +220,7 @@ jobs:
         run: make linux
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lapsecoin-linux
           path: dist/lapsecoin
@@ -229,11 +229,11 @@ jobs:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -242,7 +242,7 @@ jobs:
       # hash and neither cairo nor the render step runs on a hit.
       - name: Restore generated icons
         id: icons-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             favicon.ico
@@ -256,7 +256,7 @@ jobs:
 
       - name: Restore prebuilt liboqs
         id: liboqs-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:/liboqs/install
           key: liboqs-windows-${{ env.LIBOQS_REF }}
@@ -318,7 +318,7 @@ jobs:
       # cache (object files of code that did not change) is kept between
       # releases, so only what changed is compiled again.
       - name: Restore the Nuitka compiler cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: nuitka-cache
           key: nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-${{ github.run_id }}
@@ -338,7 +338,7 @@ jobs:
       # not throw that away.
       - name: Save the Nuitka compiler cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: nuitka-cache
           key: nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-${{ github.run_id }}
@@ -413,7 +413,7 @@ jobs:
           Copy-Item lapsecoin.msi                stage\lapsecoin.msi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lapsecoin-windows
           path: stage/*
@@ -431,11 +431,11 @@ jobs:
       # under whichever PyPI account registered that pending publisher.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -457,19 +457,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
 
       - name: Download Linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: lapsecoin-linux
           path: artifacts/linux
 
       - name: Download Windows artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: lapsecoin-windows
           path: artifacts/windows
@@ -556,7 +556,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
