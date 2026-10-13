@@ -32,14 +32,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Anything here can change how every test behaves.
 RUN_ALL = {
     "tests/conftest.py", "pyproject.toml",
-    "requirements.txt", "VERSION", "scripts/hook_oqs.py", "scripts/lapsecoin.wxs", "Makefile",
-    "scripts/select_tests.py",
+    "requirements.txt", "scripts/select_tests.py",
 }
-RUN_ALL_PREFIXES = (".github/", "tests/__init__", "vendor/")
+RUN_ALL_PREFIXES = ("tests/__init__", "vendor/")
 
 # Changes under these never reach a test unless a test names the path.
 INERT_SUFFIXES = (".md", ".svg", ".png", ".ico")
-INERT_PREFIXES = ("docs/", "scripts/")
+INERT_PREFIXES = ("docs/", "scripts/", ".github/")
+# Every release changes VERSION, so it cannot select everything. It selects
+# the tests that name it (directly or through a module they import), and the
+# CI config and Makefile are treated the same way: only a test that names
+# them is affected.
 
 # Tests that boot the whole app or run full flows. A change to any code
 # also runs these, since an import graph cannot see every runtime coupling.
@@ -112,9 +115,12 @@ def select(changed):
             continue
         if rel in RUN_ALL or rel.startswith(RUN_ALL_PREFIXES):
             return None
+        if rel.startswith("tests/test_") and not os.path.exists(os.path.join(ROOT, rel)):
+            continue  # a deleted test has nothing left to run
         if rel in path_to_mod:
             hit_modules.add(path_to_mod[rel])
-        elif rel.endswith(INERT_SUFFIXES) or rel.startswith(INERT_PREFIXES):
+        elif rel in ("VERSION", "Makefile") or rel.endswith(INERT_SUFFIXES) \
+                or rel.startswith(INERT_PREFIXES):
             hit_paths.append(rel)
         elif rel.startswith(DATA_ROOTS) or "/" not in rel:
             hit_paths.append(rel)
