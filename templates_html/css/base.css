@@ -519,6 +519,10 @@ button:disabled, button:disabled:hover {
 .alert { padding: .65rem 1rem; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); font-size: .9rem; margin-bottom: 1rem; }
 .alert-ok  { border-left: 4px solid var(--gain); color: var(--gain); }
 .alert-err { border-left: 4px solid var(--loss); color: var(--loss); }
+.alert-warn { border-left: 4px solid var(--accent); background: rgb(194 87 12 / .07); color: var(--ink); }
+.alert-warn b { color: var(--link); }
+.alert-warn code { font-family: var(--mono); font-size: .85em; white-space: nowrap; }
+.alert[hidden] { display: none; }
 
 .hash { font-family: var(--mono); font-size: .82rem; color: var(--ink-dim); word-break: break-all; white-space: normal; }
 .hash-short { font-family: var(--mono); font-size: .85rem; }

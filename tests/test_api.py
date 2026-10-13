@@ -1686,3 +1686,27 @@ class TestPeerAnnounceBehindAProxy:
                    environ_overrides={"REMOTE_ADDR": "9.9.9.9"},
                    headers={"X-Forwarded-For": "8.8.8.8"})
         assert r.status_code == 200 and pinged == ["9.9.9.9:8333"]
+
+
+class TestNoDhtNotice:
+    """Without libtorrent a node with no peers has no way to find any, so the
+    dashboard says so and points at the Discord."""
+
+    def _html(self, monkeypatch, has_lt, peers):
+        monkeypatch.setattr(api, "HAS_LIBTORRENT", has_lt)
+        pool = peerpool_mod.PeerPool()
+        if peers:
+            monkeypatch.setattr(pool, "count", lambda: peers)
+        node = TestDashboardTxPaging._DashNode(0)
+        return api.create_private_app(node, pool).test_client().get("/").get_data(as_text=True)
+
+    def test_shown_when_no_libtorrent_and_no_peers(self, monkeypatch):
+        html = self._html(monkeypatch, False, 0)
+        assert 'id="no-dht-alert"' in html and "--peer" in html
+        assert 'id="no-dht-alert" hidden' not in html
+
+    def test_hidden_until_the_poll_when_it_has_peers(self, monkeypatch):
+        assert 'id="no-dht-alert" hidden' in self._html(monkeypatch, False, 3)
+
+    def test_absent_when_libtorrent_is_installed(self, monkeypatch):
+        assert 'id="no-dht-alert"' not in self._html(monkeypatch, True, 0)
