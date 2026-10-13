@@ -548,15 +548,23 @@ class Discovery:
             if ":" in ext and ext.rsplit(":", 1)[1].isdigit():
                 port = int(ext.rsplit(":", 1)[1])
             r = requests.post(f"{u.scheme}://{u.netloc}/api/peers/announce",
-                              json={"port": port}, timeout=10)
+                              json={"port": port}, timeout=30)
             why = ""
             if not r.ok:
                 try:
                     why = ": " + str(r.json().get("error", ""))
                 except Exception:
                     pass
-            log.info("[peers] asked %s to reach us as well: %s", u.netloc,
-                     "queued" if r.ok else f"declined ({r.status_code}){why}")
+            if r.ok:
+                try:
+                    body = r.json()
+                    result = body.get("detail", "")
+                except Exception:
+                    result = ""
+                log.info("[peers] asked %s to reach us as well: %s", u.netloc, result or "sent")
+            else:
+                log.info("[peers] asked %s to reach us as well: declined (%d)%s",
+                         u.netloc, r.status_code, why)
         except Exception:
             log.debug("[peers] announce failed", exc_info=True)
 

@@ -1597,87 +1597,92 @@ class TestBenchmarkPage:
 
 class TestPeerAnnounce:
     """POST /api/peers/announce: a node that cannot be reached asks this one
-    to try it, and only ever at the address the request came from."""
+    to try it, and only ever at the address the request came from. It runs
+    the same routine as adding a peer by hand."""
 
-    def _client(self, hint):
+    def _setup(self, answers=True):
         import types
+        pinged = []
+        def ping(addr):
+            pinged.append(addr)
+            return object() if answers else None
         node, _ = fresh()
-        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=hint))
-        return api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(ping=ping))
+        pool = peerpool_mod.PeerPool()
+        return api.create_app(node, pool).test_client(), pinged, pool
 
-    def _post(self, client, body, ip="8.8.8.8"):
+    def _post(self, client, body, ip="8.8.8.8", **kw):
         return client.post("/api/peers/announce", json=body,
-                           headers={"X-Forwarded-For": ip})
+                           headers={"X-Forwarded-For": ip}, **kw)
 
-    def test_queues_the_address_the_request_came_from(self):
-        seen = []
-        r = self._post(self._client(seen.append), {"port": 8333})
-        assert r.status_code == 200 and r.get_json()["queued"] is True
-        assert seen == ["8.8.8.8:8333"]
+    def test_pings_and_adds_the_address_the_request_came_from(self):
+        c, pinged, pool = self._setup()
+        r = self._post(c, {"port": 8333})
+        assert r.status_code == 200 and r.get_json()["connected"] is True
+        assert pinged == ["8.8.8.8:8333"] and pool.is_known("8.8.8.8:8333")
+
+    def test_no_answer_adds_nothing_and_is_not_an_error(self):
+        c, pinged, pool = self._setup(answers=False)
+        r = self._post(c, {"port": 8333})
+        assert r.status_code == 200 and r.get_json()["connected"] is False
+        assert not pool.is_known("8.8.8.8:8333")
 
     def test_a_host_named_in_the_body_is_ignored(self):
-        seen = []
-        self._post(self._client(seen.append), {"port": 8333, "host": "1.1.1.1"})
-        assert seen == ["8.8.8.8:8333"]
+        c, pinged, _ = self._setup()
+        self._post(c, {"port": 8333, "host": "1.1.1.1"})
+        assert pinged == ["8.8.8.8:8333"]
 
     def test_bad_ports_are_refused(self):
-        seen = []
-        c = self._client(seen.append)
+        c, pinged, _ = self._setup()
         for i, body in enumerate(({}, {"port": "8333"}, {"port": 80}, {"port": 70000})):
             assert self._post(c, body, ip=f"8.8.4.{i + 1}").status_code == 400
-        assert seen == []
+        assert pinged == []
 
-    def test_a_private_address_is_refused(self):
-        seen = []
-        r = self._post(self._client(seen.append), {"port": 8333}, ip="192.168.1.5")
-        assert r.status_code == 400 and seen == []
+    def test_same_result_as_adding_by_hand(self):
+        import types
+        node, _ = fresh()
+        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(ping=lambda a: object()))
+        pool = peerpool_mod.PeerPool()
+        assert api._admit_by_ping(node, pool, "8.8.8.8:8333") is None
+        assert pool.is_known("8.8.8.8:8333")
+        node.gossip.udp.ping = lambda a: None
+        assert api._admit_by_ping(node, pool, "8.8.4.4:8333").startswith("no answer")
 
     def test_one_caller_gets_two_an_hour(self):
-        seen = []
-        c = self._client(seen.append)
+        c, pinged, _ = self._setup()
         assert self._post(c, {"port": 8333}).status_code == 200
         assert self._post(c, {"port": 8333}).status_code == 200
         assert self._post(c, {"port": 8333}).status_code == 429
-        assert len(seen) == 2
+        assert len(pinged) == 2
 
     def test_all_callers_together_are_capped(self, monkeypatch):
         monkeypatch.setattr(api, "ANNOUNCE_MAX_PER_WINDOW", 3)
-        seen = []
-        c = self._client(seen.append)
+        c, pinged, _ = self._setup()
         codes = [self._post(c, {"port": 8333}, ip=f"8.8.8.{i}").status_code
                  for i in range(1, 6)]
         assert codes == [200, 200, 200, 429, 429]
-        assert len(seen) == 3
+        assert len(pinged) == 3
 
 
-class TestPeerAnnounceBehindAProxy(TestPeerAnnounce):
-    def test_a_private_connection_uses_the_forwarded_address(self):
+class TestPeerAnnounceBehindAProxy:
+    def _client(self):
         import types
-        seen = []
+        pinged = []
         node, _ = fresh()
-        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=seen.append))
-        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
-        r = client.post("/api/peers/announce", json={"port": 8333},
-                        environ_overrides={"REMOTE_ADDR": "172.17.0.2"},
-                        headers={"X-Forwarded-For": "1.2.3.4, 8.8.8.8"})
-        assert r.status_code == 200 and seen == ["8.8.8.8:8333"]
+        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(
+            ping=lambda a: pinged.append(a) or object()))
+        return api.create_app(node, peerpool_mod.PeerPool()).test_client(), pinged
+
+    def test_a_private_connection_uses_the_forwarded_address(self):
+        c, pinged = self._client()
+        r = c.post("/api/peers/announce", json={"port": 8333},
+                   environ_overrides={"REMOTE_ADDR": "172.17.0.2"},
+                   headers={"X-Forwarded-For": "1.2.3.4, 8.8.8.8"})
+        assert r.status_code == 200 and pinged == ["8.8.8.8:8333"]
 
     def test_a_public_connection_ignores_the_forwarded_header(self):
-        import types
-        seen = []
-        node, _ = fresh()
-        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=seen.append))
-        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
-        r = client.post("/api/peers/announce", json={"port": 8333},
-                        environ_overrides={"REMOTE_ADDR": "9.9.9.9"},
-                        headers={"X-Forwarded-For": "8.8.8.8"})
-        assert r.status_code == 200 and seen == ["9.9.9.9:8333"]
-
-    def test_the_refusal_says_which_address_it_saw(self):
-        import types
-        node, _ = fresh()
-        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=lambda a: None))
-        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
-        r = client.post("/api/peers/announce", json={"port": 8333},
-                        environ_overrides={"REMOTE_ADDR": "172.17.0.2"})
-        assert r.status_code == 400 and r.get_json()["seen"] == "172.17.0.2"
+        c, pinged = self._client()
+        r = c.post("/api/peers/announce", json={"port": 8333},
+                   environ_overrides={"REMOTE_ADDR": "9.9.9.9"},
+                   headers={"X-Forwarded-For": "8.8.8.8"})
+        assert r.status_code == 200 and pinged == ["9.9.9.9:8333"]

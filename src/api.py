@@ -1496,6 +1496,32 @@ class _TrustLoopbackProxy:
         return self.app(environ, start_response)
 
 
+def _admit_by_ping(node, pool, addr):
+    """Ping addr and admit it to the pool on a PONG. Returns None on success
+    or the reason it was not admitted. This is the one routine behind the
+    operator's manual add and a node's announce, so both do exactly the same.
+
+    Contact it first, like any other source: nothing is admitted on the
+    say-so alone. A PONG proves a live node of this chain is there; a reply
+    carrying our own instance id (whatever port or IP got us back here)
+    marks it as this very process."""
+    try:
+        udp = node.gossip.udp
+    except AttributeError:
+        udp = None
+    if udp is not None:
+        try:
+            answered = udp.ping(addr) is not None
+        except Exception:
+            answered = False
+        if pool.is_self(addr):
+            return "that address is this node itself"
+        if not answered:
+            return "no answer: not reachable, or not a node on this chain"
+    pool.add(addr, allow_private=True)
+    return None
+
+
 def create_app(node, pool, private_port=8335, public_port=8333,
                update_checker=None, updater=None, public_url=None, oblivious=None):
     app = make_flask_app(__name__)
@@ -1548,10 +1574,8 @@ def create_app(node, pool, private_port=8335, public_port=8333,
             caller = forwarded.split(",")[-1].strip()
         addr = f"{caller}:{port}"
         log.info("[peers] %s asked to be reached at %s", caller or "?", addr)
-        if not is_routable_peer_addr(addr):
-            return jsonify({"ok": False, "seen": caller,
-                            "error": f"{caller or 'that address'} is not reachable "
-                                     "from the internet, so it was not queued"}), 400
+        if not caller:
+            return jsonify({"ok": False, "error": "no client address"}), 400
         now = time.monotonic()
         with announce_lock:
             while announce_recent and now - announce_recent[0] > ANNOUNCE_WINDOW_SECONDS:
@@ -1559,17 +1583,11 @@ def create_app(node, pool, private_port=8335, public_port=8333,
             if len(announce_recent) >= ANNOUNCE_MAX_PER_WINDOW:
                 return jsonify({"ok": False, "error": "busy, try again later"}), 429
             announce_recent.append(now)
-        try:
-            hint = node.gossip.udp._on_peer_hint
-        except AttributeError:
-            hint = None
-        if hint is None:
-            return jsonify({"ok": False, "error": "not accepting peers"}), 503
-        # The same queue every other source feeds: pinged first, and admitted
-        # only within the normal peer and per-subnet limits.
-        hint(addr)
-        log.info("[peers] queued %s to be pinged", addr)
-        return jsonify({"ok": True, "queued": True})
+        # Exactly what adding a peer by hand does.
+        err = _admit_by_ping(node, pool, addr)
+        log.info("[peers] %s: %s", addr, err or "answered, added as a peer")
+        return jsonify({"ok": True, "connected": err is None,
+                        "detail": err or "added"})
 
     # The public face of the fee service: what it is and how to use it. The
     # form itself signs with the wallet, so it only exists on the private port.
@@ -1732,27 +1750,9 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         except (socket.gaierror, UnicodeError, OSError):
             return jsonify({"ok": False, "error": f"cannot resolve {host}"}), 400
         addr = f"{ip}:{port}"
-        # Contact it first, like any other source: nothing is admitted on
-        # the operator's say-so alone. A PONG proves a live node of this
-        # chain is there; a reply carrying our own instance id (whatever
-        # port or IP got us back here) marks it as this very process.
-        try:
-            udp = node.gossip.udp
-        except AttributeError:
-            udp = None
-        if udp is not None:
-            try:
-                answered = udp.ping(addr) is not None
-            except Exception:
-                answered = False
-            if pool.is_self(addr):
-                return jsonify({"ok": False,
-                                "error": "that address is this node itself"}), 400
-            if not answered:
-                return jsonify({"ok": False,
-                                "error": "no answer: not reachable, or not a "
-                                         "node on this chain"}), 400
-        pool.add(addr, allow_private=True)
+        err = _admit_by_ping(node, pool, addr)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
         return jsonify({"ok": True})
 
     return app
