@@ -942,6 +942,7 @@ class UDPTransport:
         self._recv_counts = {}
         self._recv_since  = time.monotonic()
         self._relay_log   = Throttle(300)  # same pair, one line per 5 min
+        self._contact_log = Throttle(300)  # same stranger, one line per 5 min
 
         self._sock        = None
         self._running     = False
@@ -1496,6 +1497,11 @@ class UDPTransport:
                     self._pool.mark_self(sender_addr)
                     return
                 self._pool.touch(sender_addr)
+                if not self._pool.is_known(sender_addr):
+                    held = self._contact_log.allow(sender_addr)
+                    if held is not None:
+                        log.info("[udp] contacted by %s, a node we are not "
+                                 "connected to yet%s", sender_addr, more(held))
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash,
