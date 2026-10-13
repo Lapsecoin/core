@@ -1537,9 +1537,20 @@ def create_app(node, pool, private_port=8335, public_port=8333,
         # Only ever the address the request came from, never one the caller
         # names, so this cannot be used to make a node send packets at a
         # third party.
-        addr = f"{request.remote_addr}:{port}"
+        caller = request.remote_addr or ""
+        # Behind a reverse proxy that is not on this machine (a container
+        # network, a tunnel) the connection comes from a private address and
+        # the real client is in X-Forwarded-For, appended last by the proxy.
+        # Only believed when the connection itself is private, so a client
+        # reaching this node directly cannot name another address.
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded and not is_routable_peer_addr(f"{caller}:{port}"):
+            caller = forwarded.split(",")[-1].strip()
+        addr = f"{caller}:{port}"
         if not is_routable_peer_addr(addr):
-            return jsonify({"ok": False, "error": "address is not reachable from the internet"}), 400
+            return jsonify({"ok": False, "seen": caller,
+                            "error": f"{caller or 'that address'} is not reachable "
+                                     "from the internet, so it was not queued"}), 400
         now = time.monotonic()
         with announce_lock:
             while announce_recent and now - announce_recent[0] > ANNOUNCE_WINDOW_SECONDS:

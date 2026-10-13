@@ -1648,3 +1648,36 @@ class TestPeerAnnounce:
                  for i in range(1, 6)]
         assert codes == [200, 200, 200, 429, 429]
         assert len(seen) == 3
+
+
+class TestPeerAnnounceBehindAProxy(TestPeerAnnounce):
+    def test_a_private_connection_uses_the_forwarded_address(self):
+        import types
+        seen = []
+        node, _ = fresh()
+        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=seen.append))
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        r = client.post("/api/peers/announce", json={"port": 8333},
+                        environ_overrides={"REMOTE_ADDR": "172.17.0.2"},
+                        headers={"X-Forwarded-For": "1.2.3.4, 8.8.8.8"})
+        assert r.status_code == 200 and seen == ["8.8.8.8:8333"]
+
+    def test_a_public_connection_ignores_the_forwarded_header(self):
+        import types
+        seen = []
+        node, _ = fresh()
+        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=seen.append))
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        r = client.post("/api/peers/announce", json={"port": 8333},
+                        environ_overrides={"REMOTE_ADDR": "9.9.9.9"},
+                        headers={"X-Forwarded-For": "8.8.8.8"})
+        assert r.status_code == 200 and seen == ["9.9.9.9:8333"]
+
+    def test_the_refusal_says_which_address_it_saw(self):
+        import types
+        node, _ = fresh()
+        node.gossip = types.SimpleNamespace(udp=types.SimpleNamespace(_on_peer_hint=lambda a: None))
+        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
+        r = client.post("/api/peers/announce", json={"port": 8333},
+                        environ_overrides={"REMOTE_ADDR": "172.17.0.2"})
+        assert r.status_code == 400 and r.get_json()["seen"] == "172.17.0.2"
