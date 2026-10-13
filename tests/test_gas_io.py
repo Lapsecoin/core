@@ -1,4 +1,4 @@
-"""Reading other networks, including through the light client's proxy."""
+"""Reading other networks, including through a proxy."""
 
 import os
 import sys

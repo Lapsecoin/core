@@ -1,11 +1,8 @@
 """Reads for the web UI taken straight from this node's own chain, state
 and mempool.
 
-LocalReader is one of two implementations of the same small interface the
-wallet pages are written against (the other, RemoteReader, asks another
-node over HTTP and lives in remote_reader.py). Anything the pages need from
-a node goes through these methods, so the full node and the light client
-render the same pages from the same code and cannot drift apart.
+LocalReader is the small interface the wallet pages are written against.
+Anything the pages need from a node goes through these methods.
 """
 
 import hashlib

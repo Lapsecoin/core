@@ -251,22 +251,11 @@ jobs:
       - name: Build AppImage
         run: make linux
 
-      # The light client reuses everything installed above (it needs only
-      # liboqs), so it is built here instead of in a job of its own that
-      # would rebuild liboqs from source a second time.
-      - name: Build light client
-        run: make dumb
-
-      - name: Smoke test light client
-        run: ./dist/lapsecoin-dumb --version
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: lapsecoin-linux
-          path: |
-            dist/lapsecoin
-            dist/lapsecoin-dumb
+          path: dist/lapsecoin
 
   build-windows:
     needs: test
@@ -388,18 +377,9 @@ jobs:
           Write-Host "bridge is $($f.Length) bytes"
           if ($f.Length -lt 1000000) { throw "bridge too small for the old updater" }
 
-      - name: Build light client
-        run: pyinstaller --clean --noconfirm lapsecoin-dumb.spec
-
-      - name: Smoke test light client
-        shell: pwsh
-        run: |
-          & .\dist\lapsecoin-dumb.exe --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       # Code signing through SignPath Foundation (free for open source).
       # Skipped until the repository variable SIGNPATH_ORGANIZATION_ID and the
-      # secret SIGNPATH_API_TOKEN exist; see docs/signing.md. The unsigned
+      # secret SIGNPATH_API_TOKEN exist. The unsigned
       # build is what ships until then.
       - name: Collect the executables to sign
         if: vars.SIGNPATH_ORGANIZATION_ID != ''
@@ -408,7 +388,6 @@ jobs:
           New-Item to-sign -ItemType Directory | Out-Null
           Copy-Item dist\lapsecoin-win\lapsecoin.exe to-sign\lapsecoin-app.exe
           Copy-Item dist-bridge\lapsecoin.exe to-sign\lapsecoin-bridge.exe
-          Copy-Item dist\lapsecoin-dumb.exe to-sign\lapsecoin-dumb.exe
 
       - name: Upload the executables for signing
         id: upload-exes
@@ -437,7 +416,6 @@ jobs:
         run: |
           Copy-Item signed-exes\lapsecoin-app.exe    dist\lapsecoin-win\lapsecoin.exe -Force
           Copy-Item signed-exes\lapsecoin-bridge.exe dist-bridge\lapsecoin.exe -Force
-          Copy-Item signed-exes\lapsecoin-dumb.exe   dist\lapsecoin-dumb.exe -Force
 
       - name: Install the WiX Toolset
         run: choco install wixtoolset --no-progress -y
@@ -499,7 +477,6 @@ jobs:
           New-Item stage -ItemType Directory | Out-Null
           Copy-Item lapsecoin.msi                stage\lapsecoin.msi
           Copy-Item dist-bridge\lapsecoin.exe     stage\lapsecoin.exe
-          Copy-Item dist\lapsecoin-dumb.exe       stage\lapsecoin-dumb.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -531,12 +508,12 @@ jobs:
           path: artifacts/windows
 
       - name: Make AppImage executable
-        run: chmod +x artifacts/linux/lapsecoin artifacts/linux/lapsecoin-dumb
+        run: chmod +x artifacts/linux/lapsecoin
 
       - name: Checksums
         run: |
           cd artifacts
-          sha256sum linux/lapsecoin linux/lapsecoin-dumb windows/lapsecoin.msi windows/lapsecoin.exe windows/lapsecoin-dumb.exe \
+          sha256sum linux/lapsecoin windows/lapsecoin.msi windows/lapsecoin.exe \
             | sed 's# \(linux\|windows\)/# #' > SHA256SUMS
           cat SHA256SUMS
 
@@ -583,10 +560,8 @@ jobs:
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
             artifacts/linux/lapsecoin
-            artifacts/linux/lapsecoin-dumb
             artifacts/windows/lapsecoin.msi
             artifacts/windows/lapsecoin.exe
-            artifacts/windows/lapsecoin-dumb.exe
             artifacts/SHA256SUMS
           fail_on_unmatched_files: true
         env:

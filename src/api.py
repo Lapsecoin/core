@@ -73,11 +73,9 @@ Public app  (default port 8333, externally reachable):
 
     GET  /api/peers/http
          {"nodes": ["ip:port", ...]}: this node and the peers it has found
-         answering HTTP on its own chain. Short on purpose, for light
-         clients (see light.py) that cannot afford /api/peers. Also
-         "https": this node's own HTTPS address (--public-url) and the ones
-         its peers advertise, the only nodes a light client sends a wallet
-         address to.
+         answering HTTP on its own chain. Short on purpose, unlike
+         /api/peers. Also "https": this node's own HTTPS address
+         (--public-url) and the ones its peers advertise.
 
     POST /api/tx/send                 rate-limited: 20 requests/second
          Request body (JSON): a signed plaintext tx dict, see tx.py
@@ -571,9 +569,7 @@ def _gas_io(node):
 
 class _NodeSigner:
     """What the wallet routes sign through on a full node: the node itself
-    builds and signs, from its own chain state (see Node.build_and_sign_tx).
-    The light client has no node, so it signs with a bare Wallet instead
-    (wallet_ui.WalletSigner)."""
+    builds and signs, from its own chain state (see Node.build_and_sign_tx)."""
 
     def __init__(self, node):
         self.node = node

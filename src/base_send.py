@@ -1,6 +1,6 @@
 """The ETH-on-Base half of the send page, behind the calls wallet_ui makes:
 view() for what the tab shows, preview() for the quote under the form and
-send() for its submit. The light client has no gas wallet and passes none.
+send() for its submit.
 
 Sending to a Base address in ETH is a plain transfer. Anything else, another
 network or a token, is a swap and bridge through Relay, quoted first.

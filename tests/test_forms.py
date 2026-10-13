@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import api
+import local_reader
 import crypto
 import forms
 import peerpool as peerpool_mod
@@ -19,12 +20,10 @@ import tx as tx_mod
 from chainstate import ChainState
 from flask import Flask
 from forms import ALREADY_SENT, Forms, Notes, OneTimeTokens, forms_for
-from light_app import create_light_app
+from tests.wallet_app import PASS, _FullNode, create_wallet_app
 from params import TICKS_PER_LAPSE
-from remote_reader import RemoteReader
 from tests.browser import submit, tokens
 from tests.fixtures import address
-from tests.test_light import PASS, _FullNode, _Session, _TxIndex
 from wallet import Wallet
 
 
@@ -162,9 +161,7 @@ def world(tmp_path):
                      "transactions": [root], "hash": "h1"})
     node = _FullNode(cs)
     app = api.create_app(node, peerpool_mod.PeerPool())
-    session = _Session(app.test_client())
-    reader = RemoteReader(["http://node.test"], refresh=0, session=session)
-    light = create_light_app(reader, wallet)
+    light = create_wallet_app(local_reader.LocalReader(node), wallet)
     return type("W", (), dict(wallet=wallet, node=node, client=light.test_client(),
                               app=light, ref=tx_mod.tx_hash(root)[:6]))
 

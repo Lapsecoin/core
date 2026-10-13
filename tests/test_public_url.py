@@ -189,7 +189,7 @@ class TestNodeAdvertisesIt:
             "https://peer.example.org"]
 
     def test_a_peer_it_lists_twice_is_listed_once(self):
-        from tests.test_light import _FullNode
+        from tests.wallet_app import _FullNode
         from chainstate import ChainState
         pool = peerpool_mod.PeerPool()
         pool.add("8.8.8.8:8333")
@@ -213,7 +213,7 @@ class TestBehindAReverseProxy:
     address has to come from the proxy, and only from the proxy."""
 
     def _client(self):
-        from tests.test_light import _FullNode
+        from tests.wallet_app import _FullNode
         from chainstate import ChainState
         from flask import request
         app = api.create_app(_FullNode(ChainState.from_genesis()), peerpool_mod.PeerPool())

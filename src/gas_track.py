@@ -1,6 +1,6 @@
 """What the chain says about fee requests: who asked, who offered, in what
 order they pay. Rebuilt from blocks, so the same blocks give the same
-answers on every node and in the light client's remote node alike. No I/O."""
+answers on every node. No I/O."""
 
 import gas
 import gaslock
