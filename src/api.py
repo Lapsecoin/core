@@ -138,6 +138,7 @@ import hardware_info
 import settings as settings_mod
 from base_send import BaseSend
 import fees_ui
+from discovery_dht import HAS_LIBTORRENT
 import gas
 from gas_io import ChainIO
 import gaslock
@@ -786,6 +787,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         offset = (page - 1) * DASHBOARD_TXS_PER_PAGE
         return render_template("dashboard.html", title="Dashboard",
             info=info, supply_cap=SUPPLY_CAP, og=embeds.dashboard(info, SUPPLY_CAP),
+            no_dht=not HAS_LIBTORRENT, no_peers=pool.count() == 0, discord=fees_ui.DISCORD,
             recent_txs=_recent_committed_txs(chain, DASHBOARD_TXS_PER_PAGE, offset),
             tx_page=page, tx_total_pages=total_pages,
             tx_page_window=_pagination_window(page, total_pages),

@@ -30,6 +30,10 @@ try:
 except ImportError:
     lt = None  # type: ignore[assignment]
 
+# False means no DHT: this node only finds peers it is given or can see on its
+# own network. The dashboard says so while it has no peers.
+HAS_LIBTORRENT = lt is not None
+
 log = logging.getLogger("ec.discovery.dht")
 
 DHT_STATE_FILE       = "lapsecoin_lt_dht.dat"
