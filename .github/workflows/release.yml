@@ -331,24 +331,10 @@ jobs:
           # release binary; the app already runs fine without it either way.
           pip install cairosvg Pillow miniupnpc
 
-      # PyInstaller's prebuilt bootloader is the one part every PyInstaller
-      # program shares, malware included, and antivirus engines flag on it.
-      # Compiling it here (the runner has MSVC) gives this build a bootloader
-      # those signatures do not already match. If the compile fails, fall back
-      # to the stock wheel rather than failing the release.
-      - name: Install PyInstaller, bootloader built from source
-        shell: pwsh
-        run: |
-          pip install pyinstaller --no-binary pyinstaller --no-cache-dir
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning "bootloader build failed, using the prebuilt PyInstaller"
-            pip install pyinstaller
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          pyinstaller --version
-
-      - name: Write the Windows version resource
-        run: python scripts/make_version_info.py
+      # Pinned: 4.3 crashes on exit when a program leaves through sys.exit
+      # (a segfault in logging.shutdown); 4.2.2 and earlier do not.
+      - name: Install Nuitka
+        run: pip install nuitka==4.2.2 zstandard ordered-set
 
       - name: Generate icons
         if: steps.icons-cache.outputs.cache-hit != 'true'
@@ -357,17 +343,32 @@ jobs:
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
           & "$env:pythonLocation\python.exe" -c 'import cairosvg,io; from PIL import Image; imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url="lapsecoin.svg",output_width=s,output_height=s))).convert("RGBA") for s in [16,32,48]]; imgs[0].save("favicon.ico",format="ICO",sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]); open("lapsecoin.png","wb").write(cairosvg.svg2png(url="lapsecoin.svg",output_width=512,output_height=512)); print("icons generated")'
 
-      - name: Build
-        run: pyinstaller --clean --noconfirm lapsecoin.spec
+      # Nuitka compiles the Python to C, which is the slow part. Its compiler
+      # cache (object files of code that did not change) is kept between
+      # releases, so only what changed is compiled again.
+      - name: Restore the Nuitka compiler cache
+        uses: actions/cache@v4
+        with:
+          path: nuitka-cache
+          key: nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-${{ github.run_id }}
+          restore-keys: |
+            nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-
+            nuitka-windows-
 
-      - name: Smoke test Windows executable
+      - name: Build the program and the bridge
         shell: pwsh
         run: |
-          & .\dist\lapsecoin-win\lapsecoin.exe -h
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:NUITKA_CACHE_DIR = "$PWD\nuitka-cache"
+          $v = (Get-Content VERSION).Trim()
+          .\scripts\build_windows.ps1 -Version $v
 
-      - name: Build the bridge that old single-file copies update into
-        run: pyinstaller --clean --noconfirm --distpath dist-bridge lapsecoin-bridge.spec
+      # A windowed program does not hold the console, so wait on the process
+      # and read its exit code instead of trusting the shell to.
+      - name: Smoke test the program
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\lapsecoin-win\lapsecoin.exe -ArgumentList '-h' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the program exited with $($p.ExitCode)" }
 
       - name: Check the bridge is a plausible download for the old updater
         shell: pwsh

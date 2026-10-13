@@ -113,9 +113,15 @@ def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     exe = datadir.installed_exe()
     if not os.path.exists(exe):
-        here = os.path.dirname(os.path.realpath(sys.executable))
         dst = datadir.user_data_dir()
-        for src in (here, os.getcwd()):
+        # Where the old program sat: a compiled single file runs from a temp
+        # folder, so its own location is the first thing on the command line.
+        places = []
+        for exe_path in (sys.argv[0], sys.executable):
+            here = os.path.dirname(os.path.realpath(exe_path))
+            if here not in places:
+                places.append(here)
+        for src in (*places, os.getcwd()):
             datadir.migrate(src, dst)
         try:
             say("LapseCoin is moving to a proper installer. This takes a moment "
