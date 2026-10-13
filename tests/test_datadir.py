@@ -31,12 +31,32 @@ class TestMigrate:
         assert datadir.migrate(src, dst) == []
         assert open(os.path.join(dst, "lapsecoin_key.json")).read() == "new key"
 
-    def test_a_chain_with_unflushed_writes_is_left_behind_but_the_key_comes(self, tmp_path):
+    def test_a_chain_still_open_in_a_running_node_is_copied_whole(self, tmp_path):
+        import sqlite3
         src, dst = str(tmp_path / "old"), str(tmp_path / "new")
+        os.makedirs(src)
         _write(src, "lapsecoin_key.json")
-        _write(src, "lapsecoin_chain.db")
-        _write(src, "lapsecoin_chain.db-wal", "pending")
-        assert datadir.migrate(src, dst) == ["lapsecoin_key.json"]
+        live = sqlite3.connect(os.path.join(src, "lapsecoin_chain.db"))
+        live.execute("PRAGMA journal_mode=wal")
+        live.execute("PRAGMA wal_autocheckpoint=0")
+        live.execute("CREATE TABLE blocks (height INTEGER)")
+        live.executemany("INSERT INTO blocks VALUES (?)", [(i,) for i in range(500)])
+        live.commit()
+        assert os.path.getsize(os.path.join(src, "lapsecoin_chain.db-wal")) > 0
+        got = datadir.migrate(src, dst)
+        live.close()
+        assert "lapsecoin_chain.db" in got and "lapsecoin_key.json" in got
+        copy = sqlite3.connect(os.path.join(dst, "lapsecoin_chain.db"))
+        assert copy.execute("SELECT count(*) FROM blocks").fetchone()[0] == 500
+        assert copy.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        copy.close()
+        assert not os.path.exists(os.path.join(dst, "lapsecoin_chain.db-wal"))
+
+    def test_a_file_that_is_not_a_database_is_still_copied_as_is(self, tmp_path):
+        src, dst = str(tmp_path / "old"), str(tmp_path / "new")
+        _write(src, "lapsecoin_chain.db", "not sqlite")
+        assert "lapsecoin_chain.db" in datadir.migrate(src, dst)
+        assert open(os.path.join(dst, "lapsecoin_chain.db")).read() == "not sqlite"
 
     def test_same_folder_or_missing_source_is_a_no_op(self, tmp_path):
         _write(str(tmp_path), "lapsecoin_key.json")
