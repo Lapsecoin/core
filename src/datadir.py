@@ -69,28 +69,55 @@ def _copy(src, dst):
     os.replace(tmp, dst)
 
 
-def _wal_pending(directory):
-    wal = os.path.join(directory, "lapsecoin_chain.db-wal")
-    return os.path.exists(wal) and os.path.getsize(wal) > 0
+def _backup_db(src, dst):
+    """A consistent copy of a SQLite database, taken through SQLite itself, so
+    it is complete even when the node that owns it is still running or was
+    stopped before its write-ahead log was merged. The copy is one finished
+    file with no log beside it."""
+    import sqlite3
+    tmp = dst + ".copying"
+    for stale in (tmp, tmp + "-wal", tmp + "-shm"):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+    source = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=10)
+    try:
+        target = sqlite3.connect(tmp)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    finally:
+        source.close()
+    os.replace(tmp, dst)
 
 
 def migrate(src, dst):
     """Copy the data files found in src into dst, skipping any dst already
-    has. The chain database is left behind when src has a write-ahead log
-    with content in it, which means a node was running or stopped without
-    finishing: copying that pair is not safe, and the chain syncs again.
-    Returns the names copied."""
+    has. The chain database goes through SQLite's own backup, which is safe
+    while the old node is still running; if that fails, the database and its
+    log are copied together. Returns the names copied."""
     if os.path.abspath(src) == os.path.abspath(dst) or not os.path.isdir(src):
         return []
     os.makedirs(dst, exist_ok=True)
-    skip_chain = _wal_pending(src)
     copied = []
+    db = "lapsecoin_chain.db"
+    db_src, db_dst = os.path.join(src, db), os.path.join(dst, db)
+    db_done = False
+    if os.path.isfile(db_src) and not os.path.exists(db_dst):
+        try:
+            _backup_db(db_src, db_dst)
+            copied.append(db)
+            db_done = True
+        except Exception:
+            log.warning("[datadir] could not back up %s, copying the files", db, exc_info=True)
     for name in DATA_FILES:
         s, d = os.path.join(src, name), os.path.join(dst, name)
         if not os.path.isfile(s) or os.path.exists(d):
             continue
-        if skip_chain and name in CHAIN_FILES:
-            continue
+        if db_done and name.startswith(db):
+            continue   # the backup is complete on its own
         try:
             _copy(s, d)
             copied.append(name)
