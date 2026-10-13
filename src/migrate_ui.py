@@ -23,7 +23,7 @@ def _has_key(folder, key_name):
 
 def ask(suggestions, key_name="lapsecoin_key.json"):
     """Returns (USE, folder), (FRESH, None) or (CANCEL, None)."""
-    if "--no-gui" in sys.argv:
+    if any(a in sys.argv for a in ("--no-gui", "--export", "--update")):
         return _fallback(suggestions)
     try:
         import tkinter  # noqa: F401

@@ -238,12 +238,6 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install liboqs system dependencies
-        run: |
-          choco install cmake ninja openssl --no-progress -y
-          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
-        shell: pwsh
-
       # The icons only change when the SVG does, so they are cached by its
       # hash and neither cairo nor the render step runs on a hit.
       - name: Restore generated icons
@@ -266,6 +260,15 @@ jobs:
         with:
           path: C:/liboqs/install
           key: liboqs-windows-${{ env.LIBOQS_REF }}
+
+      # Only needed to compile liboqs, so skipped when the cache has it: the
+      # OpenSSL installer alone is a 250 MB download.
+      - name: Install liboqs build dependencies
+        if: steps.liboqs-cache.outputs.cache-hit != 'true'
+        run: |
+          choco install cmake ninja openssl --no-progress -y
+          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+        shell: pwsh
 
       - name: Build liboqs
         if: steps.liboqs-cache.outputs.cache-hit != 'true'
@@ -363,18 +366,35 @@ jobs:
       - name: Install the installer on the runner and check it
         shell: pwsh
         run: |
-          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0', '/l*v', "$PWD\install.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 80; throw "install exited $($p.ExitCode)" }
+          # Every check runs, and every failure is reported together, because
+          # each run of this job is a 30 minute round trip.
+          $failures = @()
           $dir = Join-Path $env:LOCALAPPDATA 'Programs\LapseCoin'
-          foreach ($f in 'lapsecoin.exe', 'installed-by-msi') {
-            if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f after install" }
+          $data = Join-Path $env:LOCALAPPDATA 'LapseCoin'
+
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0', '/l*v', "$PWD\install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            $failures += "install exited $($p.ExitCode)"
+            Get-Content install.log -Tail 80
           }
-          & "$dir\lapsecoin.exe" -h
-          if ($LASTEXITCODE -ne 0) { throw "installed app failed to start" }
-          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'LapseCoin'))) { throw "the app did not make its data folder" }
+          foreach ($f in 'lapsecoin.exe', 'installed-by-msi') {
+            if (-not (Test-Path (Join-Path $dir $f))) { $failures += "missing $f after install" }
+          }
+
+          # The program is windowed, so wait on the process for its exit code.
+          if (Test-Path "$dir\lapsecoin.exe") {
+            $run = Start-Process "$dir\lapsecoin.exe" -ArgumentList '-h' -Wait -PassThru
+            if ($run.ExitCode -ne 0) { $failures += "installed app exited $($run.ExitCode) on -h" }
+          }
+          if (-not (Test-Path $data)) { $failures += "the app did not make its data folder" }
+          Get-ChildItem $dir -ErrorAction SilentlyContinue | Select-Object -First 40 | Format-Table Name, Length
+
           $u = Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait -PassThru
-          if ($u.ExitCode -ne 0) { throw "uninstall exited $($u.ExitCode)" }
-          if (Test-Path (Join-Path $dir 'lapsecoin.exe')) { throw "uninstall left the program behind" }
+          if ($u.ExitCode -ne 0) { $failures += "uninstall exited $($u.ExitCode)" }
+          if (Test-Path (Join-Path $dir 'lapsecoin.exe')) { $failures += "uninstall left the program behind" }
+
+          if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
+          Write-Host "install, start and uninstall all worked"
 
       - name: Stage the release files
         shell: pwsh
