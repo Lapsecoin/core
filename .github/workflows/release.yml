@@ -155,38 +155,6 @@ jobs:
   # Ahead of the builds, which take far longer, and needs only the tests.
   # A build failing later reverts VERSION but cannot unpublish from PyPI, so
   # bump to a new version to ship different code after such a failure.
-  publish-pypi:
-    needs: [version, test]
-    runs-on: ubuntu-latest
-    permissions:
-      # Trusted publishing (OIDC): PyPI checks this token against the
-      # pending publisher registered on the project page (repo + this
-      # workflow file), so there's no PYPI_API_TOKEN secret to hold or
-      # rotate. First successful publish from here claims the project
-      # under whichever PyPI account registered that pending publisher.
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build sdist and wheel
-        run: |
-          pip install build
-          python -m build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          # PyPI never accepts the same version twice. This runs before the
-          # builds now, so if one of them fails and the release is re-run at
-          # the same version, the upload is skipped instead of failing it.
-          skip-existing: true
-
   build-linux:
     needs: test
     runs-on: ubuntu-latest
@@ -347,7 +315,7 @@ jobs:
       # cache (object files of code that did not change) is kept between
       # releases, so only what changed is compiled again.
       - name: Restore the Nuitka compiler cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: nuitka-cache
           key: nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-${{ github.run_id }}
@@ -361,6 +329,16 @@ jobs:
           $env:NUITKA_CACHE_DIR = "$PWD\nuitka-cache"
           $v = (Get-Content VERSION).Trim()
           .\scripts\build_windows.ps1 -Version $v
+
+      # Saved even when a later step fails: a build that gets as far as the
+      # compiler has already paid for the object files, and a failed run should
+      # not throw that away.
+      - name: Save the Nuitka compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: nuitka-cache
+          key: nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-${{ github.run_id }}
 
       # A windowed program does not hold the console, so wait on the process
       # and read its exit code instead of trusting the shell to.
@@ -409,6 +387,39 @@ jobs:
         with:
           name: lapsecoin-windows
           path: stage/*
+
+  publish-pypi:
+    # After both builds, so a version never reaches PyPI when its binaries
+    # failed to build.
+    needs: [version, test, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted publishing (OIDC): PyPI checks this token against the
+      # pending publisher registered on the project page (repo + this
+      # workflow file), so there's no PYPI_API_TOKEN secret to hold or
+      # rotate. First successful publish from here claims the project
+      # under whichever PyPI account registered that pending publisher.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # PyPI never accepts the same version twice, so a re-run of the
+          # release at the same version skips the upload instead of failing.
+          skip-existing: true
 
   release:
     needs: [version, build-linux, build-windows]
@@ -495,12 +506,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   revert-on-failure:
-    # publish-pypi deliberately isn't in this list: by the time it runs,
-    # the GitHub release with real binaries is already public, so there's
-    # nothing left to cleanly "not have happened yet" -- reverting VERSION
-    # and deleting the tag at that point would just orphan an already-live
-    # release. A failed PyPI publish should fail loudly and get re-run on
-    # its own, not roll back a release that already succeeded.
+    # publish-pypi deliberately isn't in this list: it runs alongside the
+    # release job once both builds have passed, so the GitHub release with
+    # real binaries is public whether or not the publish works, and rolling
+    # the version back would just orphan it. A failed PyPI publish should fail
+    # loudly and get re-run on its own (skip-existing makes that safe), not
+    # roll back a release that already succeeded.
     needs: [version, set-genesis, test, build-linux, build-windows, release]
     runs-on: ubuntu-latest
     if: |
