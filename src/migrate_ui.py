@@ -46,31 +46,33 @@ def _label(folder):
 
 def _show(suggestions, key_name):
     import tkinter as tk
-    from tkinter import filedialog, font as tkfont, messagebox
+    from tkinter import filedialog, messagebox, ttk
+
+    import gui_theme as theme
 
     result = {"v": (CANCEL, None)}
+    theme.make_dpi_aware()
     root = tk.Tk()
-    root.title("LapseCoin")
     root.resizable(False, False)
+    theme.install(root, "LapseCoin")
 
-    head = tkfont.Font(family="Segoe UI", size=20, weight="bold")
-    body = tkfont.Font(family="Segoe UI", size=14)
-    small = tkfont.Font(family="Segoe UI", size=12)
-
-    tk.Label(root, text="Restore your keys", font=head, padx=24, pady=16).pack(anchor="w")
-    tk.Label(root, font=body, padx=24, justify="left", wraplength=620, text=(
+    frame = ttk.Frame(root, padding=theme.px(root, 28))
+    frame.pack(fill="both", expand=True)
+    theme.header(frame, "LapseCoin").pack(anchor="w")
+    ttk.Label(frame, text="Restore your keys", style="H2.TLabel").pack(
+        anchor="w", pady=(theme.px(root, 22), 2))
+    ttk.Label(frame, style="Muted.TLabel", wraplength=theme.px(root, 460), text=(
         "Choose the folder you used before:" if suggestions
         else "No old folder found. Browse to the folder you used before, "
              "or start new.")).pack(anchor="w")
 
     box = None
     if suggestions:
-        box = tk.Listbox(root, width=60, height=min(max(len(suggestions), 2), 5),
-                         exportselection=False, font=small, activestyle="none")
+        box = theme.listbox(frame, root, min(max(len(suggestions), 2), 5))
         for folder in suggestions:
             box.insert("end", _label(folder))
         box.selection_set(0)
-        box.pack(padx=24, pady=(8, 4), fill="x")
+        box.pack(fill="x", pady=(theme.px(root, 12), 0), ipady=theme.px(root, 4))
 
     def finish(kind, folder=None):
         result["v"] = (kind, folder)
@@ -93,22 +95,18 @@ def _show(suggestions, key_name):
         if folder:
             use_folder(os.path.normpath(folder))
 
-    def button(parent, text, command, primary=False):
-        return tk.Button(parent, text=text, command=command, font=body, padx=14, pady=6,
-                         default="active" if primary else "normal")
-
-    row = tk.Frame(root, padx=24, pady=16)
-    row.pack(fill="x")
+    row = ttk.Frame(frame)
+    row.pack(fill="x", pady=(theme.px(root, 22), 0))
     if suggestions:
-        button(row, "Restore", use_selected, primary=True).pack(side="left")
-    button(row, "Browse...", browse).pack(side="left", padx=10)
-    button(row, "Start new", lambda: finish(FRESH)).pack(side="right")
+        ttk.Button(row, text="Restore", style="Primary.TButton", command=use_selected
+                   ).pack(side="left")
+    ttk.Button(row, text="Browse...", style="Secondary.TButton", command=browse
+               ).pack(side="left", padx=(8, 0))
+    ttk.Button(row, text="Start new", style="Secondary.TButton", command=lambda: finish(FRESH)
+               ).pack(side="right")
 
     root.protocol("WM_DELETE_WINDOW", lambda: finish(CANCEL))
-    root.update_idletasks()
-    x = (root.winfo_screenwidth() - root.winfo_width()) // 2
-    y = (root.winfo_screenheight() - root.winfo_height()) // 3
-    root.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    theme.center(root)
     root.lift()
     root.attributes("-topmost", True)
     root.mainloop()

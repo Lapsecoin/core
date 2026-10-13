@@ -1,7 +1,8 @@
-"""Minimal desktop GUI: a small status window with one button, replacing the
+"""Desktop GUI: the passphrase prompt and a status window, replacing the
 console for a double-clicked binary. Not used at all under --no-gui or when
 LAPSECOIN_PASSPHRASE is set (headless/server runs keep the console path in
-main.py unchanged).
+main.py unchanged). The look is shared with the first-run question through
+gui_theme.py.
 
 Two things this exists to get right, per real feedback from testing the
 console-only version: closing the window must for-sure kill the whole
@@ -18,95 +19,10 @@ import webbrowser
 from tkinter import ttk
 
 import crypto
+import gui_theme as theme
 from version import LOCAL_VERSION
 
 log = logging.getLogger("ec.gui")
-
-
-def _resource_dir():
-    """Directory to look for bundled assets in. Tries a few candidate
-    locations rather than assuming one exact layout, since PyInstaller's
-    onedir output layout has changed across versions (6.x moved bundled
-    data into an _internal/ subfolder next to the executable rather than
-    flat alongside it), and the AppImage wrapping step in the Makefile
-    adds another layer on top of that."""
-    candidates = []
-    import resources
-    if resources.is_frozen():
-        candidates.append(resources.bundle_dir())
-        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-        candidates.append(exe_dir)
-        candidates.append(os.path.join(exe_dir, "_internal"))
-    else:
-        candidates.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-    for c in candidates:
-        if os.path.exists(os.path.join(c, "lapsecoin.svg")):
-            return c
-    # Nothing found, return the first candidate anyway so callers get a
-    # consistent (if wrong) path and _apply_icon's own try/except handles
-    # the resulting failure gracefully rather than crashing here.
-    return candidates[0] if candidates else "."
-
-
-_ICON_PNG = os.path.join(_resource_dir(), "lapsecoin.png")
-_ICON_SVG = os.path.join(_resource_dir(), "lapsecoin.svg")
-
-def _ensure_png_exists():
-    if os.path.exists(_ICON_PNG):
-        return
-    if not os.path.exists(_ICON_SVG):
-        return
-    try:
-        import cairosvg
-        cairosvg.svg2png(url=_ICON_SVG, write_to=_ICON_PNG, output_width=512, output_height=512)
-        log.info("[gui] generated missing lapsecoin.png from svg")
-    except Exception as e:
-        log.debug("[gui] runtime png generation skipped: %s", e)
-
-
-def _apply_icon(root):
-    """Set the window icon from the already-bundled lapsecoin.png.
-
-    Previously this rasterized lapsecoin.svg at runtime via cairosvg, which
-    needs libcairo, a native library lapsecoin.spec never actually bundles
-    (no collect_all/collect_dynamic_libs for it, unlike nacl/cffi/oqs/
-    chiavdf), so it silently fails on any Windows machine without Cairo
-    already installed system-wide. lapsecoin.png is a plain build-time-
-    generated PNG (see Makefile's `icons` target) that PIL can open directly
-    with no native dependency beyond Pillow, which is already required and
-    properly bundled. Failure here should never take down the GUI itself,
-    worst case the window just keeps whatever default icon the OS/tkinter
-    picks."""
-    _ensure_png_exists()
-    try:
-        from PIL import Image, ImageTk
-
-        img = Image.open(_ICON_PNG)
-        photo = ImageTk.PhotoImage(img)
-        root.iconphoto(True, photo)
-        root._icon_photo = photo  # keep a reference; tkinter drops GC'd PhotoImages
-    except Exception as e:
-        log.debug("[gui] could not set window icon: %s", e)
-
-
-def _install_tk_exception_logging(root):
-    """Route Tkinter's own callback-exception reporting through our logger.
-
-    Once inside root.mainloop(), any exception raised in a widget command,
-    an after() callback, etc. is caught by Tkinter itself and handed to
-    report_callback_exception, whose default implementation tries to print
-    to sys.stderr. On a windowed (console=False) Windows build launched by
-    double-click, sys.stderr is None (see main.py's own comment on this),
-    so that default handler's own print() fails, and the exception it was
-    trying to report vanishes with it, the app just closes with nothing
-    in the log. Logging here instead means a future crash of this kind
-    actually shows up in LOG_FILE."""
-    def _report(exc, val, tb):
-        import traceback
-        log.error("[gui] unhandled exception in Tk callback:\n%s",
-                  "".join(traceback.format_exception(exc, val, tb)))
-    root.report_callback_exception = _report
 
 
 class _PassphraseDialog:
@@ -119,53 +35,60 @@ class _PassphraseDialog:
         self.is_new = not os.path.exists(keyfile)
         self.result = None  # (pk, kek, passphrase) on success
 
+        theme.make_dpi_aware()
         self.root = tk.Tk()
-        _install_tk_exception_logging(self.root)
-        self.root.title("LapseCoin")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
-        _apply_icon(self.root)
-        _style_dark(self.root)
+        theme.install(self.root, "LapseCoin")
+        pad = theme.px(self.root, 28)
 
-        frame = ttk.Frame(self.root, style="Dark.TFrame", padding=18)
+        frame = ttk.Frame(self.root, padding=pad)
         frame.pack(fill="both", expand=True)
+        theme.header(frame, "LapseCoin").pack(anchor="w")
 
         if self.is_new:
+            title = "Create your wallet"
             msg = "No key file found. Choose a passphrase for your new wallet."
         else:
+            title = "Unlock your wallet"
             msg = "Enter your wallet passphrase."
-        ttk.Label(frame, text=msg, style="Dark.TLabel", wraplength=280).pack(anchor="w")
+        ttk.Label(frame, text=title, style="H2.TLabel").pack(
+            anchor="w", pady=(theme.px(self.root, 22), 2))
+        ttk.Label(frame, text=msg, style="Muted.TLabel", wraplength=theme.px(self.root, 360)
+                  ).pack(anchor="w")
 
         self.error_var = tk.StringVar()
-        ttk.Label(
-            frame, textvariable=self.error_var, background=_BG, foreground="#ff6b6b",
-        ).pack(anchor="w")
+        ttk.Label(frame, textvariable=self.error_var, style="Error.TLabel",
+                  wraplength=theme.px(self.root, 360)).pack(anchor="w", pady=(4, 0))
 
-        ttk.Label(frame, text="Passphrase", style="Dim.TLabel").pack(anchor="w", pady=(10, 2))
+        ttk.Label(frame, text="Passphrase", style="Dim.TLabel").pack(
+            anchor="w", pady=(theme.px(self.root, 12), 3))
         self.pass1 = tk.StringVar()
         if preset_passphrase is not None:
             self.pass1.set(preset_passphrase)
-        entry1 = ttk.Entry(frame, textvariable=self.pass1, show="*", width=30, style="Dark.TEntry")
-        entry1.pack(anchor="w")
+        entry1 = ttk.Entry(frame, textvariable=self.pass1, show="*", width=36, style="App.TEntry")
+        entry1.pack(anchor="w", fill="x")
 
         self.pass2 = None
         if self.is_new:
-            ttk.Label(frame, text="Confirm passphrase", style="Dim.TLabel").pack(anchor="w", pady=(10, 2))
+            ttk.Label(frame, text="Confirm passphrase", style="Dim.TLabel").pack(
+                anchor="w", pady=(theme.px(self.root, 12), 3))
             self.pass2 = tk.StringVar()
             if preset_passphrase is not None:
                 self.pass2.set(preset_passphrase)
-            ttk.Entry(
-                frame, textvariable=self.pass2, show="*", width=30, style="Dark.TEntry",
-            ).pack(anchor="w")
+            ttk.Entry(frame, textvariable=self.pass2, show="*", width=36,
+                      style="App.TEntry").pack(anchor="w", fill="x")
 
-        btns = ttk.Frame(frame, style="Dark.TFrame")
-        btns.pack(anchor="e", pady=(16, 0))
-        ttk.Button(btns, text="Cancel", style="Plain.TButton", command=self._cancel).pack(side="left", padx=(0, 6))
-        submit = ttk.Button(btns, text="Continue", style="Accent.TButton", command=self._submit)
-        submit.pack(side="left")
+        btns = ttk.Frame(frame)
+        btns.pack(anchor="e", pady=(theme.px(self.root, 22), 0))
+        ttk.Button(btns, text="Cancel", style="Secondary.TButton", command=self._cancel
+                   ).pack(side="left", padx=(0, 8))
+        ttk.Button(btns, text="Continue", style="Primary.TButton", command=self._submit
+                   ).pack(side="left")
 
         entry1.bind("<Return>", lambda e: self._submit())
         entry1.focus_set()
+        theme.center(self.root)
         if preset_passphrase is not None:
             self.root.after(0, self._submit)
 
@@ -240,40 +163,6 @@ def _open_path(path):
         log.warning("[gui] could not open %s: %s", path, e)
 
 
-_BG = "#1c1f26"
-_BG_PANEL = "#242832"
-_FG = "#e7e9ee"
-_FG_DIM = "#9aa1af"
-_ACCENT = "#5b8cff"
-
-
-def _style_dark(root):
-    style = ttk.Style(root)
-    try:
-        style.theme_use("clam")
-    except Exception:
-        pass
-    root.configure(bg=_BG)
-    style.configure("Dark.TFrame", background=_BG)
-    style.configure("Dark.TLabel", background=_BG, foreground=_FG)
-    style.configure("Dim.TLabel", background=_BG, foreground=_FG_DIM)
-    style.configure(
-        "Accent.TButton", background=_ACCENT, foreground="white",
-        padding=(10, 6), borderwidth=0,
-    )
-    style.map("Accent.TButton", background=[("active", "#4674e0")])
-    style.configure(
-        "Plain.TButton", background=_BG_PANEL, foreground=_FG,
-        padding=(10, 6), borderwidth=0,
-    )
-    style.map("Plain.TButton", background=[("active", "#2e3340")])
-    style.configure(
-        "Dark.TEntry", fieldbackground=_BG_PANEL, foreground=_FG,
-        insertcolor=_FG, borderwidth=0, padding=6,
-    )
-    return style
-
-
 def _make_tray_icon(node, on_open, on_quit):
     """Build a pystray icon so the window can fully vanish (no taskbar
     entry) while the node keeps running, with a way back in. Returns None
@@ -292,7 +181,7 @@ def _make_tray_icon(node, on_open, on_quit):
         )
         return None
 
-    _ensure_png_exists()
+    theme.ensure_png_exists()
     try:
         from PIL import Image
 
@@ -302,17 +191,17 @@ def _make_tray_icon(node, on_open, on_quit):
         # letting it scale down, which is what produced a blurry/pixelated
         # result, most Linux tray implementations don't use good
         # downsampling on their own. No cairosvg/libcairo needed here: see
-        # _apply_icon's docstring for why that dependency isn't reliable on
+        # gui_theme._load_logo's docstring for why that dependency isn't reliable on
         # a Windows build.
-        raw = Image.open(_ICON_PNG).convert("RGBA")
+        raw = Image.open(theme.ICON_PNG).convert("RGBA")
 
         # Some AppIndicator/Ayatana implementations don't composite true
         # transparency correctly and render it as solid black instead of the
         # panel's own background. Rather than leaving the icon transparent
         # and hoping the backend handles it, flatten it onto an opaque
-        # square matching the app's own dark theme, worst case it's a
-        # small dark square with the logo, not a broken black one.
-        flattened = Image.new("RGBA", raw.size, _BG)
+        # square in the window colour, worst case it's a small paper-
+        # coloured square with the logo, not a broken black one.
+        flattened = Image.new("RGBA", raw.size, theme.PAPER)
         flattened.paste(raw, (0, 0), raw)
         img = flattened.resize((32, 32), Image.LANCZOS)
 
@@ -358,27 +247,21 @@ def run_status_window(node, udp, private_port, log_file):
     entirely rather than trying to track down and gracefully join every
     one of them.
     """
+    theme.make_dpi_aware()
     root = tk.Tk()
-    _install_tk_exception_logging(root)
-    root.title(f"LapseCoin v{LOCAL_VERSION}")
-    root.minsize(440, 300)
-    _apply_icon(root)
-    _style_dark(root)
+    theme.install(root, f"LapseCoin v{LOCAL_VERSION}", minsize=(520, 420))
+    pad = theme.px(root, 28)
+    gap = theme.px(root, 12)
 
-    outer = ttk.Frame(root, style="Dark.TFrame", padding=16)
+    outer = ttk.Frame(root, padding=pad)
     outer.pack(fill="both", expand=True)
 
-    header = ttk.Frame(outer, style="Dark.TFrame")
-    header.pack(fill="x")
-    ttk.Label(
-        header, text=f"LapseCoin v{LOCAL_VERSION}", style="Dark.TLabel", font=("", 15, "bold"),
-    ).pack(anchor="w")
-    ttk.Label(
-        header, text="Node is running", style="Dim.TLabel", font=("", 9),
-    ).pack(anchor="w", pady=(0, 10))
-
-    status_frame = ttk.Frame(outer, style="Dark.TFrame")
-    status_frame.pack(fill="x", pady=(0, 12))
+    top = ttk.Frame(outer)
+    top.pack(fill="x")
+    theme.header(top, "LapseCoin", f"Version {LOCAL_VERSION}").pack(side="left")
+    live = ttk.Frame(top)
+    live.pack(side="right", anchor="n")
+    ttk.Label(live, text="\u25cf Node is running", style="Live.TLabel").pack(anchor="e")
 
     height_var = tk.StringVar(value="…")
     peers_var = tk.StringVar(value="…")
@@ -387,26 +270,30 @@ def run_status_window(node, udp, private_port, log_file):
     activity_var = tk.StringVar(value="starting…")
     error_var = tk.StringVar(value="")
 
-    def _stat_row(row, label, var):
-        ttk.Label(status_frame, text=label, style="Dim.TLabel").grid(
-            row=row, column=0, sticky="w", pady=3,
-        )
-        ttk.Label(
-            status_frame, textvariable=var, style="Dark.TLabel", font=("Consolas", 11, "bold"),
-        ).grid(row=row, column=1, sticky="e", padx=(24, 0), pady=3)
+    tiles = ttk.Frame(outer)
+    tiles.pack(fill="x", pady=(theme.px(root, 22), 0))
+    tiles.columnconfigure((0, 1), weight=1, uniform="tile")
 
-    status_frame.columnconfigure(1, weight=1)
-    _stat_row(0, "Height", height_var)
-    _stat_row(1, "Peers", peers_var)
-    _stat_row(2, "Mempool", mempool_var)
-    _stat_row(3, "Sync", sync_var)
-    ttk.Label(
-        status_frame, textvariable=activity_var, style="Dim.TLabel",
-        wraplength=360, font=("", 9, "italic"),
-    ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
-    ttk.Label(status_frame, textvariable=error_var, style="Dim.TLabel", wraplength=360).grid(
-        row=5, column=0, columnspan=2, sticky="w", pady=(6, 0),
-    )
+    def _tile(row, col, label, var):
+        box = theme.card(tiles)
+        box.grid(row=row, column=col, sticky="nsew",
+                 padx=(0 if col == 0 else gap // 2, 0 if col == 1 else gap // 2),
+                 pady=(0 if row == 0 else gap // 2, 0 if row == 1 else gap // 2))
+        inner = ttk.Frame(box, style="Card.TFrame", padding=theme.px(root, 16))
+        inner.pack(fill="both", expand=True)
+        ttk.Label(inner, text=label, style="CardDim.TLabel").pack(anchor="w")
+        ttk.Label(inner, textvariable=var, style="Figure.TLabel").pack(anchor="w")
+
+    _tile(0, 0, "Height", height_var)
+    _tile(0, 1, "Peers", peers_var)
+    _tile(1, 0, "Mempool", mempool_var)
+    _tile(1, 1, "Sync", sync_var)
+
+    wrap = theme.px(root, 460)
+    ttk.Label(outer, textvariable=activity_var, style="Muted.TLabel", wraplength=wrap
+              ).pack(anchor="w", pady=(theme.px(root, 16), 0))
+    ttk.Label(outer, textvariable=error_var, style="Error.TLabel", wraplength=wrap
+              ).pack(anchor="w", pady=(4, 0))
 
     _sync_start_h = -1
     _sync_start_t = 0
@@ -450,18 +337,18 @@ def run_status_window(node, udp, private_port, log_file):
             error_var.set(f"status unavailable: {e}")
         root.after(3000, refresh)
 
-    btns = ttk.Frame(outer, style="Dark.TFrame")
-    btns.pack(fill="x", side="bottom")
+    btns = ttk.Frame(outer)
+    btns.pack(fill="x", side="bottom", pady=(theme.px(root, 20), 0))
     ttk.Button(
-        btns, text="Open Node", style="Accent.TButton",
+        btns, text="Open Node", style="Primary.TButton",
         command=lambda: webbrowser.open(f"http://127.0.0.1:{private_port}"),
     ).pack(side="left", padx=(0, 8))
     ttk.Button(
-        btns, text="Logs", style="Plain.TButton",
+        btns, text="Logs", style="Secondary.TButton",
         command=lambda: _open_path(log_file),
     ).pack(side="left", padx=(0, 8))
     ttk.Button(
-        btns, text="Quit", style="Plain.TButton", command=lambda: _quit(),
+        btns, text="Quit", style="Secondary.TButton", command=lambda: _quit(),
     ).pack(side="right")
 
     tray_icon = None  # set below if available
@@ -517,5 +404,6 @@ def run_status_window(node, udp, private_port, log_file):
         # than losing it with no path to reopen.
         root.protocol("WM_DELETE_WINDOW", root.iconify)
 
+    theme.center(root)
     refresh()
     root.mainloop()
