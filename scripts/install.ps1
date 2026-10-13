@@ -66,8 +66,7 @@ function Install-LapseCoin {
         }
     }
 
-    # --- 1. build tools: liboqs-python needs these to build liboqs itself
-    #        automatically on first run; nothing else to set up beyond this. ---
+    # --- 1. build tools: liboqs-python needs these to build liboqs itself. ---
     $haveMsvc = Test-MsvcTools
     if ((Test-Cmd "cmake") -and (Test-Cmd "git") -and $haveMsvc) {
         Write-Host "cmake, git, and a C++ compiler already present."
@@ -99,12 +98,28 @@ function Install-LapseCoin {
         }
     }
 
+    # liboqs-python compiles liboqs the first time it is imported, which is
+    # minutes of work with a countdown. Importing it here means that happens
+    # during the install, not on the first launch. A failure leaves the
+    # install standing and the first launch tries again.
+    function Build-Liboqs {
+        Write-Host ""
+        Write-Host "Building liboqs now (a few minutes, once) so the first launch starts straight away..."
+        python -c "import oqs"
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "liboqs is ready."
+        } else {
+            Write-Warning "Could not build liboqs here; it will be built on the first launch instead."
+        }
+    }
+
     # --- 2. install the app. Try the full install first; only fall back to
     #        skipping libtorrent if THAT is specifically what failed -- any
     #        other failure surfaces as-is rather than getting masked. ---
     $installLog = [System.IO.Path]::GetTempFileName()
     pip install lapsecoin 2>&1 | Tee-Object -FilePath $installLog
     if ($LASTEXITCODE -eq 0) {
+        Build-Liboqs
         Write-Host ""
         Write-Host "Installed. Run: lapsecoin"
         Remove-Item $installLog -ErrorAction SilentlyContinue
@@ -138,6 +153,7 @@ function Install-LapseCoin {
     pip install lapsecoin --no-deps
     Remove-Item $reqsTmp, $reqsNoLt -ErrorAction SilentlyContinue
 
+    Build-Liboqs
     Write-Host ""
     Write-Host "Installed without libtorrent. Run: lapsecoin"
 }
