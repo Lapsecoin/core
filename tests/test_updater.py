@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -61,7 +62,9 @@ class TestWindowsMsiUpdate:
         exe_path = tmp_path / "app" / "lapsecoin.exe"
         exe_path.parent.mkdir()
         exe_path.write_bytes(b"MZ")
-        monkeypatch.setattr(sys, "executable", str(exe_path))
+        # A Nuitka build reports a python.exe that does not exist beside the
+        # real program, so the helper must not start sys.executable.
+        monkeypatch.setattr(sys, "executable", str(exe_path.parent / "python.exe"))
         monkeypatch.setattr(sys, "argv", [str(exe_path), "--no-gui"])
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
         monkeypatch.setattr(updater, "_download", lambda url, dest, on_progress=None:
@@ -81,3 +84,13 @@ class TestWindowsMsiUpdate:
         assert "msiexec /i" in helper and "/qn" in helper
         assert 'start "" "' + str(exe_path) + '" --no-gui' in helper
         assert str(tmp_path / "Local" / "LapseCoin" / "update") in seen["cwd"]
+
+
+    def test_update_stops_before_closing_the_app_when_the_program_is_missing(self, monkeypatch, tmp_path):
+        (tmp_path / "app").mkdir()
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "python.exe"))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("must not hand off"))
+        monkeypatch.setattr(os, "_exit", lambda code: pytest.fail("must not exit"))
+        with pytest.raises(RuntimeError, match="cannot find the installed program"):
+            updater._installed_exe()
