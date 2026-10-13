@@ -26,7 +26,7 @@ from tests.browser import submit, tokens
 from tests.fixtures import address, make_block, make_tx
 from tests.test_gas_worker import (ASKER, DEST, ESC, FakeIO, ME, NET, PRICE, TARGET,
                                    World)
-from tests.test_light import PASS, _FullNode
+from tests.wallet_app import PASS, _FullNode
 
 GAS_PRICE = 10 ** 10      # 10 gwei: a send needs 9.75e14 wei, over a node's ceiling
 

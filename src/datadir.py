@@ -32,8 +32,7 @@ MIGRATED_NOTE = "migrated-from.txt"
 KEY_FILES = ("lapsecoin_key.json", "base_gas.key")
 CHAIN_FILES = ("lapsecoin_chain.db", "lapsecoin_chain.db-wal",
                "lapsecoin_chain.db-shm", "lapsecoin_chain_mempool.json")
-CACHE_FILES = ("lapsecoin_peers.json", "lapsecoin_lt_dht.dat",
-               "lapsecoin_light_nodes.json")
+CACHE_FILES = ("lapsecoin_peers.json", "lapsecoin_lt_dht.dat")
 DATA_FILES = KEY_FILES + CHAIN_FILES + CACHE_FILES
 
 

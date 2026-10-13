@@ -81,12 +81,10 @@ def _problem(message, status=400):
     return jsonify(ok=False, error=message), status
 
 
-def register(app, reader, signer, csrf_token, io, light=False):
-    """The Fees routes. `reader` and `signer` are the full node's own or the
-    light client's (wallet_ui.WalletSigner); `io` reads the other networks
-    (gas_io.ChainIO or a fake). In the light client the request's status comes
-    from the node it talks to."""
-    after = "/fees/{}" if light else "/tx/{}"
+def register(app, reader, signer, csrf_token, io):
+    """The Fees routes. `reader` and `signer` are the node's own; `io` reads
+    the other networks (gas_io.ChainIO or a fake)."""
+    after = "/tx/{}"
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
@@ -178,11 +176,6 @@ def register(app, reader, signer, csrf_token, io, light=False):
                                    message="Not a transaction hash."), 404
         return render_template("fees_status.html", title="Fee request", tx_hash=txid)
 
-    if light:
-        @app.route("/api/gas/<txid>", endpoint="api_gas_status")
-        def api_gas_status(txid):
-            return jsonify(reader.gas_status(txid))
-
 
 STATUS_TTL = 15
 _status_cache = {}
@@ -190,8 +183,7 @@ _status_cache = {}
 
 def register_status(app, node, pfx, io):
     """The live status of a request, on both apps: it reads the chain and the
-    destination's own balance, nothing private. Light clients ask for it
-    here, so answers are kept a few seconds rather than costing a round of
+    destination's own balance, nothing private. Answers are kept a few seconds rather than costing a round of
     outside calls per poll."""
 
     @app.route("/api/gas/<txid>", endpoint=pfx + "api_gas_status")

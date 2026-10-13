@@ -26,13 +26,11 @@ import tx as tx_mod
 from board_view import (BOARD_MEMO_TAG, DELETE_TAG, MAX_POST_TEXT_BYTES, apply_splice,
                         build_board_edit, make_splice, parse_board_edit, resolve_board)
 from chainstate import ChainState
-from light_app import create_light_app
+from tests.wallet_app import PASS, _FullNode, create_wallet_app
 from params import TICKS_PER_LAPSE
-from remote_reader import RemoteReader
 from state import State
 from tests.fixtures import address, make_tx, seed_balance
 from tests.browser import submit, tokens
-from tests.test_light import PASS, _FullNode, _Session
 from wallet import Wallet
 
 ALICE, BOB = "alice-addr", "bob-addr"
@@ -297,7 +295,7 @@ class TestSnapshot:
 
 
 # ---------------------------------------------------------------------------
-# The pages: full node and light client alike
+# The pages
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -319,9 +317,8 @@ def world(tmp_path):
                      "transactions": [mine, theirs], "hash": "h1"})
     cs.state.apply_tx(mine)
     node = _FullNode(cs)
-    session = _Session(api.create_app(node, peerpool_mod.PeerPool()).test_client())
-    reader = RemoteReader(["http://node.test"], refresh=0, session=session)
-    app = create_light_app(reader, wallet)
+    reader = local_reader.LocalReader(node)
+    app = create_wallet_app(reader, wallet)
     return type("World", (), dict(wallet=wallet, cs=cs, node=node, app=app,
                                   client=app.test_client(), reader=reader,
                                   mine_ref=tx_mod.tx_hash(mine)[:6],

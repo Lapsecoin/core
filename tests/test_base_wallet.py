@@ -23,7 +23,7 @@ import settings as settings_mod
 from chainstate import ChainState
 from params import TICKS_PER_LAPSE
 from tests.browser import submit
-from tests.test_light import PASS, _FullNode
+from tests.wallet_app import PASS, _FullNode
 
 DEST = "0x000000000000000000000000000000000000dEaD"
 RPC = "http://rpc.test"

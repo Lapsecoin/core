@@ -1,11 +1,9 @@
-"""The wallet's web pages, written once for two kinds of app.
+"""The wallet's web pages.
 
-The full node's private app and the light client both register these
-handlers. They differ only in what they are handed:
+The private app registers these handlers, handed:
 
-  reader  where chain data comes from. LocalReader (local_reader.py) reads
-          this node's own chain, RemoteReader (remote_reader.py) asks
-          another node over HTTP. Both answer the same methods:
+  reader  where chain data comes from: LocalReader (local_reader.py), which
+          reads this node's own chain. It answers:
 
             fee_estimate()                    -> fee market dict
             account(addr, nick=, fees=)
@@ -17,12 +15,8 @@ handlers. They differ only in what they are handed:
                                               -> the board, see board_view
 
   signer  who builds and signs a transaction: .addr, .pk_hex and
-          .sign(outputs, fee, memo, passphrase, nonce). The full node's is
-          api._NodeSigner (the node signs from its own state), the light
-          client's is WalletSigner below (a bare Wallet, wallet.py).
-
-Light-safe: imports nothing that pulls in the VDF, the chain database, or
-the swap code, and a test keeps it that way.
+          .sign(outputs, fee, memo, passphrase, nonce): api._NodeSigner,
+          where the node signs from its own state.
 """
 
 import gzip
@@ -124,23 +118,6 @@ def edit_text(ref, orig, new):
     return build_board_edit(ref, pos, ndel, inserted), None
 
 
-class WalletSigner:
-    """What the routes sign through, for a bare Wallet: the light client,
-    which has no node to build the transaction for it. The full node's
-    equivalent is api._NodeSigner, which hands the job to
-    Node.build_and_sign_tx."""
-
-    def __init__(self, wallet):
-        self.wallet = wallet
-        self.addr = wallet.addr
-        self.pk_hex = wallet.pk_hex
-
-    def sign(self, outputs, fee, memo, passphrase, nonce):
-        t, _fee = self.wallet.sign_tx(outputs, nonce, fee, memo=memo,
-                                      passphrase=passphrase)
-        return t
-
-
 def _insufficient(acct, required):
     if required > acct["balance"]:
         return (f"Insufficient balance: have {fmt_balance(acct['balance'])}, "
@@ -154,8 +131,7 @@ def _insufficient(acct, required):
 
 def _json(data):
     """JSON, gzipped when the client accepts it and the body is worth it.
-    A light client may be on a very small data allowance, and this text
-    compresses to a fraction of its size."""
+    This text compresses to a fraction of its size."""
     body = json.dumps(data, separators=(",", ":")).encode()
     resp = make_response(body)
     resp.headers["Content-Type"] = "application/json"
@@ -166,10 +142,8 @@ def _json(data):
     return resp
 
 
-def register_data_api(app, reader, pfx, full=True):
-    """The read endpoints a light client calls. `full` is the node serving
-    them; a light client's own app only needs /api/fees, for its pages'
-    scripts to poll."""
+def register_data_api(app, reader, pfx):
+    """The read endpoints other programs call on this node."""
 
     @app.route("/api/fees", endpoint=pfx + "api_fees")
     def api_fees():
@@ -177,9 +151,6 @@ def register_data_api(app, reader, pfx, full=True):
         poll and stay live: the suggested rate is only true for as long as
         the mempool doesn't change, and it changes constantly."""
         return jsonify(reader.fee_estimate())
-
-    if not full:
-        return
 
     @app.route("/api/state", endpoint=pfx + "api_state")
     def api_state():
@@ -237,7 +208,7 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
     `histogram`, when given, returns (holder_count, rows, max_count) for
     the wealth distribution shown before a lookup runs; only a full node
     has the balances to compute it. `default_addr`, when given, supplies
-    the address to show when none was asked for: the light client's own.
+    the address to show when none was asked for.
     """
 
     @app.route("/balance", methods=["GET", "POST"], endpoint=pfx + "address_lookup")
@@ -339,7 +310,7 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
 def register_wallet_routes(app, reader, signer, csrf_token, base=None):
     """Send, post, vote and the fee quotes behind them: everything that
     spends from `signer`'s address. `base`, when given, adds the ETH-on-Base half
-    of the send page (see base_send.BaseSend); the light client has none."""
+    of the send page (see base_send.BaseSend)."""
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
@@ -414,7 +385,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
         return render_template("send.html", **ctx)
 
     if base is not None:
-        import evm      # the light client never gets here, so it never loads these
+        import evm
         import relay
 
         @app.route("/api/send/base/tokens", endpoint="api_send_base_tokens")

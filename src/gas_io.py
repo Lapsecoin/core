@@ -1,7 +1,6 @@
 """Reading other networks for fee requests: prices, gas prices, balances and
 the sanctions oracle. Read-only and node-free, so the full node's pages, its
-worker and the light client's page all ask the world the same way, and tests
-swap one object for a fake.
+worker all ask the world the same way, and tests swap one object for a fake.
 """
 
 import evm
@@ -12,12 +11,10 @@ import sanctions
 
 class ChainIO:
     def __init__(self, proxy=None):
-        self.proxy = proxy          # callable returning a proxy URL or None (the light client's Tor)
+        self.proxy = proxy          # callable returning a proxy URL or None
 
     def _route(self):
-        """Send this call the way the light client sends its own: through its
-        proxy when it has one, so reading another network does not name the
-        user's address outside Tor."""
+        """Send this call through the proxy when there is one."""
         url = self.proxy() if self.proxy else None
         proxies = {"http": url, "https": url} if url else {}
         evm._session.proxies = proxies

@@ -1,6 +1,5 @@
-"""Formatting and form-parsing helpers shared by the full node's web app
-and the light client. Light-safe: imports nothing that pulls in the VDF,
-the chain database, or the node, and a test keeps it that way."""
+"""Formatting and form-parsing helpers for the node's web apps. Imports
+nothing that pulls in the VDF, the chain database, or the node."""
 
 import logging
 import os
@@ -15,8 +14,8 @@ import tx as tx_mod
 from params import TICKS_PER_LAPSE
 
 
-# Which nav entry a page lights up, by endpoint name. The full node and the
-# light client both read it, so a page that moves lives in one place.
+# Which nav entry a page lights up, by endpoint name, so a page that moves
+# lives in one place.
 NAV_ACTIVE = {
     "dashboard": "dashboard", "blocks": "blocks",
     "block_detail": "blocks", "tx_detail": "blocks",

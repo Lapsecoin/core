@@ -2,9 +2,7 @@
 transaction gets built and signed.
 
 Deliberately knows nothing about chain state. The nonce is passed in by
-whoever can see it (a full node reads it from its own state and mempool,
-a light client asks a remote node), so the same signing code serves both
-and cannot drift between them.
+whoever can see it (a full node reads it from its own state and mempool).
 """
 
 import getpass

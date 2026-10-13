@@ -6,9 +6,6 @@
 #                 console at runtime if missing, but PyInstaller needs it
 #                 present at build time to bundle it in the first place)
 # make windows -- build dist/lapsecoin-win/ (onedir, packaged by the MSI) using pre-committed icons
-# make dumb    -- build dist/lapsecoin-dumb (.exe on Windows), the light client:
-#                 wallet and board through another node, no chain of its own.
-#                 One file, no GUI, no VDF; needs only liboqs to build.
 # make icons   -- regenerate favicon.ico and lapsecoin.png from lapsecoin.svg
 #                 (Linux only; requires libcairo2-dev + pip install cairosvg Pillow)
 #                 Run before make linux or make windows. Output is git-ignored.
@@ -24,12 +21,11 @@
 # Requirements: pip install pyinstaller cairosvg Pillow
 
 SPEC    = lapsecoin.spec
-DUMB    = lapsecoin-dumb.spec
 DIST    = dist
 BUILD   = build
 APPDIR  = AppDir
 
-.PHONY: linux windows dumb icons test clean
+.PHONY: linux windows icons test clean
 
 linux: icons
 	pyinstaller --clean --noconfirm $(SPEC)
@@ -47,10 +43,6 @@ linux: icons
 windows:
 	pyinstaller --clean --noconfirm $(SPEC)
 	@echo "Built: $(DIST)/lapsecoin-win/lapsecoin.exe"
-
-dumb:
-	pyinstaller --clean --noconfirm $(DUMB)
-	@echo "Built: $(DIST)/lapsecoin-dumb"
 
 icons:
 	python3 -c "\

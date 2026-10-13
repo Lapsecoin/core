@@ -497,19 +497,17 @@ def board_ctx(reader, page_arg, own_addr, extra=None):
     under their parent. `page_arg` is how many chunks of
     BOARD_THREADS_PER_CHUNK threads to render, so the page can keep
     appending as the reader scrolls. Shared between the GET route
-    (read-only, both apps), the private app's POST handlers, and the light
-    client, so none of them can drift apart.
+    (read-only, both apps) and the private app's POST handlers, so none of
+    them can drift apart.
 
     own_addr is the caller's call, not this function's: the wallet's own
-    address on the private app and the light client, and on the public app
+    address on the private app, and on the public app
     whatever the Dandelion privacy setting (settings.HIDE_ADDRESS_PUBLICLY)
     says, possibly None, which never matches a real row.tx.from and so
     quietly drops the "mine" styling in board.html rather than needing
     its own branch here.
 
-    The viewer's own icon and nickname come from reader.profile(), which a
-    light client answers from the board it already has, so showing them
-    never tells a node whose address this is.
+    The viewer's own icon and nickname come from reader.profile().
     """
     chunks = max(page_arg, 1)
     data = reader.board_page(chunks)
