@@ -41,7 +41,6 @@ lapsecoin.lock
 
 # VSCode
 .history/
-dist-bridge/
 build-nuitka/
 nuitka-cache/
 msi-work/

@@ -1,11 +1,10 @@
-# Compiles the Windows program and the small bridge with Nuitka (MSVC).
+# Compiles the Windows program with Nuitka (MSVC).
 # Run by .github/workflows/release.yml; also usable on a Windows machine with
 # Python, the requirements, Visual Studio Build Tools and liboqs installed.
 #
 #   scripts/build_windows.ps1 -Version 1.0.10
 #
 # Produces  dist\lapsecoin-win\   the program as a folder (packaged by the MSI)
-#           dist-bridge\lapsecoin.exe   the stand-in for the old single-file exe
 #
 # Why Nuitka and not PyInstaller: PyInstaller's bootloader and self-extracting
 # layout are what antivirus engines match on. Nuitka turns the code into a
@@ -74,14 +73,4 @@ if ($LASTEXITCODE) { throw "nuitka failed for the program" }
 New-Item dist -ItemType Directory -Force | Out-Null
 Move-Item build-nuitka\main.dist dist\lapsecoin-win
 
-# The bridge is standard library only, as one file, because old copies of the
-# program download a single lapsecoin.exe.
-Remove-Item dist-bridge -Recurse -Force -ErrorAction SilentlyContinue
-python -m nuitka --mode=onefile @common @identity `
-    "--file-description=LapseCoin installer launcher" `
-    --windows-console-mode=disable `
-    --output-dir=dist-bridge --output-filename=lapsecoin.exe `
-    --include-data-files=VERSION=VERSION `
-    lapsecoin_bridge.py
-if ($LASTEXITCODE) { throw "nuitka failed for the bridge" }
-Write-Host "Built dist\lapsecoin-win and dist-bridge\lapsecoin.exe"
+Write-Host "Built dist\lapsecoin-win"

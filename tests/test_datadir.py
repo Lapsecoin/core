@@ -44,6 +44,35 @@ class TestMigrate:
         assert datadir.migrate(str(tmp_path / "nope"), str(tmp_path / "x")) == []
 
 
+class TestFindLegacyFolders:
+    def test_finds_keys_on_the_desktop_and_in_downloads_newest_first(self, tmp_path):
+        old = tmp_path / "Downloads" / "lapsecoin"
+        new = tmp_path / "Desktop"
+        _write(str(old), "lapsecoin_key.json")
+        _write(str(new), "lapsecoin_key.json")
+        os.utime(old / "lapsecoin_key.json", (1000, 1000))
+        assert datadir.find_legacy_folders(str(tmp_path)) == [str(new), str(old)]
+
+    def test_goes_a_few_folders_deep_but_not_forever(self, tmp_path):
+        _write(str(tmp_path / "Downloads" / "a" / "b" / "c"), "lapsecoin_key.json")
+        _write(str(tmp_path / "Downloads" / "a" / "b" / "c" / "d" / "e"), "lapsecoin_key.json")
+        assert datadir.find_legacy_folders(str(tmp_path)) == [
+            str(tmp_path / "Downloads" / "a" / "b" / "c")]
+
+    def test_nothing_found_is_an_empty_list(self, tmp_path):
+        assert datadir.find_legacy_folders(str(tmp_path)) == []
+
+    def test_the_search_is_bounded(self, tmp_path):
+        for i in range(30):
+            (tmp_path / "Downloads" / f"d{i}").mkdir(parents=True)
+        _write(str(tmp_path / "Downloads" / "d29"), "lapsecoin_key.json")
+        assert datadir.find_legacy_folders(str(tmp_path), max_dirs=5) == []
+
+    def test_the_same_folder_is_not_listed_twice(self, tmp_path):
+        _write(str(tmp_path / "Downloads"), "lapsecoin_key.json")
+        assert datadir.find_legacy_folders(str(tmp_path)) == [str(tmp_path / "Downloads")]
+
+
 class TestPrepare:
     def _installed(self, monkeypatch, tmp_path):
         exe_dir = tmp_path / "Programs"
@@ -53,40 +82,70 @@ class TestPrepare:
         monkeypatch.setattr(sys, "executable", str(exe_dir / "lapsecoin.exe"))
         return {"LOCALAPPDATA": str(tmp_path / "Local")}
 
+    def _run(self, env, home, answer, monkeypatch=None):
+        asked = []
+        before = os.getcwd()
+        try:
+            def ask(suggestions):
+                asked.append(list(suggestions))
+                return answer(suggestions) if callable(answer) else answer
+            return datadir.prepare(env, home=home, ask=ask), asked
+        finally:
+            os.chdir(before)
+
     def test_not_an_installed_build_changes_nothing(self, tmp_path):
         before = os.getcwd()
         assert datadir.prepare({"LOCALAPPDATA": str(tmp_path)}) is None
         assert os.getcwd() == before
 
-    def test_an_installed_build_works_in_its_data_folder(self, monkeypatch, tmp_path):
-        env = self._installed(monkeypatch, tmp_path)
-        before = os.getcwd()
-        try:
-            got = datadir.prepare(env, home=str(tmp_path / "home"))
-            assert got == str(tmp_path / "Local" / "LapseCoin")
-            assert os.path.samefile(os.getcwd(), got)
-        finally:
-            os.chdir(before)
-
-    def test_an_empty_data_folder_picks_up_a_key_left_in_downloads(self, monkeypatch, tmp_path):
+    def test_the_first_run_offers_what_it_found_and_copies_the_choice(self, monkeypatch, tmp_path):
         env = self._installed(monkeypatch, tmp_path)
         home = tmp_path / "home"
         _write(str(home / "Downloads"), "lapsecoin_key.json", "key")
+        dst, asked = self._run(env, str(home), lambda s: ("use", s[0]))
+        assert asked == [[str(home / "Downloads")]]
+        assert open(os.path.join(dst, "lapsecoin_key.json")).read() == "key"
+        assert os.path.exists(home / "Downloads" / "lapsecoin_key.json")
+
+    def test_a_folder_the_user_browsed_to_is_copied_too(self, monkeypatch, tmp_path):
+        env = self._installed(monkeypatch, tmp_path)
+        other = tmp_path / "somewhere" / "else"
+        _write(str(other), "lapsecoin_key.json", "key")
+        _write(str(other), "lapsecoin_chain.db", "chain")
+        dst, _ = self._run(env, str(tmp_path / "home"), ("use", str(other)))
+        assert open(os.path.join(dst, "lapsecoin_chain.db")).read() == "chain"
+
+    def test_starting_fresh_copies_nothing(self, monkeypatch, tmp_path):
+        env = self._installed(monkeypatch, tmp_path)
+        home = tmp_path / "home"
+        _write(str(home / "Downloads"), "lapsecoin_key.json", "key")
+        dst, _ = self._run(env, str(home), ("fresh", None))
+        assert not os.path.exists(os.path.join(dst, "lapsecoin_key.json"))
+
+    def test_closing_the_question_exits_without_making_a_key(self, monkeypatch, tmp_path):
+        env = self._installed(monkeypatch, tmp_path)
         before = os.getcwd()
         try:
-            dst = datadir.prepare(env, home=str(home))
-            assert open(os.path.join(dst, "lapsecoin_key.json")).read() == "key"
+            with pytest.raises(SystemExit):
+                datadir.prepare(env, home=str(tmp_path), ask=lambda s: ("cancel", None))
         finally:
             os.chdir(before)
 
-    def test_a_data_folder_with_a_key_is_not_touched_again(self, monkeypatch, tmp_path):
+    def test_a_data_folder_with_a_key_is_never_asked_about(self, monkeypatch, tmp_path):
         env = self._installed(monkeypatch, tmp_path)
-        home = tmp_path / "home"
-        _write(str(home / "Downloads"), "lapsecoin_key.json", "stale")
         _write(str(tmp_path / "Local" / "LapseCoin"), "lapsecoin_key.json", "mine")
-        before = os.getcwd()
-        try:
-            dst = datadir.prepare(env, home=str(home))
-            assert open(os.path.join(dst, "lapsecoin_key.json")).read() == "mine"
-        finally:
-            os.chdir(before)
+        dst, asked = self._run(env, str(tmp_path / "home"), ("fresh", None))
+        assert asked == []
+        assert open(os.path.join(dst, "lapsecoin_key.json")).read() == "mine"
+
+
+class TestTheQuestionWithoutAWindow:
+    def test_no_gui_takes_the_newest_folder_found(self, monkeypatch):
+        import migrate_ui
+        monkeypatch.setattr(sys, "argv", ["lapsecoin", "--no-gui"])
+        assert migrate_ui.ask(["/new", "/old"]) == ("use", "/new")
+
+    def test_no_gui_and_nothing_found_starts_fresh(self, monkeypatch):
+        import migrate_ui
+        monkeypatch.setattr(sys, "argv", ["lapsecoin", "--no-gui"])
+        assert migrate_ui.ask([]) == ("fresh", None)

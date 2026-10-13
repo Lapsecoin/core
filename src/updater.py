@@ -6,7 +6,6 @@ this module existed: nothing, the UI just links out to the releases page.
 Install types this recognizes:
   "windows-msi"    the MSI installer build on Windows: a folder of files
                    installed per user, with its data under %LOCALAPPDATA%.
-  "windows-exe"    the older frozen PyInstaller onefile build on Windows.
   "linux-appimage" frozen PyInstaller build running inside an AppImage
                    (identified by the $APPIMAGE env var the AppImage
                    runtime itself sets, not guessed at).
@@ -24,7 +23,7 @@ Install types this recognizes:
                    build run directly), or anything ambiguous. Never
                    guessed into one of the self-updatable types.
 
-Only "windows-msi", "windows-exe", "linux-appimage" and "pip" are self-updatable. This
+Only "windows-msi", "linux-appimage" and "pip" are self-updatable. This
 mirrors scripts/install.sh and scripts/install.ps1's own reasoning: the
 prebuilt binaries always have libtorrent and liboqs bundled at CI build
 time, so libtorrent availability never affects *whether* a self-update
@@ -42,7 +41,6 @@ import threading
 log = logging.getLogger("ec.updater")
 
 RELEASE_ASSET_LINUX   = "lapsecoin"
-RELEASE_ASSET_WINDOWS = "lapsecoin.exe"
 RELEASE_ASSET_MSI     = "lapsecoin.msi"
 RELEASE_ASSET_SUMS    = "SHA256SUMS"
 DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
@@ -55,7 +53,7 @@ DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
 PEER_CACHE_FILE     = "lapsecoin_peers.json"
 DEFAULT_PEERS_URL   = "https://lapsenode.vicnas.me/api/peers/download"
 
-SELF_UPDATABLE = {"windows-msi", "windows-exe", "linux-appimage", "pip"}
+SELF_UPDATABLE = {"windows-msi", "linux-appimage", "pip"}
 
 # Stages, in the order a successful attempt moves through them. "restarting"
 # is the last one any caller ever observes: every self-update path either
@@ -73,7 +71,7 @@ def detect_install_type():
             return "linux-appimage"
         if sys.platform.startswith("win"):
             import datadir
-            return "windows-msi" if datadir.is_msi_install() else "windows-exe"
+            return "windows-msi" if datadir.is_msi_install() else "source"
         return "source"
     try:
         import importlib.metadata as _md
@@ -156,16 +154,6 @@ def _verify_appimage(path):
         raise RuntimeError("downloaded file doesn't look like an ELF binary; refusing to install it")
 
 
-def _verify_pe(path):
-    size = os.path.getsize(path)
-    if size < 1_000_000:
-        raise RuntimeError(f"downloaded executable is only {size} bytes; refusing to install it")
-    with open(path, "rb") as f:
-        magic = f.read(2)
-    if magic != b"MZ":
-        raise RuntimeError("downloaded file doesn't look like a Windows executable; refusing to install it")
-
-
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"   # every .msi starts with this
 
 
@@ -196,27 +184,6 @@ def _verify_sha256(path, expected):
             h.update(chunk)
     if h.hexdigest() != expected:
         raise RuntimeError("downloaded installer does not match the published checksum; refusing to run it")
-
-
-def _cleanup_stray_update_files():
-    """Removes leftovers from a windows-exe update whose helper never got
-    to run. A successful run always cleans both the download and the helper
-    script up itself, so anything still here on startup is from a run that
-    didn't finish -- never a file this attempt itself just created, since
-    this only ever runs before any update has begun.
-    """
-    install_dir = os.path.dirname(os.path.realpath(sys.executable))
-    with contextlib.suppress(OSError):
-        for name in os.listdir(install_dir):
-            if name.startswith(".lapsecoin-update-") and name.endswith(".exe"):
-                with contextlib.suppress(OSError):
-                    os.remove(os.path.join(install_dir, name))
-    tmp_dir = tempfile.gettempdir()
-    with contextlib.suppress(OSError):
-        for name in os.listdir(tmp_dir):
-            if name.startswith("lapsecoin-update-") and name.endswith(".bat"):
-                with contextlib.suppress(OSError):
-                    os.remove(os.path.join(tmp_dir, name))
 
 
 class UpdateSession:
@@ -258,8 +225,6 @@ class UpdateSession:
                 self._run_appimage()
             elif self.install_type == "windows-msi":
                 self._run_windows_msi()
-            elif self.install_type == "windows-exe":
-                self._run_windows_exe()
             else:
                 self._set("unsupported",
                           f"Can't auto-update a {self.install_type!r} install.")
@@ -405,76 +370,6 @@ class UpdateSession:
         self._set("restarting", "exiting so the installer can finish")
         os._exit(0)
 
-    # ---- windows exe -----------------------------------------------------
-
-    def _run_windows_exe(self):
-        exe_path = os.path.realpath(sys.executable)
-        install_dir = os.path.dirname(exe_path)
-        if not os.access(install_dir, os.W_OK):
-            raise RuntimeError(
-                f"{install_dir} isn't writable by this process; "
-                "re-run the installer instead")
-
-        url = f"{DOWNLOAD_BASE}/v{self.target_version}/{RELEASE_ASSET_WINDOWS}"
-        self._set("downloading", url)
-        tmp_path = os.path.join(install_dir, f".lapsecoin-update-{os.getpid()}.exe")
-        try:
-            _download(url, tmp_path, on_progress=lambda d: self._set("downloading", d))
-            self._set("verifying", "checking the download looks like a real executable")
-            _verify_pe(tmp_path)
-        except Exception:
-            with contextlib.suppress(OSError):
-                os.remove(tmp_path)
-            raise
-
-        self._set("installing", "handing off to the update helper")
-        pid = os.getpid()
-        helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.bat")
-        launch_args = subprocess.list2cmdline(sys.argv[1:])
-
-        # The handoff sequence:
-        # 1. Terminate the original process forcefully if it lingers.
-        # 2. Loop until the OS lock is released and the file move succeeds.
-        # 3. Timeout for 2 seconds to ensure PyInstaller generates a completely unique _MEI folder name.
-        # 4. Start the new executable.
-        # 5. Silently delete the helper script in the same cycle.
-        helper_script = (
-            "@echo off\r\n"
-            f'taskkill /PID {pid} /F >nul 2>&1\r\n'
-            "for /L %%N in (1,1,120) do (\r\n"
-            f'  move /Y "{tmp_path}" "{exe_path}" >nul 2>&1 && goto moved\r\n'
-            "  timeout /T 1 /NOBREAK >nul\r\n"
-            ")\r\n"
-            "exit /B 1\r\n"
-            ":moved\r\n"
-            "timeout /T 2 /NOBREAK >nul\r\n"
-            f'start "" "{exe_path}"{(" " + launch_args) if launch_args else ""}\r\n'
-            '(goto) 2>nul & del "%~f0"\r\n'
-        )
-        with open(helper_path, "w", encoding="ascii") as f:
-            f.write(helper_script)
-
-        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
-                        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
-                        getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
-
-        # Deep scrub of all PyInstaller variables using case-insensitive matching
-        # to guarantee the new process does not attempt to extract into the old directory.
-        clean_env = {}
-        for k, v in os.environ.items():
-            if not k.upper().startswith(("_MEI", "_PYI", "PYINSTALLER", "TCL", "TK")):
-                clean_env[k] = v
-
-        subprocess.Popen(
-            ["cmd.exe", "/D", "/C", helper_path],
-            creationflags=creationflags,
-            close_fds=True,
-            env=clean_env,
-            cwd=install_dir,  # Force execution outside of dying _MEI temp folders
-        )
-        self._set("restarting", "exiting so the update helper can finish")
-        os._exit(0)
-
 
 class Updater:
     """Owns the install-type detection (computed once, it never changes for
@@ -484,8 +379,6 @@ class Updater:
         self.install_type = install_type if install_type is not None else detect_install_type()
         self._session = None
         self._lock = threading.Lock()
-        if self.install_type == "windows-exe":
-            _cleanup_stray_update_files()
 
     def can_self_update(self):
         return self.install_type in SELF_UPDATABLE

@@ -13,13 +13,16 @@ file the installer places next to the executable, so a source checkout, a
 pip install, the AppImage and a portable copy behave exactly as before.
 
 Moving from the old single .exe is a copy, never a move: the originals stay
-where they were, and nothing is ever overwritten in the new location.
+where they were, and nothing is ever overwritten in the new location. On the
+first run the user is asked where the old program ran from, with the folders
+found under Desktop and Downloads offered first (see migrate_ui.py).
 """
 
 import logging
 import os
 import shutil
 import sys
+import time
 
 log = logging.getLogger("ec.datadir")
 
@@ -51,15 +54,6 @@ def user_data_dir(environ=None):
     base = environ.get("LOCALAPPDATA") or os.path.join(
         os.path.expanduser("~"), "AppData", "Local")
     return os.path.join(base, APP_DIR_NAME)
-
-
-def installed_exe(environ=None):
-    """Where the MSI puts the program, per user. The WiX package and the
-    bridge both rely on this being %LOCALAPPDATA%\\Programs\\LapseCoin."""
-    environ = os.environ if environ is None else environ
-    base = environ.get("LOCALAPPDATA") or os.path.join(
-        os.path.expanduser("~"), "AppData", "Local")
-    return os.path.join(base, "Programs", APP_DIR_NAME, "lapsecoin.exe")
 
 
 def _has_data(directory):
@@ -111,34 +105,71 @@ def migrate(src, dst):
     return copied
 
 
-def legacy_candidates(home=None):
-    """Folders a single-file .exe was most likely run from, newest data
-    first. A double-clicked exe keeps its data beside itself, and people keep
-    such files in their downloads or on the desktop."""
+# Folders to look in for an earlier install, with how deep to go. Desktop and
+# Downloads are where a downloaded single-file program usually ends up; a
+# synced Desktop lives under OneDrive.
+_SEARCH = (("Desktop", 3), ("OneDrive/Desktop", 3), ("Downloads", 3),
+           ("Documents", 2), ("OneDrive/Documents", 2), ("", 1))
+_SKIP = {"appdata", "node_modules", "$recycle.bin", "windows", "program files",
+         "program files (x86)", "programdata", ".git", "__pycache__"}
+
+
+def find_legacy_folders(home=None, max_dirs=4000, seconds=3.0):
+    """Folders that hold an earlier install's key, most recently used first.
+    The search is bounded in depth, in folders visited and in time, so a huge
+    Downloads folder cannot hold up the first start."""
     home = home or os.path.expanduser("~")
-    folders = [os.path.join(home, d) for d in ("Downloads", "Desktop", "Documents", "")]
-    found = []
-    for folder in folders:
-        key = os.path.join(folder, KEY_FILES[0])
-        if os.path.isfile(key):
-            found.append((os.path.getmtime(key), folder))
-    return [f for _, f in sorted(found, reverse=True)]
+    deadline = time.monotonic() + seconds
+    seen, found, visited = set(), [], 0
+    for sub, depth in _SEARCH:
+        root = os.path.join(home, *sub.split("/")) if sub else home
+        queue = [(root, 0)]
+        while queue and visited < max_dirs and time.monotonic() < deadline:
+            folder, level = queue.pop(0)
+            real = os.path.realpath(folder)
+            if real in seen:
+                continue
+            seen.add(real)
+            visited += 1
+            try:
+                entries = list(os.scandir(folder))
+            except OSError:
+                continue
+            for e in entries:
+                try:
+                    if e.name == KEY_FILES[0] and e.is_file():
+                        found.append((e.stat().st_mtime, folder))
+                    elif (level < depth and e.is_dir(follow_symlinks=False)
+                          and e.name.lower() not in _SKIP and not e.name.startswith(".")):
+                        queue.append((e.path, level + 1))
+                except OSError:
+                    continue
+    found.sort(reverse=True)
+    return [folder for _, folder in found]
 
 
-def prepare(environ=None, home=None):
+def prepare(environ=None, home=None, ask=None):
     """Called before anything else starts. For an installed build, makes the
-    data folder, brings an older install's data across if this one is empty,
-    and makes it the working directory. Returns the folder, or None when this
-    is not an installed build and nothing changed."""
+    data folder and makes it the working directory. On the very first run,
+    when there is no key or chain yet, asks whether an earlier install exists
+    and brings its data across. Returns the folder, or None when this is not
+    an installed build and nothing changed."""
     if not is_msi_install():
         return None
     dst = user_data_dir(environ)
     os.makedirs(dst, exist_ok=True)
     if not _has_data(dst):
-        for src in legacy_candidates(home):
-            copied = migrate(src, dst)
+        import migrate_ui
+        suggestions = find_legacy_folders(home)
+        kind, folder = (ask or migrate_ui.ask)(suggestions)
+        if kind == migrate_ui.CANCEL:
+            # Closing the question must not quietly make a new key.
+            sys.exit(0)
+        if kind == migrate_ui.USE and folder:
+            copied = migrate(folder, dst)
             if copied:
-                log.info("[datadir] brought %s across from %s", ", ".join(copied), src)
-                break
+                log.info("[datadir] brought %s across from %s", ", ".join(copied), folder)
+            else:
+                log.warning("[datadir] nothing to copy from %s", folder)
     os.chdir(dst)
     return dst
