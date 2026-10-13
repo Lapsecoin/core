@@ -4,7 +4,9 @@ place. Every other install type keeps doing exactly what it did before
 this module existed: nothing, the UI just links out to the releases page.
 
 Install types this recognizes:
-  "windows-exe"    frozen PyInstaller onefile build on Windows.
+  "windows-msi"    the MSI installer build on Windows: a folder of files
+                   installed per user, with its data under %LOCALAPPDATA%.
+  "windows-exe"    the older frozen PyInstaller onefile build on Windows.
   "linux-appimage" frozen PyInstaller build running inside an AppImage
                    (identified by the $APPIMAGE env var the AppImage
                    runtime itself sets, not guessed at).
@@ -22,7 +24,7 @@ Install types this recognizes:
                    build run directly), or anything ambiguous. Never
                    guessed into one of the self-updatable types.
 
-Only "windows-exe", "linux-appimage" and "pip" are self-updatable. This
+Only "windows-msi", "windows-exe", "linux-appimage" and "pip" are self-updatable. This
 mirrors scripts/install.sh and scripts/install.ps1's own reasoning: the
 prebuilt binaries always have libtorrent and liboqs bundled at CI build
 time, so libtorrent availability never affects *whether* a self-update
@@ -41,6 +43,8 @@ log = logging.getLogger("ec.updater")
 
 RELEASE_ASSET_LINUX   = "lapsecoin"
 RELEASE_ASSET_WINDOWS = "lapsecoin.exe"
+RELEASE_ASSET_MSI     = "lapsecoin.msi"
+RELEASE_ASSET_SUMS    = "SHA256SUMS"
 DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
 
 # Same file discovery.py's PEER_CACHE_FILE loads on startup, and the same
@@ -51,7 +55,7 @@ DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
 PEER_CACHE_FILE     = "lapsecoin_peers.json"
 DEFAULT_PEERS_URL   = "https://lapsenode.vicnas.me/api/peers/download"
 
-SELF_UPDATABLE = {"windows-exe", "linux-appimage", "pip"}
+SELF_UPDATABLE = {"windows-msi", "windows-exe", "linux-appimage", "pip"}
 
 # Stages, in the order a successful attempt moves through them. "restarting"
 # is the last one any caller ever observes: every self-update path either
@@ -67,7 +71,8 @@ def detect_install_type():
         if os.environ.get("APPIMAGE"):
             return "linux-appimage"
         if sys.platform.startswith("win"):
-            return "windows-exe"
+            import datadir
+            return "windows-msi" if datadir.is_msi_install() else "windows-exe"
         return "source"
     try:
         import importlib.metadata as _md
@@ -160,6 +165,38 @@ def _verify_pe(path):
         raise RuntimeError("downloaded file doesn't look like a Windows executable; refusing to install it")
 
 
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"   # every .msi starts with this
+
+
+def _verify_msi(path):
+    size = os.path.getsize(path)
+    if size < 1_000_000:
+        raise RuntimeError(f"downloaded installer is only {size} bytes; refusing to run it")
+    with open(path, "rb") as f:
+        magic = f.read(8)
+    if magic != _OLE_MAGIC:
+        raise RuntimeError("downloaded file doesn't look like a Windows installer; refusing to run it")
+
+
+def _expected_sha256(sums_text, name):
+    """The hash listed for `name` in a SHA256SUMS file, or None."""
+    for line in sums_text.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].lstrip("*") == name:
+            return parts[0].lower()
+    return None
+
+
+def _verify_sha256(path, expected):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    if h.hexdigest() != expected:
+        raise RuntimeError("downloaded installer does not match the published checksum; refusing to run it")
+
+
 def _cleanup_stray_update_files():
     """Removes leftovers from a windows-exe update whose helper never got
     to run. A successful run always cleans both the download and the helper
@@ -218,6 +255,8 @@ class UpdateSession:
                 self._run_pip()
             elif self.install_type == "linux-appimage":
                 self._run_appimage()
+            elif self.install_type == "windows-msi":
+                self._run_windows_msi()
             elif self.install_type == "windows-exe":
                 self._run_windows_exe()
             else:
@@ -301,6 +340,69 @@ class UpdateSession:
 
         self._set("restarting", "relaunching the updated AppImage")
         os.execv(appimage_path, [appimage_path] + sys.argv[1:])
+
+    # ---- windows msi -------------------------------------------------------
+
+    def _run_windows_msi(self):
+        """Download the new installer, check it, then hand off to a helper
+        that closes this process, runs the installer quietly (a per-user
+        install, so no elevation) and starts the app again. The installer
+        replaces the program files; the data folder is not touched."""
+        import datadir
+        exe_path = os.path.realpath(sys.executable)
+        work = os.path.join(datadir.user_data_dir(), "update")
+        os.makedirs(work, exist_ok=True)
+        msi_path = os.path.join(work, f"lapsecoin-{self.target_version}.msi")
+
+        base = f"{DOWNLOAD_BASE}/v{self.target_version}"
+        self._set("downloading", f"{base}/{RELEASE_ASSET_MSI}")
+        try:
+            _download(f"{base}/{RELEASE_ASSET_MSI}", msi_path,
+                      on_progress=lambda d: self._set("downloading", d))
+            self._set("verifying", "checking the installer")
+            _verify_msi(msi_path)
+            expected = None
+            try:
+                import requests
+                r = requests.get(f"{base}/{RELEASE_ASSET_SUMS}", timeout=30)
+                if r.ok:
+                    expected = _expected_sha256(r.text, RELEASE_ASSET_MSI)
+            except Exception:
+                log.debug("[updater] could not fetch the checksums", exc_info=True)
+            if expected:
+                _verify_sha256(msi_path, expected)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.remove(msi_path)
+            raise
+
+        self._set("installing", "handing off to the update helper")
+        pid = os.getpid()
+        helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.bat")
+        msi_log = os.path.join(work, "installer.log")
+        launch_args = subprocess.list2cmdline(sys.argv[1:])
+        helper_script = (
+            "@echo off\r\n"
+            f'taskkill /PID {pid} /F >nul 2>&1\r\n'
+            "timeout /T 2 /NOBREAK >nul\r\n"
+            f'msiexec /i "{msi_path}" /qn /norestart LAUNCH=0 /l*v "{msi_log}"\r\n'
+            f'del "{msi_path}" >nul 2>&1\r\n'
+            f'start "" "{exe_path}"{(" " + launch_args) if launch_args else ""}\r\n'
+            '(goto) 2>nul & del "%~f0"\r\n'
+        )
+        with open(helper_path, "w", encoding="ascii") as f:
+            f.write(helper_script)
+
+        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
+                        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | \
+                        getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+        clean_env = {k: v for k, v in os.environ.items()
+                     if not k.upper().startswith(("_MEI", "_PYI", "PYINSTALLER", "TCL", "TK"))}
+        subprocess.Popen(["cmd.exe", "/D", "/C", helper_path],
+                         creationflags=creationflags, close_fds=True,
+                         env=clean_env, cwd=work)
+        self._set("restarting", "exiting so the installer can finish")
+        os._exit(0)
 
     # ---- windows exe -----------------------------------------------------
 

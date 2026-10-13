@@ -22,9 +22,11 @@ Grab a binary from the [releases page](https://github.com/Lapsecoin/core/release
 
 ```
 # Linux                    # Windows
-chmod +x lapsecoin         lapsecoin.exe
+chmod +x lapsecoin         double-click lapsecoin.msi, then open LapseCoin from the Start menu
 ./lapsecoin
 ```
+
+The Windows installer needs no administrator rights. The program goes in `%LOCALAPPDATA%\Programs\LapseCoin` and your key and chain in `%LOCALAPPDATA%\LapseCoin`, which installing, updating and uninstalling leave alone. If you ran the old `lapsecoin.exe`, installing the MSI copies its key and data across (the originals stay where they were).
 
 You'll be prompted for a signing passphrase, then the wallet is at `http://localhost:8335` and the block explorer at `http://localhost:8333`.
 

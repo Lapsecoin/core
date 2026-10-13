@@ -374,8 +374,19 @@ jobs:
       - name: Smoke test Windows executable
         shell: pwsh
         run: |
-          & .\dist\lapsecoin.exe -h
+          & .\dist\lapsecoin-win\lapsecoin.exe -h
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build the bridge that old single-file copies update into
+        run: pyinstaller --clean --noconfirm --distpath dist-bridge lapsecoin-bridge.spec
+
+      - name: Check the bridge is a plausible download for the old updater
+        shell: pwsh
+        run: |
+          # Old copies refuse a download under 1 MB or without an MZ header.
+          $f = Get-Item dist-bridge\lapsecoin.exe
+          Write-Host "bridge is $($f.Length) bytes"
+          if ($f.Length -lt 1000000) { throw "bridge too small for the old updater" }
 
       - name: Build light client
         run: pyinstaller --clean --noconfirm lapsecoin-dumb.spec
@@ -386,13 +397,115 @@ jobs:
           & .\dist\lapsecoin-dumb.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Code signing through SignPath Foundation (free for open source).
+      # Skipped until the repository variable SIGNPATH_ORGANIZATION_ID and the
+      # secret SIGNPATH_API_TOKEN exist; see docs/signing.md. The unsigned
+      # build is what ships until then.
+      - name: Collect the executables to sign
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          New-Item to-sign -ItemType Directory | Out-Null
+          Copy-Item dist\lapsecoin-win\lapsecoin.exe to-sign\lapsecoin-app.exe
+          Copy-Item dist-bridge\lapsecoin.exe to-sign\lapsecoin-bridge.exe
+          Copy-Item dist\lapsecoin-dumb.exe to-sign\lapsecoin-dumb.exe
+
+      - name: Upload the executables for signing
+        id: upload-exes
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exes
+          path: to-sign/*
+
+      - name: Sign the executables
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: lapsecoin
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: exes
+          github-artifact-id: ${{ steps.upload-exes.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-exes
+
+      - name: Put the signed executables back
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          Copy-Item signed-exes\lapsecoin-app.exe    dist\lapsecoin-win\lapsecoin.exe -Force
+          Copy-Item signed-exes\lapsecoin-bridge.exe dist-bridge\lapsecoin.exe -Force
+          Copy-Item signed-exes\lapsecoin-dumb.exe   dist\lapsecoin-dumb.exe -Force
+
+      - name: Install the WiX Toolset
+        run: choco install wixtoolset --no-progress -y
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION).Trim()
+          .\scripts\build_msi.ps1 -Source dist\lapsecoin-win -Version $v -Out lapsecoin.msi
+
+      # The installer is the thing most likely to be wrong the first time it
+      # runs somewhere real, so install it on the runner, check the result,
+      # and remove it again, before anything is published.
+      - name: Install the installer on the runner and check it
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0', '/l*v', "$PWD\install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 80; throw "install exited $($p.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\LapseCoin'
+          foreach ($f in 'lapsecoin.exe', 'installed-by-msi') {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f after install" }
+          }
+          & "$dir\lapsecoin.exe" -h
+          if ($LASTEXITCODE -ne 0) { throw "installed app failed to start" }
+          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'LapseCoin'))) { throw "the app did not make its data folder" }
+          $u = Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "uninstall exited $($u.ExitCode)" }
+          if (Test-Path (Join-Path $dir 'lapsecoin.exe')) { throw "uninstall left the program behind" }
+
+      - name: Upload the installer for signing
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        id: upload-msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-msi
+          path: lapsecoin.msi
+
+      - name: Submit the installer for signing
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: lapsecoin
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: msi
+          github-artifact-id: ${{ steps.upload-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-msi
+
+      - name: Use the signed installer
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: Copy-Item signed-msi\lapsecoin.msi lapsecoin.msi -Force
+
+      - name: Stage the release files
+        shell: pwsh
+        run: |
+          New-Item stage -ItemType Directory | Out-Null
+          Copy-Item lapsecoin.msi                stage\lapsecoin.msi
+          Copy-Item dist-bridge\lapsecoin.exe     stage\lapsecoin.exe
+          Copy-Item dist\lapsecoin-dumb.exe       stage\lapsecoin-dumb.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: lapsecoin-windows
-          path: |
-            dist/lapsecoin.exe
-            dist/lapsecoin-dumb.exe
+          path: stage/*
 
   release:
     needs: [version, build-linux, build-windows]
@@ -423,7 +536,7 @@ jobs:
       - name: Checksums
         run: |
           cd artifacts
-          sha256sum linux/lapsecoin linux/lapsecoin-dumb windows/lapsecoin.exe windows/lapsecoin-dumb.exe \
+          sha256sum linux/lapsecoin linux/lapsecoin-dumb windows/lapsecoin.msi windows/lapsecoin.exe windows/lapsecoin-dumb.exe \
             | sed 's# \(linux\|windows\)/# #' > SHA256SUMS
           cat SHA256SUMS
 
@@ -471,6 +584,7 @@ jobs:
           files: |
             artifacts/linux/lapsecoin
             artifacts/linux/lapsecoin-dumb
+            artifacts/windows/lapsecoin.msi
             artifacts/windows/lapsecoin.exe
             artifacts/windows/lapsecoin-dumb.exe
             artifacts/SHA256SUMS

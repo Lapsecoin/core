@@ -5,7 +5,7 @@
 #                 requires python3-tk (for the desktop GUI; falls back to
 #                 console at runtime if missing, but PyInstaller needs it
 #                 present at build time to bundle it in the first place)
-# make windows -- build dist/lapsecoin.exe (onefile) using pre-committed icons
+# make windows -- build dist/lapsecoin-win/ (onedir, packaged by the MSI) using pre-committed icons
 # make dumb    -- build dist/lapsecoin-dumb (.exe on Windows), the light client:
 #                 wallet and board through another node, no chain of its own.
 #                 One file, no GUI, no VDF; needs only liboqs to build.
@@ -46,7 +46,7 @@ linux: icons
 
 windows:
 	pyinstaller --clean --noconfirm $(SPEC)
-	@echo "Built: $(DIST)/lapsecoin.exe"
+	@echo "Built: $(DIST)/lapsecoin-win/lapsecoin.exe"
 
 dumb:
 	pyinstaller --clean --noconfirm $(DUMB)
