@@ -355,7 +355,7 @@ jobs:
             nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-
             nuitka-windows-
 
-      - name: Build the program and the bridge
+      - name: Build the program
         shell: pwsh
         run: |
           $env:NUITKA_CACHE_DIR = "$PWD\nuitka-cache"
@@ -370,14 +370,6 @@ jobs:
           $p = Start-Process dist\lapsecoin-win\lapsecoin.exe -ArgumentList '-h' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "the program exited with $($p.ExitCode)" }
 
-      - name: Check the bridge is a plausible download for the old updater
-        shell: pwsh
-        run: |
-          # Old copies refuse a download under 1 MB or without an MZ header.
-          $f = Get-Item dist-bridge\lapsecoin.exe
-          Write-Host "bridge is $($f.Length) bytes"
-          if ($f.Length -lt 1000000) { throw "bridge too small for the old updater" }
-
       # Code signing through SignPath Foundation (free for open source).
       # Skipped until the repository variable SIGNPATH_ORGANIZATION_ID and the
       # secret SIGNPATH_API_TOKEN exist. The unsigned
@@ -388,7 +380,6 @@ jobs:
         run: |
           New-Item to-sign -ItemType Directory | Out-Null
           Copy-Item dist\lapsecoin-win\lapsecoin.exe to-sign\lapsecoin-app.exe
-          Copy-Item dist-bridge\lapsecoin.exe to-sign\lapsecoin-bridge.exe
 
       - name: Upload the executables for signing
         id: upload-exes
@@ -416,7 +407,6 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item signed-exes\lapsecoin-app.exe    dist\lapsecoin-win\lapsecoin.exe -Force
-          Copy-Item signed-exes\lapsecoin-bridge.exe dist-bridge\lapsecoin.exe -Force
 
       - name: Install the WiX Toolset
         run: choco install wixtoolset --no-progress -y
@@ -477,7 +467,6 @@ jobs:
         run: |
           New-Item stage -ItemType Directory | Out-Null
           Copy-Item lapsecoin.msi                stage\lapsecoin.msi
-          Copy-Item dist-bridge\lapsecoin.exe     stage\lapsecoin.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -514,7 +503,7 @@ jobs:
       - name: Checksums
         run: |
           cd artifacts
-          sha256sum linux/lapsecoin windows/lapsecoin.msi windows/lapsecoin.exe \
+          sha256sum linux/lapsecoin windows/lapsecoin.msi \
             | sed 's# \(linux\|windows\)/# #' > SHA256SUMS
           cat SHA256SUMS
 
@@ -562,7 +551,6 @@ jobs:
           files: |
             artifacts/linux/lapsecoin
             artifacts/windows/lapsecoin.msi
-            artifacts/windows/lapsecoin.exe
             artifacts/SHA256SUMS
           fail_on_unmatched_files: true
         env:
