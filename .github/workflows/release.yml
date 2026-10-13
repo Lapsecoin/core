@@ -396,6 +396,15 @@ jobs:
           if (Test-Path "$dir\lapsecoin.exe") {
             $run = Start-Process "$dir\lapsecoin.exe" -ArgumentList '-h' -Wait -PassThru
             if ($run.ExitCode -ne 0) { $failures += "installed app exited $($run.ExitCode) on -h" }
+
+            # An update restarts the app through the helper script, so the
+            # program it names must be the one that is running. A Nuitka
+            # build reports a python.exe in sys.executable that does not
+            # exist, which is what broke the Windows update before.
+            $chk = Join-Path $env:RUNNER_TEMP 'restart-check.txt'
+            $rc = Start-Process "$dir\lapsecoin.exe" -ArgumentList '--check-restart-exe', $chk -Wait -PassThru
+            if (Test-Path $chk) { Get-Content $chk }
+            if ($rc.ExitCode -ne 0) { $failures += "an update would restart the wrong program (exit $($rc.ExitCode))" }
           }
           if (-not (Test-Path $data)) { $failures += "the app did not make its data folder" }
           Get-ChildItem $dir -ErrorAction SilentlyContinue | Select-Object -First 40 | Format-Table Name, Length

@@ -94,3 +94,34 @@ class TestWindowsMsiUpdate:
         monkeypatch.setattr(os, "_exit", lambda code: pytest.fail("must not exit"))
         with pytest.raises(RuntimeError, match="cannot find the installed program"):
             updater._installed_exe()
+
+
+    def test_restart_check_passes_for_the_running_program(self, monkeypatch, tmp_path):
+        app = tmp_path / "app"
+        app.mkdir()
+        exe = app / "lapsecoin.exe"
+        exe.write_bytes(b"MZ")
+        monkeypatch.setattr(sys, "executable", str(app / "python.exe"))
+        monkeypatch.setattr(sys, "argv", [str(exe)])
+        report = tmp_path / "r.txt"
+        assert updater.restart_check(str(report)) == 0
+        assert "ok" in report.read_text()
+
+    def test_restart_check_fails_when_the_target_is_not_the_running_program(self, monkeypatch, tmp_path):
+        app = tmp_path / "app"
+        app.mkdir()
+        (app / "lapsecoin.exe").write_bytes(b"MZ")
+        other = tmp_path / "other.exe"
+        other.write_bytes(b"MZ")
+        monkeypatch.setattr(sys, "executable", str(app / "python.exe"))
+        monkeypatch.setattr(sys, "argv", [str(other)])
+        report = tmp_path / "r.txt"
+        assert updater.restart_check(str(report)) == 1
+        assert "WRONG" in report.read_text()
+
+    def test_restart_check_reports_a_missing_program(self, monkeypatch, tmp_path):
+        (tmp_path / "app").mkdir()
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "python.exe"))
+        report = tmp_path / "r.txt"
+        assert updater.restart_check(str(report)) == 1
+        assert "cannot find the installed program" in report.read_text()

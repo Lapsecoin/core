@@ -87,6 +87,30 @@ def _installed_exe():
     return exe
 
 
+def restart_check(report_path):
+    """For CI: does this running build restart the right program after an
+    update? Writes what it found to report_path (a windowed build has no
+    console) and returns an exit code, 0 when _installed_exe() is the very
+    file that is running. Starts nothing."""
+    lines = [f"sys.executable: {sys.executable}",
+             f"sys.argv[0]:    {sys.argv[0]}"]
+    code = 1
+    try:
+        exe = _installed_exe()
+        lines.append(f"restart target: {exe}")
+        running = os.path.abspath(sys.argv[0])
+        if os.path.samefile(exe, running):
+            code = 0
+        else:
+            lines.append(f"but the running program is {running}")
+    except Exception as e:
+        lines.append(f"failed: {e}")
+    lines.append("ok" if code == 0 else "WRONG")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return code
+
+
 def _download(url, dest_path, on_progress=None):
     import requests
     with requests.get(url, stream=True, timeout=30) as r:
