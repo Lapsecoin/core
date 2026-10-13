@@ -139,17 +139,19 @@ jobs:
           sudo apt-get install -y cmake ninja-build libssl-dev
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt pytest-xdist
 
+      # One worker per core. loadfile keeps each test file on a single
+      # worker, so tests inside a file still run in order together.
       - name: Run tests
         run: |
           SELECTION='${{ steps.pick.outputs.tests }}'
           if [ "$SELECTION" = "ALL" ]; then
-            pytest tests/ -v --durations=15
+            pytest tests/ -v --durations=15 -n auto --dist loadfile
           elif [ -z "$SELECTION" ]; then
             echo "No test can be affected by the changes since the last release."
           else
-            pytest $SELECTION -v --durations=15
+            pytest $SELECTION -v --durations=15 -n auto --dist loadfile
           fi
 
   # Ahead of the builds, which take far longer, and needs only the tests.

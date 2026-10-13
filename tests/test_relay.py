@@ -8,6 +8,7 @@ import base64
 import gzip
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -118,7 +119,7 @@ class TestSealing:
         with pytest.raises(ValueError):
             svc.open_request(bytes(bad))
 
-    @pytest.mark.parametrize("garbage", [b"", b"x", os.urandom(200), os.urandom(5000)])
+    @pytest.mark.parametrize("garbage", [b"", b"x", random.Random(1).randbytes(200), random.Random(2).randbytes(5000)])
     def test_garbage_is_refused(self, garbage):
         with pytest.raises(ValueError):
             ObliviousService(_MemoryMeta()).open_request(garbage)
