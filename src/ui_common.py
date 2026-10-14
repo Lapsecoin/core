@@ -227,6 +227,21 @@ def _tx_amount(t):
 
 
 
+# Where to send people who want to help the project: shown on the dashboard.
+# The addresses are also in README.md and on https://lapsecoin.github.io.
+SUPPORT = {
+    "github": "https://github.com/Lapsecoin/core",
+    "lapse": ("report.crane.scan.sound.raccoon.orient.exercise."
+              "patient.vital.season.point.cabbage"),
+    "bitcoin": "bc1q8qxvr5zuws78650wz9rgzpqxfx7dqzl38rdtsw",
+    "listings": [
+        ("Product Hunt", "https://www.producthunt.com/products/lapsecoin"),
+        ("Indie Hackers", "https://www.indiehackers.com/product/lapsecoin"),
+        ("PeerPush", "https://peerpush.com/p/lapsecoin"),
+    ],
+}
+
+
 def make_flask_app(import_name):
     """A Flask app set up the way every app here is: templates from the
     bundle, and the formatting helpers the templates call."""
@@ -234,7 +249,7 @@ def make_flask_app(import_name):
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
                                  fmt_duration=fmt_duration,
-                                 fmt_lapse_dp=fmt_lapse_dp,
+                                 fmt_lapse_dp=fmt_lapse_dp, SUPPORT=SUPPORT,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
                                  BOARD_POST_AMOUNT=tx_mod.BOARD_POST_AMOUNT,

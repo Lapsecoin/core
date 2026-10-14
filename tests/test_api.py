@@ -17,6 +17,8 @@ import api
 import block as block_mod
 import mempool as mempool_mod
 import peerpool as peerpool_mod
+import crypto
+import ui_common
 import settings as settings_mod
 from chainstate import ChainState
 from node import NodeView
@@ -247,6 +249,18 @@ class TestDashboardTxPaging:
         html = self._client(4).get("/").get_data(as_text=True)
         assert self._amounts(html) == [4, 3, 2, 1]
         assert "tx_page=" not in html
+
+    def test_the_support_panel_is_on_the_dashboard(self):
+        html = self._client(4).get("/").get_data(as_text=True)
+        assert "Support LapseCoin" in html
+        assert 'href="https://github.com/Lapsecoin/core"' in html
+        for url in ("producthunt.com/products/lapsecoin", "indiehackers.com/product/lapsecoin",
+                    "peerpush.com/p/lapsecoin"):
+            assert url in html
+        assert crypto.is_valid_address(ui_common.SUPPORT["lapse"])
+        assert ui_common.SUPPORT["lapse"] in html and ui_common.SUPPORT["bitcoin"] in html
+        # Links only: no third-party image or script is fetched by the page.
+        assert "peerpush.com/p/lapsecoin/badge" not in html
 
     def test_an_empty_chain_still_renders(self):
         html = self._client(0).get("/").get_data(as_text=True)
