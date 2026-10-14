@@ -61,7 +61,11 @@ jobs:
       - name: Pack it
         run: |
           mkdir dist
-          tar -czf "dist/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" -C /tmp/oqs lib/liboqs.so lib/liboqs.so.*
+          out="$PWD/dist"
+          # The glob has to be expanded inside the install folder, so cd there
+          # first: tar -C only changes directory after the shell has expanded it.
+          (cd /tmp/oqs && tar -czf "$out/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" lib/liboqs.so lib/liboqs.so.*)
+          tar -tzvf "$out/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz"
           cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
 
       - uses: actions/upload-artifact@v6
