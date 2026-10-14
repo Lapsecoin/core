@@ -26,16 +26,20 @@ ENV_PREFIX = "LAPSECOIN_"
 
 class Setting:
     __slots__ = ("key", "default", "kind", "label", "help", "minimum",
-                 "slider_max", "supports_inf")
+                 "slider_min", "slider_max", "supports_inf")
 
     def __init__(self, key, default, kind=str, label="", help="", minimum=None,
-                 slider_max=None, supports_inf=False):
+                 slider_max=None, supports_inf=False, slider_min=None):
         self.key     = key
         self.default = default
         self.kind    = kind
         self.label   = label
         self.help    = help
         self.minimum = minimum
+        # Where the slider's left end sits, for a setting whose lowest
+        # valid value is a special one that is typed in rather than dragged
+        # to. None means the same as minimum.
+        self.slider_min = minimum if slider_min is None else slider_min
         # Purely a UI convenience (the settings page's slider needs some
         # upper bound to draw one at all) and never enforced here: parse()
         # below still accepts anything >= minimum, same as before this
@@ -209,10 +213,13 @@ PUBLISH_MACHINE = Setting(
 # Minimum race odds (percent) this node needs before it builds straight
 # away. At or below it, the node waits for the field first, the same wait
 # a measured 0% always got (see Node._wait_for_field_or_own_pace). Zero,
-# the default, keeps the old behavior of waiting only at 0%.
+# the default, keeps the old behavior of waiting only at 0%. -1 never
+# waits: the node builds straight away even at 0%, which can win a height
+# when the fastest builders drop out. The slider stops at 0, so -1 is typed.
 MIN_ODDS_PCT = Setting(
-    "min_odds_pct", 0.0, float, minimum=0.0, slider_max=100.0,
+    "min_odds_pct", 0.0, float, minimum=-1.0, slider_min=0.0, slider_max=100.0,
     label="Minimum odds to build straight away (%)",
+    help="Type -1 to always build straight away, even when the odds are 0%.",
 )
 
 ALL = [DRAW_WINDOW_SECONDS,

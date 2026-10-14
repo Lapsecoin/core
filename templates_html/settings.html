@@ -19,7 +19,7 @@
       {% elif s.supports_inf %}
       <div class="setting-control-inf">
         <div class="setting-control">
-          <input type="range" class="setting-slider" min="{{ s.minimum }}" max="{{ s.slider_max }}"
+          <input type="range" class="setting-slider" min="{{ s.slider_min }}" max="{{ s.slider_max }}"
                  step="any" value="{{ 0 if s.is_inf else s.value }}"
                  {% if s.forced or s.is_inf %}disabled{% endif %}
                  oninput="document.getElementById('{{ s.key }}').value = this.value">
@@ -41,7 +41,7 @@
 
       {% elif s.slider_max is not none %}
       <div class="setting-control">
-        <input type="range" class="setting-slider" min="{{ s.minimum }}" max="{{ s.slider_max }}"
+        <input type="range" class="setting-slider" min="{{ s.slider_min }}" max="{{ s.slider_max }}"
                step="{{ 1 if s.value is number and s.value == s.value|int else 'any' }}"
                value="{{ s.value }}" {% if s.forced %}disabled{% endif %}
                oninput="document.getElementById('{{ s.key }}').value = this.value">

@@ -1713,7 +1713,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
             value = node.settings.get(s_)
             return {"key": s_.key, "label": s_.label, "help": s_.help,
                     "is_bool": s_.kind is bool,
-                    "minimum": s_.minimum, "slider_max": s_.slider_max,
+                    "minimum": s_.minimum, "slider_min": s_.slider_min, "slider_max": s_.slider_max,
                     "value": value,
                     "supports_inf": s_.supports_inf,
                     "is_inf": s_.supports_inf and value == float("inf"),

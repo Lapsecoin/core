@@ -583,6 +583,19 @@ class TestSettingsValidation:
         client.post("/settings", data=self._full_form(client))
         assert node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS) is False
 
+    def test_minus_one_minimum_odds_is_typed_not_dragged(self):
+        """-1 means always build straight away. The slider still starts at
+        0, so -1 is reached by typing, and the help text says so."""
+        client, node = self._client()
+        html = client.get("/settings").get_data(as_text=True)
+        assert 'min="0.0" max="100.0"' in html
+        assert "Type -1 to always build straight away" in html
+        client.post("/settings", data=self._full_form(client, min_odds_pct="-1"))
+        assert node.settings.get(settings_mod.MIN_ODDS_PCT) == -1.0
+        resp = client.post("/settings", data=self._full_form(client, min_odds_pct="-2"))
+        assert b"at least -1" in resp.data
+        assert node.settings.get(settings_mod.MIN_ODDS_PCT) == -1.0
+
     def test_slider_metadata_reaches_the_page(self):
         """The numeric settings render a slider (a range input); the
         bool settings (show_hardware_details, mining_enabled,
