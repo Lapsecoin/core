@@ -1269,6 +1269,54 @@ class TestWaitForFieldOrOwnPace:
         node._measure_full_build()
         assert list(node._own_build_seconds) == [77.0]
 
+    def test_calibration_runs_before_the_full_build(self, node_env, monkeypatch):
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = None
+        order = []
+
+        def evaluate(challenge, iterations, handle=None):
+            order.append(iterations)
+            return ("aa" * 100, "bb" * 100, iterations * 1e-5)
+
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate", evaluate)
+        node._measure_full_build()
+        assert order[0] == node_mod.VDF_CALIBRATION_ITERATIONS
+        assert order[1] == block_mod.get_vdf_iterations(node.view.chain)
+
+    def test_mining_starts_one_timing_thread_not_two(self, node_env, monkeypatch):
+        """Side by side they share the CPU: on one free core the 500k sample
+        took twice as long, so the log quoted twice the real figure."""
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = None
+        started = []
+        monkeypatch.setattr(node_mod.threading, "Thread",
+                            lambda target=None, **kw: MagicMock(
+                                start=lambda: started.append(kw.get("name"))))
+        monkeypatch.setattr(node.settings, "get", lambda key, *a: True)
+        node._start_vdf_timing()
+        assert started == ["vdf-measure"]
+
+    def test_without_mining_only_the_short_calibration_runs(self, node_env, monkeypatch):
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = None
+        started = []
+        monkeypatch.setattr(node_mod.threading, "Thread",
+                            lambda target=None, **kw: MagicMock(
+                                start=lambda: started.append(kw.get("name"))))
+        monkeypatch.setattr(node.settings, "get", lambda key, *a: False)
+        node._start_vdf_timing()
+        assert started == ["vdf-calibrate"]
+
+    def test_the_full_build_replaces_the_stored_rate(self, node_env, monkeypatch):
+        node, *_ = node_env
+        node._vdf_seconds_per_iteration = 2e-5          # taken while busy
+        iterations = block_mod.get_vdf_iterations(node.view.chain)
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate",
+                            MagicMock(return_value=("aa" * 100, "bb" * 100, iterations * 1e-5)))
+        node._measure_full_build()
+        assert node._vdf_seconds_per_iteration == pytest.approx(1e-5)
+        assert float(node.storage.get_meta(node._VDF_RATE_META_KEY)) == pytest.approx(1e-5)
+
     def test_no_window_yet_is_not_treated_as_zero(self, node_env, monkeypatch):
         """The deadlock case: a fresh node_env's chain has no race window
         yet (race_odds returns None, the real function, not mocked

@@ -548,6 +548,8 @@ class Node:
         so nothing else computes meanwhile and the figure is not inflated
         by sharing the CPU."""
         try:
+            if not self._vdf_seconds_per_iteration:
+                self._calibrate_vdf()
             iterations = block_mod.get_vdf_iterations(self.view.chain)
             log.info("[vdf] benchmark started: one full block's worth of VDF "
                      "(%d iterations), nothing else builds until it ends",
@@ -556,6 +558,12 @@ class Node:
                 crypto.sha256(b"lapsecoin-vdf-measurement"), iterations)
             self._own_build_seconds.append(seconds)
             self._save_own_build_seconds()
+            # The whole run is a better rate than any short sample, and it
+            # replaces one stored by an earlier start that was taken while
+            # the machine was busy.
+            self._vdf_seconds_per_iteration = seconds / iterations
+            self.storage.set_meta(self._VDF_RATE_META_KEY,
+                                  repr(self._vdf_seconds_per_iteration))
             log.info("[vdf] benchmark done: a full block takes %.0fs on this "
                      "machine", seconds)
         except Exception:
@@ -736,20 +744,27 @@ class Node:
             "status":       self.status_line,
         }
 
+    def _start_vdf_timing(self):
+        if self.settings.get(settings_mod.MINING_ENABLED):
+            self._timing_done.clear()
+            # Calibrates first when it has to, then times the full block, in
+            # one thread: run side by side they share the CPU, and on a
+            # machine with one free core the short sample came out twice as
+            # slow, which is the figure the log then quoted.
+            threading.Thread(target=self._measure_full_build, daemon=True,
+                             name="vdf-measure").start()
+        elif not self._vdf_seconds_per_iteration:
+            # Off the loop thread: it is a few seconds of real work and the
+            # cycle should not wait on it.
+            threading.Thread(target=self._calibrate_vdf, daemon=True,
+                             name="vdf-calibrate").start()
+
     def start(self, kek):
         self._kek         = kek
         self.running      = True
         self._loop_thread = threading.current_thread()
         log.info("[startup] node ready, our address is %s", self.addr)
-        if self.settings.get(settings_mod.MINING_ENABLED):
-            self._timing_done.clear()
-            threading.Thread(target=self._measure_full_build, daemon=True,
-                             name="vdf-measure").start()
-        if not self._vdf_seconds_per_iteration:
-            # Off the loop thread: it is a few seconds of real work and the
-            # cycle should not wait on it.
-            threading.Thread(target=self._calibrate_vdf, daemon=True,
-                             name="vdf-calibrate").start()
+        self._start_vdf_timing()
         self._load_mempool()
         threading.Thread(target=self._mempool_saver, daemon=True,
                          name="mempool-save").start()
