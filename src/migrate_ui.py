@@ -107,7 +107,6 @@ def _show(suggestions, key_name):
 
     root.protocol("WM_DELETE_WINDOW", lambda: finish(CANCEL))
     theme.center(root)
-    root.lift()
-    root.attributes("-topmost", True)
+    theme.bring_to_front(root)
     root.mainloop()
     return result["v"]

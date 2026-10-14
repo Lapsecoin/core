@@ -89,6 +89,7 @@ class _PassphraseDialog:
         entry1.bind("<Return>", lambda e: self._submit())
         entry1.focus_set()
         theme.center(self.root)
+        theme.bring_to_front(self.root)
         if preset_passphrase is not None:
             self.root.after(0, self._submit)
 
@@ -418,5 +419,6 @@ def run_status_window(node, udp, private_port, log_file):
         root.protocol("WM_DELETE_WINDOW", root.iconify)
 
     theme.center(root)
+    theme.bring_to_front(root)
     refresh()
     root.mainloop()
