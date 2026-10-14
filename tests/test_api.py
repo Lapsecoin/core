@@ -281,6 +281,91 @@ class TestDashboardTxPaging:
         assert 'data-tx-page="3"' in html
 
 
+class TestDashboardTxFilter:
+    """Only payments show by default; board and fee-request transactions are
+    opt-in, and the choice rides along in the URL so paging keeps it."""
+
+    class _Node(TestDashboardTxPaging._DashNode):
+        MEMOS = ["", "[board] hello", "[vote+] abcdef", "[gas] a b c", "plain note", "[del] x"]
+
+        def __init__(self, count):
+            super().__init__(0)
+            chain = [{"height": 0, "transactions": []}]
+            for n in range(1, count + 1):
+                memo = self.MEMOS[n % len(self.MEMOS)]
+                t = {"from": address(1), "nonce": n, "fee": 0,
+                     "outputs": [{"to": address(2), "amount": n * TICKS_PER_LAPSE}]}
+                if memo:
+                    t["memo"] = memo
+                chain.append({"height": n, "transactions": [t]})
+            self.view = SimpleNamespace(chain=chain, state=SimpleNamespace(nicknames={}))
+
+    def _html(self, query="", count=30):
+        client = api.create_private_app(self._Node(count), peerpool_mod.PeerPool()).test_client()
+        return client.get("/" + query).get_data(as_text=True)
+
+    def _amounts(self, html):
+        return [int(float(m.replace(",", "")))
+                for m in re.findall(r'data-label="Amount">([\d,.]+) LAPSE', html)]
+
+    def test_the_panel_is_called_transactions(self):
+        html = self._html()
+        assert "<b>Transactions</b>" in html and "Recent transactions" not in html
+
+    def test_kinds_are_told_apart(self):
+        for memo, kind in [("", "payment"), ("plain note", "payment"),
+                           ("[board] hi", "board"), ("[vote-] abcdef", "board"),
+                           ("[del] x", "board"), ("[gas] a b c", "fees"),
+                           ("[gas-claim] a b c", "fees")]:
+            assert api._tx_kind({"memo": memo}) == kind, memo
+        assert api._tx_kind({}) == "payment"
+
+    def test_only_payments_show_by_default(self):
+        # memos cycle by n % 6: 0 and 4 are payments, 1, 2 and 5 board, 3 fees
+        assert self._amounts(self._html()) == [30, 28, 24, 22, 18]
+
+    def test_selecting_board_shows_board_posts_votes_and_deletes(self):
+        assert self._amounts(self._html("?types=board")) == [29, 26, 25, 23, 20]
+
+    def test_several_kinds_combine(self):
+        assert self._amounts(self._html("?types=payment,fees")) == [30, 28, 27, 24, 22]
+
+    def test_the_selection_survives_paging(self):
+        html = self._html("?types=board")
+        assert "/?tx_page=2&types=board" in html
+        page2 = self._html("?types=board&tx_page=2")
+        assert self._amounts(page2) == [19, 17, 14, 13, 11]
+
+    def test_the_default_keeps_clean_urls(self):
+        html = self._html()
+        pager = html.split('<nav class="pager"')[1].split("</nav>")[0]
+        assert "/?tx_page=2" in pager and "types=" not in pager
+
+    def test_an_empty_selection_shows_nothing_and_says_why(self):
+        html = self._html("?types=")
+        assert self._amounts(html) == []
+        assert "No transactions of the selected types" in html
+
+    def test_junk_in_the_selection_falls_back_to_the_default(self):
+        assert self._amounts(self._html("?types=nonsense")) == self._amounts(self._html())
+
+    def test_the_chips_show_what_is_selected_and_how_many_there_are(self):
+        html = self._html("?types=board")
+        assert re.search(r'value="board" checked', html)
+        assert not re.search(r'value="payment" checked', html)
+        assert re.search(r"Payments <small>10</small>", html)
+
+    def test_non_payment_rows_are_tagged(self):
+        html = self._html("?types=board,fees")
+        assert 'class="tx-kind">Board<' in html and 'class="tx-kind">Fee request<' in html
+        assert 'class="tx-kind"' not in self._html()
+
+    def test_the_live_poll_follows_the_filter(self):
+        client = api.create_private_app(self._Node(30), peerpool_mod.PeerPool()).test_client()
+        rows = client.get("/api/info?types=board").get_json()["recent_txs"]
+        assert [r["kind"] for r in rows] == ["board"] * 5
+
+
 class TestOddsPage:
     """The self figure on /odds has three sources and the page has to say
     which one it is showing.

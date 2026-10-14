@@ -34,36 +34,46 @@
       <div><span class="tip-label">Sync</span><span class="tip-fig" id="live-sync"><span class="stat-spinner"></span></span></div>
     </div>
   </div>
-  <div class="panel" data-tx-page="{{ tx_page }}">
-    <div class="panel-head"><b>Recent transactions</b>{% if tx_total_pages > 1 %}<span>page {{ tx_page }} of {{ tx_total_pages }}</span>{% endif %}</div>
+  <div class="panel" data-tx-page="{{ tx_page }}" data-tx-query="{{ tx_query }}">
+    <div class="panel-head">
+      <b>Transactions</b>
+      <form class="tx-filter" id="tx-filter" method="get" action="/" aria-label="Transaction types">
+        {% for key, label in tx_kinds %}
+        <label class="chip"><input type="checkbox" name="types" value="{{ key }}"{% if key in tx_selected %} checked{% endif %}><span>{{ label }} <small>{{ "{:,}".format(tx_counts[key]) }}</small></span></label>
+        {% endfor %}
+        <noscript><button type="submit" class="chip-apply">Apply</button></noscript>
+      </form>
+      {% if tx_total_pages > 1 %}<span class="tx-pageno">page {{ tx_page }} of {{ tx_total_pages }}</span>{% endif %}
+    </div>
     <table class="dt">
       <thead><tr><th class="num">Block</th><th>Hash</th><th class="hide-sm">From</th><th class="num">Amount</th></tr></thead>
       <tbody id="live-recent-txs">
       {% if recent_txs %}
         {% for height, h, t, amount in recent_txs %}
+        {% set kind = tx_kind_of(t) %}
         <tr>
           <td class="num" data-label="Height"><a href="/block/{{ height }}">{{ height }}</a></td>
-          <td class="fill" data-label="Hash"><a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
+          <td class="fill" data-label="Hash">{% if kind != "payment" %}<span class="tx-kind">{{ "Board" if kind == "board" else "Fee request" }}</span>{% endif %}<a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
           <td class="hide-sm dim" data-label="From">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</td>
           <td class="num" data-label="Amount">{{ fmt_lapse_dp(amount) }}</td>
         </tr>
         {% endfor %}
       {% else %}
-        <tr class="empty"><td colspan="4">No transactions yet</td></tr>
+        <tr class="empty"><td colspan="4">{{ "No transactions yet" if not tx_all else "No transactions of the selected types" }}</td></tr>
       {% endif %}
       </tbody>
     </table>
 {% if tx_total_pages > 1 %}
     <div class="panel-foot">
     <nav class="pager" aria-label="Recent transaction pagination">
-      {% if tx_has_prev %}<a href="/?tx_page={{ tx_page - 1 }}">Prev</a>{% endif %}
+      {% if tx_has_prev %}<a href="/?tx_page={{ tx_page - 1 }}{% if tx_query %}&{{ tx_query }}{% endif %}">Prev</a>{% endif %}
       {% for p in tx_page_window %}
         {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
         {% elif p == tx_page %}<span class="pager-current">{{ p }}</span>
-        {% else %}<a href="/?tx_page={{ p }}">{{ p }}</a>
+        {% else %}<a href="/?tx_page={{ p }}{% if tx_query %}&{{ tx_query }}{% endif %}">{{ p }}</a>
         {% endif %}
       {% endfor %}
-      {% if tx_has_next %}<a href="/?tx_page={{ tx_page + 1 }}">Next</a>{% endif %}
+      {% if tx_has_next %}<a href="/?tx_page={{ tx_page + 1 }}{% if tx_query %}&{{ tx_query }}{% endif %}">Next</a>{% endif %}
     </nav>
     </div>
 {% endif %}
@@ -125,6 +135,18 @@
   const SELF_ADDRESS = {{ info.address|tojson }};
   const TX_PAGE = parseInt(
     document.querySelector("[data-tx-page]").getAttribute("data-tx-page"), 10);
+  // "types=board,payment" or "" for the default selection: the live refresh
+  // asks for the same kinds the page was loaded with.
+  const TX_QUERY = document.querySelector("[data-tx-page]").getAttribute("data-tx-query");
+  const KIND_LABEL = {board: "Board", fees: "Fee request"};
+
+  // Ticking a type reloads page 1 with the new selection in the URL, so it
+  // survives paging and can be shared. The default selection keeps a clean URL.
+  document.getElementById("tx-filter").addEventListener("change", function () {
+    const picked = Array.from(this.querySelectorAll("input:checked")).map(function (i) { return i.value; });
+    const isDefault = picked.length === 1 && picked[0] === "payment";
+    window.location.href = isDefault ? "/" : "/?types=" + picked.join(",");
+  });
 
   function fmtDuration(seconds) {
     seconds = Math.max(Math.floor(seconds || 0), 0);
@@ -183,7 +205,7 @@
 
   async function refresh() {
     try {
-      const res = await fetch("/api/info", {cache: "no-store"});
+      const res = await fetch("/api/info" + (TX_QUERY ? "?" + TX_QUERY : ""), {cache: "no-store"});
       if (!res.ok) throw new Error("bad status " + res.status);
       const info = await res.json();
 
@@ -241,7 +263,9 @@
         txBody.innerHTML = txs.map(function (tx) {
           return "<tr>" +
             "<td class=\"num\" data-label=\"Height\"><a href=\"/block/" + tx.height + "\">" + tx.height + "</a></td>" +
-            "<td data-label=\"Hash\" class=\"fill\"><a href=\"/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
+            "<td data-label=\"Hash\" class=\"fill\">" +
+              (KIND_LABEL[tx.kind] ? "<span class=\"tx-kind\">" + KIND_LABEL[tx.kind] + "</span>" : "") +
+              "<a href=\"/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
             "<td data-label=\"From\" class=\"hide-sm dim\">" +
               (tx.from === SELF_ADDRESS ? "self" : tx.from.slice(0, 24) + "…") +
               "</td>" +
@@ -249,7 +273,10 @@
             "</tr>";
         }).join("");
       } else {
-        txBody.innerHTML = "<tr class=\"empty\"><td colspan=\"4\">No transactions yet</td></tr>";
+        // Keep what the server rendered when it says why the list is empty.
+        if (!txBody.querySelector(".empty")) {
+          txBody.innerHTML = "<tr class=\"empty\"><td colspan=\"4\">No transactions of the selected types</td></tr>";
+        }
       }
 
       statusEl.textContent = "refreshed " + new Date().toLocaleTimeString();
