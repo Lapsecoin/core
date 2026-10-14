@@ -17,7 +17,24 @@
 }
 .settings-form .setting-row.is-forced .setting-text,
 .settings-form .setting-row.is-forced .setting-main { opacity: .7; }
-.settings-form .setting-text { min-width: 0; max-width: 34rem; }
+.settings-form .setting-text { position: relative; min-width: 0; max-width: 34rem; }
+.settings-form .setting-title { display: flex; align-items: center; gap: .35rem; }
+.settings-form .tip { display: inline-flex; }
+.settings-form .tip-btn {
+  display: inline-flex; width: 16px; height: 16px; padding: 0; border: 0; background: none;
+  color: var(--ink-dim); cursor: help; border-radius: 50%;
+}
+.settings-form .tip-btn:hover, .settings-form .tip-btn:focus-visible { color: var(--accent); }
+.settings-form .tip-btn:focus-visible { outline: 2px solid rgb(var(--ink-rgb) / .35); outline-offset: 1px; }
+.settings-form .tip-btn svg { width: 16px; height: 16px; }
+.settings-form .tip-body {
+  position: absolute; z-index: 5; left: 0; bottom: calc(100% + .2rem); width: min(16rem, 100%);
+  padding: .55rem .7rem; border-radius: var(--radius-sm); border: 1px solid var(--rule);
+  background: var(--surface); box-shadow: 0 6px 20px rgb(var(--ink-rgb) / .12);
+  font-size: .78rem; line-height: 1.4; font-weight: 400; color: var(--ink);
+  opacity: 0; visibility: hidden; transition: opacity .12s;
+}
+.settings-form .tip:hover .tip-body, .settings-form .tip:focus-within .tip-body { opacity: 1; visibility: visible; }
 .settings-form .setting-label { display: block; margin: 0; font-size: .92rem; font-weight: 600; color: var(--ink); }
 .settings-form .setting-help { margin: .2rem 0 0; font-size: .78rem; line-height: 1.4; color: var(--ink-dim); }
 .settings-form .setting-forced { margin: .25rem 0 0; font-size: .78rem; font-weight: 600; color: var(--accent); }

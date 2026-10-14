@@ -4,7 +4,10 @@
 {% macro setting_row(s) %}
   <div class="setting-row {{ 'is-forced' if s.forced }}">
     <div class="setting-text">
-      <label class="setting-label" for="{{ s.key }}">{{ s.label }}</label>
+      <div class="setting-title">
+        <label class="setting-label" for="{{ s.key }}">{{ s.label }}</label>
+        {% if s.tip %}<span class="tip"><button type="button" class="tip-btn" aria-label="More about {{ s.label }}" aria-describedby="tip-{{ s.key }}"><svg aria-hidden="true"><use href="#i-info"/></svg></button><span class="tip-body" role="tooltip" id="tip-{{ s.key }}">{{ s.tip }}</span></span>{% endif %}
+      </div>
       {% if s.help %}<p class="setting-help">{{ s.help }}</p>{% endif %}
       {% if s.forced %}<p class="setting-forced">Set by {{ s.env_name }}, not editable here.</p>{% endif %}
     </div>
