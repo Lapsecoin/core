@@ -117,12 +117,18 @@
     return parts.length ? parts.join(" ") : "just now";
   }
 
+  // Same rule as fmt_lapse_dp in src/ui_common.py: a non-zero amount that
+  // 4 decimals would print as 0.0000 is shown in ticks instead.
   function fmtLapse(ticks) {
+    if (ticks > 0 && ticks * 2 * 10000 < TICKS_PER_LAPSE) {
+      return ticks.toLocaleString() + (ticks === 1 ? " tick" : " ticks");
+    }
     return (ticks / TICKS_PER_LAPSE).toLocaleString(undefined, {
       minimumFractionDigits: 4, maximumFractionDigits: 4}) + " LAPSE";
   }
 
   function fmtLapseWhole(ticks) {
+    if (ticks > 0 && ticks < TICKS_PER_LAPSE) return fmtLapse(ticks);
     return Math.floor(ticks / TICKS_PER_LAPSE).toLocaleString() + " LAPSE";
   }
 

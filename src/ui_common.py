@@ -34,7 +34,11 @@ def fmt_balance(ticks):
 
 
 def fmt_lapse(ticks):
-    """Whole-LAPSE amount only, comma-grouped, for compact display."""
+    """Whole-LAPSE amount only, comma-grouped, for compact display. Under one
+    LAPSE a whole-number figure would read "0 LAPSE" for a real amount, so
+    that range gets fmt_lapse_dp instead."""
+    if 0 < ticks < TICKS_PER_LAPSE:
+        return fmt_lapse_dp(ticks)
     return f"{ticks // TICKS_PER_LAPSE:,} LAPSE"
 
 
@@ -44,7 +48,13 @@ def fmt_lapse_dp(ticks, places=4):
     For headline figures, where "28,708 LAPSE 25,987,856 ticks" is nine
     digits of tick that wrap the line and answer nothing anyone asked. The
     exact tick count is still on /api/info for anything that needs it.
+
+    An amount that is not zero but would still print as "0.0000" (under
+    half of the last place) is given in ticks instead: "37 ticks". Keep
+    fmtLapse in templates_html/dashboard.html on the same rule.
     """
+    if 0 < ticks * 2 * 10 ** places < TICKS_PER_LAPSE:
+        return f"{ticks:,} tick" + ("" if ticks == 1 else "s")
     return f"{ticks / TICKS_PER_LAPSE:,.{places}f} LAPSE"
 
 
