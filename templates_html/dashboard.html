@@ -39,7 +39,7 @@
       <b>Transactions</b>
       <form class="tx-filter" id="tx-filter" method="get" action="/" aria-label="Transaction types">
         {% for key, label in tx_kinds %}
-        <label class="chip"><input type="checkbox" name="types" value="{{ key }}"{% if key in tx_selected %} checked{% endif %}><span>{{ label }} <small>{{ "{:,}".format(tx_counts[key]) }}</small></span></label>
+        <label class="chip"><input type="checkbox" name="types" value="{{ key }}"{% if key in tx_selected %} checked{% endif %}><span>{{ label }}</span></label>
         {% endfor %}
         <noscript><button type="submit" class="chip-apply">Apply</button></noscript>
       </form>
