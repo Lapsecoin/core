@@ -46,6 +46,7 @@ function Install-LapseCoin {
     $requirePrebuilt = ($env:LAPSECOIN_REQUIRE_PREBUILT -eq "1")
     $oqsDir = if ($env:OQS_INSTALL_PATH) { $env:OQS_INSTALL_PATH } else { Join-Path $HOME "_oqs" }
     $prebuilt = $false
+    $script:toolsReady = $false   # true once Ensure-BuildTools has run
 
     function Test-Cmd($name) {
         return [bool](Get-Command $name -ErrorAction SilentlyContinue)
@@ -102,6 +103,7 @@ function Install-LapseCoin {
             Write-Host "You may need to open a new terminal for PATH updates to take effect."
         }
         $script:buildToolsOk = $true
+        $script:toolsReady = $true
     }
 
     function Get-LiboqsAsset($name, $dest) {
@@ -234,6 +236,26 @@ function Install-LapseCoin {
     }
 
     $logContent = Get-Content $installLog -Raw
+
+    # The build tools are skipped when the prebuilt liboqs is used, because
+    # nothing else normally needs them. If a package does have to be compiled
+    # (no wheel for this Python), pip fails with a compiler error: install the
+    # tools then and try once more, rather than leave a failed install.
+    if (-not $script:toolsReady -and $logContent -match "(?i)subprocess-exited-with-error|failed building wheel|failed to build|microsoft visual c\+\+|unable to execute|fatal error:") {
+        Write-Host ""
+        Write-Host "A package had to be compiled and the build tools were skipped; installing them and trying once more."
+        Ensure-BuildTools | Out-Null
+        if (-not $script:buildToolsOk) { return }
+        pip install lapsecoin 2>&1 | Tee-Object -FilePath $installLog
+        if ($LASTEXITCODE -eq 0) {
+            Finish-Liboqs
+            Write-Host ""
+            Write-Host "Installed. Run: lapsecoin"
+            Remove-Item $installLog -ErrorAction SilentlyContinue
+            return
+        }
+        $logContent = Get-Content $installLog -Raw
+    }
     Remove-Item $installLog -ErrorAction SilentlyContinue
 
     if ($logContent -notmatch "(?i)libtorrent") {

@@ -27,11 +27,12 @@ LIBOQS_BASE="${LAPSECOIN_LIBOQS_BASE:-https://github.com/Lapsecoin/core/releases
 REQUIRE_PREBUILT="${LAPSECOIN_REQUIRE_PREBUILT:-0}"
 OQS_DIR="${OQS_INSTALL_PATH:-$HOME/_oqs}"
 PREBUILT=0
+TOOLS_READY=0   # 1 once ensure_build_tools has run
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
 INSTALL_LOG="$(mktemp)"
-trap 'rm -f "$INSTALL_LOG"' EXIT
+trap 'rm -f "$INSTALL_LOG" "$INSTALL_LOG.last"' EXIT
 
 # liboqs builds against OpenSSL by default on Linux (it is only off by default
 # on Windows), and the CI workflow installs libssl-dev for that reason, so the
@@ -68,6 +69,7 @@ ensure_build_tools() {
       exit 1
     fi
   fi
+  TOOLS_READY=1
 }
 
 python_cmd() { command -v python3 || command -v python; }
@@ -181,6 +183,7 @@ pip_install() {
   pip install "$@" 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
   cat "$log" >> "$INSTALL_LOG"
+  cp "$log" "$INSTALL_LOG.last"
   if [ "$rc" -ne 0 ]; then
     pkgs="$(grep -oE 'Cannot uninstall [A-Za-z0-9_.-]+' "$log" | awk '{print $3}' | sort -u | tr '\n' ' ')"
     if [ -n "$pkgs" ] && grep -q "RECORD file not found" "$log"; then
@@ -195,10 +198,31 @@ pip_install() {
   return "$rc"
 }
 
+# The build tools are skipped when the prebuilt liboqs is used, because nothing
+# else normally needs them. If a package does have to be compiled (no wheel for
+# this Python or platform), pip fails with a compiler error: install the tools
+# then and try once more, rather than leave the user with a failed install.
+needs_compiler() {
+  grep -qiE "subprocess-exited-with-error|failed building wheel|failed to build|command '(gcc|cc|c\+\+|g\+\+|cmake)'|cmake: command not found|unable to execute|fatal error: .*\.h|microsoft visual c\+\+" \
+    "$INSTALL_LOG.last" 2>/dev/null
+}
+
+pip_install_with_tools() {
+  pip_install "$@" && return 0
+  if [ "$TOOLS_READY" != "1" ] && needs_compiler; then
+    echo
+    echo "A package had to be compiled and the build tools were skipped; installing them and trying once more."
+    ensure_build_tools
+    pip_install "$@"
+    return $?
+  fi
+  return 1
+}
+
 # --- 2. install the app. Try the full install first; only fall back to
 #        skipping libtorrent if THAT is specifically what failed -- any
 #        other failure surfaces as-is rather than getting masked. ---
-if pip_install lapsecoin; then
+if pip_install_with_tools lapsecoin; then
   finish_liboqs
   echo
   echo "Installed. Run: lapsecoin"
@@ -222,8 +246,8 @@ if ! curl -fsSL "$REPO_RAW/requirements.txt" -o "$REQS_TMP"; then
   exit 1
 fi
 grep -v '^libtorrent' "$REQS_TMP" > "$REQS_TMP.nolt"
-pip_install -r "$REQS_TMP.nolt"
-pip_install lapsecoin --no-deps
+pip_install_with_tools -r "$REQS_TMP.nolt"
+pip_install_with_tools lapsecoin --no-deps
 rm -f "$REQS_TMP" "$REQS_TMP.nolt"
 
 finish_liboqs
