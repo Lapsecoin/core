@@ -157,7 +157,7 @@ from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_a
 # The board names the tests and other modules still reach through api.
 from board_view import (BOARD_MEMO_TAG, parse_board_body, build_board_body,  # noqa: F401
                         REPLY_REF_LEN, ICON_PALETTE, ICON_GHOST, _icon_emoji,
-                        VOTE_UP_TAG, VOTE_DOWN_TAG, _nickname_owned_by,
+                        VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG, _nickname_owned_by,
                         _board_posts, _board_profiles_and_votes,
                         BOARD_THREADS_PER_CHUNK, _flatten_threads)
 import oblivious as oblivious_mod
@@ -257,17 +257,78 @@ def bucket_label(i):
 
 
 
-def _recent_committed_txs(chain, limit, offset=0):
+# What the dashboard's transaction filter offers. A transaction is exactly one
+# of these: board posts, votes and deletes are the board's tagged memos,
+# fee requests and claims are the fee service's, and everything else (with
+# or without a plain memo) is an ordinary payment. Only payments show by
+# default, so the list is not dominated by the board.
+TX_KINDS = (("payment", "Payments"), ("board", "Board"), ("fees", "Fee requests"))
+TX_KIND_DEFAULT = frozenset({"payment"})
+_BOARD_TAGS = (BOARD_MEMO_TAG, VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG)
+_FEE_TAGS = (gaslock.REQUEST_TAG, gaslock.CLAIM_TAG)
+
+
+def _tx_kind(t):
+    """"payment", "board" or "fees" for one transaction."""
+    memo = t.get("memo") or ""
+    if memo.startswith(_BOARD_TAGS):
+        return "board"
+    if memo.startswith(_FEE_TAGS):
+        return "fees"
+    return "payment"
+
+
+def _tx_kinds_from(raw):
+    """The kinds a "types" query value selects. Absent means the default, a
+    list means exactly those (unknown names ignored), an empty value means
+    none, and a value with nothing recognisable falls back to the default
+    rather than showing a page that looks broken."""
+    if raw is None:
+        return TX_KIND_DEFAULT
+    names = {n for n in raw.split(",") if n in dict(TX_KINDS)}
+    if raw.strip() and not names:
+        return TX_KIND_DEFAULT
+    return frozenset(names)
+
+
+def _tx_kinds_arg(args):
+    """The raw "types" value from a request's query: one comma list, or the
+    same name repeated (what a plain form without script sends), or None."""
+    values = args.getlist("types")
+    return ",".join(values) if values else None
+
+
+def _tx_kinds_query(kinds):
+    """The query string that carries a selection through paging, empty for
+    the default so ordinary URLs stay clean."""
+    if kinds == TX_KIND_DEFAULT:
+        return ""
+    return "types=" + ",".join(k for k, _ in TX_KINDS if k in kinds)
+
+
+def _kind_counts(chain):
+    """How many transactions of each kind the chain holds."""
+    counts = dict.fromkeys(dict(TX_KINDS), 0)
+    for blk in chain:
+        for t in blk.get("transactions", ()):
+            counts[_tx_kind(t)] += 1
+    return counts
+
+
+def _recent_committed_txs(chain, limit, offset=0, kinds=None):
     """Most recently committed transactions across the chain, tip first.
 
     Walks blocks backward from the tip so this stays cheap even on a long
     chain with sparse blocks: it touches offset+limit transactions and
     stops, never the whole chain, so a later page costs no more than the
-    size of the page before it.
+    size of the page before it. With kinds, only transactions of those
+    kinds count, toward the page and toward the offset alike.
     """
     rows, skipped = [], 0
     for blk in reversed(chain):
         for t in reversed(blk.get("transactions", [])):
+            if kinds is not None and _tx_kind(t) not in kinds:
+                continue
             if skipped < offset:
                 skipped += 1
                 continue
@@ -771,6 +832,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     # ---- UI pages --------------------------------------------------------
 
+    # Counting kinds reads every transaction's memo, so the result is kept for
+    # as long as the chain is the same one (same list, length and tip).
+    _kind_cache = {}
+
+    def _cached_kind_counts(chain):
+        key = (id(chain), len(chain), chain[-1].get("hash") if chain else None)
+        if _kind_cache.get("key") != key:
+            _kind_cache["key"], _kind_cache["counts"] = key, _kind_counts(chain)
+        return _kind_cache["counts"]
+
     @app.route("/", endpoint=pfx+"dashboard")
     def dashboard():
         info = dict(node.get_info())
@@ -781,17 +852,21 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # while the address itself stayed hidden.
         info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
-        total = _committed_tx_count(chain)
+        kinds = _tx_kinds_from(_tx_kinds_arg(request.args))
+        counts = _cached_kind_counts(chain)
+        total = sum(counts[k] for k in kinds)
         total_pages = max(-(-total // DASHBOARD_TXS_PER_PAGE), 1)
         page  = min(max(request.args.get("tx_page", 1, type=int) or 1, 1), total_pages)
         offset = (page - 1) * DASHBOARD_TXS_PER_PAGE
         return render_template("dashboard.html", title="Dashboard",
             info=info, supply_cap=SUPPLY_CAP, og=embeds.dashboard(info, SUPPLY_CAP),
             no_dht=not HAS_LIBTORRENT, no_peers=pool.count() == 0, discord=fees_ui.DISCORD,
-            recent_txs=_recent_committed_txs(chain, DASHBOARD_TXS_PER_PAGE, offset),
+            recent_txs=_recent_committed_txs(chain, DASHBOARD_TXS_PER_PAGE, offset, kinds),
             tx_page=page, tx_total_pages=total_pages,
             tx_page_window=_pagination_window(page, total_pages),
-            tx_has_prev=page > 1, tx_has_next=page < total_pages)
+            tx_has_prev=page > 1, tx_has_next=page < total_pages,
+            tx_kinds=TX_KINDS, tx_selected=kinds, tx_counts=counts,
+            tx_all=sum(counts.values()), tx_query=_tx_kinds_query(kinds), tx_kind_of=_tx_kind)
 
     @app.route("/blocks", endpoint=pfx+"blocks")
     def blocks():
@@ -1250,10 +1325,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
         info["address"] = _own_addr_or_hidden()
         info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
+        # The dashboard passes its filter so the live refresh lists the same
+        # kinds as the page it is on.
+        kinds = _tx_kinds_from(_tx_kinds_arg(request.args))
         info["recent_txs"] = [
-            {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount}
+            {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount,
+             "kind": _tx_kind(t)}
             for height, h, t, amount in _recent_committed_txs(
-                chain, DASHBOARD_TXS_PER_PAGE)
+                chain, DASHBOARD_TXS_PER_PAGE, 0, kinds)
         ]
         return jsonify(info)
 
