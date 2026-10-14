@@ -497,6 +497,14 @@ jobs:
             | sed 's# \(linux\|windows\)/# #' > SHA256SUMS
           cat SHA256SUMS
 
+      # Uploads the installer to VirusTotal and keeps the summary for the
+      # release notes. The key is the VT_API_KEY repo secret; with no key, or
+      # on any failure, the script prints nothing and the release goes on.
+      - name: Scan the installer on VirusTotal
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: python3 scripts/virustotal.py artifacts/windows/lapsecoin.msi > /tmp/vt.md || true
+
       - name: Generate changelog
         id: changelog
         run: |
@@ -518,8 +526,8 @@ jobs:
 
           SEVERITY="${{ needs.version.outputs.severity }}"
           case "$SEVERITY" in
-            protocol) SEVERITY_LINE="**Protocol change** -- old and new nodes may not sync with each other. Upgrade recommended." ;;
-            critical) SEVERITY_LINE="**Critical update** -- upgrading is recommended." ;;
+            protocol) SEVERITY_LINE="**Protocol change**: old and new nodes may not sync with each other. Upgrade recommended." ;;
+            critical) SEVERITY_LINE="**Critical update**: upgrading is recommended." ;;
             *)        SEVERITY_LINE="Routine update." ;;
           esac
 
@@ -530,7 +538,9 @@ jobs:
           echo "" >> "$GITHUB_OUTPUT"
           echo "Windows: the installer is not code signed, so SmartScreen may warn on first run (More info, then Run anyway). Check the download against SHA256SUMS." >> "$GITHUB_OUTPUT"
           echo "" >> "$GITHUB_OUTPUT"
-          echo "### 10 largest commits" >> "$GITHUB_OUTPUT"
+          cat /tmp/vt.md >> "$GITHUB_OUTPUT" 2>/dev/null || true
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "### 5 largest commits" >> "$GITHUB_OUTPUT"
           cat /tmp/largest.txt >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
