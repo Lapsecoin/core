@@ -607,6 +607,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Puts the installer at a URL that does not redirect, for the Microsoft
+  # Store (see pages.yml). Not part of revert-on-failure: the release is
+  # already public by now, and a failed copy can be re-run on its own.
+  publish-pages:
+    needs: [version, release]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+
   revert-on-failure:
     # publish-pypi deliberately isn't in this list: it runs after the
     # release job, so the GitHub release with real binaries is public whether
