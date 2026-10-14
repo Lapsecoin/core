@@ -26,10 +26,10 @@ ENV_PREFIX = "LAPSECOIN_"
 
 class Setting:
     __slots__ = ("key", "default", "kind", "label", "help", "minimum",
-                 "slider_min", "slider_max", "supports_inf")
+                 "slider_min", "slider_max", "supports_inf", "tip")
 
     def __init__(self, key, default, kind=str, label="", help="", minimum=None,
-                 slider_max=None, supports_inf=False, slider_min=None):
+                 slider_max=None, supports_inf=False, slider_min=None, tip=""):
         self.key     = key
         self.default = default
         self.kind    = kind
@@ -40,6 +40,8 @@ class Setting:
         # valid value is a special one that is typed in rather than dragged
         # to. None means the same as minimum.
         self.slider_min = minimum if slider_min is None else slider_min
+        # Longer explanation shown on hover of an (i) beside the label.
+        self.tip = tip
         # Purely a UI convenience (the settings page's slider needs some
         # upper bound to draw one at all) and never enforced here: parse()
         # below still accepts anything >= minimum, same as before this
@@ -219,7 +221,10 @@ PUBLISH_MACHINE = Setting(
 MIN_ODDS_PCT = Setting(
     "min_odds_pct", 0.0, float, minimum=-1.0, slider_min=0.0, slider_max=100.0,
     label="Minimum odds to build straight away (%)",
-    help="Type -1 to always build straight away, even when the odds are 0%.",
+    help="Type -1 to always build.",
+    tip="Never waits for faster builders. If the fastest one drops out, "
+        "you can land a block before the others wake up. Costs compute "
+        "on blocks you may lose.",
 )
 
 ALL = [DRAW_WINDOW_SECONDS,

@@ -1711,7 +1711,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
         def _row(s_):
             value = node.settings.get(s_)
-            return {"key": s_.key, "label": s_.label, "help": s_.help,
+            return {"key": s_.key, "label": s_.label, "help": s_.help, "tip": s_.tip,
                     "is_bool": s_.kind is bool,
                     "minimum": s_.minimum, "slider_min": s_.slider_min, "slider_max": s_.slider_max,
                     "value": value,
