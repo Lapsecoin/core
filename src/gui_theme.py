@@ -145,6 +145,29 @@ def center(root):
     root.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
 
+def bring_to_front(root):
+    """Show the window on top of the others. Windows keeps a window opened by
+    a background process, such as the app started again by the update helper,
+    behind everything and only flashes its taskbar button, so a prompt could
+    sit unseen. Marking it topmost shows it without needing focus; the mark is
+    dropped a moment later so it does not stay above other programs."""
+    try:
+        root.update_idletasks()
+        root.attributes("-topmost", True)
+        root.lift()
+        root.focus_force()
+        root.after(500, lambda: _drop_topmost(root))
+    except tk.TclError:
+        pass
+
+
+def _drop_topmost(root):
+    try:
+        root.attributes("-topmost", False)
+    except tk.TclError:
+        pass
+
+
 # ------------------------------------------------------------------- styles
 
 def fonts(root):
