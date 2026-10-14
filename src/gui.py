@@ -14,7 +14,6 @@ import logging
 import os
 import subprocess
 import sys
-import threading
 import tkinter as tk
 import webbrowser
 from tkinter import ttk
@@ -311,20 +310,15 @@ def run_status_window(node, udp, private_port, log_file):
     ttk.Label(outer, textvariable=error_var, style="Error.TLabel", wraplength=wrap
               ).pack(anchor="w", pady=(4, 0))
     notice_var = tk.StringVar(value="")
-    notice_lbl = ttk.Label(outer, textvariable=notice_var, style="Muted.TLabel", wraplength=wrap)
-    notice_lbl.pack(anchor="w", pady=(4, 0))
+    ttk.Label(outer, textvariable=notice_var, style="Notice.TLabel", wraplength=wrap
+              ).pack(anchor="w", pady=(4, 0))
 
-    # Only shows the state and re-checks. The update itself is run from the
-    # node's page, where the confirmation and progress already are.
-    check = {"ok": None, "busy": False}
-
+    # Only says an update exists. Running it is the node page's job, where
+    # the confirmation and progress already are.
     def _show_notice():
         checker = getattr(node, "update_checker", None)
-        severity = getattr(checker, "severity", None)
         notice_var.set(update_check.notice_text(
-            severity, getattr(checker, "latest_version", None), check["ok"]))
-        # Orange only for an available update, a quiet line otherwise.
-        notice_lbl.configure(style="Notice.TLabel" if severity else "Muted.TLabel")
+            getattr(checker, "severity", None), getattr(checker, "latest_version", None)))
 
     _sync_start_h = -1
     _sync_start_t = 0
@@ -382,30 +376,6 @@ def run_status_window(node, udp, private_port, log_file):
     ttk.Button(
         btns, text="Quit", style="Secondary.TButton", command=lambda: _quit(),
     ).pack(side="right")
-
-    def _check_updates():
-        checker = getattr(node, "update_checker", None)
-        if checker is None or check["busy"]:
-            return
-        check["busy"] = True
-        check_btn.config(text="Checking\u2026", state="disabled")
-        done = []
-        threading.Thread(target=lambda: done.append(checker.check_once()),
-                         daemon=True, name="update-check-now").start()
-
-        def _poll():
-            if not done:
-                root.after(300, _poll)
-                return
-            check["ok"] = done[0]
-            check["busy"] = False
-            check_btn.config(text="Check for updates", state="normal")
-            _show_notice()
-        root.after(300, _poll)
-
-    check_btn = ttk.Button(btns, text="Check for updates", style="Secondary.TButton",
-                           command=_check_updates)
-    check_btn.pack(side="left", padx=(0, 8))
 
     tray_icon = None  # set below if available
 

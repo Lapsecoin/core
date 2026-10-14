@@ -93,18 +93,16 @@ class UpdateChecker:
 
     def check_once(self):
         """One check, synchronous. Never raises, any failure (missing
-        'requests', network error, bad response) just leaves state as-is.
-        Returns True when the version file was read, False when it was not,
-        so a button can tell "up to date" from "could not check"."""
+        'requests', network error, bad response) just leaves state as-is."""
         try:
             import requests
         except ImportError:
             log.debug("[update] 'requests' not installed; update check disabled")
-            return False
+            return
         try:
             r = requests.get(self.version_url, timeout=10)
             if r.status_code != 200:
-                return False
+                return
             remote = r.text.strip()
             severity = classify_update(remote, self.local_version)
             if severity:
@@ -112,19 +110,12 @@ class UpdateChecker:
                 self.severity = severity
                 log.info("[update] newer version available: %s (current %s, severity=%s)",
                          remote, self.local_version, severity)
-            return True
         except Exception:
             log.debug("[update] check failed", exc_info=True)
-            return False
 
 
-def notice_text(severity, latest_version, check_ok=None):
-    """The one line the desktop window shows. check_ok is None until the user
-    has pressed the check button, then what check_once returned."""
+def notice_text(severity, latest_version):
+    """The one line the desktop window shows: empty unless an update exists."""
     if severity:
         return f"v{latest_version} is available. Open Node to update."
-    if check_ok is True:
-        return "Up to date."
-    if check_ok is False:
-        return "Could not check for updates."
     return ""
