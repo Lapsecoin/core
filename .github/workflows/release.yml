@@ -545,7 +545,7 @@ jobs:
         timeout-minutes: 20
         env:
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
-        run: python3 scripts/virustotal.py artifacts/windows/lapsecoin.msi > /tmp/vt.md || true
+        run: python3 scripts/virustotal.py artifacts/windows/lapsecoin.msi /tmp/vt-badge.md > /tmp/vt.md || true
 
       - name: Generate changelog
         id: changelog
@@ -574,7 +574,14 @@ jobs:
           esac
 
           echo "CHANGELOG<<EOF" >> "$GITHUB_OUTPUT"
-          echo "## ${{ needs.version.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          # The VirusTotal badge sits after the version in the heading; with no
+          # scan result the heading is just the version.
+          BADGE=$(cat /tmp/vt-badge.md 2>/dev/null || true)
+          if [ -n "$BADGE" ]; then
+            echo "## ${{ needs.version.outputs.tag }}  $BADGE" >> "$GITHUB_OUTPUT"
+          else
+            echo "## ${{ needs.version.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
           echo "" >> "$GITHUB_OUTPUT"
           echo "$SEVERITY_LINE" >> "$GITHUB_OUTPUT"
           echo "" >> "$GITHUB_OUTPUT"

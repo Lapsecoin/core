@@ -86,8 +86,8 @@ def vt(monkeypatch):
         s.server.server_close()
 
 
-def run(mod, monkeypatch, path, capsys):
-    monkeypatch.setattr("sys.argv", ["virustotal.py", str(path)])
+def run(mod, monkeypatch, path, capsys, badge=None):
+    monkeypatch.setattr("sys.argv", ["virustotal.py", str(path)] + ([str(badge)] if badge else []))
     mod.main()
     out = capsys.readouterr()
     return out.out, out.err
@@ -103,24 +103,47 @@ def msi(tmp_path):
 CLEAN = {"malicious": 0, "suspicious": 0, "harmless": 0, "undetected": 70}
 
 
-def test_a_clean_scan_links_the_report_and_shows_a_green_badge(vt, msi, monkeypatch, capsys):
+def test_a_clean_scan_links_the_report_and_keeps_the_badge_out_of_the_body(vt, msi, monkeypatch, capsys):
     fake = vt.fake(CLEAN)
     out, _ = run(vt, monkeypatch, msi, capsys)
     sha = hashlib.sha256(b"installer bytes").hexdigest()
     assert "0 of 70 engines flagged lapsecoin.msi" in out
     assert f"https://www.virustotal.com/gui/file/{sha}" in out
-    assert "brightgreen" in out and f"SHA256: `{sha}`" in out
+    assert f"SHA256: `{sha}`" in out
+    assert "shields.io" not in out, "the badge belongs in the heading of the notes"
     assert all(key == "secret-key" for _, _, key in fake.requests)
     assert fake.requests[0][:2] == ("POST", "/api/v3/files")
 
 
-def test_the_badge_colour_follows_how_many_engines_flag_it(vt, msi, monkeypatch, capsys):
+def test_the_badge_is_written_for_the_heading_when_a_file_is_named(vt, msi, tmp_path, monkeypatch, capsys):
+    vt.fake(CLEAN)
+    badge = tmp_path / "badge.md"
+    run(vt, monkeypatch, msi, capsys, badge=badge)
+    assert badge.read_text() == ("![VirusTotal](https://img.shields.io/badge/"
+                                 "VirusTotal-0%20%2F%2070-brightgreen)")
+
+
+def test_the_badge_colour_follows_how_many_engines_flag_it(vt, msi, tmp_path, monkeypatch, capsys):
+    badge = tmp_path / "badge.md"
     vt.fake({"malicious": 2, "suspicious": 1, "harmless": 0, "undetected": 67})
-    out, _ = run(vt, monkeypatch, msi, capsys)
-    assert "3 of 70" in out and "yellow" in out
+    out, _ = run(vt, monkeypatch, msi, capsys, badge=badge)
+    assert "3 of 70" in out and badge.read_text().endswith("VirusTotal-3%20%2F%2070-yellow)")
     vt.fake({"malicious": 9, "suspicious": 0, "harmless": 0, "undetected": 61})
-    out, _ = run(vt, monkeypatch, msi, capsys)
-    assert "9 of 70" in out and "red" in out
+    out, _ = run(vt, monkeypatch, msi, capsys, badge=badge)
+    assert "9 of 70" in out and badge.read_text().endswith("VirusTotal-9%20%2F%2070-red)")
+
+
+def test_no_badge_file_means_none_is_written(vt, msi, tmp_path, monkeypatch, capsys):
+    vt.fake(CLEAN)
+    run(vt, monkeypatch, msi, capsys)
+    assert list(tmp_path.glob("*.md")) == []
+
+
+def test_a_failed_scan_leaves_no_badge_so_the_heading_stays_plain(vt, msi, tmp_path, monkeypatch, capsys):
+    vt.fake(CLEAN, fail_upload=True)
+    badge = tmp_path / "badge.md"
+    run(vt, monkeypatch, msi, capsys, badge=badge)
+    assert not badge.exists()
 
 
 def test_it_waits_while_the_analysis_is_queued(vt, msi, monkeypatch, capsys):
