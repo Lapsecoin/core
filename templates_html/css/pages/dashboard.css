@@ -1,11 +1,11 @@
 /* Dashboard: chain tip and recent transactions on the left, supply and
    node facts in a narrow reference column on the right. */
-.dash { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: .75rem; align-items: start; }
+.dash { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: .6rem; align-items: start; }
 .dash-main, .dash-side { min-width: 0; }
-.dash .panel { margin-bottom: .75rem; }
+.dash .panel { margin-bottom: .6rem; }
 .dash-main > .panel:last-child, .dash-side > .panel:last-child { margin-bottom: 0; }
 
-.tip { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .75rem 2.5rem; padding: .85rem 1rem; }
+.tip { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .6rem 2.5rem; padding: .65rem 1rem; }
 .tip-height { color: var(--ink); text-decoration: none; display: block; }
 .tip-height:hover { color: var(--accent); }
 .tip-label { display: block; font-size: .78rem; color: var(--ink-dim); margin-bottom: .1rem; }
@@ -58,7 +58,7 @@
 }
 .support-star svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
 .support-star:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
-.support-body { padding: .6rem 1rem .75rem; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: .5rem 1.5rem; }
+.support-body { padding: .5rem 1rem .6rem; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: .5rem 1.5rem; }
 .support-addr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .6rem; align-items: center; align-content: start; min-width: 0; }
 .support-label { font-size: .75rem; color: var(--ink-dim); font-weight: 550; }
 .support-addr code {
