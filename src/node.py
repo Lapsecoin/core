@@ -991,7 +991,7 @@ class Node:
                                    own_machine=self.machine_label())
         min_odds = self.settings.get(settings_mod.MIN_ODDS_PCT)
         odds = race["odds_pct"] if race is not None else None
-        if odds is not None and odds <= min_odds:
+        if odds is not None and min_odds >= 0 and odds <= min_odds:
             shown = round(odds, 1)
             self.status_line = (f"waiting  (block {cs.height + 1}, odds are "
                                 f"{shown:g}%, watching before building)")

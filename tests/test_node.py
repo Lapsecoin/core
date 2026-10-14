@@ -1250,6 +1250,21 @@ class TestWaitForFieldOrOwnPace:
         assert "not building yet" not in caplog.text
         evaluate_spy.assert_called()
 
+    def test_minus_one_builds_straight_away_even_at_zero_odds(
+        self, node_env, monkeypatch, caplog
+    ):
+        node, *_ = node_env
+        node._own_build_seconds.append(0.05)
+        monkeypatch.setenv("LAPSECOIN_MIN_ODDS_PCT", "-1")
+        monkeypatch.setattr(node_mod.block_mod, "race_odds",
+                            lambda *a, **kw: {"odds_pct": 0.0, "median": 120.0})
+        evaluate_spy = MagicMock(return_value=("aa" * 100, "bb" * 100, 0.05))
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate", evaluate_spy)
+        with caplog.at_level("INFO", logger="ec.node"):
+            node._run_cycle()
+        assert "not building yet" not in caplog.text
+        evaluate_spy.assert_called()
+
     def test_default_minimum_only_waits_at_zero(self, node_env, monkeypatch, caplog):
         node, *_ = node_env
         node._own_build_seconds.append(0.05)
