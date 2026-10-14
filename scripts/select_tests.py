@@ -14,8 +14,15 @@ It errs toward running too much, never too little:
   * A test also depends on any repo path or root script it names in a
     string, which covers subprocess runs, spec_from_file_location and
     tests that read templates or docs.
-  * Changes to test infrastructure, dependencies, packaging or the CI
-    config, and any file the graph does not know about, select ALL.
+  * A test depends on a module it only names in a string: a dotted
+    mock.patch / monkeypatch target ("node.time.monotonic") or the argument
+    of importlib.import_module. Neither is an import the graph can see.
+  * A template change reaches every template that extends, includes or
+    imports it, so changing base.html selects what renders any page.
+  * A test that scans a whole directory (glob, listdir, walk) depends on
+    everything under it.
+  * Changes to test infrastructure, dependencies, packaging, a deleted
+    module, and any file the graph does not know about, select ALL.
 
 The release workflow still runs the whole suite. This is for the faster
 check on every push, not a replacement for the release gate.
@@ -24,6 +31,7 @@ check on every push, not a replacement for the release gate.
 import argparse
 import ast
 import os
+import re
 import subprocess
 import sys
 
@@ -64,8 +72,16 @@ def py_files():
     return out
 
 
+# "node.time.monotonic", "gossip.Gossip": a string a mock.patch or
+# monkeypatch resolves to a module at run time.
+DOTTED = re.compile(r"^[A-Za-z_]\w*(\.\w+)+$")
+DYNAMIC_IMPORTS = ("import_module", "__import__", "reload")
+
+
 def local_imports(path, modules):
-    """Names of repo modules imported anywhere in this file."""
+    """Names of repo modules a file depends on: imported anywhere in it
+    (inside functions too), or named in a dotted patch target or the
+    argument of a dynamic import."""
     with open(os.path.join(ROOT, path), encoding="utf-8") as f:
         source = f.read()
     found = set()
@@ -75,6 +91,18 @@ def local_imports(path, modules):
         elif isinstance(node, ast.ImportFrom):
             names = [node.module or ""] + [
                 (node.module + "." if node.module else "") + a.name for a in node.names]
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names = [node.value] if DOTTED.match(node.value) else []
+            names = [n.split(".")[0] for n in names]
+        elif isinstance(node, ast.Call):
+            fn = node.func
+            called = getattr(fn, "attr", getattr(fn, "id", ""))
+            arg = node.args[0] if node.args else None
+            if called in DYNAMIC_IMPORTS and isinstance(arg, ast.Constant) \
+                    and isinstance(arg.value, str):
+                names = [arg.value.split(".")[0]]
+            else:
+                continue
         else:
             continue
         for n in names:
@@ -82,6 +110,34 @@ def local_imports(path, modules):
                 if part in modules:
                     found.add(part)
     return found, source
+
+
+# {% extends "base.html" %}, {% include "x.html" %}, {% import "m.html" as m %},
+# {% from "m.html" import f %}
+TEMPLATE_REF = re.compile(
+    r"{%-?\s*(?:extends|include|import|from)\s+[\"']([^\"']+)[\"']")
+TEMPLATE_DIR = "templates_html"
+
+
+def template_dependents(rel):
+    """Templates (basenames) that include rel, directly or through others,
+    plus rel itself."""
+    base = os.path.join(ROOT, TEMPLATE_DIR)
+    if not os.path.isdir(base):
+        return {os.path.basename(rel)}
+    refs = {}
+    for name in os.listdir(base):
+        if name.endswith(".html"):
+            with open(os.path.join(base, name), encoding="utf-8") as f:
+                for target in TEMPLATE_REF.findall(f.read()):
+                    refs.setdefault(os.path.basename(target), set()).add(name)
+    out, stack = set(), [os.path.basename(rel)]
+    while stack:
+        cur = stack.pop()
+        if cur not in out:
+            out.add(cur)
+            stack.extend(refs.get(cur, ()))
+    return out
 
 
 def build(modules):
@@ -102,23 +158,35 @@ def closure(name, deps):
     return seen
 
 
+SCANNERS = ("glob", "listdir", "walk", "iterdir", "scandir")
+
+
+def dir_prefixes(rel):
+    parts = rel.split("/")[:-1]
+    return ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+
+
 def select(changed):
     modules = py_files()
     deps, sources = build(modules)
     path_to_mod = {p: m for m, p in modules.items()}
     tests = {m: p for m, p in modules.items() if p.startswith("tests/test_")}
+    files = [r.strip().replace(os.sep, "/") for r in changed if r.strip()]
 
     hit_modules, hit_paths = set(), []
-    for rel in changed:
-        rel = rel.strip().replace(os.sep, "/")
-        if not rel:
-            continue
+    for rel in files:
         if rel in RUN_ALL or rel.startswith(RUN_ALL_PREFIXES):
             return None
-        if rel.startswith("tests/test_") and not os.path.exists(os.path.join(ROOT, rel)):
+        gone = not os.path.exists(os.path.join(ROOT, rel))
+        if rel.startswith("tests/test_") and gone:
             continue  # a deleted test has nothing left to run
+        if rel.endswith(".py") and gone and not rel.startswith(INERT_PREFIXES):
+            return None  # a deleted module: whatever imported it changes too, run all
         if rel in path_to_mod:
             hit_modules.add(path_to_mod[rel])
+        elif rel.startswith(TEMPLATE_DIR + "/") and rel.endswith(".html"):
+            hit_paths.extend(template_dependents(rel))
+            hit_paths.append(rel)
         elif rel in ("VERSION", "Makefile") or rel.endswith(INERT_SUFFIXES) \
                 or rel.startswith(INERT_PREFIXES):
             hit_paths.append(rel)
@@ -130,19 +198,21 @@ def select(changed):
     chosen = set()
     for tname, tpath in tests.items():
         reach = closure(tname, deps)
-        if tpath in changed or reach & hit_modules:
+        if tpath in files or reach & hit_modules:
             chosen.add(tpath)
             continue
         # Paths named in strings, anywhere in the test or what it imports.
         text = "\n".join(sources[m] for m in reach)
+        own = sources[tname]
+        scans = any(word in own for word in SCANNERS)
         for rel in hit_paths:
-            if rel in text or os.path.basename(rel) in text:
+            if rel in text or os.path.basename(rel) in text or (
+                    scans and any(d in own for d in dir_prefixes(rel))):
                 chosen.add(tpath)
                 break
         else:
             # A root script or module run by path or in a subprocess is
             # named in the test's own source, not in what it imports.
-            own = sources[tname]
             if any(modules[m] in own or (m + ".py") in own for m in hit_modules):
                 chosen.add(tpath)
     if chosen or hit_modules:
@@ -151,8 +221,10 @@ def select(changed):
 
 
 def changed_files(base):
-    for args in (["git", "diff", "--name-only", f"{base}...HEAD"],
-                 ["git", "diff", "--name-only", base]):
+    # --no-renames lists the old path of a moved file too, so a moved module
+    # is seen as the deletion it is for everything that imported it.
+    for args in (["git", "diff", "--name-only", "--no-renames", f"{base}...HEAD"],
+                 ["git", "diff", "--name-only", "--no-renames", base]):
         r = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
         if r.returncode == 0:
             files = r.stdout.split()
