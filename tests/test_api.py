@@ -143,6 +143,40 @@ class TestFmtDuration:
         assert api.fmt_duration(-5) == "just now"
 
 
+class TestBlocksTxColumn:
+    """The Txs column only earns its place when some block on the page has a
+    transaction; a column of zeros is just noise."""
+
+    class _BlocksNode:
+        def __init__(self, tx_counts):
+            self.addr = address(0)
+            self.view = SimpleNamespace(
+                chain=[{"height": h, "hash": f"{h:064x}", "timestamp": 1000 + 90 * h,
+                        "builder": address(1) if h else None,
+                        "transactions": [{"from": address(1)}] * n}
+                       for h, n in enumerate(tx_counts)],
+                state=SimpleNamespace(nicknames={}))
+
+    def _html(self, tx_counts, url="/blocks"):
+        node = self._BlocksNode(tx_counts)
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        return client.get(url).get_data(as_text=True)
+
+    def test_the_column_is_dropped_when_every_block_is_empty(self):
+        html = self._html([0, 0, 0, 0])
+        assert "<th>Hash</th>" in html
+        assert ">Txs<" not in html and 'data-label="Txs"' not in html
+
+    def test_the_column_is_kept_when_any_block_has_a_transaction(self):
+        html = self._html([0, 0, 2, 0])
+        assert ">Txs<" in html
+        assert html.count('data-label="Txs"') == 4
+
+    def test_the_empty_state_spans_the_columns_that_exist(self):
+        html = self._html([])
+        assert "No blocks yet" in html and ">Txs<" not in html
+
+
 class TestDashboardTxPaging:
     """Recent transactions page like every other listing on the site.
 

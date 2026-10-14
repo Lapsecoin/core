@@ -5,9 +5,12 @@
   <h2>Blocks</h2>
   {% if recent %}<span class="sub">{{ recent[0].height }} to {{ recent[-1].height }}</span>{% endif %}
 </div>
+{# The Txs column is dropped while no block on this page has a transaction.
+   The panel is re-fetched as a whole by the live refresh, so this follows it. #}
+{% set show_txs = recent|map(attribute='transactions')|select|list|length > 0 %}
 <div class="panel"{% if page == 1 %} data-live="blocks"{% endif %}>
   <table class="dt">
-    <thead><tr><th class="num">Height</th><th>Hash</th><th class="num hide-sm">Block time</th><th class="num">Txs</th><th class="hide-sm">Builder</th></tr></thead>
+    <thead><tr><th class="num">Height</th><th>Hash</th><th class="num hide-sm">Block time</th>{% if show_txs %}<th class="num">Txs</th>{% endif %}<th class="hide-sm">Builder</th></tr></thead>
     <tbody>
     {% if recent %}
       {% for b in recent %}
@@ -15,12 +18,12 @@
         <td class="num" data-label="Height"><a href="/block/{{ b.height }}">{{ b.height }}</a></td>
         <td class="fill" data-label="Hash"><a href="/block/{{ b.height }}">{{ b.hash }}</a></td>
         <td class="num hide-sm" data-label="Block time">{% if b.height in block_times %}{{ block_times[b.height] }}s{% endif %}</td>
-        <td class="num" data-label="Txs">{{ b.transactions | length }}</td>
+        {% if show_txs %}<td class="num" data-label="Txs">{{ b.transactions | length }}</td>{% endif %}
         <td class="hide-sm dim" data-label="Builder">{{ b.builder or '' }}</td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr class="empty"><td colspan="5">No blocks yet</td></tr>
+      <tr class="empty"><td colspan="{{ 5 if show_txs else 4 }}">No blocks yet</td></tr>
     {% endif %}
     </tbody>
   </table>
