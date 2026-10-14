@@ -1,0 +1,207 @@
+name: liboqs prebuilt
+
+# Builds liboqs once per pinned version and publishes it as a release asset
+# (liboqs-<version>), which scripts/install.sh and install.ps1 download instead
+# of compiling it. Nothing is published until the install scripts have been run
+# against the build in conditions where a quiet fallback to compiling cannot
+# pass (scripts/check_prebuilt_linux.sh and check_prebuilt_windows.ps1), and
+# the published files are checked again afterwards from their real URL.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/liboqs.yml
+      - scripts/install.sh
+      - scripts/install.ps1
+      - scripts/check_prebuilt_linux.sh
+      - scripts/check_prebuilt_windows.ps1
+
+env:
+  # Keep equal to LIBOQS_REF in release.yml and the version in the install
+  # scripts. tests/test_liboqs_pin.py fails if they differ.
+  LIBOQS_VERSION: "0.16.0"
+
+concurrency:
+  group: liboqs-prebuilt
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    # Ubuntu 22.04, so the library asks for no newer glibc than that has. The
+    # install script refuses to use it below the floor checked here.
+    container: ubuntu:22.04
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq cmake ninja-build gcc g++ git binutils libssl-dev ca-certificates
+
+      - name: Build liboqs
+        run: |
+          git clone --depth 1 --branch "$LIBOQS_VERSION" https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build -G Ninja \
+            -DBUILD_SHARED_LIBS=ON \
+            -DOQS_ALGS_ENABLED=STD \
+            -DOQS_BUILD_ONLY_LIB=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/oqs
+          cmake --build /tmp/liboqs/build
+          cmake --install /tmp/liboqs/build
+
+      - name: Check the glibc it needs
+        run: |
+          max=$(objdump -T /tmp/oqs/lib/liboqs.so.$LIBOQS_VERSION | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "needs up to $max"
+          test "$(printf '%s\n' GLIBC_2.34 "$max" | sort -V | tail -1)" = "GLIBC_2.34"
+
+      - name: Pack it
+        run: |
+          mkdir dist
+          tar -czf "dist/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" -C /tmp/oqs lib/liboqs.so lib/liboqs.so.*
+          cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: liboqs-linux
+          path: dist/
+
+  verify-linux:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
+        with:
+          name: liboqs-linux
+          path: dist
+      # A bare Ubuntu 22.04: no compiler, so building from source cannot
+      # quietly rescue a prebuilt that was ignored.
+      - name: Run the install script against it
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w ubuntu:22.04 \
+            bash scripts/check_prebuilt_linux.sh /w/dist "$LIBOQS_VERSION"
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Build liboqs
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:LIBOQS_VERSION https://github.com/open-quantum-safe/liboqs.git C:/liboqs
+          # The same switches liboqs-python uses when it builds liboqs itself on
+          # Windows, plus the smaller standardized algorithm set.
+          cmake -S C:/liboqs -B C:/liboqs/build `
+            -DBUILD_SHARED_LIBS=ON `
+            -DOQS_ALGS_ENABLED=STD `
+            -DOQS_BUILD_ONLY_LIB=ON `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=TRUE `
+            -DCMAKE_INSTALL_PREFIX=C:/oqs
+          cmake --build C:/liboqs/build --config Release --parallel
+          cmake --install C:/liboqs/build --config Release
+          if (-not (Test-Path C:/oqs/bin/oqs.dll)) { Get-ChildItem -Recurse C:/oqs | Select-Object FullName; throw "oqs.dll was not built" }
+
+      - name: Pack it
+        shell: pwsh
+        run: |
+          New-Item dist -ItemType Directory | Out-Null
+          $zip = "dist/liboqs-$env:LIBOQS_VERSION-windows-x64.zip"
+          Compress-Archive -Path C:/oqs/bin -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  liboqs-$env:LIBOQS_VERSION-windows-x64.zip" | Set-Content -Path dist/SHA256SUMS -Encoding ascii
+          Get-Content dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: liboqs-windows
+          path: dist/
+
+  verify-windows:
+    needs: build-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v6
+        with:
+          name: liboqs-windows
+          path: dist
+      - name: Run the install script against it
+        shell: pwsh
+        run: ./scripts/check_prebuilt_windows.ps1 -Dist dist -Version $env:LIBOQS_VERSION
+
+  publish:
+    needs: [verify-linux, verify-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: liboqs-linux
+          path: files/linux
+      - uses: actions/download-artifact@v6
+        with:
+          name: liboqs-windows
+          path: files/windows
+
+      - name: One checksum file for both
+        run: |
+          mkdir out
+          cp files/linux/*.tar.gz files/windows/*.zip out/
+          cat files/linux/SHA256SUMS files/windows/SHA256SUMS > out/SHA256SUMS
+          cat out/SHA256SUMS
+
+      # A push that only touches a script re-checks the existing release; it
+      # does not replace files that users may be downloading.
+      - name: Is this release already published?
+        id: exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "liboqs-$LIBOQS_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish
+        if: steps.exists.outputs.published != 'true' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: liboqs-${{ env.LIBOQS_VERSION }}
+          name: liboqs ${{ env.LIBOQS_VERSION }} prebuilt
+          body: |
+            liboqs ${{ env.LIBOQS_VERSION }} for the LapseCoin install scripts (scripts/install.sh and
+            scripts/install.ps1), so they do not have to compile it. Built from the upstream tag with
+            the standardized algorithm set, which includes Falcon-512. Not meant to be downloaded by hand.
+          files: |
+            out/liboqs-${{ env.LIBOQS_VERSION }}-linux-x86_64.tar.gz
+            out/liboqs-${{ env.LIBOQS_VERSION }}-windows-x64.zip
+            out/SHA256SUMS
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The checks above feed the scripts a local copy. This one uses the real
+  # download URL, so a wrong release name or a missing asset fails here.
+  verify-published:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch the published files
+        run: |
+          mkdir dist
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/liboqs-${LIBOQS_VERSION}"
+          curl -fsSL "$base/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" -o "dist/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz"
+          curl -fsSL "$base/SHA256SUMS" -o dist/SHA256SUMS
+      - name: Run the install script against the real URL
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w ubuntu:22.04 \
+            bash scripts/check_prebuilt_linux.sh /w/dist "$LIBOQS_VERSION" published

@@ -1,5 +1,6 @@
-# One-command setup for running LapseCoin from source: makes sure the
-# build tools liboqs needs are on PATH, then installs the app via pip.
+# One-command setup for running LapseCoin from source: gets liboqs (a
+# prebuilt copy where one exists, otherwise built from source, which needs
+# the Visual Studio C++ build tools), then installs the app via pip.
 # libtorrent (DHT peer discovery) has real wheel gaps on some platforms;
 # if it's specifically what fails, this retries without it rather than
 # failing the whole install.
@@ -34,6 +35,18 @@ function Install-LapseCoin {
     $repoRaw  = if ($env:LAPSECOIN_REPO_RAW)  { $env:LAPSECOIN_REPO_RAW }  else { "https://raw.githubusercontent.com/Lapsecoin/core/main" }
     $wingetFlags = @("-e", "--silent", "--accept-package-agreements", "--accept-source-agreements")
 
+    # The liboqs release the prebuilt copy comes from. Keep it equal to
+    # LIBOQS_REF in release.yml and LIBOQS_VERSION in liboqs.yml (a test checks
+    # all four).
+    $LiboqsVersion = "0.16.0"
+    $liboqsBase = if ($env:LAPSECOIN_LIBOQS_BASE) { $env:LAPSECOIN_LIBOQS_BASE } else { "https://github.com/Lapsecoin/core/releases/download/liboqs-$LiboqsVersion" }
+    # 1 makes the script stop instead of building liboqs from source when the
+    # prebuilt cannot be used. CI sets it so a prebuilt that is quietly ignored
+    # fails the run instead of being rebuilt and looking fine.
+    $requirePrebuilt = ($env:LAPSECOIN_REQUIRE_PREBUILT -eq "1")
+    $oqsDir = if ($env:OQS_INSTALL_PATH) { $env:OQS_INSTALL_PATH } else { Join-Path $HOME "_oqs" }
+    $prebuilt = $false
+
     function Test-Cmd($name) {
         return [bool](Get-Command $name -ErrorAction SilentlyContinue)
     }
@@ -66,24 +79,100 @@ function Install-LapseCoin {
         }
     }
 
-    # --- 1. build tools: liboqs-python needs these to build liboqs itself. ---
-    $haveMsvc = Test-MsvcTools
-    if ((Test-Cmd "cmake") -and (Test-Cmd "git") -and $haveMsvc) {
-        Write-Host "cmake, git, and a C++ compiler already present."
-    } else {
-        Write-Host "Installing build tools (cmake, git, Visual Studio Build Tools)..."
-        if (-not (Test-Cmd "winget")) {
-            Write-Error "winget not found (needs Windows 10 1809+ or Windows 11 with App Installer). Install cmake, git, and Visual Studio Build Tools (C++ workload) yourself, then re-run."
+    # --- Build tools: only needed when liboqs has to be built from source. ---
+    function Ensure-BuildTools {
+        $script:buildToolsOk = $false
+        $haveMsvc = Test-MsvcTools
+        if ((Test-Cmd "cmake") -and (Test-Cmd "git") -and $haveMsvc) {
+            Write-Host "cmake, git, and a C++ compiler already present."
+        } else {
+            Write-Host "Installing build tools (cmake, git, Visual Studio Build Tools)..."
+            if (-not (Test-Cmd "winget")) {
+                Write-Error "winget not found (needs Windows 10 1809+ or Windows 11 with App Installer). Install cmake, git, and Visual Studio Build Tools (C++ workload) yourself, then re-run."
+                $script:buildToolsOk = $false
+                return
+            }
+            if (-not (Test-Cmd "cmake")) { winget install --id Kitware.CMake @wingetFlags }
+            if (-not (Test-Cmd "git"))   { winget install --id Git.Git @wingetFlags }
+            if (-not $haveMsvc) {
+                Write-Host "Installing Visual Studio Build Tools (C++ workload) -- this is a large download and may take a while."
+                winget install --id Microsoft.VisualStudio.2022.BuildTools @wingetFlags --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools"
+            }
+            Update-SessionPath
+            Write-Host "You may need to open a new terminal for PATH updates to take effect."
+        }
+        $script:buildToolsOk = $true
+    }
+
+    function Get-LiboqsAsset($name, $dest) {
+        if ($liboqsBase -like "file:*") {
+            Copy-Item -LiteralPath ([Uri]"$liboqsBase/$name").LocalPath -Destination $dest -ErrorAction Stop
+        } else {
+            Invoke-WebRequest -Uri "$liboqsBase/$name" -OutFile $dest -UseBasicParsing -ErrorAction Stop
+        }
+    }
+
+    # A prebuilt oqs.dll (published by .github/workflows/liboqs.yml) saves the
+    # build and the multi-gigabyte Visual Studio Build Tools. Used only if it
+    # downloads, matches its checksum and loads on this machine; any failure
+    # returns $false and the caller falls back to building.
+    function Install-PrebuiltLiboqs {
+        $asset = "liboqs-$LiboqsVersion-windows-x64.zip"
+        if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
+            Write-Host "liboqs: no prebuilt copy for $($env:PROCESSOR_ARCHITECTURE)."
+            return $false
+        }
+        if (-not (Test-Cmd "python")) {
+            Write-Host "liboqs: python is missing, so the prebuilt copy is skipped."
+            return $false
+        }
+        $dll = Join-Path $oqsDir "bin\oqs.dll"
+        if (Test-Path $dll) {
+            Write-Host "liboqs: already in $oqsDir."
+            return $true
+        }
+        $tmp = Join-Path ([IO.Path]::GetTempPath()) ("liboqs-" + [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $tmp | Out-Null
+        try {
+            try {
+                Get-LiboqsAsset $asset (Join-Path $tmp $asset)
+                Get-LiboqsAsset "SHA256SUMS" (Join-Path $tmp "SHA256SUMS")
+            } catch {
+                Write-Host "liboqs: could not download the prebuilt copy from $liboqsBase"
+                return $false
+            }
+            $line = Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match ("\s" + [regex]::Escape($asset) + "$") } | Select-Object -First 1
+            $want = if ($line) { ($line -split "\s+")[0].ToLower() } else { "" }
+            $got = (Get-FileHash (Join-Path $tmp $asset) -Algorithm SHA256).Hash.ToLower()
+            if (-not $want -or $want -ne $got) {
+                Write-Host "liboqs: the download does not match its checksum, so it is not used."
+                return $false
+            }
+            New-Item -ItemType Directory -Force -Path $oqsDir | Out-Null
+            Expand-Archive -LiteralPath (Join-Path $tmp $asset) -DestinationPath $oqsDir -Force
+        } finally {
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        }
+        # It has to load here before the build tools are skipped on its account.
+        python -c "import ctypes, sys; ctypes.CDLL(sys.argv[1])" $dll 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "liboqs: the prebuilt copy does not load on this system."
+            Remove-Item -Force (Join-Path $oqsDir "bin\oqs.dll") -ErrorAction SilentlyContinue
+            return $false
+        }
+        Write-Host "liboqs: using the prebuilt $LiboqsVersion in $oqsDir"
+        return $true
+    }
+
+    $prebuilt = [bool](Install-PrebuiltLiboqs | Select-Object -Last 1)
+    if (-not $prebuilt) {
+        if ($requirePrebuilt) {
+            Write-Error "LAPSECOIN_REQUIRE_PREBUILT is set and the prebuilt liboqs could not be used, so it is not being built from source."
+            $script:installFailed = $true
             return
         }
-        if (-not (Test-Cmd "cmake")) { winget install --id Kitware.CMake @wingetFlags }
-        if (-not (Test-Cmd "git"))   { winget install --id Git.Git @wingetFlags }
-        if (-not $haveMsvc) {
-            Write-Host "Installing Visual Studio Build Tools (C++ workload) -- this is a large download and may take a while."
-            winget install --id Microsoft.VisualStudio.2022.BuildTools @wingetFlags --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools"
-        }
-        Update-SessionPath
-        Write-Host "You may need to open a new terminal for PATH updates to take effect."
+        Ensure-BuildTools | Out-Null
+        if (-not $script:buildToolsOk) { return }
     }
 
     # --- 1b. VC++ 2015-2022 runtime, as the Windows release workflow does.
@@ -98,11 +187,29 @@ function Install-LapseCoin {
         }
     }
 
-    # liboqs-python compiles liboqs the first time it is imported, which is
-    # minutes of work with a countdown. Importing it here means that happens
-    # during the install, not on the first launch. A failure leaves the
-    # install standing and the first launch tries again.
-    function Build-Liboqs {
+    # Final check, after the app is installed. With the prebuilt copy it
+    # confirms that oqs really loaded THAT file: liboqs-python prefers any
+    # liboqs it finds elsewhere on the system, which would make a bad prebuilt
+    # look fine. Without it, importing oqs makes liboqs-python compile liboqs
+    # now, which is minutes of work, so the first launch does not pay for it.
+    function Finish-Liboqs {
+        if ($prebuilt) {
+            $check = "import os, sys, oqs; p = os.path.realpath(oqs.native()._name); w = os.path.realpath(sys.argv[1]); print('liboqs: loaded from', p); sys.exit(0 if p.lower().startswith(w.lower()) else 3)"
+            python -c $check $oqsDir
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "liboqs is ready (prebuilt)."
+                return
+            }
+            if ($requirePrebuilt) {
+                Write-Error "The prebuilt liboqs is installed but the app did not load it."
+                $script:installFailed = $true
+                return
+            }
+            Write-Host "The prebuilt liboqs did not load; building it from source instead."
+            Remove-Item -Force (Join-Path $oqsDir "bin\oqs.dll") -ErrorAction SilentlyContinue
+            Ensure-BuildTools | Out-Null
+            if (-not $script:buildToolsOk) { return }
+        }
         Write-Host ""
         Write-Host "Building liboqs now (a few minutes, once) so the first launch starts straight away..."
         python -c "import oqs"
@@ -119,7 +226,7 @@ function Install-LapseCoin {
     $installLog = [System.IO.Path]::GetTempFileName()
     pip install lapsecoin 2>&1 | Tee-Object -FilePath $installLog
     if ($LASTEXITCODE -eq 0) {
-        Build-Liboqs
+        Finish-Liboqs
         Write-Host ""
         Write-Host "Installed. Run: lapsecoin"
         Remove-Item $installLog -ErrorAction SilentlyContinue
@@ -153,9 +260,13 @@ function Install-LapseCoin {
     pip install lapsecoin --no-deps
     Remove-Item $reqsTmp, $reqsNoLt -ErrorAction SilentlyContinue
 
-    Build-Liboqs
+    Finish-Liboqs
     Write-Host ""
     Write-Host "Installed without libtorrent. Run: lapsecoin"
 }
 
 Install-LapseCoin
+
+# Only for CI: a run that required the prebuilt liboqs and could not use it
+# must be a failed run, which `return` alone does not make it.
+if ($script:installFailed -and $env:LAPSECOIN_REQUIRE_PREBUILT -eq "1") { exit 1 }
