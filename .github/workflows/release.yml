@@ -176,9 +176,11 @@ jobs:
 
   # The builds run alongside the tests instead of after them (the release
   # takes as long as the slowest of the two, not the sum). Nothing is
-  # published until the tests have also passed: publish-pypi and release both
-  # need test. A failure later reverts VERSION but cannot unpublish from PyPI,
-  # so bump to a new version to ship different code after such a failure.
+  # published until the tests have also passed: the release needs test, and
+  # publish-pypi needs the release, so PyPI goes last. A failure before that
+  # reverts VERSION with nothing on PyPI; once a version is on PyPI it cannot
+  # be taken back, so bump to a new version to ship different code after a
+  # failure of the publish itself.
   build-linux:
     needs: [version, set-genesis]
     runs-on: ubuntu-latest
@@ -466,9 +468,11 @@ jobs:
           path: stage/*
 
   publish-pypi:
-    # After both builds, so a version never reaches PyPI when its binaries
-    # failed to build.
-    needs: [version, test, build-linux, build-windows]
+    # After the release job, which itself waits for the tests and both builds
+    # (and holds the VirusTotal scan and the notes), so a version never
+    # reaches PyPI, where it cannot be taken back, unless the GitHub release
+    # with its binaries was created.
+    needs: [version, release]
     runs-on: ubuntu-latest
     permissions:
       # Trusted publishing (OIDC): PyPI checks this token against the
@@ -535,6 +539,10 @@ jobs:
       # release notes. The key is the VT_API_KEY repo secret; with no key, or
       # on any failure, the script prints nothing and the release goes on.
       - name: Scan the installer on VirusTotal
+        # Whatever happens here, even a hang, must not fail the release: the
+        # script gives up after 15 minutes, this is the backstop.
+        continue-on-error: true
+        timeout-minutes: 20
         env:
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: python3 scripts/virustotal.py artifacts/windows/lapsecoin.msi > /tmp/vt.md || true
@@ -593,10 +601,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   revert-on-failure:
-    # publish-pypi deliberately isn't in this list: it runs alongside the
-    # release job once both builds have passed, so the GitHub release with
-    # real binaries is public whether or not the publish works, and rolling
-    # the version back would just orphan it. A failed PyPI publish should fail
+    # publish-pypi deliberately isn't in this list: it runs after the
+    # release job, so the GitHub release with real binaries is public whether
+    # or not the publish works, and rolling the version back would just
+    # orphan it. A failed PyPI publish should fail
     # loudly and get re-run on its own (skip-existing makes that safe), not
     # roll back a release that already succeeded.
     needs: [version, set-genesis, test, build-linux, build-windows, release]
