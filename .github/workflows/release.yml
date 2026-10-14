@@ -133,7 +133,27 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # Without liboqs on the machine, liboqs-python compiles it from source
+      # the first time the tests import it: about five minutes of a job whose
+      # tests take under one. The Linux build below keeps the finished install
+      # in this cache; it is restored here without ever being saved from this
+      # job, and when it is missing (a new LIBOQS_REF the build has not
+      # stored yet) everything falls back to the build from source, as before.
+      - name: Restore prebuilt liboqs
+        id: liboqs-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/liboqs-install
+          key: liboqs-linux-${{ env.LIBOQS_REF }}
+
+      - name: Install prebuilt liboqs system-wide
+        if: steps.liboqs-cache.outputs.cache-hit == 'true'
+        run: |
+          sudo cp -a "$HOME/liboqs-install/." /usr/local/
+          sudo ldconfig
+
       - name: Install liboqs system dependencies
+        if: steps.liboqs-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y cmake ninja-build libssl-dev
@@ -237,10 +257,15 @@ jobs:
         with:
           ref: main
 
+      # The cache key covers the build tools too (scripts/requirements-windows-build.txt),
+      # so Nuitka's wheel is built once and not on every release.
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            scripts/requirements-windows-build.txt
 
       # The icons only change when the SVG does, so they are cached by its
       # hash and neither cairo nor the render step runs on a hit.
@@ -296,20 +321,14 @@ jobs:
         run: choco install vcredist140 --no-progress -y
         shell: pwsh
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          # Not in requirements.txt: it's a C extension with no prebuilt
-          # wheels, so requiring it there breaks plain source installs on
-          # machines without a compiler (see git history). CI runners have
-          # one by default, so it's installed here instead, purely for the
-          # release binary; the app already runs fine without it either way.
-          pip install cairosvg Pillow miniupnpc
-
-      # Pinned: 4.3 crashes on exit when a program leaves through sys.exit
-      # (a segfault in logging.shutdown); 4.2.2 and earlier do not.
-      - name: Install Nuitka
-        run: pip install nuitka==4.2.2 zstandard ordered-set
+      # What is not in requirements.txt: miniupnpc is a C extension with no
+      # prebuilt wheels, so requiring it there breaks plain source installs on
+      # machines without a compiler (see git history). CI runners have one by
+      # default, so it is installed here instead, purely for the release
+      # binary; the app already runs fine without it either way. The rest of
+      # that file is the icon rendering and Nuitka itself, with its pin.
+      - name: Install dependencies and the build tools
+        run: pip install -r requirements.txt -r scripts/requirements-windows-build.txt
 
       - name: Generate icons
         if: steps.icons-cache.outputs.cache-hit != 'true'
@@ -329,6 +348,21 @@ jobs:
           restore-keys: |
             nuitka-windows-${{ hashFiles('requirements.txt', 'scripts/build_windows.ps1') }}-
             nuitka-windows-
+
+      # Real-time scanning of the compiler's many small object files slows the
+      # build. Only its scratch folders are left out: dist and the installer
+      # stay scanned, so the smoke test below still fails if Defender
+      # quarantines the program it just built. Skipped quietly if the runner
+      # does not allow the change.
+      - name: Keep Defender off the compiler's scratch folders
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "$PWD\build-nuitka", "$PWD\nuitka-cache"
+            Write-Host "build-nuitka and nuitka-cache are excluded from real-time scanning"
+          } catch {
+            Write-Host "could not change the Defender settings, carrying on: $($_.Exception.Message)"
+          }
 
       - name: Build the program
         shell: pwsh

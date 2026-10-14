@@ -1,5 +1,5 @@
-# Builds lapsecoin.msi from the PyInstaller folder with the WiX Toolset 3
-# (heat, candle, light). Windows only; run by .github/workflows/release.yml.
+# Builds lapsecoin.msi from the folder scripts/build_windows.ps1 makes (Nuitka)
+# with the WiX Toolset 3 (heat, candle, light). Windows only; run by .github/workflows/release.yml.
 #
 #   scripts/build_msi.ps1 -Source dist\lapsecoin-win -Version 1.0.10 -Out lapsecoin.msi
 

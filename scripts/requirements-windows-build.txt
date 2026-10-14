@@ -1,0 +1,13 @@
+# Installed by the Windows release build next to requirements.txt, and part of
+# the pip cache key there, so a change here refreshes that cache.
+
+# Pinned: 4.3 crashes on exit when a program leaves through sys.exit
+# (a segfault in logging.shutdown); 4.2.2 and earlier do not.
+nuitka==4.2.2
+zstandard
+ordered-set
+
+# Renders the icons from the SVG (the build only) and the optional UPnP support.
+cairosvg
+Pillow
+miniupnpc
