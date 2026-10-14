@@ -590,7 +590,7 @@ class TestSettingsValidation:
         html = client.get("/settings").get_data(as_text=True)
         assert 'min="0.0" max="100.0"' in html
         assert "Type -1 to always build." in html
-        assert 'class="tip-body"' in html and "Never waits for faster builders" in html
+        assert 'class="tip-body"' in html and "-1 never waits" in html
         client.post("/settings", data=self._full_form(client, min_odds_pct="-1"))
         assert node.settings.get(settings_mod.MIN_ODDS_PCT) == -1.0
         resp = client.post("/settings", data=self._full_form(client, min_odds_pct="-2"))

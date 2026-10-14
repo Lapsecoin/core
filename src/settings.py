@@ -222,9 +222,10 @@ MIN_ODDS_PCT = Setting(
     "min_odds_pct", 0.0, float, minimum=-1.0, slider_min=0.0, slider_max=100.0,
     label="Minimum odds to build straight away (%)",
     help="Type -1 to always build.",
-    tip="Never waits for faster builders. If the fastest one drops out, "
-        "you can land a block before the others wake up. Costs compute "
-        "on blocks you may lose.",
+    tip="At or below this, the node waits for someone else's block before "
+        "building. 0 waits only at 0% odds. -1 never waits: it always builds "
+        "straight away, so it can land a block when the fastest builder drops "
+        "out. Costs compute on blocks you may lose.",
 )
 
 ALL = [DRAW_WINDOW_SECONDS,
