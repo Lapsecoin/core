@@ -564,7 +564,7 @@ jobs:
               total = ins[1] + del[1]
               print total " " hash
             }
-          ' | sort -rn | head -10 | awk '{$1=""; print NR"."$0}' > /tmp/largest.txt
+          ' | sort -rn | head -5 | awk '{$1=""; print NR"."$0}' > /tmp/largest.txt
 
           SEVERITY="${{ needs.version.outputs.severity }}"
           case "$SEVERITY" in
