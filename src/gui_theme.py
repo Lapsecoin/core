@@ -217,6 +217,7 @@ def install(root, title, minsize=None):
     style.configure("Figure.TLabel", background=SURFACE, foreground=INK, font=f["figure"])
     style.configure("Error.TLabel", foreground=LOSS, font=f["body"])
     style.configure("Live.TLabel", foreground=GAIN, font=f["small"])
+    style.configure("Notice.TLabel", foreground=ACCENT, font=f["bold"])
 
     pad = (px(root, 18), px(root, 9))
     style.configure("Primary.TButton", background=ACCENT, foreground="white", font=f["bold"],

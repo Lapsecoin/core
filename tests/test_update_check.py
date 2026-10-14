@@ -68,7 +68,7 @@ class TestUpdateChecker:
         fake_requests = MagicMock()
         fake_requests.get.return_value = fake_response
         with patch.dict(sys.modules, {"requests": fake_requests}):
-            checker.check_once()
+            assert checker.check_once() is True
         assert checker.severity == "critical"
         assert checker.latest_version == "0.2.0"
 
@@ -79,7 +79,7 @@ class TestUpdateChecker:
         fake_requests = MagicMock()
         fake_requests.get.return_value = fake_response
         with patch.dict(sys.modules, {"requests": fake_requests}):
-            checker.check_once()
+            assert checker.check_once() is True       # read fine, just nothing newer
         assert checker.severity is None
         assert checker.latest_version is None
 
@@ -90,7 +90,7 @@ class TestUpdateChecker:
         fake_requests = MagicMock()
         fake_requests.get.return_value = fake_response
         with patch.dict(sys.modules, {"requests": fake_requests}):
-            checker.check_once()  # must not raise
+            assert checker.check_once() is False  # must not raise
         assert checker.severity is None
 
     def test_check_once_survives_network_exception(self):
@@ -108,3 +108,25 @@ class TestUpdateChecker:
         with patch.dict(sys.modules, {"requests": None}):
             checker.check_once()  # must not raise
         assert checker.severity is None
+
+
+class TestNoticeText:
+    """The one line of the desktop window, so a user can tell "up to date"
+    from "could not check" and is sent to the node page to update."""
+
+    def test_nothing_until_there_is_something_to_say(self):
+        from update_check import notice_text
+        assert notice_text(None, None) == ""
+
+    def test_an_available_update_names_the_version_and_where_to_update(self):
+        from update_check import notice_text
+        assert notice_text("minor", "1.2.3") == "v1.2.3 is available. Open Node to update."
+        assert notice_text("minor", "1.2.3", check_ok=True).startswith("v1.2.3 is available")
+
+    def test_a_check_that_found_nothing_says_up_to_date(self):
+        from update_check import notice_text
+        assert notice_text(None, None, check_ok=True) == "Up to date."
+
+    def test_a_check_that_failed_says_so(self):
+        from update_check import notice_text
+        assert notice_text(None, None, check_ok=False) == "Could not check for updates."

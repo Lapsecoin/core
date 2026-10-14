@@ -611,6 +611,7 @@ def main():
     class NodeWrapper:
         def __init__(self):
             self.real_node = None
+            self.update_checker = None   # set once start-up has made it; the window reads it
         def get_info(self):
             if self.real_node:
                 return self.real_node.get_info()
@@ -657,6 +658,7 @@ def main():
             releases_url=args.releases_url,
         )
         update_checker.start()
+        node_wrapper.update_checker = update_checker
         updater = Updater()
 
         # The gas wallet: one Base key sealed under the node's kek, created
