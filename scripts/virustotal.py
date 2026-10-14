@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Scan a release file on VirusTotal and print a markdown summary.
 
-    VT_API_KEY=... python scripts/virustotal.py dist/lapsecoin.msi
+    VT_API_KEY=... python scripts/virustotal.py dist/lapsecoin.msi [badge-file]
 
 The key comes from the environment (the VT_API_KEY repo secret in CI). The
-summary goes to stdout, progress to stderr. Any problem (no key, network,
-timeout) prints nothing and exits 0: a scan must never block a release.
+summary goes to stdout and, when a badge file is named, the badge (markdown
+for the heading of the notes) is written there. Progress goes to stderr. Any
+problem (no key, network, timeout) prints nothing and exits 0: a scan must
+never block a release.
 Files over 32 MB use the one-time upload URL the API hands out.
 """
 import hashlib
@@ -62,21 +64,24 @@ def wait(analysis_id, key):
 
 
 def render(path, sha, stats):
+    """(the summary for the body of the notes, the badge for their heading)."""
     flagged = stats.get("malicious", 0) + stats.get("suspicious", 0)
     total = flagged + stats.get("harmless", 0) + stats.get("undetected", 0)
     color = "brightgreen" if flagged == 0 else "yellow" if flagged <= 3 else "red"
-    badge = f"https://img.shields.io/badge/VirusTotal-{flagged}%20%2F%20{total}-{color}"
+    badge = (f"![VirusTotal](https://img.shields.io/badge/VirusTotal-"
+             f"{flagged}%20%2F%20{total}-{color})")
     link = f"https://www.virustotal.com/gui/file/{sha}"
     when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
-    return (f"**VirusTotal:** [{flagged} of {total} engines flagged "
-            f"{os.path.basename(path)}]({link}) ![VirusTotal]({badge})\n\n"
-            f"SHA256: `{sha}`, scanned {when}. Engines update their verdicts over "
-            "time, so the link shows the current result.\n")
+    summary = (f"**VirusTotal:** [{flagged} of {total} engines flagged "
+               f"{os.path.basename(path)}]({link})\n\n"
+               f"SHA256: `{sha}`, scanned {when}. Engines update their verdicts over "
+               "time, so the link shows the current result.\n")
+    return summary, badge
 
 
 def main():
     key = os.environ.get("VT_API_KEY", "").strip()
-    if len(sys.argv) != 2 or not key:
+    if len(sys.argv) not in (2, 3) or not key:
         log("virustotal: no file or no VT_API_KEY, skipping")
         return
     path = sys.argv[1]
@@ -87,7 +92,11 @@ def main():
         if stats is None:
             log("virustotal: gave up waiting")
             return
-        print(render(path, sha, stats))
+        summary, badge = render(path, sha, stats)
+        print(summary)
+        if len(sys.argv) == 3:           # the badge goes in the heading of the notes
+            with open(sys.argv[2], "w", encoding="utf-8") as f:
+                f.write(badge)
     except Exception as e:  # never block a release on a scan
         log(f"virustotal: {type(e).__name__}: {e}")
 
