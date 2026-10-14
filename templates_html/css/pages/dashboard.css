@@ -25,32 +25,28 @@
 .dash .kv dd.num { font-family: var(--mono); font-size: .85rem; }
 .dash .kv dd.addr { font-family: var(--mono); font-size: .78rem; word-break: break-all; }
 
-/* Support panel: a star, listing links and the two donation addresses. */
-.support-body { padding: .8rem 1rem 1rem; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: .9rem 1.75rem; align-items: start; }
-.support-intro, .support-addrs { display: flex; flex-direction: column; gap: .7rem; min-width: 0; }
-.support-body p { margin: 0; font-size: .82rem; line-height: 1.45; color: var(--ink-dim); }
+/* Support panel: the star and listing links in the header row, the two
+   donation addresses side by side below. Kept short so the dashboard fits a
+   laptop window without scrolling. */
+.support .panel-head { flex-wrap: wrap; gap: .3rem 1rem; }
+.support-links { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem; font-size: .82rem; font-weight: 400; }
 .support-star {
-  display: flex; align-items: center; justify-content: center; gap: .45rem; height: 36px;
-  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface);
-  color: var(--ink); font-size: .88rem; font-weight: 600; text-decoration: none;
+  display: inline-flex; align-items: center; gap: .35rem; height: 28px; padding: 0 .65rem;
+  border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface);
+  color: var(--ink); font-size: .78rem; font-weight: 600; text-decoration: none;
   transition: background .12s, border-color .12s;
 }
-.support-star svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
+.support-star svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
 .support-star:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
-.support-sites { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .82rem; }
-.support-sites a { color: var(--link); }
-.support-addr {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .15rem .6rem; align-items: center;
-  padding-top: .65rem; border-top: 1px solid var(--rule);
-}
-.support-addr:first-child { padding-top: 0; border-top: 0; }
-.support-label { grid-column: 1 / -1; font-size: .75rem; color: var(--ink-dim); font-weight: 550; }
+.support-body { padding: .6rem 1rem .75rem; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: .5rem 1.5rem; }
+.support-addr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .6rem; align-items: center; align-content: start; min-width: 0; }
+.support-label { font-size: .75rem; color: var(--ink-dim); font-weight: 550; }
 .support-addr code {
-  min-width: 0; padding: 0; background: none; font: .75rem/1.5 var(--mono);
+  grid-column: 1 / -1; min-width: 0; padding: 0; background: none; font: .75rem/1.45 var(--mono);
   overflow-wrap: anywhere; user-select: all;
 }
 .support-copy {
-  height: 28px; min-width: 4.2rem; padding: 0 .6rem; font-size: .75rem; font-weight: 550;
+  height: 24px; min-width: 3.6rem; padding: 0 .5rem; font-size: .72rem; font-weight: 550;
   background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 6px;
 }
 .support-copy:hover { background: var(--hover); }
@@ -61,7 +57,6 @@
 }
 @media (max-width: 760px) {
   .support-body { grid-template-columns: minmax(0, 1fr); }
-  .support-addr:first-child { padding-top: .65rem; border-top: 1px solid var(--rule); }
 }
 @media (max-width: 640px) {
   .tip { padding: .7rem .6rem; }

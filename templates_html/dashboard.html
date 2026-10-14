@@ -69,29 +69,26 @@
 {% endif %}
   </div>
   <div class="panel support">
-    <div class="panel-head"><b>Support LapseCoin</b></div>
-    <div class="support-body">
-      <div class="support-intro">
-      <p>Open source and built in the open. A star or a vote helps new people find it.</p>
-      <a class="support-star" href="{{ SUPPORT.github }}" target="_blank" rel="noopener">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l2.0 4.2 4.6.6-3.4 3.2.9 4.5L8 11.6 3.9 14l.9-4.5L1.4 6.3l4.6-.6z"/></svg>
-        Star on GitHub
-      </a>
-      <div class="support-sites">
+    <div class="panel-head">
+      <b>Support LapseCoin</b>
+      <div class="support-links">
+        <a class="support-star" href="{{ SUPPORT.github }}" target="_blank" rel="noopener" title="Open source and built in the open. A star helps new people find it.">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l2.0 4.2 4.6.6-3.4 3.2.9 4.5L8 11.6 3.9 14l.9-4.5L1.4 6.3l4.6-.6z"/></svg>
+          Star on GitHub
+        </a>
         {% for name, url in SUPPORT.listings %}<a href="{{ url }}" target="_blank" rel="noopener">{{ name }}</a>{% endfor %}
       </div>
-      </div>
-      <div class="support-addrs">
+    </div>
+    <div class="support-body">
       <div class="support-addr">
         <span class="support-label">LAPSE</span>
-        <code id="support-lapse">{{ SUPPORT.lapse }}</code>
         <button type="button" class="support-copy" data-copy="#support-lapse">Copy</button>
+        <code id="support-lapse">{{ SUPPORT.lapse }}</code>
       </div>
       <div class="support-addr">
         <span class="support-label">Bitcoin</span>
-        <code id="support-btc">{{ SUPPORT.bitcoin }}</code>
         <button type="button" class="support-copy" data-copy="#support-btc">Copy</button>
-      </div>
+        <code id="support-btc">{{ SUPPORT.bitcoin }}</code>
       </div>
     </div>
   </div>
