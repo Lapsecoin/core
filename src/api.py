@@ -353,22 +353,6 @@ def _mempool_rows(mempool):
 
 
 
-def _committed_tx_count(chain):
-    """How many transactions the chain holds, for paging the dashboard.
-
-    Counts block-by-block rather than walking transactions, so it is one
-    len() per block and does not touch a transaction at all.
-    """
-    return sum(len(blk.get("transactions", ())) for blk in chain)
-
-
-
-
-
-
-
-
-
 
 
 

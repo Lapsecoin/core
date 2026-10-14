@@ -185,12 +185,15 @@ class TestValidateTimestamp:
 # ---------------------------------------------------------------------------
 
 class TestValidateVDF:
-    def test_vdf_verified_for_height_gt_zero(self):
+    def test_vdf_verified_for_height_gt_zero(self, monkeypatch):
         g = genesis()
         b = make_block(1, g["hash"], [])
-        # VDF mock returns True by default, should pass
+        calls = []
+        monkeypatch.setattr("block.vdf_mod.verify",
+                            lambda *a, **kw: calls.append(a) or True)
         ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is True, err
+        assert len(calls) == 1, "a block above genesis must have its VDF checked"
 
     def test_invalid_vdf_proof_fails(self, monkeypatch):
         monkeypatch.setattr("block.vdf_mod.verify", lambda *a, **kw: False)
@@ -282,9 +285,13 @@ class TestValidateVDF:
         ok, err = block_mod.validate(refilled, st, [g])
         assert ok is True, err
 
-    def test_genesis_skips_vdf_check(self):
+    def test_genesis_skips_vdf_check(self, monkeypatch):
         g = genesis()
+
+        def must_not_run(*a, **kw):
+            raise AssertionError("genesis has no VDF, so it must not be verified")
         # Genesis has vdf_output=None, should still pass
+        monkeypatch.setattr("block.vdf_mod.verify", must_not_run)
         ok, err = block_mod.validate(g, fresh_state(), [])
         assert ok is True, err
 

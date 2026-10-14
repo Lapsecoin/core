@@ -51,8 +51,8 @@ def scan(path, key):
 
 
 def wait(analysis_id, key):
-    deadline = time.time() + GIVE_UP_AFTER
-    while time.time() < deadline:
+    deadline = time.monotonic() + GIVE_UP_AFTER
+    while time.monotonic() < deadline:
         attrs = call(f"{API}/analyses/{analysis_id}", key)["data"]["attributes"]
         if attrs["status"] == "completed":
             return attrs["stats"]

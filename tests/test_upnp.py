@@ -64,7 +64,7 @@ def test_map_port_one_protocol_failing_does_not_block_the_other():
                 raise RuntimeError("router rejected UDP mapping")
 
         fake.addportmapping.side_effect = side_effect
-        upnp._map_port(8333, "LapseCoin")  # must not raise
+        assert upnp._map_port(8333, "LapseCoin") is None  # must not raise
         protocols = {call.args[1] for call in fake.addportmapping.call_args_list}
         assert protocols == {"UDP", "TCP"}
     finally:

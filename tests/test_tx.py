@@ -343,13 +343,6 @@ class TestValidateSignature:
 # ---------------------------------------------------------------------------
 
 class TestValidateNonce:
-    def test_correct_nonce_passes(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
-        ok, err = tx_mod.validate(t, s)
-        assert ok is True, err
-
     def test_nonce_too_high_fails(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)

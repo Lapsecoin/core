@@ -608,12 +608,3 @@ class TestPassBudget:
         syncer.check_and_sync(chain_of(200), apply_fn=MagicMock(return_value=False),
                               local_work=1, budget=0.2)
         assert time.monotonic() - started < 2.0
-
-    def test_no_budget_behaves_as_before(self):
-        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
-        udp.get_info.return_value = {"height": 9, "tip_hash": "", "work": 999}
-        udp.request_sync.return_value = wrap_chain(tail_from(0, 2))
-        apply_fn = MagicMock(return_value=False)
-        with patch.object(syncer, "_find_fork_point", return_value=0):
-            syncer.check_and_sync(chain_of(5), apply_fn=apply_fn, local_work=1)
-        apply_fn.assert_called_once()

@@ -259,10 +259,12 @@ def test_broadcast_discover_announces_own_port_on_discovery_socket(monkeypatch):
 
 
 def test_broadcast_discover_noop_without_discovery_socket():
+    pool = MagicMock()
     udp = UDPTransport(port=9999, genesis_hash="a" * 64, on_block=MagicMock(),
-                       on_tx=MagicMock(), on_peers=MagicMock(), pool=MagicMock())
+                       on_tx=MagicMock(), on_peers=MagicMock(), pool=pool)
     udp._disc_sock = None
-    udp.broadcast_discover()  # must not raise
+    udp.broadcast_discover()  # must not raise, and has nothing to tell anyone
+    pool.add.assert_not_called()
 
 
 def test_disc_announce_from_lan_pings_announced_port():

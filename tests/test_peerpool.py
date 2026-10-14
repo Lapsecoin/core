@@ -96,7 +96,8 @@ class TestTouch:
 
     def test_touch_unknown_peer_is_noop(self):
         p = make_pool()
-        p.touch("9.9.9.9:9000")  # must not raise
+        p.touch("9.9.9.9:9000")  # must not raise, nor learn the peer
+        assert p.count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +153,8 @@ class TestStrike:
 
     def test_strike_unknown_peer_is_noop(self):
         p = make_pool()
-        p.strike("9.9.9.9:9000")  # must not raise
+        p.strike("9.9.9.9:9000")  # must not raise, nor learn the peer
+        assert p.count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +171,9 @@ class TestRemove:
 
     def test_remove_nonexistent_is_noop(self):
         p = make_pool()
-        p.remove("9.9.9.9:9000")  # must not raise
+        p.add("1.2.3.4:9000")
+        p.remove("9.9.9.9:9000")  # must not raise, and leaves the others
+        assert p.count() == 1
 
 
 # ---------------------------------------------------------------------------

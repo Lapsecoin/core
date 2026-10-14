@@ -270,9 +270,10 @@ class TestDashboardTxPaging:
         # Counted directly: a count that skips a block shortens the pager
         # and makes the oldest transactions unreachable, which no test
         # driving the route can see unless that block happens to hold one.
-        chain = [{"transactions": ["a", "b"]}, {"transactions": []},
-                 {}, {"transactions": ["c"]}]
-        assert api._committed_tx_count(chain) == 3
+        pay, board, fee = {}, {"memo": "[board] hi"}, {"memo": "[gas] a b c"}
+        chain = [{"transactions": [pay, board]}, {"transactions": []},
+                 {}, {"transactions": [fee, pay]}]
+        assert api._kind_counts(chain) == {"payment": 2, "board": 1, "fees": 1}
 
     def test_the_page_tells_the_live_refresh_which_page_it_is_on(self):
         # The poll only ever carries the newest transactions, so the script

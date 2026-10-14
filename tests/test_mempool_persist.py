@@ -209,6 +209,8 @@ class TestNodePersistence:
                                           "missing_dir", "m.json")
         node.mempool.add(tx_from(3))
         node._save_mempool()          # logs a warning, node carries on
+        assert node.mempool.size() == 1
+        assert not os.path.exists(node._mempool_file)
 
 
 class TestRebroadcast:
