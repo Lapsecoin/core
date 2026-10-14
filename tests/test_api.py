@@ -349,11 +349,11 @@ class TestDashboardTxFilter:
     def test_junk_in_the_selection_falls_back_to_the_default(self):
         assert self._amounts(self._html("?types=nonsense")) == self._amounts(self._html())
 
-    def test_the_chips_show_what_is_selected_and_how_many_there_are(self):
+    def test_the_chips_show_what_is_selected(self):
         html = self._html("?types=board")
         assert re.search(r'value="board" checked', html)
         assert not re.search(r'value="payment" checked', html)
-        assert re.search(r"Payments <small>10</small>", html)
+        assert "<small>" not in html.split('id="tx-filter"')[1].split("</form>")[0]
 
     def test_non_payment_rows_are_tagged(self):
         html = self._html("?types=board,fees")
