@@ -75,7 +75,9 @@ class TestRemove:
 
     def test_remove_nonexistent_is_noop(self):
         mp = fresh_mempool()
-        mp.remove("00" * 32)  # Should not raise
+        mp.add(sample_tx())
+        mp.remove("00" * 32)  # Should not raise, and takes nothing else with it
+        assert mp.size() == 1
 
     def test_remove_many(self):
         mp = fresh_mempool()
