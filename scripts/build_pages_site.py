@@ -5,7 +5,9 @@
 
 For each of the newest releases that carry a lapsecoin.msi it downloads the
 installer into <out>/downloads/<version>/lapsecoin.msi (served directly, with
-no redirect, which the Microsoft Store requires) and writes <out>/releases.json
+no redirect, which the Microsoft Store requires), copies the newest one to
+<out>/latest/lapsecoin.msi (a stable address, NOT for the Store, which wants a
+versioned file that never changes) and writes <out>/releases.json
 for the downloads page on lapsecoin.github.io. Nothing here is committed to git.
 
 The VirusTotal result is read from the release notes, where the release job
@@ -20,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -130,8 +133,13 @@ def main():
         entries.append(entry(r, sha))
 
     os.makedirs(args.out, exist_ok=True)
+    if not args.no_download:
+        newest = entries[0]["version"]
+        os.makedirs(os.path.join(args.out, "latest"), exist_ok=True)
+        shutil.copyfile(os.path.join(args.out, "downloads", newest, MSI),
+                        os.path.join(args.out, "latest", MSI))
     with open(os.path.join(args.out, "releases.json"), "w", encoding="utf-8") as f:
-        json.dump({"releases": entries}, f, indent=1)
+        json.dump({"latest_msi": f"{SITE}/latest/{MSI}", "releases": entries}, f, indent=1)
         f.write("\n")
     # The unstyled project root is not a page anyone should land on.
     with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as f:
