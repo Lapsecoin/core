@@ -28,13 +28,13 @@ import re
 import secrets
 from urllib.parse import urlencode
 
-from flask import jsonify, make_response, redirect, render_template, request
+from flask import g, jsonify, make_response, redirect, render_template, request
 
 import crypto as crypto_mod
 import tx as tx_mod
 import embeds
 from forms import ALREADY_SENT, forms_for
-from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, DELETE_TAG,
+from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, DELETE_TAG, _icon_emoji,
                         MAX_POST_TEXT_BYTES, REPLY_REF_LEN, VOTE_DOWN_TAG,
                         VOTE_UP_TAG, apply_splice, board_ctx, build_board_body,
                         build_board_edit, make_splice)
@@ -87,6 +87,9 @@ def submit_and_alert(reader, signer, outputs, passphrase, ctx, memo="", floor=0,
         t = signer.sign(outputs, fee, memo, passphrase, acct["nonce"] + 1)
         ok, result = reader.submit(t)
         if ok:
+            remember = getattr(signer, "remember", None)
+            if remember:
+                remember()           # the account the pickers default to next time
             ctx["alert_ok_tx"]   = result
             ctx["alert_ok_verb"] = "Submitted."
         else:
@@ -260,17 +263,44 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
         return render_template("address.html", **ctx)
 
 
-def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
+def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None, accounts_fn=None):
     """GET /board and its live-refresh fragment, for every app that shows
-    the board. own_addr_fn is the caller's call (see board_view.board_ctx)."""
+    the board. own_addr_fn is the caller's call (see board_view.board_ctx).
+
+    accounts_fn, on the private app, returns (accounts, default): the
+    wallet's addresses and the index the compose box starts on. A post, vote
+    or edit is then made as the address picked there (an `account` query
+    value on the page and its refresh), and a post by any of the wallet's
+    addresses reads as the reader's own."""
+
+    def _own_view():
+        """(own address, accounts for the picker, selected index, {address: index})."""
+        if accounts_fn is None:
+            return own_addr_fn(), [], 0, {}
+        accounts, default = accounts_fn()
+        listed = {a["index"]: a for a in accounts}
+        pick = request.args.get("account", type=int)
+        selected = pick if pick in listed else default
+        if selected not in listed:
+            selected = accounts[0]["index"]
+        own_index = {a["address"]: a["index"] for a in accounts}
+        rows = []
+        if len(accounts) > 1:
+            for a in accounts:
+                prof = reader.profile(a["address"])
+                idx = prof["icon"] if prof else 0
+                rows.append({**a, "nick": (prof.get("nick") if prof else None) or "",
+                             "icon": _icon_emoji(idx), "icon_idx": idx or 0})
+        return listed[selected]["address"], rows, selected, own_index
 
     @app.route("/board", endpoint=pfx + "board")
     def board():
-        own = own_addr_fn()
+        own, post_as, selected, own_index = _own_view()
         # Nothing here names the viewer: a node asked for the board learns
         # no address. The compose box's own icon comes from the board itself.
         extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
-                     message_value="", form_token="")
+                     message_value="", form_token="", own_index=own_index,
+                     post_as=post_as, selected_account=selected)
         if csrf_token:   # private app only: there is a compose box
             forms = forms_for(app)
             # This page's compose form works once (see forms.py), and what
@@ -291,17 +321,17 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
     def api_board_fragment():
         """Return live board rows without replacing the compose box."""
         page = max(request.args.get("page", 1, type=int) or 1, 1)
-        own = own_addr_fn()
+        own, _post_as, _selected, own_index = _own_view()
         # Unchanged since the viewer's last poll: answer 304 without
         # rendering anything. Validators are the board state itself plus the
         # window size and viewer, the only inputs the fragment depends on.
         etag = '"' + hashlib.sha1(
-            repr((reader.board_etag(page), page, own)).encode()).hexdigest() + '"'
+            repr((reader.board_etag(page), page, own, sorted(own_index.items()))).encode()).hexdigest() + '"'
         if request.headers.get("If-None-Match") == etag:
             resp = make_response("", 304)
         else:
             resp = make_response(render_template(
-                "board_rows.html", **board_ctx(reader, page, own)))
+                "board_rows.html", **board_ctx(reader, page, own, {"own_index": own_index})))
         resp.headers["ETag"] = etag
         resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -310,7 +340,41 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None):
 def register_wallet_routes(app, reader, signer, csrf_token, base=None):
     """Send, post, vote and the fee quotes behind them: everything that
     spends from `signer`'s address. `base`, when given, adds the ETH-on-Base half
-    of the send page (see base_send.BaseSend)."""
+    of the send page (see base_send.BaseSend).
+
+    A wallet with several accounts lets each send or post pick one (an
+    `account` field or query value, else the last one used). Every route
+    below just says `signer`, which is a stand-in that answers with the
+    account picked for the request in hand."""
+    node_signer = signer
+
+    class _RequestSigner:
+        def _current(self):
+            s = g.get("wallet_signer")
+            if s is None:
+                for_account = getattr(node_signer, "for_account", None)
+                s = for_account(request.values.get("account", type=int)) if for_account else node_signer
+                g.wallet_signer = s
+            return s
+
+        def __getattr__(self, name):
+            return getattr(self._current(), name)
+
+    signer = _RequestSigner()
+
+    def _accounts_ctx():
+        listing = getattr(node_signer, "accounts", None)
+        accounts = listing() if listing else []
+        if len(accounts) < 2:
+            return dict(accounts=[], selected_account=0)
+        rows = []
+        for a in accounts:
+            try:
+                balance = reader.account(a["address"])["balance"]
+            except Exception:        # an unreadable balance must not hide the picker
+                balance = 0
+            rows.append({**a, "balance": balance})
+        return dict(accounts=rows, selected_account=getattr(signer, "index", 0))
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
@@ -319,6 +383,12 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
     send_note_keys = ("alert_ok_tx", "alert_ok_verb", "alert_err", "alert_err_lines",
                       "outputs_value", "memo_value", "asset", "base_to_value",
                       "base_amount_value", "base_network_value", "base_token_value")
+
+    def _picked():
+        """The account the form named, to carry it through the redirect so the
+        page shows the same one again."""
+        pick = request.form.get("account", type=int)
+        return {} if pick is None else {"account": pick}
 
     def _send_post():
         """Do what the send form asks, and answer with a redirect to the
@@ -331,17 +401,18 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
                       base_network_value="base", base_token_value="")
         if not _csrf_ok():
             result["alert_err"] = "Session expired; reload the page and try again."
-            return forms.done("/send", result)
+            return forms.done("/send", result, **_picked())
         if not forms.tokens.consume(request.form.get("form_token")):
             result["alert_err"] = ALREADY_SENT
-            return forms.done("/send", result)
+            return forms.done("/send", result, **_picked())
 
         asset = request.form.get("asset", "lapse")
         passphrase = request.form.get("passphrase", "").strip()
         if asset == "base" and base is not None:
             result["asset"] = "base"
             base.send(request.form, passphrase, result)
-            return forms.done("/send", {k: result[k] for k in send_note_keys if k in result})
+            return forms.done("/send", {k: result[k] for k in send_note_keys if k in result},
+                              **_picked())
         outputs_raw = request.form.get("outputs", "").strip()
         memo        = request.form.get("memo", "").strip()
         csv_file    = request.files.get("csv_file")
@@ -362,7 +433,8 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
                 result["alert_ok_verb"] = "Sent."
                 result["outputs_value"] = ""
                 result["memo_value"] = ""
-        return forms.done("/send", {k: result[k] for k in send_note_keys if k in result})
+        return forms.done("/send", {k: result[k] for k in send_note_keys if k in result},
+                          **_picked())
 
     @app.route("/send", methods=["GET", "POST"], endpoint="send")
     def send():
@@ -377,7 +449,8 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
                    form_token="" if request.headers.get("X-Live") else forms.tokens.issue(),
                    outputs_value="", memo_value="", memo_max_bytes=tx_mod.MAX_MEMO_BYTES,
                    asset="lapse", base_enabled=base is not None,
-                   alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
+                   alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[],
+                   **_accounts_ctx())
         if base is not None:
             ctx.update(base.view())
         note = forms.notes.take(request.args.get("note"))

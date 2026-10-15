@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/wallet.css?v={{ local_version }}">
+<link rel="stylesheet" href="/css/pages/addresses.css?v={{ local_version }}">{% endblock %}
+{% block content %}
+<div class="wl">
+<div class="page-head">
+<h2>Addresses</h2>
+</div>
+
+{% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+
+{% if exported %}
+<section class="panel export-result" aria-live="polite">
+  <div class="panel-head">Key for address {{ exported.index }}<span>shown once</span></div>
+  <div class="panel-body">
+    <textarea id="export-key" readonly rows="2" spellcheck="false" aria-label="Exported key">{{ exported.key }}</textarea>
+    <div class="export-actions">
+      <button type="button" class="btn-sm" data-copy-from="export-key">Copy key</button>
+      <span class="hint">{{ exported.address }}</span>
+    </div>
+    <p class="hint">This key opens address {{ exported.index }} only, under the passphrase you just chose.
+      It does not contain your recovery phrase. On the other machine, use it as
+      <code>--key</code> or <code>$LAPSECOIN_KEY</code>.</p>
+  </div>
+</section>
+{% endif %}
+
+<div class="wl-grid">
+  <section class="panel">
+    <div class="panel-head">Your addresses<span>{{ rows | length }}</span></div>
+    <table class="acct">
+      <thead><tr><th class="c-idx">#</th><th>Address</th><th class="num">Balance</th><th class="c-act"><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td class="c-idx" data-label="#">{{ r.index }}</td>
+          <td class="c-name">
+            <div class="nm">
+            {% if has_phrase %}
+            <form method="POST" action="/addresses/label" class="label-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="account" value="{{ r.index }}">
+              <input type="text" name="label" value="{{ r.label }}" maxlength="60" placeholder="Address {{ r.index }}" aria-label="Name of address {{ r.index }}">
+            </form>
+            {% else %}<span class="nm-text">{{ r.label or ('Address ' ~ r.index) }}</span>{% endif %}
+            {% if r.active %}<span class="tag" title="This node mines and builds as this address">This node</span>{% endif %}
+            </div>
+            <div class="addr-mono">{{ r.address | replace('.', '.<wbr>') | safe }}</div>
+          </td>
+          <td class="c-bal num">{% if r.balance is none %}<span class="dim">unavailable</span>{% else %}{{ fmt_balance(r.balance) }}{% endif %}</td>
+          <td class="c-act">
+            <button type="button" class="btn-sm" data-copy="{{ r.address }}">Copy</button>
+            <a class="btn-sm" href="/send?account={{ r.index }}">Send</a>
+            <a class="btn-sm" href="/balance?addr={{ r.address }}">History</a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if not has_phrase %}
+    <p class="panel-note">This node runs on a single exported key, so it has one address and no
+      recovery phrase. Addresses are added where the recovery-phrase wallet lives.</p>
+    {% endif %}
+  </section>
+
+  {% if has_phrase %}
+  <div class="side-stack">
+    <section class="panel">
+      <div class="panel-head">New address</div>
+      <form method="POST" action="/addresses/new" class="panel-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <div class="field">
+          <label for="new-pass">Wallet passphrase</label>
+          <input type="password" id="new-pass" name="passphrase" autocomplete="current-password">
+          <div class="hint">Each address is its own account with its own balance. Funds are not merged.</div>
+        </div>
+        <button type="submit">Add address</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">Export a key</div>
+      <form method="POST" action="/addresses/export" class="panel-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <div class="field">
+          <label for="export-account">Address</label>
+          <select id="export-account" name="account">
+            {% for r in rows %}<option value="{{ r.index }}">{{ r.label or ('Address ' ~ r.index) }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="export-pass">Wallet passphrase</label>
+          <input type="password" id="export-pass" name="passphrase" autocomplete="current-password">
+        </div>
+        <div class="field">
+          <label for="export-new">Passphrase for the key</label>
+          <input type="password" id="export-new" name="new_passphrase" minlength="{{ min_passphrase }}" autocomplete="new-password">
+          <div class="hint">For a machine that should mine without holding your recovery phrase. Use a different passphrase from the wallet's, at least {{ min_passphrase }} characters.</div>
+        </div>
+        <button type="submit">Export key</button>
+      </form>
+    </section>
+  </div>
+  {% endif %}
+</div>
+</div>
+<script>
+(function () {
+  // Copy buttons and the name fields: a name saves when you leave the field.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-copy], [data-copy-from]");
+    if (!b || !navigator.clipboard) return;
+    var text = b.dataset.copy;
+    if (text === undefined) text = document.getElementById(b.dataset.copyFrom).value;
+    navigator.clipboard.writeText(text).then(function () {
+      var was = b.textContent;
+      b.textContent = "Copied";
+      setTimeout(function () { b.textContent = was; }, 1200);
+    });
+  });
+  document.querySelectorAll(".label-form input[name=label]").forEach(function (input) {
+    var start = input.value;
+    input.addEventListener("change", function () { if (input.value !== start) input.form.submit(); });
+  });
+})();
+</script>
+{% endblock %}

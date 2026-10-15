@@ -525,6 +525,7 @@ def board_ctx(reader, page_arg, own_addr, extra=None):
                own_icon_idx=own_icon_idx or 0,
                own_nick=own_profile.get("nick") if own_profile else None,
                icon_palette=ICON_PALETTE,
+               own_index={}, post_as=[], selected_account=0,
                tag_len=len(BOARD_MEMO_TAG),
                page=chunks, has_more=data["has_more"])
     if extra:

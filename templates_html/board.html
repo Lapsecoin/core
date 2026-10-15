@@ -34,6 +34,13 @@
         <button type="submit" id="board-send">Send</button>
       </div>
       <div class="board-compose-row board-compose-sub">
+        {% if post_as %}
+        <label class="board-as">as
+          <select name="account" id="board-account" aria-label="Post as">
+            {% for a in post_as %}<option value="{{ a.index }}" data-nick="{{ a.nick }}" data-icon="{{ a.icon }}" data-icon-idx="{{ a.icon_idx }}"{% if a.index == selected_account %} selected{% endif %}>{{ a.nick or a.label or ('Address ' ~ a.index) }}</option>{% endfor %}
+          </select>
+        </label>
+        {% endif %}
         <span id="board-fee-live" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post (and any icon/nickname/reply riding along) costs more.">fee {{ board_fee_floor }}+</span>
         <span id="board-msg-counter"></span>
         <button type="button" id="board-preview-btn" class="board-link">Preview</button>
@@ -101,6 +108,16 @@
   // prompt that asks for the passphrase, not just a bare "Passphrase:"
   // like a free action would get.
   const feedEl = document.getElementById("board-feed");
+  // With several addresses, the one picked beside the compose box signs posts
+  // and votes. Empty when the wallet has just one.
+  function pickedAccount() {
+    const sel = document.getElementById("board-account");
+    return sel ? sel.value : "";
+  }
+  function accountQuery() {
+    const a = pickedAccount();
+    return a === "" ? "" : "&account=" + encodeURIComponent(a);
+  }
   const CSRF = feedEl ? feedEl.dataset.csrf : "";
   const BURN = feedEl ? feedEl.dataset.burn : "0";
 
@@ -117,7 +134,7 @@
       const dir = btn.dataset.dir;
       let fee = null;
       try {
-        const res = await fetch(`/api/board/vote_fee?ref=${encodeURIComponent(ref)}&dir=${encodeURIComponent(dir)}`, {cache: "no-store"});
+        const res = await fetch(`/api/board/vote_fee?ref=${encodeURIComponent(ref)}&dir=${encodeURIComponent(dir)}${accountQuery()}`, {cache: "no-store"});
         const data = await res.json();
         if (!data.ok) { window.alert(data.reason || "Can't vote."); return; }
         fee = data.fee;
@@ -131,6 +148,7 @@
       const passphrase = window.prompt(label);
       if (passphrase === null) return;  // cancelled, nothing sent
       const body = new URLSearchParams({csrf_token: CSRF, ref, dir, passphrase});
+      if (pickedAccount() !== "") body.set("account", pickedAccount());
       const res = await fetch(`/board/vote?page=${PAGE}`, {method: "POST", body});
       const data = await res.json().catch(() => ({ok: false, error: "The app did not answer."}));
       if (!data.ok) window.alert(data.error || "That did not go through.");
@@ -149,7 +167,7 @@
       const ref = btn.dataset.ref;
       let cost = "";
       try {
-        const res = await fetch(`/api/board/delete_fee?ref=${encodeURIComponent(ref)}`, {cache: "no-store"});
+        const res = await fetch(`/api/board/delete_fee?ref=${encodeURIComponent(ref)}${btn.dataset.account ? "&account=" + encodeURIComponent(btn.dataset.account) : ""}`, {cache: "no-store"});
         const data = await res.json();
         if (!data.ok) { window.alert(data.reason || "Can't delete."); return; }
         cost = ` This burns ${BURN} tick + ~${data.fee} tick fee (real coins).`;
@@ -161,6 +179,7 @@
         cost + " Passphrase:");
       if (passphrase === null) return;  // cancelled, nothing sent
       const body = new URLSearchParams({csrf_token: CSRF, ref, passphrase});
+      if (btn.dataset.account) body.set("account", btn.dataset.account);
       const res = await fetch(`/board/delete?page=${PAGE}`, {method: "POST", body});
       const data = await res.json().catch(() => ({ok: false, error: "The app did not answer."}));
       if (!data.ok) window.alert(data.error || "That did not go through.");
@@ -268,6 +287,21 @@
     });
     nickInput.addEventListener("input", markProfileDirty);
 
+    // Picking another address brings its own icon and nickname into the box.
+    const accountSel = document.getElementById("board-account");
+    if (accountSel) accountSel.addEventListener("change", () => {
+      const opt = accountSel.selectedOptions[0];
+      ownNick = opt.dataset.nick || "";
+      ownIconIdx = parseInt(opt.dataset.iconIdx, 10) || 0;
+      nickInput.value = ownNick;
+      iconValue.value = String(ownIconIdx);
+      iconBtn.textContent = opt.dataset.icon || iconBtn.textContent;
+      profileChanged.value = "";
+      profileNote.textContent = "";
+      refreshFee(new TextEncoder().encode(msgInput.value).length);
+      pollBoard();
+    });
+
     function leaveEditMode() {
       editRefInput.value = "";
       editOrigInput.value = "";
@@ -284,6 +318,9 @@
       replyBanner.hidden = true;
       editRefInput.value = edit.dataset.ref;
       editOrigInput.value = edit.dataset.text;
+      // An edit has to come from the address that wrote the post.
+      const asEl = document.getElementById("board-account");
+      if (asEl && edit.dataset.account !== "") { asEl.value = edit.dataset.account; asEl.dispatchEvent(new Event("change")); }
       editBanner.hidden = false;
       msgInput.value = edit.dataset.text;
       msgInput.focus();
@@ -347,6 +384,7 @@
             params.set("icon", String(currentIconIdx()));
             params.set("nick", cleanNick());
           }
+          if (pickedAccount() !== "") params.set("account", pickedAccount());
           if (replyRefInput.value) params.set("reply_ref", replyRefInput.value);
           if (editRefInput.value) {
             params.set("edit_ref", editRefInput.value);
@@ -478,7 +516,7 @@
     if (pollInFlight) return;
     pollInFlight = true;
     try {
-      const res = await fetch("/api/board/fragment?page=" + loaded);
+      const res = await fetch("/api/board/fragment?page=" + loaded + accountQuery());
       if (!res.ok) throw new Error("bad status " + res.status);
       const html = await res.text();
       const next = document.createElement("template");

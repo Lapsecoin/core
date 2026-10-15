@@ -1,0 +1,60 @@
+/* Addresses: the wallet's accounts in a table, two actions beside it.
+   Panels, fields and alerts come from wallet.css. Stacks below 900px, and the
+   table becomes one block per address below 640px. */
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.side-stack { display: flex; flex-direction: column; gap: .75rem; min-width: 0; }
+.panel-note { margin: 0; padding: .75rem 1rem; border-top: 1px solid var(--rule); font-size: .82rem; color: var(--ink-dim); line-height: 1.5; }
+.dim { color: var(--ink-dim); }
+
+table.acct { width: 100%; min-width: 0; border-collapse: collapse; font-size: .85rem; }
+.acct th { text-align: left; padding: .5rem .9rem; border-bottom: 1px solid var(--rule); font-size: .78rem; font-weight: 600; color: var(--ink-dim); background: none; text-transform: none; letter-spacing: 0; }
+.acct td { padding: .6rem .9rem; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+.acct tbody tr:last-child td { border-bottom: 0; }
+.acct tbody tr:hover { background: var(--hover); }
+.acct .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.acct th.num { text-align: right; }
+.acct .c-idx { width: 2rem; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.acct .c-name { min-width: 0; }
+.acct .nm { display: flex; align-items: center; gap: .1rem; margin-bottom: .1rem; }
+.acct .nm-text { font-weight: 500; }
+.acct .addr-mono { font-family: var(--mono); font-size: .74rem; color: var(--ink-dim); line-height: 1.45; overflow-wrap: anywhere; }
+.acct .c-act { white-space: nowrap; text-align: right; }
+.acct .c-act .btn-sm { margin-left: .25rem; height: 28px; display: inline-flex; align-items: center; vertical-align: middle; }
+/* actions appear on hover or focus where there is a pointer, and stay put on touch */
+@media (hover: hover) {
+  .acct .c-act .btn-sm { opacity: 0; }
+  .acct tr:hover .c-act .btn-sm, .acct tr:focus-within .c-act .btn-sm { opacity: 1; }
+}
+
+.label-form { display: inline-block; margin: 0; }
+.label-form input {
+  width: 9.5rem; height: 28px; padding: 0 .45rem; font-size: .85rem; font-weight: 500;
+  background: transparent; border-color: transparent; box-shadow: none;
+}
+.label-form input { margin-left: -.45rem; }
+.label-form input:hover { border-color: var(--rule); }
+.label-form input:focus { background: var(--surface); border-color: var(--line-strong); box-shadow: none; }
+.label-form input::placeholder { color: var(--ink); opacity: .7; }
+.tag { display: inline-block; margin-left: .35rem; padding: .05rem .45rem; border: 1px solid var(--rule); border-radius: 999px; font-size: .7rem; color: var(--ink-dim); vertical-align: 1px; }
+
+/* the exported key, shown once */
+.export-result { margin-bottom: .75rem; }
+.export-result textarea { width: 100%; min-height: 0; font-family: var(--mono); font-size: .78rem; line-height: 1.5; resize: none; overflow-wrap: anywhere; }
+.export-actions { display: flex; align-items: center; gap: .75rem; margin: .5rem 0; flex-wrap: wrap; }
+.export-actions .hint { margin: 0; font-family: var(--mono); font-size: .72rem; overflow-wrap: anywhere; }
+.export-result .hint code { font-family: var(--mono); font-size: .76rem; }
+
+@media (max-width: 640px) {
+  .acct thead { display: none; }
+  .acct, .acct tbody { display: block; }
+  .acct tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .75rem; padding: .7rem .9rem; border-bottom: 1px solid var(--rule); }
+  .acct tbody tr:last-child { border-bottom: 0; }
+  .acct td { display: block; padding: 0; border: 0; min-width: 0; }
+  .acct .c-idx { display: none; }
+  .acct .c-name { grid-column: 1; grid-row: 1 / span 2; }
+  .acct .c-bal { grid-column: 2; grid-row: 1; }
+  .acct .c-act { grid-column: 1 / -1; grid-row: 3; text-align: left; margin-top: .35rem; }
+  .acct .c-act .btn-sm { margin: 0 .25rem 0 0; opacity: 1; }
+  .label-form input { width: 100%; }
+}

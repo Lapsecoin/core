@@ -42,6 +42,7 @@ import time
 
 import block as block_mod
 import crypto
+from wallet import PhraseWallet
 import gossip as gossip_mod
 import mempool as mempool_mod
 import mempool_store
@@ -905,7 +906,26 @@ class Node:
         except queue.Empty:
             return False, "node busy (timeout)"
 
-    def build_and_sign_tx(self, to_outputs, fee=0, passphrase=None, memo=""):
+    def accounts(self):
+        """Every account of the wallet this node runs on: dicts with index,
+        address, public_key and label. A node on a single key has one."""
+        wf = getattr(self.wallet, "walletfile", None)
+        if wf is None:
+            return [{"index": 0, "address": self.addr, "public_key": self.pk_hex, "label": ""}]
+        return wf.accounts
+
+    def wallet_for(self, account=None):
+        """The wallet object for one account (the node's own when None). The
+        node still mines and builds as the one account it started with; the
+        others sign for sends and posts only."""
+        if account is None or account == getattr(self.wallet, "account", None):
+            return self.wallet
+        wf = getattr(self.wallet, "walletfile", None)
+        if wf is None:
+            raise ValueError("this node runs on a single key")
+        return PhraseWallet(wf, account)
+
+    def build_and_sign_tx(self, to_outputs, fee=0, passphrase=None, memo="", account=None):
         """Build, sign, and return a plaintext transaction from this node's
         own address. fee is sender-chosen (default 0; callers building a
         wallet UI should let the user pick a competitive fee). memo is an
@@ -913,18 +933,20 @@ class Node:
         and permanent like the rest of the transaction, not encrypted."""
         if not passphrase:
             raise ValueError("passphrase is required to sign a transaction")
-        kek = self.wallet.derive_kek(passphrase)
+        wallet = self.wallet_for(account)
+        kek = wallet.derive_kek(passphrase)
         try:
-            return self._build_and_sign_tx_with_kek(to_outputs, fee, kek, memo)
+            return self._build_and_sign_tx_with_kek(to_outputs, fee, kek, memo, wallet=wallet)
         finally:
             del kek
 
-    def _build_and_sign_tx_with_kek(self, to_outputs, fee, kek, memo=""):
+    def _build_and_sign_tx_with_kek(self, to_outputs, fee, kek, memo="", wallet=None):
+        wallet    = wallet or self.wallet
         v         = self.view
-        committed = v.state.get_nonce(self.addr)
-        pending   = self.mempool.pending_nonce(self.addr)
+        committed = v.state.get_nonce(wallet.addr)
+        pending   = self.mempool.pending_nonce(wallet.addr)
         nonce     = max(committed, pending) + 1
-        return self.wallet.sign_tx(to_outputs, nonce, fee, memo=memo, kek=kek)
+        return wallet.sign_tx(to_outputs, nonce, fee, memo=memo, kek=kek)
 
     # ------------------------------------------------------------------
     # Block cycle

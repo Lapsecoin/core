@@ -24,6 +24,16 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="form_token" value="{{ form_token }}">
       <input type="hidden" name="asset" value="lapse">
+      {% if accounts %}
+      <div class="field">
+        <label for="from-account">From</label>
+        <select name="account" id="from-account">
+          {% for a in accounts %}
+          <option value="{{ a.index }}" data-addr="{{ a.address }}" data-balance="{{ fmt_balance(a.balance) }}"{% if a.index == selected_account %} selected{% endif %}>{{ a.label or ('Address ' ~ a.index) }} &middot; {{ fmt_balance(a.balance) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
       <div class="field">
         <label for="outputs">Recipients and amounts</label>
         <textarea name="outputs" id="outputs" rows="4" placeholder="word1.word2...word12,1000&#10;burn,500">{{ outputs_value }}</textarea>
@@ -56,7 +66,7 @@
     <dl class="kv">
       <div>
         <dt>Address</dt>
-        <dd class="hash">{{ from_addr }}</dd>
+        <dd class="hash" id="from-addr">{{ from_addr }}</dd>
       </div>
       <div>
         <dt>Balance</dt>
@@ -170,6 +180,7 @@
   const outputsEl = document.querySelector('textarea[name="outputs"]');
   const memoEl = document.getElementById("memo-input");
   const sendBtn = document.getElementById("lapse-send");
+  const accountEl = document.getElementById("from-account");
   if (!outputsEl || !sendBtn) return;
 
   let timer = null;
@@ -192,7 +203,9 @@
     timer = setTimeout(async () => {
       const s = ++seq;
       try {
-        const res = await fetch("/api/send/fee?" + new URLSearchParams({outputs, memo}),
+        const params = {outputs, memo};
+        if (accountEl) params.account = accountEl.value;
+        const res = await fetch("/api/send/fee?" + new URLSearchParams(params),
                                 {cache: "no-store"});
         if (!res.ok) throw new Error("bad status " + res.status);
         const data = await res.json();
@@ -207,6 +220,20 @@
   }
   outputsEl.addEventListener("input", refreshValidity);
   if (memoEl) memoEl.addEventListener("input", refreshValidity);
+  if (accountEl) accountEl.addEventListener("change", function () {
+    // The side panel follows the pick; the address in the URL keeps the page's
+    // background refresh on the same account.
+    const opt = accountEl.selectedOptions[0];
+    const addr = document.getElementById("from-addr");
+    if (addr) addr.textContent = opt.dataset.addr;
+    const bal = document.querySelector('[data-live="lapse-balance"]');
+    if (bal) bal.textContent = opt.dataset.balance;
+    const u = new URL(location.href);
+    u.searchParams.set("account", accountEl.value);
+    u.searchParams.delete("note");
+    history.replaceState(null, "", u);
+    refreshValidity();
+  });
   refreshValidity();
 })();
 

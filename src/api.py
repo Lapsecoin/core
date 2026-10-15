@@ -136,6 +136,7 @@ import crypto as crypto_mod
 import hardware_info
 import settings as settings_mod
 from base_send import BaseSend
+import addresses_ui
 import fees_ui
 from discovery_dht import HAS_LIBTORRENT
 import gas
@@ -694,22 +695,71 @@ def _gas_io(node):
 
 class _NodeSigner:
     """What the wallet routes sign through on a full node: the node itself
-    builds and signs, from its own chain state (see Node.build_and_sign_tx)."""
+    builds and signs, from its own chain state (see Node.build_and_sign_tx).
 
-    def __init__(self, node):
+    Bound to one account of the wallet. Built with none it is the node's own
+    account; for_account() gives the one a send or post picked, or the last
+    one used."""
+
+    def __init__(self, node, account=None):
         self.node = node
+        self.account = account       # None: the node's own
+
+    def _wallet(self):
+        wallet_for = getattr(self.node, "wallet_for", None)
+        return wallet_for(self.account) if wallet_for else None
 
     @property
     def addr(self):
-        return self.node.addr
+        w = self._wallet()
+        return w.addr if w is not None else self.node.addr
 
     @property
     def pk_hex(self):
-        return self.node.pk_hex
+        w = self._wallet()
+        return w.pk_hex if w is not None else self.node.pk_hex
+
+    @property
+    def index(self):
+        """The account number this signer is for."""
+        w = self._wallet()
+        return getattr(w, "account", 0) if w is not None else 0
+
+    def accounts(self):
+        listing = getattr(self.node, "accounts", None)
+        return listing() if listing else [
+            {"index": 0, "address": self.node.addr, "label": ""}]
+
+    def default_account(self):
+        wf = getattr(getattr(self.node, "wallet", None), "walletfile", None)
+        last = wf.last_account if wf is not None else None
+        if last is not None and any(a["index"] == last for a in self.accounts()):
+            return last
+        return None
+
+    def for_account(self, pick=None):
+        """The signer for account `pick`, else the last used, else the
+        node's own. A number that is not in the wallet falls back the same
+        way, so a stale form can never sign as something unexpected."""
+        listed = {a["index"] for a in self.accounts()}
+        if pick is None or pick not in listed:
+            pick = self.default_account()
+        return _NodeSigner(self.node, pick)
+
+    def remember(self):
+        """Record this account as the last used, for the pickers to default to."""
+        wf = getattr(getattr(self.node, "wallet", None), "walletfile", None)
+        if wf is not None:
+            try:
+                wf.set_last_account(self.index)
+            except OSError as e:
+                log.warning("[wallet] could not record the last used address: %s", e)
 
     def sign(self, outputs, fee, memo, passphrase, nonce):
+        kwargs = {} if self.account is None else {"account": self.account}
         t, _fee = self.node.build_and_sign_tx(outputs, fee=fee,
-                                              passphrase=passphrase or None, memo=memo)
+                                              passphrase=passphrase or None, memo=memo,
+                                              **kwargs)
         return t
 
 
@@ -801,11 +851,18 @@ def _shared_read_only_routes(app, node, pool, limiter,
             return node.addr
         return None
 
+    def _board_accounts():
+        """The wallet's addresses for the board's "post as" picker, and the
+        one it starts on (the last used, else the node's own)."""
+        signer = _NodeSigner(node)
+        return signer.accounts(), signer.for_account(None).index
+
     reader = local_reader_for(node)
     if oblivious is not None and not is_private:
         _register_oblivious(app, pool, limiter, pfx, oblivious, lambda: _self_external_addr())
     register_static_routes(app, pfx)
-    register_board_pages(app, reader, pfx, _own_addr_or_hidden, csrf_token)
+    register_board_pages(app, reader, pfx, _own_addr_or_hidden, csrf_token,
+                         accounts_fn=_board_accounts if is_private else None)
     register_data_api(app, reader, pfx)
     fees_ui.register_status(app, node, pfx, _gas_io(node))
 
@@ -1863,6 +1920,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
                            base=BaseSend(node))
     fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node))
+    addresses_ui.register(app, local_reader_for(node), node, csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

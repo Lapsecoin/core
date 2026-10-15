@@ -251,6 +251,18 @@ class WalletFile:
         self._data.pop("pending_sweep", None)
         self._save()
 
+    @property
+    def last_account(self):
+        """The account last used to send or post, for the pickers to default
+        to. Not a secret; None until something has been sent."""
+        return self._data.get("last_account")
+
+    def set_last_account(self, index):
+        if self._data.get("last_account") != index and any(
+                a["index"] == index for a in self._data["accounts"]):
+            self._data["last_account"] = index
+            self._save()
+
     def mark_phrase_shown(self):
         self._data["phrase_shown"] = True
         self._save()
