@@ -53,6 +53,36 @@ def create(path: str, kek: bytes) -> str:
     return address
 
 
+def reseal(path: str, old_kek: bytes, new_kek: bytes) -> bool:
+    """Seal an existing gas wallet under a new key-encryption key. The gas
+    wallet opens with the node's kek, so when the node's key changes (an old
+    key moving to a recovery phrase) the file would otherwise be locked for
+    good. Does nothing when there is no wallet or it already opens with
+    `new_kek`. Returns True if it was re-sealed; ValueError if neither kek
+    opens it."""
+    if not os.path.isfile(path):
+        return False
+    try:
+        decrypt_secret(path, new_kek)
+        return False
+    except ValueError:
+        pass
+    secret = decrypt_secret(path, old_kek)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        data["ciphertext"] = base64.b64encode(nacl.secret.SecretBox(new_kek).encrypt(secret)).decode()
+    finally:
+        del secret
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+    log.info("[base_wallet] the gas wallet is now sealed under the new wallet key")
+    return True
+
+
 def ensure(path: str, kek: bytes) -> str:
     """The wallet's address, creating the wallet on first start."""
     address = load_address(path)

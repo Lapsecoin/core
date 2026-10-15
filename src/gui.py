@@ -18,6 +18,7 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk
 
+import falcon_seeded
 import gui_theme as theme
 import update_check
 from version import LOCAL_VERSION
@@ -144,6 +145,11 @@ class _StartupDialog:
             return
         except Exception as e:
             self.error_var.set(f"Could not load the wallet: {e}")
+            return
+        if self.source.kind == "legacy" and not falcon_seeded.available():
+            log.warning("[startup] %s", wallet_mod.NO_SEEDED_LIBRARY)
+            self.result = (w, kek, p1)
+            self.root.destroy()
             return
         if self.source.kind == "legacy":
             try:
