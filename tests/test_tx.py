@@ -552,25 +552,6 @@ class TestBoardNicknameConsensus:
         ok, err = tx_mod.validate(t, s)
         assert ok is True, err
 
-    def test_a_different_address_claiming_the_same_name_is_rejected(self):
-        s = fresh_state()
-        seed_balance(s, 0, 1000.0)
-        seed_balance(s, 1, 1000.0)
-        s.apply_tx(self._post(0, s, "Al"))
-        t2 = self._post(1, s, "Al")
-        ok, err = tx_mod.validate(t2, s)
-        assert ok is False
-        assert "already taken" in err
-
-    def test_claiming_it_case_insensitively_is_still_rejected(self):
-        s = fresh_state()
-        seed_balance(s, 0, 1000.0)
-        seed_balance(s, 1, 1000.0)
-        s.apply_tx(self._post(0, s, "Al"))
-        t2 = self._post(1, s, "al")
-        ok, _err = tx_mod.validate(t2, s)
-        assert ok is False
-
     def test_the_same_address_re_setting_its_own_name_still_validates(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
@@ -594,3 +575,37 @@ class TestBoardNicknameConsensus:
         seed_balance(s, 0, 1000.0)
         s.apply_tx(self._post(0, s, "Al"))
         assert s.nicknames["al"] == address(0)
+
+
+class TestBoardNicknamesNoLongerExist:
+    """The rule that refused a taken nickname is gone: a name in a post's
+    header is just text and no address owns it."""
+
+    def _post(self, sender, s, nick, fee=1000):
+        outputs = [{"to": address((sender + 1) % 3), "amount": 1}]
+        memo = tx_mod.BOARD_MEMO_TAG + tx_mod.build_board_body("hi", icon=0, nick=nick)
+        return make_tx(sender, (sender + 1) % 3, 1, s, fee=fee, memo=memo,
+                       outputs_override=outputs)
+
+    def test_a_different_address_may_use_the_same_name(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        seed_balance(s, 1, 1000.0)
+        s.apply_tx(self._post(0, s, "Al"))
+        ok, err = tx_mod.validate(self._post(1, s, "Al"), s)
+        assert ok is True, err
+
+    def test_and_case_makes_no_difference_either(self):
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        seed_balance(s, 1, 1000.0)
+        s.apply_tx(self._post(0, s, "Al"))
+        ok, err = tx_mod.validate(self._post(1, s, "al"), s)
+        assert ok is True, err
+
+    def test_every_post_that_was_valid_before_still_is(self):
+        """The change only relaxes: nothing already on a chain becomes invalid."""
+        s = fresh_state()
+        seed_balance(s, 0, 1000.0)
+        ok, err = tx_mod.validate(self._post(0, s, "Al"), s)
+        assert ok is True, err

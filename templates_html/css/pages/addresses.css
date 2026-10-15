@@ -29,13 +29,12 @@ table.acct { width: 100%; min-width: 0; border-collapse: collapse; font-size: .8
 
 .label-form { display: inline-block; margin: 0; }
 .label-form input {
-  width: 9.5rem; height: 28px; padding: 0 .45rem; font-size: .85rem; font-weight: 500;
-  background: transparent; border-color: transparent; box-shadow: none;
+  width: 11rem; height: 28px; padding: 0 .5rem; font-size: .85rem; font-weight: 500;
+  background: var(--paper); border-color: var(--rule); box-shadow: none;
 }
-.label-form input { margin-left: -.45rem; }
-.label-form input:hover { border-color: var(--rule); }
+.label-form input:hover { border-color: var(--line-strong); }
 .label-form input:focus { background: var(--surface); border-color: var(--line-strong); box-shadow: none; }
-.label-form input::placeholder { color: var(--ink); opacity: .7; }
+.label-form input::placeholder { color: var(--ink-dim); font-weight: 400; opacity: .8; }
 .tag { display: inline-block; margin-left: .35rem; padding: .05rem .45rem; border: 1px solid var(--rule); border-radius: 999px; font-size: .7rem; color: var(--ink-dim); vertical-align: 1px; }
 
 /* the exported key, shown once */

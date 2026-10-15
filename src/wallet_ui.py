@@ -34,7 +34,7 @@ import crypto as crypto_mod
 import tx as tx_mod
 import embeds
 from forms import ALREADY_SENT, forms_for
-from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, DELETE_TAG, _icon_emoji,
+from board_view import (BOARD_MEMO_TAG, BOARD_POST_AMOUNT, DELETE_TAG,
                         MAX_POST_TEXT_BYTES, REPLY_REF_LEN, VOTE_DOWN_TAG,
                         VOTE_UP_TAG, apply_splice, board_ctx, build_board_body,
                         build_board_edit, make_splice)
@@ -206,7 +206,7 @@ def address_ctx(reader, addr, page):
 
 
 def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
-    """GET /balance: look up any address, or a board nickname.
+    """GET /balance: look up any address.
 
     `histogram`, when given, returns (holder_count, rows, max_count) for
     the wealth distribution shown before a lookup runs; only a full node
@@ -229,19 +229,6 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
             query = request.args.to_dict(flat=True)
             query["addr"] = crypto_mod.burn_address()
             return redirect(f"/balance?{urlencode(query)}")
-        # Same redirect-to-the-real-address pattern as "burn" above: a
-        # board nickname is looked up the same deterministic way every
-        # node already resolves one for display (see _nickname_owned_by),
-        # so typing a name here lands on exactly the address that name
-        # actually belongs to, not a second, separate notion of identity.
-        # A nickname is at most 16 characters, so anything longer is not
-        # worth asking a node about.
-        if addr and not crypto_mod.is_valid_address(addr) and len(addr) <= 16:
-            owner = reader.account(None, nick=addr).get("nick_owner")
-            if owner is not None:
-                query = request.args.to_dict(flat=True)
-                query["addr"] = owner
-                return redirect(f"/balance?{urlencode(query)}")
         page = max(request.args.get("page", 1, type=int) or 1, 1)
         # The distribution histogram is only shown before a lookup runs, so
         # skip computing it once an address has actually been submitted.
@@ -274,9 +261,10 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None, account
     addresses reads as the reader's own."""
 
     def _own_view():
-        """(own address, accounts for the picker, selected index, {address: index})."""
+        """(own address, accounts for the picker, selected index, {address: index},
+        {address: the name the reader gave it})."""
         if accounts_fn is None:
-            return own_addr_fn(), [], 0, {}
+            return own_addr_fn(), [], 0, {}, {}
         accounts, default = accounts_fn()
         listed = {a["index"]: a for a in accounts}
         pick = request.args.get("account", type=int)
@@ -284,23 +272,21 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None, account
         if selected not in listed:
             selected = accounts[0]["index"]
         own_index = {a["address"]: a["index"] for a in accounts}
-        rows = []
-        if len(accounts) > 1:
-            for a in accounts:
-                prof = reader.profile(a["address"])
-                idx = prof["icon"] if prof else 0
-                rows.append({**a, "nick": (prof.get("nick") if prof else None) or "",
-                             "icon": _icon_emoji(idx), "icon_idx": idx or 0})
-        return listed[selected]["address"], rows, selected, own_index
+        many = len(accounts) > 1
+        names = {a["address"]: a.get("label") or (f"Address {a['index']}" if many else "")
+                 for a in accounts}
+        rows = [{**a, "name": names[a["address"]]} for a in accounts] if many else []
+        return (listed[selected]["address"], rows, selected, own_index,
+                {addr: name for addr, name in names.items() if name})
 
     @app.route("/board", endpoint=pfx + "board")
     def board():
-        own, post_as, selected, own_index = _own_view()
+        own, post_as, selected, own_index, own_labels = _own_view()
         # Nothing here names the viewer: a node asked for the board learns
         # no address. The compose box's own icon comes from the board itself.
         extra = dict(csrf_token=csrf_token, compose_err="", compose_ok="",
                      message_value="", form_token="", own_index=own_index,
-                     post_as=post_as, selected_account=selected)
+                     own_labels=own_labels, post_as=post_as, selected_account=selected)
         if csrf_token:   # private app only: there is a compose box
             forms = forms_for(app)
             # This page's compose form works once (see forms.py), and what
@@ -321,7 +307,7 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None, account
     def api_board_fragment():
         """Return live board rows without replacing the compose box."""
         page = max(request.args.get("page", 1, type=int) or 1, 1)
-        own, _post_as, _selected, own_index = _own_view()
+        own, _post_as, _selected, own_index, own_labels = _own_view()
         # Unchanged since the viewer's last poll: answer 304 without
         # rendering anything. Validators are the board state itself plus the
         # window size and viewer, the only inputs the fragment depends on.
@@ -331,7 +317,7 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None, account
             resp = make_response("", 304)
         else:
             resp = make_response(render_template(
-                "board_rows.html", **board_ctx(reader, page, own, {"own_index": own_index})))
+                "board_rows.html", **board_ctx(reader, page, own, {"own_index": own_index, "own_labels": own_labels})))
         resp.headers["ETag"] = etag
         resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -512,23 +498,11 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
         can move between keystrokes too.
         """
         msg_bytes = min(max(0, request.args.get("bytes", 0, type=int) or 0), tx_mod.MAX_MEMO_BYTES)
-        # Profile/reply headers are opt-in and priced exactly like the rest
-        # of the memo (more bytes -> more fee), so the live estimate has to
-        # account for whichever of them this particular post will actually
-        # carry, not just the free-text part.
-        icon = request.args.get("icon", type=int)
-        nick = (request.args.get("nick") or "")[:16] or None
+        # A reply header is priced like the rest of the memo (more bytes, more
+        # fee), so the live estimate accounts for it when this post carries one.
         reply_ref = request.args.get("reply_ref") or None
         edit_ref = request.args.get("edit_ref") or None
-        acct = reader.account(signer.addr, nick=nick, fees=True)
-        # Checked before quoting a fee, not just before display: paying to
-        # set a name that's already someone else's is a real cost for a
-        # change that would then silently never show, so the compose box
-        # needs to know before the user signs anything, not after.
-        owner = acct.get("nick_owner")
-        if nick and owner is not None and owner != signer.addr:
-            return jsonify({"fee": 0, "floor": 0, "ok": False, "nick_taken": True,
-                            "reason": f"'{nick}' is already taken."})
+        acct = reader.account(signer.addr, fees=True)
         if edit_ref:
             # An edit is priced on what it will really send, the splice
             # and not the whole text, so it is worked out from the texts.
@@ -536,9 +510,9 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
                                   request.args.get("new", ""))
             if why:
                 return jsonify({"fee": 0, "floor": 0, "ok": False, "reason": why})
-            memo = BOARD_MEMO_TAG + build_board_body(text, icon=icon, nick=nick)
+            memo = BOARD_MEMO_TAG + build_board_body(text)
         else:
-            header = build_board_body("", icon=icon, nick=nick, reply_ref=reply_ref)
+            header = build_board_body("", reply_ref=reply_ref)
             # An ASCII placeholder of the same byte length: close enough for
             # an estimate, and the real message never leaves the browser
             # until actually posted.
@@ -595,13 +569,6 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
             # Not brought back into the box: it was sent already, or may
             # have been, and putting it there invites sending it twice.
             return fail(ALREADY_SENT, keep_text=False)
-        # icon/nick only ride along when the compose form's own "profile
-        # changed" checkbox says so (see board.html): otherwise this post
-        # costs exactly what it would with no profile feature at all.
-        icon = request.form.get("icon", type=int) if request.form.get("profile_changed") else None
-        nick = (request.form.get("nick") or "").strip()[:16] or None if request.form.get("profile_changed") else None
-        if request.form.get("profile_changed") and icon is None:
-            icon = 0
         reply_ref = request.form.get("reply_ref") or None
         edit_ref = request.form.get("edit_ref") or None
         edit_orig = request.form.get("edit_orig", "")
@@ -610,18 +577,11 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
         # same value tx.validate() will check the resulting tx against,
         # modulo a block landing in between, which is exactly the rare
         # "resubmit at the new floor" case that staircase is designed for.
-        acct = reader.account(signer.addr, nick=nick, fees=True, fresh=True)
+        acct = reader.account(signer.addr, fees=True, fresh=True)
         floor = acct["board_floor"]
 
         if not message:
             return fail("Write something to post.")
-        # Refused outright, not just silently dropped at display time: a
-        # tx claiming a taken name now also fails tx.validate() itself
-        # (_check_nickname_available), but catching it here first still
-        # saves the round trip to a node that would only reject it anyway.
-        owner = acct.get("nick_owner")
-        if nick and owner is not None and owner != signer.addr:
-            return fail(f"'{nick}' is already taken.")
         if edit_ref:
             # Posted as the edit it is: a splice against the text being
             # edited, which costs what any post costs.
@@ -629,7 +589,7 @@ def register_wallet_routes(app, reader, signer, csrf_token, base=None):
             if why:
                 return fail(why)
             reply_ref = None
-        body = build_board_body(message, icon=icon, nick=nick, reply_ref=reply_ref)
+        body = build_board_body(message, reply_ref=reply_ref)
         memo = BOARD_MEMO_TAG + body
         over = len(memo.encode("utf-8")) - tx_mod.MAX_MEMO_BYTES
         if over > 0:

@@ -230,3 +230,31 @@ def test_the_board_fragment_follows_the_picked_address(world):
     a = world.client.get("/api/board/fragment", query_string={"account": 0})
     b = world.client.get("/api/board/fragment", query_string={"account": 1})
     assert a.headers["ETag"] != b.headers["ETag"]
+
+
+def test_the_post_as_picker_uses_the_names_given_on_the_addresses_page(world):
+    csrf, _ = tokens(world.client, "/addresses")
+    world.client.post("/addresses/label", data={"csrf_token": csrf, "account": 1, "label": "shop"})
+    html = page(world.client, "/board")
+    assert re.search(r'<option value="1"[^>]*>shop</option>', html)
+    assert re.search(r'<option value="0"[^>]*>Address 0</option>', html)      # unnamed: its number
+
+
+def test_a_post_by_one_of_my_addresses_shows_the_name_i_gave_it(world):
+    csrf, _ = tokens(world.client, "/addresses")
+    world.client.post("/addresses/label", data={"csrf_token": csrf, "account": 1, "label": "shop"})
+    submit(world.client, "/board", passphrase=PASS, message="from the shop", account=1)
+    html = page(world.client, "/board")
+    assert re.search(r'class="rc-username[^"]*"[^>]*>shop</a>', html)
+
+
+def test_a_single_address_wallet_shows_no_made_up_name_on_its_own_posts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    w, kek, _ = wallet_mod.create_wallet(PASS, phrase=PHRASE)
+    cs = ChainState.from_genesis()
+    cs.state.credit(ADDR0, 100 * TICKS_PER_LAPSE)
+    node = WalletNode(cs, w)
+    client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+    submit(client, "/board", passphrase=PASS, message="solo")
+    html = page(client, "/board")
+    assert "Address 0" not in html and 'id="board-account"' not in html
