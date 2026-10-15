@@ -12,7 +12,7 @@
 <meta property="og:title" content="{{ card.title }}">
 <meta property="og:description" content="{{ card.description }}">
 <meta property="og:url" content="{{ page_url }}">
-<meta property="og:image" content="{{ site_url }}/lapsecoin-512x512.png">
+<meta property="og:image" content="{{ og_image or (site_url ~ '/lapsecoin-512x512.png') }}">
 <meta property="og:image:width" content="512">
 <meta property="og:image:height" content="512">
 <meta name="twitter:card" content="summary">
@@ -80,9 +80,15 @@
         </svg>
       </a>
     </div>
-    <div class="masthead-title"><img src="/favicon.svg" alt="" width="24" height="24">LapseCoin v{{ local_version }}</div>
+    <div class="masthead-title"><img src="/favicon.svg" alt="" width="24" height="24">LapseCoin{% if not public_site %} v{{ local_version }}{% endif %}</div>
     <nav class="mainnav" id="mainnav">
-      {% if light %}
+      {% if public_site %}
+      {#- The copy published to lapsecoin.github.io (scripts/build_whitepaper.py),
+          where the node's own pages do not exist. -#}
+      {{ link('home', 'https://lapsecoin.github.io/', 'dashboard', 'Website') }}
+      {{ link('download', 'https://lapsecoin.github.io/downloads.html', 'blocks', 'Download') }}
+      {{ link('whitepaper', 'https://lapsecoin.github.io/core/whitepaper.html', 'whitepaper', 'Whitepaper') }}
+      {% elif light %}
       {{ community() }}
       {{ link('address', '/balance', 'balance', 'Balance') }}
       {{ link('send', '/send', 'send', 'Send') }}

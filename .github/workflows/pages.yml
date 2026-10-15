@@ -9,13 +9,28 @@ name: Publish installers to Pages
 # does not grow. Each deploy replaces the site, so the releases stay the
 # source of truth and this is only a mirror of the newest ones.
 #
+# It also serves the whitepaper, rendered as a node shows it, at
+#   https://lapsecoin.github.io/core/whitepaper.html
+# (scripts/build_whitepaper.py), so a change to docs/whitepaper.md is live on
+# the website a minute or two after it reaches main.
+#
 # One-time setup: Settings > Pages > Source: GitHub Actions.
-# Runs after every release (called from release.yml) and by hand from the
-# Actions tab, which rebuilds the site from the releases as they are now.
+# Runs after every release (called from release.yml), on a push to main that
+# changes the whitepaper or what renders it, and by hand from the Actions tab,
+# which rebuilds the site from the releases as they are now.
 
 on:
   workflow_call:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - docs/whitepaper.md
+      - templates_html/whitepaper.html
+      - templates_html/css/pages/whitepaper.css
+      - src/whitepaper_render.py
+      - scripts/build_whitepaper.py
+      - .github/workflows/pages.yml
 
 env:
   # How many of the newest releases stay on the site.
@@ -46,6 +61,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/build_pages_site.py --repo "$GITHUB_REPOSITORY" --keep "$KEEP" --out site && find site -type f | sort
+
+      # The whitepaper page, rendered with the node's own code and styles.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Render the whitepaper
+        run: |
+          python3 -m pip install "markdown>=3.5" jinja2
+          python3 scripts/build_whitepaper.py --out site
 
       - uses: actions/configure-pages@v5
 
