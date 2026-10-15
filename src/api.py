@@ -424,6 +424,65 @@ def _x_ticks(rows):
             for idx in idxs]
 
 
+# Vertical room one right-edge reference label needs, in chart units.
+_LABEL_GAP = 14
+
+
+def _label_ys(line_ys):
+    """Baseline for each reference line's label, in the order given (None
+    entries are lines that are not drawn and get None back).
+
+    A label sits just above its line. Going down the chart, one that would
+    land within _LABEL_GAP of the label above it drops below its own line
+    instead, and is pushed further down if that still touches. So lines that
+    are far apart read exactly as before, and a cluster fans out downward
+    instead of printing over itself. Computed here, once, because the
+    server-rendered SVG and the script that repaints it both draw these.
+    """
+    out = [None] * len(line_ys)
+    prev = None
+    for i in sorted((i for i, y in enumerate(line_ys) if y is not None),
+                    key=lambda i: (line_ys[i], i)):
+        y = line_ys[i] - 4
+        if prev is not None and y - prev < _LABEL_GAP:
+            y = max(line_ys[i] + 11, prev + 12)
+        out[i] = prev = y
+    return out
+
+
+def _time_left(retarget):
+    if retarget["remaining"] <= 0:
+        return "due next block"
+    hours = retarget["seconds_left"] / 3600
+    if hours >= 24:
+        return f"{hours / 24:.1f}d left"
+    if hours >= 1:
+        return f"{hours:.0f}h left"
+    return "under 1h left"
+
+
+def _retarget_label(retarget, clipped):
+    left = _time_left(retarget)
+    if clipped:
+        left += ", off scale"
+    return f"retarget median {retarget['median']:.0f}s ({left})"
+
+
+def _retarget_title(retarget):
+    pct = ((block_mod.VDF_ADJUST_NUMERATOR - block_mod.VDF_ADJUST_DENOMINATOR)
+           * 100 / block_mod.VDF_ADJUST_DENOMINATOR)
+    text = (f"Median block time over the {retarget['blocks']:,} blocks so far in "
+            f"this retarget window (heights {retarget['start']:,} to "
+            f"{retarget['next_height'] - 1:,}). At height "
+            f"{retarget['next_height']:,} difficulty rises {pct:g}% if that "
+            f"median is under {retarget['threshold']}s. ")
+    if retarget["remaining"] <= 0:
+        return text + "The window is full, so this applies to the next block."
+    return text + (f"{retarget['remaining']:,} blocks to go, "
+                   f"{_time_left(retarget)}, estimated at the window's "
+                   f"average of {retarget['mean']:.0f}s.")
+
+
 def _chart_dims():
     """The chart size the page asked for (?w=&h=, in CSS pixels), so the
     chart is drawn at the size it is shown and uses the room the window has.
@@ -547,6 +606,24 @@ def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
         own_y = round(y_at(own_seconds), 1)
         own_clipped = own_seconds > axis_hi or own_seconds < axis_lo
 
+    # The retarget median is the consensus window's, not the display
+    # window's, so it can sit well away from the data. It is left out of the
+    # axis range for that reason, like the window median, and clips to the
+    # edge with a note when it is off scale.
+    retarget = race.get("retarget")
+    retarget_chart = None
+    if retarget:
+        off = retarget["median"] > axis_hi or retarget["median"] < axis_lo
+        retarget_chart = {"y": round(y_at(retarget["median"]), 1),
+                          "clipped": off,
+                          "label": _retarget_label(retarget, off),
+                          "title": _retarget_title(retarget)}
+    median_y = round(y_at(median), 1)
+    median_label_y, own_label_y, retarget_label_y = _label_ys(
+        [median_y, own_y, retarget_chart["y"] if retarget_chart else None])
+    if retarget_chart:
+        retarget_chart["label_y"] = retarget_label_y
+
     # The end ticks sit exactly on the plot edges, which are also where
     # anything off scale gets clamped to. Say so on the axis when that
     # actually happened: a line resting on the edge is otherwise reading
@@ -575,7 +652,9 @@ def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
     # points are on screen, so the vertical scale and its clipping stay
     # exactly as computed here.
     return {"points": points, "own_y": own_y, "own_clipped": own_clipped,
-            "median_y": round(y_at(median), 1), "ticks": ticks,
+            "median_y": median_y, "median_label_y": median_label_y,
+            "own_label_y": own_label_y, "retarget": retarget_chart,
+            "ticks": ticks,
             "x_ticks": _x_ticks(rows),
             "width": chart_w, "height": chart_h,
             "pad_l": _CHART_PAD_L, "plot_w": plot_w,

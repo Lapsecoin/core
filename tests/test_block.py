@@ -1064,6 +1064,160 @@ class TestRetargetUsesAnExactRatio:
         assert VDF_ADJUST_NUMERATOR > VDF_ADJUST_DENOMINATOR
 
 
+class TestRetargetProgress:
+    """The odds page's retarget line: the median of the window the next
+    difficulty adjustment will replay, and how long until it closes."""
+
+    @staticmethod
+    def _chain(deltas):
+        ts = [1000]
+        for d in deltas:
+            ts.append(ts[-1] + d)
+        return [{"timestamp": t} for t in ts]
+
+    @pytest.fixture(autouse=True)
+    def _small_window(self, monkeypatch):
+        monkeypatch.setattr("block.VDF_ADJUST_INTERVAL", 5)
+        monkeypatch.setattr("block.VDF_ADJUST_MIN_SECONDS", 100)
+
+    def test_nothing_to_show_before_there_is_an_interval(self):
+        assert block_mod.retarget_progress(self._chain([])) is None
+
+    def test_the_first_window_starts_at_height_one(self):
+        # Heights 1..3 so far: genesis has no parent, so no interval.
+        r = block_mod.retarget_progress(self._chain([110, 90, 130]))
+        assert (r["start"], r["next_height"]) == (0, 5)
+        assert r["blocks"] == 3 and r["median"] == 110
+        # Height 4 is still to come before the boundary block, height 5.
+        assert r["remaining"] == 1
+
+    def test_only_blocks_since_the_last_boundary_count(self):
+        # Heights 1..7 exist; the open window starts at 5, so only the
+        # intervals of heights 5, 6, 7 count and the older ones do not.
+        r = block_mod.retarget_progress(
+            self._chain([500, 500, 500, 500, 100, 140, 120]))
+        assert r["start"] == 5 and r["next_height"] == 10
+        assert r["blocks"] == 3 and r["median"] == 120
+        assert r["remaining"] == 2
+        assert r["seconds_left"] == pytest.approx(2 * 120)
+
+    def test_the_boundary_block_itself_opens_the_next_window(self):
+        # Height 5 is the boundary block: the tip being a boundary means a
+        # fresh window with one interval in it, not a closed one.
+        r = block_mod.retarget_progress(self._chain([100] * 4 + [77]))
+        assert r["start"] == 5 and r["blocks"] == 1 and r["median"] == 77
+        assert r["remaining"] == 4
+
+    def test_a_full_window_is_due_at_the_next_block(self):
+        r = block_mod.retarget_progress(self._chain([100] * 8))
+        assert r["start"] == 5 and r["blocks"] == 4
+        assert r["remaining"] == 1
+        r = block_mod.retarget_progress(self._chain([100] * 9))
+        assert r["start"] == 5 and r["blocks"] == 5 and r["remaining"] == 0
+
+    @pytest.mark.parametrize("deltas,bumps", [
+        ([90, 95, 99, 120, 130], True),    # median 99, under the line
+        ([90, 95, 100, 120, 130], False),  # median 100 is not under it
+        ([140, 150, 99, 99, 160], False),
+    ])
+    def test_matches_what_the_boundary_block_will_decide(self, deltas, bumps):
+        # Same data, two readers: the page's median must be the very number
+        # get_vdf_iterations compares to the threshold once the window fills.
+        chain = self._chain([120] * 4 + deltas)       # heights 5..9
+        assert len(chain) == 10
+        r = block_mod.retarget_progress(chain)
+        assert r["blocks"] == 5 and r["remaining"] == 0
+        grew = block_mod.get_vdf_iterations(chain) > block_mod.VDF_ITERATIONS
+        assert grew is bumps
+        assert (r["median"] < r["threshold"]) is bumps
+
+
+class TestRetargetChartLine:
+    """api._race_chart's retarget line and the label placement that keeps it
+    from printing over the other two."""
+
+    @staticmethod
+    def _retarget(median=100.0, remaining=5040, mean=110.0):
+        return {"median": median, "mean": mean, "blocks": 50, "of": 10080,
+                "remaining": remaining, "start": 0, "next_height": 10080,
+                "seconds_left": remaining * mean, "threshold": 100}
+
+    def _race(self, retarget):
+        rows = [(h, s, "") for h, s in enumerate([120, 124, 118, 122, 119], 1)]
+        race = {"window": rows, "median": 120, "own_pace": None,
+                "machine_of": {}}
+        if retarget is not None:
+            race["retarget"] = retarget
+        return race
+
+    def test_the_line_and_its_label(self):
+        import api as api_mod
+        chart = api_mod._race_chart(self._race(self._retarget(median=121.0)))
+        rt = chart["retarget"]
+        assert rt["label"] == "retarget median 121s (6.4d left)"
+        assert rt["clipped"] is False
+        assert chart["plot_top"] <= rt["y"] <= chart["plot_bottom"]
+
+    def test_the_hover_says_what_the_line_decides(self):
+        import api as api_mod
+        title = api_mod._race_chart(self._race(self._retarget()))["retarget"]["title"]
+        assert "50 blocks so far" in title
+        assert "difficulty rises 2% if that median is under 100s" in title
+        assert "height 10,080" in title and "5,040 blocks to go" in title
+
+    def test_no_line_when_there_is_no_retarget_data(self):
+        import api as api_mod
+        assert api_mod._race_chart(self._race(None))["retarget"] is None
+
+    def test_an_off_scale_median_is_clipped_and_says_so(self):
+        import api as api_mod
+        rt = api_mod._race_chart(self._race(self._retarget(median=400.0)))["retarget"]
+        assert rt["clipped"] is True
+        assert rt["label"].endswith("(6.4d left, off scale)")
+
+    def test_it_does_not_stretch_the_axis(self):
+        import api as api_mod
+        near = api_mod._race_chart(self._race(self._retarget(median=121.0)))
+        far = api_mod._race_chart(self._race(self._retarget(median=900.0)))
+        assert far["axis_hi"] == near["axis_hi"]
+
+    @pytest.mark.parametrize("remaining,expected", [
+        (0, "due next block"),
+        (1, "under 1h left"),         # 110s
+        (100, "3h left"),             # 11,000s
+        (700, "21h left"),
+        (800, "1.0d left"),           # 88,000s
+        (5040, "6.4d left"),
+    ])
+    def test_time_left_wording(self, remaining, expected):
+        import api as api_mod
+        assert api_mod._time_left(self._retarget(remaining=remaining)) == expected
+
+    def test_labels_far_apart_sit_above_their_lines(self):
+        import api as api_mod
+        assert api_mod._label_ys([100, 50, 150]) == [96, 46, 146]
+
+    def test_two_close_labels_keep_the_old_placement(self):
+        import api as api_mod
+        # Upper above its line, lower below its own, in either order.
+        assert api_mod._label_ys([100, 105]) == [96, 116]
+        assert api_mod._label_ys([105, 100]) == [116, 96]
+        # Equal heights: the first listed stays above, the next drops.
+        assert api_mod._label_ys([100, 100]) == [96, 111]
+
+    def test_an_undrawn_line_gets_no_label(self):
+        import api as api_mod
+        assert api_mod._label_ys([100, None, 150]) == [96, None, 146]
+
+    def test_three_close_labels_never_overlap(self):
+        import api as api_mod
+        import itertools
+        for ys in itertools.permutations([100, 103, 108]):
+            labels = api_mod._label_ys(list(ys))
+            for a, b in itertools.combinations(labels, 2):
+                assert abs(a - b) >= 11, (ys, labels)
+
+
 class TestTimestampRulesAreSeparate:
     """The future-tolerance rule and the parent-gap rule are two different
     questions and now have two different constants."""

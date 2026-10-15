@@ -444,6 +444,18 @@ class TestOddsPage:
         assert "only builder inside the 10s draw window" in html
         assert "1 of the last 2" in html   # blocks won, the measured fact
 
+    def test_the_chart_has_a_red_retarget_median_line_with_days_left(self):
+        # Two intervals so far (120s, 200s): median 160s. 10,077 blocks left
+        # of the 10,080 window at their 160s average is 18.7 days.
+        client = self._client(False)
+        html = client.get("/odds").get_data(as_text=True)
+        svg = html.split('<svg id="odds-svg"', 1)[1].split("</svg>", 1)[0]
+        assert "retarget median 160s (18.7d left)" in svg
+        assert 'stroke="var(--loss)"' in svg
+        chart = client.get("/api/odds").get_json()["chart"]
+        assert chart["retarget"]["label"] == "retarget median 160s (18.7d left)"
+        assert chart["retarget"]["label_y"] is not None
+
     def test_the_json_carries_the_draw_and_the_win_share(self):
         data = self._client(False).get("/api/odds").get_json()
         assert data["field_blocks"] == 1
