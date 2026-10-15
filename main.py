@@ -47,7 +47,7 @@ from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from updater import Updater
 from version import LOCAL_VERSION
-from wallet import export_key, key_path, load_or_create_key as _load_or_create_key
+import wallet as wallet_mod
 
 LOG_FILE = "lapsecoin.log"
 LOCK_FILE = "lapsecoin.lock"
@@ -303,14 +303,23 @@ def main():
     # someone typed on the command line to override it.
     parser.add_argument("--port",    type=int,
                         default=_env_port("LAPSECOIN_PORT", 8333))
-    parser.add_argument("--key", "--keyfile", dest="keyfile", default=None,
-                        help="The wallet key: a path to the key file, or the text "
-                             "--export prints. Default: $LAPSECOIN_KEY, else "
-                             "lapsecoin_key.json."
-                        ).completer = FilesCompleter()
+    parser.add_argument("--key", dest="key", default=None, metavar="KEY",
+                        help="Run as one exported account: the lc1- text that --export "
+                             "prints (default: $LAPSECOIN_KEY). Without it the node uses "
+                             "lapsecoin_wallet.json, its recovery-phrase wallet.")
+    parser.add_argument("--account", type=int, default=0, metavar="N",
+                        help="Which account of the wallet this node runs as, or --export "
+                             "writes out (default 0).")
     parser.add_argument("--export", action="store_true",
-                        help="Print the key as one line of text (still encrypted) "
-                             "and exit. Use it as --key or $LAPSECOIN_KEY elsewhere.")
+                        help="Print one account's key (--account N) as short lc1- text, "
+                             "sealed under a new passphrase, and exit. Use it as --key or "
+                             "$LAPSECOIN_KEY on another machine; it never holds the "
+                             "recovery phrase.")
+    parser.add_argument("--new-address", action="store_true",
+                        help="Add the wallet's next account, print its address and exit.")
+    parser.add_argument("--restore", action="store_true",
+                        help="Rebuild the wallet from a recovery phrase (typed hidden, or "
+                             "piped in) into an empty folder and exit.")
     parser.add_argument("--db",      default=DB_PATH
                         ).completer = FilesCompleter()
     parser.add_argument("--peer",       action="append", default=[])
@@ -372,15 +381,14 @@ def main():
         # CI only: checks the update restart target, starts nothing.
         import updater as _updater
         sys.exit(_updater.restart_check(args.check_restart_exe))
-    try:
-        args.keyfile = key_path(args.keyfile)
-    except ValueError as e:
-        sys.exit(f"Error: --key: {e}")
+    if args.restore:
+        wallet_mod.cmd_restore()
+        sys.exit(0)
+    if args.new_address:
+        wallet_mod.cmd_new_address(args.key)
+        sys.exit(0)
     if args.export:
-        try:
-            print(export_key(args.keyfile))
-        except OSError as e:
-            sys.exit(f"Error: {e}")
+        wallet_mod.cmd_export(args.key, args.account)
         sys.exit(0)
     public_url = None
     if args.public_url:
@@ -495,10 +503,11 @@ def main():
                 sys.exit(1)
     if use_gui:
         env_passphrase = os.environ.get("LAPSECOIN_PASSPHRASE") or None
-        pk, kek, passphrase = gui.load_or_create_key_gui(
-            args.keyfile, env_passphrase)
+        wallet, kek, passphrase = gui.startup_gui(
+            args.key, args.account, env_passphrase)
     else:
-        pk, kek, passphrase = _load_or_create_key(args.keyfile)
+        wallet, kek, passphrase = wallet_mod.startup_console(args.key, args.account)
+    pk = wallet.pk
     genesis  = block_mod.create_genesis()
     pk_hex   = pk.hex()
 
@@ -623,7 +632,7 @@ def main():
     node_wrapper = NodeWrapper()
 
     def background_startup():
-        node = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
+        node = Node(wallet, gossip, syncer, pool, net_in_q, db_path=args.db)
         node_wrapper.real_node = node
 
         def _chain_provider(from_h, to_h):
@@ -664,7 +673,7 @@ def main():
         # The gas wallet: one Base key sealed under the node's kek, created
         # on first start. It holds nothing until funded, so a fresh node is
         # not made to sit locked for lack of an address nobody has used.
-        node.base_wallet_path = base_wallet.key_path_for(args.keyfile)
+        node.base_wallet_path = base_wallet.default_path()
         base_wallet.ensure(node.base_wallet_path, kek)
         # Answers fee requests while the gas wallet holds enough to pay for
         # one; an operator who does not want to simply does not fund it.

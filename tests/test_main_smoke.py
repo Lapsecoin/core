@@ -38,7 +38,7 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def run_headless(tmp_path, keyfile, extra_env=None, ready_check=None):
+def run_headless(tmp_path, extra_env=None, ready_check=None):
     """Launch main.py against a scratch tmp_path, collect output until
     `ready_check(output_so_far)` is true or it exits or times out, then
     kill it. Returns (ready, exit_code, full_output)."""
@@ -51,7 +51,6 @@ def run_headless(tmp_path, keyfile, extra_env=None, ready_check=None):
     proc = subprocess.Popen(
         [sys.executable, MAIN_PY,
          "--no-gui",
-         "--keyfile", str(keyfile),
          "--db", str(tmp_path / "chain.db"),
          "--port", str(port),
          "--no-update-check"],
@@ -99,21 +98,20 @@ class TestMainStartupSmoke:
     direct check of that, run against the actual broken commit."""
 
     def test_fresh_key_creation_starts_cleanly(self, tmp_path):
-        keyfile = tmp_path / "node.key"
-        ready, code, output = run_headless(tmp_path, keyfile)
+        ready, code, output = run_headless(tmp_path)
         assert ready, f"never reached startup (exit={code}):\n{output}"
         assert "Traceback" not in output
-        assert keyfile.exists()
+        assert (tmp_path / "lapsecoin_wallet.json").exists()
+        assert not (tmp_path / "lapsecoin_key.json").exists()
 
     def test_existing_key_reload_starts_cleanly(self, tmp_path):
-        """A second start against the same keyfile takes the other branch
-        of _load_or_create_key, the branch the real crash hit (an
-        already-provisioned node restarting)."""
-        keyfile = tmp_path / "node.key"
-        ready1, code1, output1 = run_headless(tmp_path, keyfile)
+        """A second start against the same wallet takes the other branch of
+        the start-up, the branch the real crash hit (an already-provisioned
+        node restarting)."""
+        ready1, code1, output1 = run_headless(tmp_path)
         assert ready1, f"first start failed (exit={code1}):\n{output1}"
 
-        ready2, code2, output2 = run_headless(tmp_path, keyfile)
+        ready2, code2, output2 = run_headless(tmp_path)
         assert ready2, f"reload failed (exit={code2}):\n{output2}"
         assert "Traceback" not in output2
         assert "key loaded" in output2

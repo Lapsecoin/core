@@ -35,7 +35,7 @@ def fund(node, *senders):
 
 
 def reopen(node, keyfile):
-    return Node(keyfile=keyfile, public_key=node.pk, gossip=node.gossip,
+    return Node(node.wallet, gossip=node.gossip,
                 syncer=node.syncer, pool=node.pool, net_in_q=node.net_in_q,
                 db_path=node.storage.path)
 

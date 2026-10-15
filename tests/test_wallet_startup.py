@@ -54,38 +54,3 @@ class TestPassphrase:
     def test_a_first_entry_already_given_is_checked_not_asked_again(self, monkeypatch):
         answers(monkeypatch, "same passphrase")        # only the confirmation
         assert wallet.prompt_new_passphrase("same passphrase") == "same passphrase"
-
-
-class TestKeyFile:
-    def test_a_new_key_is_created_and_the_same_passphrase_opens_it(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("LAPSECOIN_PASSPHRASE", "correct horse battery")
-        path = str(tmp_path / "key.json")
-        pk, kek, _ = wallet.load_or_create_key(path)
-        assert os.path.exists(path)
-        pk2, kek2, _ = wallet.load_or_create_key(path)
-        assert pk2 == pk and kek2 == kek
-        assert crypto.public_key_to_address(pk) == crypto.public_key_to_address(pk2)
-
-    def test_the_secret_is_not_stored_in_the_clear(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("LAPSECOIN_PASSPHRASE", "correct horse battery")
-        path = str(tmp_path / "key.json")
-        wallet.load_or_create_key(path)
-        text = open(path).read()
-        assert "correct horse battery" not in text
-        assert isinstance(json.loads(text), dict)
-
-    def test_a_wrong_passphrase_stops_the_start(self, monkeypatch, tmp_path):
-        path = str(tmp_path / "key.json")
-        monkeypatch.setenv("LAPSECOIN_PASSPHRASE", "correct horse battery")
-        wallet.load_or_create_key(path)
-        monkeypatch.setenv("LAPSECOIN_PASSPHRASE", "not the passphrase")
-        with pytest.raises(SystemExit) as stopped:
-            wallet.load_or_create_key(path)
-        assert "Error" in str(stopped.value)
-
-    def test_without_the_variable_a_new_key_asks_twice(self, monkeypatch, tmp_path):
-        asked = answers(monkeypatch, "typed passphrase", "typed passphrase")
-        path = str(tmp_path / "key.json")
-        wallet.load_or_create_key(path)
-        assert asked == ["New passphrase: ", "Confirm passphrase: "]
-        assert os.path.exists(path)

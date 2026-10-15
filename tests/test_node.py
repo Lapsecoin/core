@@ -34,6 +34,7 @@ from chainstate import ChainState
 import gossip as gossip_mod
 from gossip import Gossip
 from node import Node, NodeView, _validate_tail
+from wallet import Wallet
 from params import TICKS_PER_LAPSE
 from tests.fixtures import (
     address, genesis, keypair, make_block, make_tx,
@@ -84,8 +85,7 @@ def node_env(tmp_path):
     db_path = str(tmp_path / "chain.db")
 
     node = Node(
-        keyfile=keyfile,
-        public_key=pk,
+        Wallet(keyfile, pk),
         gossip=gossip,
         syncer=syncer,
         pool=pool,
@@ -181,7 +181,7 @@ class TestLoadCs:
 
         # First node, creates genesis
         n1 = Node(
-            keyfile=keyfile, public_key=pk,
+            Wallet(keyfile, pk),
             gossip=MagicMock(), syncer=MagicMock(),
             pool=MagicMock(), net_in_q=queue.Queue(),
             db_path=db_path,
@@ -190,7 +190,7 @@ class TestLoadCs:
 
         # Second node, should reload genesis from db
         n2 = Node(
-            keyfile=keyfile, public_key=pk,
+            Wallet(keyfile, pk),
             gossip=MagicMock(), syncer=MagicMock(),
             pool=MagicMock(), net_in_q=queue.Queue(),
             db_path=db_path,
@@ -210,7 +210,7 @@ class TestLoadCs:
         db_path = str(tmp_path / "chain3.db")
 
         def start():
-            return Node(keyfile=keyfile, public_key=pk, gossip=MagicMock(), syncer=MagicMock(),
+            return Node(Wallet(keyfile, pk), gossip=MagicMock(), syncer=MagicMock(),
                         pool=MagicMock(), net_in_q=queue.Queue(), db_path=db_path)
 
         n1 = start()
@@ -2029,7 +2029,7 @@ class TestReorgStats:
         node, keyfile, *_ = node_env
         node._record_reorg(7)
         reopened = node_mod.Node(
-            keyfile=keyfile, public_key=node.pk, gossip=node.gossip,
+            Wallet(keyfile, node.pk), gossip=node.gossip,
             syncer=node.syncer, pool=node.pool, net_in_q=node.net_in_q,
             db_path=node.storage.path)
         assert reopened.reorg_stats()["deepest"] == 7

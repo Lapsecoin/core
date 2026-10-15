@@ -122,7 +122,7 @@ class BaseSend:
             ctx["alert_err"] = "This node has no Base gas wallet yet. Restart the node to create one."
             return
         try:
-            kek = crypto_mod.derive_kek(self.node.keyfile, passphrase)
+            kek = self.node.wallet.derive_kek(passphrase)
             if self._direct(net, token):
                 tx_hash = base_wallet.send_eth(path, kek, self._rpc_url(), dest, wei)
             else:

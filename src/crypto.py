@@ -195,6 +195,18 @@ def load_pubkey(path):
         return bytes.fromhex(json.load(f)["public_key"])
 
 
+def derive_kek_data(data, passphrase):
+    """derive_kek for a key file already parsed into a dict."""
+    if not passphrase:
+        raise ValueError("passphrase is mandatory")
+    salt = base64.b64decode(data["salt"])
+    return nacl.pwhash.argon2id.kdf(
+        _KLEN, passphrase.encode(), salt,
+        opslimit=data.get("ops", _OPS),
+        memlimit=data.get("mem", _MEM),
+    )
+
+
 def derive_kek(path, passphrase):
     """Derive and return a key-encryption key (KEK) from the passphrase and
     the salt stored in the key file. The KEK is a 32-byte value suitable for
@@ -209,12 +221,16 @@ def derive_kek(path, passphrase):
         raise ValueError("passphrase is mandatory")
     with open(path) as f:
         data = json.load(f)
-    salt = base64.b64decode(data["salt"])
-    return nacl.pwhash.argon2id.kdf(
-        _KLEN, passphrase.encode(), salt,
-        opslimit=data.get("ops", _OPS),
-        memlimit=data.get("mem", _MEM),
-    )
+    return derive_kek_data(data, passphrase)
+
+
+def decrypt_secret_key_data(data, kek):
+    """decrypt_secret_key for a key file already parsed into a dict."""
+    ciphertext = base64.b64decode(data["ciphertext"])
+    try:
+        return bytes(nacl.secret.SecretBox(kek).decrypt(ciphertext))
+    except nacl.exceptions.CryptoError:
+        raise ValueError("wrong passphrase or corrupted key file")
 
 
 def decrypt_secret_key(path, passphrase=None, kek=None):
@@ -222,23 +238,13 @@ def decrypt_secret_key(path, passphrase=None, kek=None):
     Supply exactly one of passphrase or kek."""
     with open(path) as f:
         data = json.load(f)
-    salt       = base64.b64decode(data["salt"])
-    ciphertext = base64.b64decode(data["ciphertext"])
     if kek is not None:
         derived = kek
     elif passphrase:
-        derived = nacl.pwhash.argon2id.kdf(
-            _KLEN, passphrase.encode(), salt,
-            opslimit=data.get("ops", _OPS),
-            memlimit=data.get("mem", _MEM),
-        )
+        derived = derive_kek_data(data, passphrase)
     else:
         raise ValueError("passphrase or kek is required")
-    box = nacl.secret.SecretBox(derived)
-    try:
-        return bytes(box.decrypt(ciphertext))
-    except nacl.exceptions.CryptoError:
-        raise ValueError("wrong passphrase or corrupted key file")
+    return decrypt_secret_key_data(data, derived)
 
 
 def sign_with_keyfile(message_bytes, keyfile_path, kek):

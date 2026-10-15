@@ -32,7 +32,7 @@ MIGRATED_NOTE = "migrated-from.txt"
 
 # The key is the one file that cannot be recreated. The rest are a chain
 # that can be fetched again, and caches.
-KEY_FILES = ("lapsecoin_key.json", "base_gas.key")
+KEY_FILES = ("lapsecoin_wallet.json", "lapsecoin_key.json", "base_gas.key")
 CHAIN_FILES = ("lapsecoin_chain.db", "lapsecoin_chain.db-wal",
                "lapsecoin_chain.db-shm", "lapsecoin_chain_mempool.json")
 CACHE_FILES = ("lapsecoin_peers.json", "lapsecoin_lt_dht.dat")
@@ -164,7 +164,7 @@ def find_legacy_folders(home=None, max_dirs=4000, seconds=3.0):
                 continue
             for e in entries:
                 try:
-                    if e.name == KEY_FILES[0] and e.is_file():
+                    if e.name in KEY_FILES[:2] and e.is_file():
                         found.append((e.stat().st_mtime, folder))
                     elif (level < depth and e.is_dir(follow_symlinks=False)
                           and e.name.lower() not in _SKIP and not e.name.startswith(".")):
