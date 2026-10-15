@@ -71,9 +71,11 @@ class WalletFile:
     # -- creating and loading -------------------------------------------
 
     @classmethod
-    def create(cls, path, phrase, passphrase, phrase_shown=True):
+    def create(cls, path, phrase, passphrase, phrase_shown=True, scan_pending=False):
         """Seal `phrase` under `passphrase` and write the wallet with account
-        0. Refuses to overwrite an existing file."""
+        0. Refuses to overwrite an existing file. `scan_pending` marks a
+        restore: the node looks for the phrase's other accounts in the chain
+        history once it is running."""
         if os.path.exists(path):
             raise FileExistsError(path)
         if not passphrase:
@@ -91,6 +93,7 @@ class WalletFile:
             "ciphertext": base64.b64encode(sealed).decode(),
             "accounts": [_account_entry(0, hdwallet.falcon_seed_for_account(phrase, "", 0))],
             "phrase_shown": bool(phrase_shown),
+            "scan_pending": bool(scan_pending),
         }
         _atomic_write(path, data)
         return cls(path, data)
@@ -128,6 +131,10 @@ class WalletFile:
     @property
     def phrase_shown(self):
         return bool(self._data.get("phrase_shown", True))
+
+    @property
+    def scan_pending(self):
+        return bool(self._data.get("scan_pending", False))
 
     def account(self, index):
         for a in self._data["accounts"]:
@@ -202,6 +209,11 @@ class WalletFile:
         self._data["accounts"].append(entry)
         self._save()
         return dict(entry)
+
+    def finish_scan(self, kek, indexes):
+        """List the accounts a history scan found and clear the restore flag."""
+        self._data["scan_pending"] = False
+        self.add_discovered(kek, indexes)
 
     def add_discovered(self, kek, indexes):
         """List accounts found by scanning history after a restore."""

@@ -18,7 +18,6 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk
 
-import crypto
 import gui_theme as theme
 import update_check
 from version import LOCAL_VERSION
@@ -26,30 +25,44 @@ from version import LOCAL_VERSION
 log = logging.getLogger("ec.gui")
 
 
-class _PassphraseDialog:
-    """Blocking passphrase entry with inline retry, a wrong passphrase or
-    a too-short new one re-shows the same dialog with an error message
-    instead of crashing or reopening a fresh window each attempt."""
+class _StartupDialog:
+    """Blocking wallet start-up: unlock, or create a new wallet and show its
+    recovery phrase once. A wrong passphrase or a too-short new one re-shows
+    the same dialog with an error message instead of crashing or reopening a
+    fresh window each attempt. The logic is wallet.py's; this is the window."""
 
-    def __init__(self, keyfile, preset_passphrase=None):
-        self.keyfile = keyfile
-        self.is_new = not os.path.exists(keyfile)
-        self.result = None  # (pk, kek, passphrase) on success
+    def __init__(self, source, account=0, preset_passphrase=None):
+        self.source = source
+        self.account = account
+        self.is_new = source.kind == "new"
+        self.result = None  # (wallet, kek, passphrase) on success
+        self._pending = None
 
         theme.make_dpi_aware()
         self.root = tk.Tk()
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
         theme.install(self.root, "LapseCoin")
-        pad = theme.px(self.root, 28)
+        self.pad = theme.px(self.root, 28)
+        self.preset = preset_passphrase
+        self._ask()
 
-        frame = ttk.Frame(self.root, padding=pad)
+    # -- the passphrase page --------------------------------------------
+
+    def _fresh_frame(self):
+        for child in self.root.winfo_children():
+            child.destroy()
+        frame = ttk.Frame(self.root, padding=self.pad)
         frame.pack(fill="both", expand=True)
         theme.header(frame, "LapseCoin").pack(anchor="w")
+        return frame
 
+    def _ask(self):
+        preset = self.preset
+        frame = self._fresh_frame()
         if self.is_new:
             title = "Create your wallet"
-            msg = "No key file found. Choose a passphrase for your new wallet."
+            msg = "No wallet found. Choose a passphrase for your new wallet."
         else:
             title = "Unlock your wallet"
             msg = "Enter your wallet passphrase."
@@ -65,8 +78,8 @@ class _PassphraseDialog:
         ttk.Label(frame, text="Passphrase", style="Dim.TLabel").pack(
             anchor="w", pady=(theme.px(self.root, 12), 3))
         self.pass1 = tk.StringVar()
-        if preset_passphrase is not None:
-            self.pass1.set(preset_passphrase)
+        if preset is not None:
+            self.pass1.set(preset)
         entry1 = ttk.Entry(frame, textvariable=self.pass1, show="*", width=36, style="App.TEntry")
         entry1.pack(anchor="w", fill="x")
 
@@ -75,8 +88,8 @@ class _PassphraseDialog:
             ttk.Label(frame, text="Confirm passphrase", style="Dim.TLabel").pack(
                 anchor="w", pady=(theme.px(self.root, 12), 3))
             self.pass2 = tk.StringVar()
-            if preset_passphrase is not None:
-                self.pass2.set(preset_passphrase)
+            if preset is not None:
+                self.pass2.set(preset)
             ttk.Entry(frame, textvariable=self.pass2, show="*", width=36,
                       style="App.TEntry").pack(anchor="w", fill="x")
 
@@ -91,7 +104,8 @@ class _PassphraseDialog:
         entry1.focus_set()
         theme.center(self.root)
         theme.bring_to_front(self.root)
-        if preset_passphrase is not None:
+        if preset is not None:
+            self.preset = None      # a retry after a wrong preset asks properly
             self.root.after(0, self._submit)
 
     def _cancel(self):
@@ -99,44 +113,77 @@ class _PassphraseDialog:
         self.root.destroy()
 
     def _submit(self):
+        import wallet as wallet_mod
         p1 = self.pass1.get()
         if self.is_new:
-            if len(p1) < 8:
-                self.error_var.set("Passphrase must be at least 8 characters.")
+            if len(p1) < wallet_mod.MIN_PASSPHRASE:
+                self.error_var.set(
+                    f"Passphrase must be at least {wallet_mod.MIN_PASSPHRASE} characters.")
                 return
             if p1 != self.pass2.get():
                 self.error_var.set("Passphrases do not match.")
                 self.pass2.set("")
                 return
             try:
-                sk, pk = crypto.generate_keypair()
-                crypto.save_key(self.keyfile, sk, pk, p1)
-                kek = crypto.derive_kek(self.keyfile, p1)
-                addr = crypto.public_key_to_address(pk)
-                del sk
-                log.info("[startup] key created  file=%s", self.keyfile)
-                log.info("[startup] address=%s", addr)
+                w, kek, phrase = wallet_mod.create_wallet(p1, self.source.value)
             except Exception as e:
-                self.error_var.set(f"Could not create key: {e}")
+                self.error_var.set(f"Could not create the wallet: {e}")
                 return
-            self.result = (pk, kek, p1)
-            self.root.destroy()
+            log.info("[startup] address=%s", w.addr)
+            self._show_phrase(phrase, (w, kek, p1))
             return
 
         try:
-            pk = crypto.load_pubkey(self.keyfile)
-            kek = crypto.derive_kek(self.keyfile, p1)
-            sk_test = crypto.decrypt_secret_key(self.keyfile, kek=kek)
-            del sk_test
-        except ValueError:
-            self.error_var.set("Incorrect passphrase. Try again.")
+            w, kek = wallet_mod.unlock(self.source, p1, self.account)
+        except wallet_mod.WalletFileError as e:
+            self.error_var.set(str(e))
+            return
+        except ValueError as e:
+            self.error_var.set("Incorrect passphrase. Try again." if "passphrase" in str(e)
+                               else str(e))
             self.pass1.set("")
             return
         except Exception as e:
-            self.error_var.set(f"Could not load key: {e}")
+            self.error_var.set(f"Could not load the wallet: {e}")
             return
-        log.info("[startup] key loaded  file=%s", self.keyfile)
-        self.result = (pk, kek, p1)
+        log.info("[startup] key loaded  kind=%s", self.source.kind)
+        if self.source.kind == "wallet" and not w.walletfile.phrase_shown:
+            self._show_phrase(w.walletfile.phrase(kek), (w, kek, p1))
+            return
+        self.result = (w, kek, p1)
+        self.root.destroy()
+
+    # -- the recovery phrase, shown once ----------------------------------
+
+    def _show_phrase(self, phrase, result):
+        self._pending = result
+        frame = self._fresh_frame()
+        ttk.Label(frame, text="Your recovery phrase", style="H2.TLabel").pack(
+            anchor="w", pady=(theme.px(self.root, 22), 2))
+        ttk.Label(frame, text="Write these words down. They restore every address of this "
+                  "wallet on any machine, and they are shown only this once.",
+                  style="Muted.TLabel", wraplength=theme.px(self.root, 400)).pack(anchor="w")
+        grid = ttk.Frame(frame)
+        grid.pack(anchor="w", pady=(theme.px(self.root, 14), 0))
+        words = phrase.split()
+        rows = (len(words) + 2) // 3
+        for i, w in enumerate(words):
+            col, row = divmod(i, rows)
+            ttk.Label(grid, text=f"{i + 1:>2}.  {w}", style="Muted.TLabel").grid(
+                row=row, column=col, sticky="w", padx=(0, theme.px(self.root, 22)), pady=2)
+        btns = ttk.Frame(frame)
+        btns.pack(anchor="e", pady=(theme.px(self.root, 22), 0))
+        ttk.Button(btns, text="I have saved it", style="Primary.TButton",
+                   command=self._phrase_done).pack(side="left")
+        theme.center(self.root)
+
+    def _phrase_done(self):
+        w, kek, passphrase = self._pending
+        try:
+            w.walletfile.mark_phrase_shown()
+        except Exception as e:
+            log.warning("[startup] could not record that the phrase was shown: %s", e)
+        self.result = (w, kek, passphrase)
         self.root.destroy()
 
     def run(self):
@@ -144,10 +191,15 @@ class _PassphraseDialog:
         return self.result
 
 
-def load_or_create_key_gui(keyfile, preset_passphrase=None):
-    """GUI equivalent of main._load_or_create_key. Returns
-    (pk, kek, passphrase), or exits the process if the user cancels."""
-    result = _PassphraseDialog(keyfile, preset_passphrase).run()
+def startup_gui(key_text=None, account=0, preset_passphrase=None):
+    """GUI equivalent of wallet.startup_console. Returns
+    (wallet, kek, passphrase), or exits the process if the user cancels."""
+    import wallet as wallet_mod
+    try:
+        source = wallet_mod.find_source(key_text)
+    except ValueError as e:
+        sys.exit(f"Error: --key: {e}")
+    result = _StartupDialog(source, account, preset_passphrase).run()
     if result is None:
         sys.exit(0)
     return result

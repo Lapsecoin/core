@@ -1,6 +1,7 @@
 """The Base gas wallet: sealed under the node key, created once, spendable
 only with the right passphrase, and shown on the send page."""
 
+import types
 import json
 import os
 import re
@@ -81,8 +82,9 @@ class TestKeyFile:
         bad.write_text("not json")
         assert base_wallet.load_address(str(bad)) is None
 
-    def test_lives_next_to_the_node_key(self, tmp_path):
-        assert base_wallet.key_path_for(str(tmp_path / "node.key")) == str(tmp_path / "base_gas.key")
+    def test_lives_in_the_working_directory(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert base_wallet.default_path() == str(tmp_path / "base_gas.key")
 
 
 class FakeChain:
@@ -151,7 +153,8 @@ def page(tmp_path, kek, monkeypatch):
     addr = base_wallet.create(path, kek_bytes)
     cs = ChainState.from_genesis()
     node = _FullNode(cs)
-    node.keyfile = keyfile
+    node.wallet = types.SimpleNamespace(
+        derive_kek=lambda passphrase: crypto.derive_kek(keyfile, passphrase))
     node.base_wallet_path = path
     chain = FakeChain(monkeypatch, balance=5 * 10 ** 17)
     client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()

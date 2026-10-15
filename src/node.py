@@ -54,7 +54,6 @@ from chainstate import ChainState
 from params import (DB_PATH, MIN_BLOCK_SPACING_SECONDS,
                     VDF_CALIBRATION_ITERATIONS)
 from storage import Storage
-from wallet import Wallet
 
 log = logging.getLogger("ec.node")
 _rng = _secrets.SystemRandom()
@@ -259,10 +258,8 @@ class NodeView:
 
 class Node:
 
-    def __init__(self, keyfile, public_key, gossip, syncer, pool, net_in_q,
-                 db_path=None):
-        self.wallet       = Wallet(keyfile, public_key)
-        self.keyfile      = self.wallet.keyfile
+    def __init__(self, wallet, gossip, syncer, pool, net_in_q, db_path=None):
+        self.wallet       = wallet
         self.pk           = self.wallet.pk
         self.pk_hex       = self.wallet.pk_hex
         self.addr         = self.wallet.addr
@@ -913,7 +910,7 @@ class Node:
         and permanent like the rest of the transaction, not encrypted."""
         if not passphrase:
             raise ValueError("passphrase is required to sign a transaction")
-        kek = crypto.derive_kek(self.keyfile, passphrase)
+        kek = self.wallet.derive_kek(passphrase)
         try:
             return self._build_and_sign_tx_with_kek(to_outputs, fee, kek, memo)
         finally:

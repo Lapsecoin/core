@@ -25,9 +25,10 @@ log = logging.getLogger("ec.base_wallet")
 KEY_FILE_NAME = "base_gas.key"
 
 
-def key_path_for(node_keyfile: str) -> str:
-    """The gas wallet lives next to the node key."""
-    return os.path.join(os.path.dirname(os.path.abspath(node_keyfile)), KEY_FILE_NAME)
+def default_path() -> str:
+    """The gas wallet lives in the working directory, with the node's other
+    files (an installed build has already moved there, see datadir.py)."""
+    return os.path.abspath(KEY_FILE_NAME)
 
 
 def create(path: str, kek: bytes) -> str:
