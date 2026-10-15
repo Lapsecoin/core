@@ -9,7 +9,6 @@ network or a token, is a swap and bridge through Relay, quoted first.
 import logging
 
 import base_wallet
-import crypto as crypto_mod
 import evm
 import gas
 import relay

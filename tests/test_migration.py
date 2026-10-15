@@ -160,8 +160,7 @@ def test_funds_that_arrive_after_the_move_are_reported(home, old_node, monkeypat
     assert "cannot be reached" in caplog.text
 
 
-# -- a restored phrase finds its other addresses ----------------------------
-
+# A restored phrase finds its other addresses
 def test_restore_scan_lists_the_used_accounts_and_stops_after_a_gap(home, monkeypatch):
     import hdwallet
     phrase = "abandon " * 11 + "about"

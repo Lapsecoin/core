@@ -42,6 +42,9 @@ $oqs = Join-Path $Liboqs "bin"
 $oqsDll = @("oqs.dll", "liboqs.dll") | ForEach-Object { Join-Path $oqs $_ } |
     Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $oqsDll) { throw "no oqs.dll in $oqs" }
+# The HD wallet's seeded Falcon key generation, built beside it (release.yml).
+$fsDll = Join-Path $oqs "falcon_seeded.dll"
+if (-not (Test-Path $fsDll)) { throw "no falcon_seeded.dll in $oqs" }
 
 $env:PYTHONPATH = "src"
 
@@ -60,6 +63,7 @@ python -m nuitka --mode=standalone @common @identity `
     --include-data-dir=templates_html=templates_html `
     --include-data-dir=vendor=vendor `
     --include-data-files="$oqsDll=_oqs/bin/$(Split-Path $oqsDll -Leaf)" `
+    --include-data-files="$fsDll=_oqs/bin/falcon_seeded.dll" `
     --include-package-data=limits `
     main.py
 if ($LASTEXITCODE) { throw "nuitka failed for the program" }

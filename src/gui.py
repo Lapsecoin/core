@@ -47,8 +47,7 @@ class _StartupDialog:
         self.preset = preset_passphrase
         self._ask()
 
-    # -- the passphrase page --------------------------------------------
-
+    # The passphrase page
     def _fresh_frame(self):
         for child in self.root.winfo_children():
             child.destroy()
@@ -162,8 +161,7 @@ class _StartupDialog:
         self.result = (w, kek, p1)
         self.root.destroy()
 
-    # -- the recovery phrase, shown once ----------------------------------
-
+    # The recovery phrase, shown once
     def _show_phrase(self, phrase, result, notice=None):
         self._pending = result
         frame = self._fresh_frame()

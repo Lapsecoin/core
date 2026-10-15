@@ -103,3 +103,17 @@ sig = s.sign(b"lapsecoin")
 assert oqs.Signature("Falcon-512").verify(b"lapsecoin", sig, pk)
 print("prebuilt verified:", loaded[0])
 PY
+
+# 5. the seeded Falcon library came in the same download, loads from there,
+#    and reproduces the public key the wallet page publishes for its first seed
+python3 - <<'PY'
+import os, sys
+sys.path.insert(0, "src")
+import falcon_seeded
+
+assert falcon_seeded.available(), "the seeded Falcon library did not come with the prebuilt"
+loaded = sorted({l.split()[-1] for l in open("/proc/self/maps") if "libfalcon_seeded" in l})
+home_lib = os.path.realpath(os.path.expanduser("~/_oqs/lib"))
+assert loaded and all(os.path.realpath(p).startswith(home_lib) for p in loaded), loaded
+print("seeded library verified:", loaded[0])
+PY

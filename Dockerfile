@@ -20,6 +20,15 @@ RUN git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/lib
 
 WORKDIR /app
 
+# The HD wallet's seeded Falcon key generation, built from the same PQClean
+# sources liboqs ships (native/falcon_seeded) and installed beside liboqs.
+COPY native/falcon_seeded /tmp/falcon_seeded
+RUN cmake -S /tmp/falcon_seeded -B /tmp/falcon_seeded/build -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && cmake --build /tmp/falcon_seeded/build \
+    && cmake --install /tmp/falcon_seeded/build \
+    && ldconfig \
+    && rm -rf /tmp/falcon_seeded
+
 COPY requirements.txt .
 # chiavdf's build pulls in libtorrent via apt above; pip install picks up the
 # system libtorrent module since apt provides python3-libtorrent, not a wheel.
@@ -33,16 +42,19 @@ COPY . .
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 
-# Chain DB, wallet key file, and logs should live on a mounted volume so they
-# survive container restarts/rebuilds.
+# The wallet, chain DB and logs live on a mounted volume so they survive
+# container restarts/rebuilds. The node keeps its files in its working
+# directory, so that is the volume.
 VOLUME ["/data"]
+WORKDIR /data
 
 EXPOSE 8333
 
 # LAPSECOIN_PASSPHRASE must be supplied at runtime (e.g. via `docker run -e`
 # or an env file); it is intentionally not baked into the image.
-CMD ["python", "main.py", \
+# A volume that still holds an old lapsecoin_key.json is moved to a recovery
+# phrase at start: the phrase is printed once to this container's output.
+CMD ["python", "/app/main.py", \
      "--log-level", "INFO", \
-     "--key", "/data/lapsecoin_key.json", \
      "--db", "/data/lapsecoin_chain.db", \
      "--no-gui"]

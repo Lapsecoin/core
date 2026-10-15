@@ -35,6 +35,17 @@ export LAPSECOIN_PASSPHRASE="your passphrase"
 ./lapsecoin --no-gui
 ```
 
+## Your wallet
+
+The first start creates a wallet and shows its **recovery phrase** (12 words) once, in the window or the terminal. Write it down: it restores every address of the wallet on any machine. It is kept in `lapsecoin_wallet.json`, encrypted under your passphrase.
+
+- **More addresses.** The **Addresses** page adds one, names them and shows each balance (`--new-address` does the same from the terminal). Each address is its own account. The node mines and builds as the one it started with (`--account N`, default 0); Send and the board let you pick which address signs, and remember the last one you used.
+- **A key for another machine.** On a box that should mine without holding your recovery phrase, run it with one address's key only: **Addresses > Export a key**, or `./lapsecoin --export --account 1`. It prints about 120 characters (`lc1-...`) sealed under a *new* passphrase. On that machine use it as `--key` or `$LAPSECOIN_KEY` (with `LAPSECOIN_PASSPHRASE`). It never holds the phrase, so losing the machine exposes that one address and nothing else. Nothing is written to disk there.
+- **Restoring.** In an empty folder, `./lapsecoin --restore` asks for the phrase (hidden input, or piped in) and a passphrase. When the node has synced it finds the other addresses the phrase has used.
+- **Upgrading an older node.** A node that still has `lapsecoin_key.json` moves to a recovery phrase at its next start: it creates the wallet under the same passphrase, shows the phrase once and runs as the new address. Once synced it sends the old address's funds to it in one ordinary transaction and deletes the old key. Without a terminal or window (Docker, systemd) the phrase is printed once to the program's output, never to the log file.
+
+The phrase follows the convention on the [wallet integration page](https://lapsecoin.github.io/wallets.html), so other wallets that follow it restore the same addresses. FALCON key generation from a seed is not in liboqs, so a small library built from the same PQClean sources (`native/falcon_seeded`) provides it; the install scripts and releases include it, and a source checkout builds it with `make -C native/falcon_seeded`.
+
 ## Fee requests
 
 **Fees** in the wallet gets you gas on another chain: pick the network and what you want to do, sign with the wallet that holds the address, and burn 10 LAPSE (returned only if no node offers). To serve requests, fund the Base address on **Send**. A node helps while that wallet holds enough, and does nothing otherwise.
