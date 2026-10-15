@@ -633,6 +633,8 @@ def main():
 
     def background_startup():
         node = Node(wallet, gossip, syncer, pool, net_in_q, db_path=args.db)
+        node.background_jobs = [j for j in (getattr(wallet, "migration", None),
+                                            getattr(wallet, "discovery", None)) if j]
         node_wrapper.real_node = node
 
         def _chain_provider(from_h, to_h):

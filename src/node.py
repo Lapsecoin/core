@@ -284,6 +284,7 @@ class Node:
         self._draw_closes = 0.0
         self.running      = False
         self._kek         = None
+        self.background_jobs = []   # objects with start(node); run once the loop is up
         self._loop_thread = None
         # Set by _handle_inbound_block when a peer shows evidence of a
         # higher chain: the address to sync from next. Evidence, not proof
@@ -765,6 +766,8 @@ class Node:
         self._load_mempool()
         threading.Thread(target=self._mempool_saver, daemon=True,
                          name="mempool-save").start()
+        for job in self.background_jobs:
+            job.start(self)
         try:
             while self.running:
                 try:

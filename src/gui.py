@@ -146,6 +146,15 @@ class _StartupDialog:
         except Exception as e:
             self.error_var.set(f"Could not load the wallet: {e}")
             return
+        if self.source.kind == "legacy":
+            try:
+                w, kek, phrase = wallet_mod.begin_migration(p1, w, kek, self.source.value)
+            except Exception as e:
+                self.error_var.set(f"Could not create the new wallet: {e}")
+                return
+            log.info("[startup] address=%s", w.addr)
+            self._show_phrase(phrase, (w, kek, p1), notice=wallet_mod.MIGRATION_NOTICE)
+            return
         log.info("[startup] key loaded  kind=%s", self.source.kind)
         if self.source.kind == "wallet" and not w.walletfile.phrase_shown:
             self._show_phrase(w.walletfile.phrase(kek), (w, kek, p1))
@@ -155,9 +164,13 @@ class _StartupDialog:
 
     # -- the recovery phrase, shown once ----------------------------------
 
-    def _show_phrase(self, phrase, result):
+    def _show_phrase(self, phrase, result, notice=None):
         self._pending = result
         frame = self._fresh_frame()
+        if notice:
+            ttk.Label(frame, text=notice.replace("\n", " "), style="Muted.TLabel",
+                      wraplength=theme.px(self.root, 400)).pack(
+                anchor="w", pady=(theme.px(self.root, 18), 0))
         ttk.Label(frame, text="Your recovery phrase", style="H2.TLabel").pack(
             anchor="w", pady=(theme.px(self.root, 22), 2))
         ttk.Label(frame, text="Write these words down. They restore every address of this "

@@ -141,6 +141,10 @@ class PhraseWallet(_Signer):
         self.account    = account
         self.pk_hex     = self.pk.hex()
         self.addr       = walletfile.address(account)
+        # Background jobs the node runs once it is up: moving an old key's
+        # funds here, and finding a restored phrase's other addresses.
+        self.migration  = None
+        self.discovery  = None
 
     def derive_kek(self, passphrase):
         return self.walletfile.derive_kek(passphrase)
@@ -209,17 +213,57 @@ def unlock(source, passphrase, account=0):
     if kind == "wallet":
         wf = WalletFile.load(value)
         kek = wf.derive_kek(passphrase)
-        try:
-            wf.verify(kek)
-        except WalletFileError:
-            raise
-        return PhraseWallet(wf, account), kek
+        wf.verify(kek)
+        w = PhraseWallet(wf, account)
+        _attach_jobs(w, kek, passphrase)
+        return w, kek
     if kind == "legacy":
         w = Wallet(value, crypto.load_pubkey(value))
         kek = w.derive_kek(passphrase)
         crypto.decrypt_secret_key(value, kek=kek)
         return w, kek
     raise ValueError("nothing to unlock")
+
+
+def _attach_jobs(w, kek, passphrase, legacy_file=LEGACY_KEY_FILE):
+    """A wallet that still has an old key to move (a start that was cut short
+    leaves the old file beside the new one), a move waiting to confirm, or a
+    restore to scan gets the job that finishes it."""
+    from migration import Discovery, Migration
+    wf = w.walletfile
+    legacy = legacy_kek = None
+    if os.path.exists(legacy_file):
+        try:
+            legacy = Wallet(legacy_file, crypto.load_pubkey(legacy_file))
+            legacy_kek = legacy.derive_kek(passphrase)
+            crypto.decrypt_secret_key(legacy_file, kek=legacy_kek)
+        except (ValueError, OSError, KeyError):
+            log.warning("[startup] %s is there but does not open with this passphrase; "
+                        "leaving it alone", legacy_file)
+            legacy = legacy_kek = None
+    if legacy is not None or wf.pending_sweep:
+        w.migration = Migration(wf, legacy, legacy_kek, legacy_file if legacy else None)
+    if wf.scan_pending:
+        w.discovery = Discovery(wf, kek)
+
+
+def begin_migration(passphrase, legacy, legacy_kek, legacy_file=LEGACY_KEY_FILE,
+                    path=WALLET_FILE):
+    """An old key becomes a recovery-phrase wallet, under the same passphrase.
+    Returns (wallet, kek, phrase) like create_wallet; the caller shows the
+    phrase. The node then runs as the new account 0, and the returned
+    wallet's `migration` job moves the old address's funds there."""
+    from migration import Migration
+    w, kek, phrase = create_wallet(passphrase, path)
+    w.migration = Migration(w.walletfile, legacy, legacy_kek, legacy_file)
+    log.info("[startup] moving the old key %s to the new address %s", legacy.addr, w.addr)
+    return w, kek, phrase
+
+
+MIGRATION_NOTICE = (
+    "This node's old single key has been replaced by a recovery-phrase wallet.\n"
+    "Its funds move to the new address once the node has synced, and the node\n"
+    "now runs as the new address.")
 
 
 def create_wallet(passphrase, path=WALLET_FILE, phrase=None):
@@ -234,7 +278,11 @@ def create_wallet(passphrase, path=WALLET_FILE, phrase=None):
                            scan_pending=not new)
     kek = wf.derive_kek(passphrase)
     log.info("[startup] wallet created  file=%s", path)
-    return PhraseWallet(wf, 0), kek, phrase
+    w = PhraseWallet(wf, 0)
+    if not new:
+        from migration import Discovery
+        w.discovery = Discovery(wf, kek)
+    return w, kek, phrase
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +361,15 @@ def startup_console(key_text=None, account=0):
         wallet, kek = unlock(source, passphrase, account)
     except (ValueError, WalletFileError) as e:
         sys.exit(f"Error: {e}")
+    if source.kind == "legacy":
+        legacy, legacy_kek = wallet, kek
+        wallet, kek, phrase = begin_migration(passphrase, legacy, legacy_kek, source.value)
+        print(MIGRATION_NOTICE)
+        show_phrase_console(phrase)
+        del phrase
+        wallet.walletfile.mark_phrase_shown()
+        log.info("[startup] address=%s", wallet.addr)
+        return wallet, kek, passphrase
     if source.kind == "wallet" and not wallet.walletfile.phrase_shown:
         # A crash before the phrase was acknowledged: show it again.
         phrase = wallet.walletfile.phrase(kek)
