@@ -1,0 +1,15 @@
+# The PQClean Falcon-512 "clean" files in this folder, byte for byte as shipped in liboqs.
+# tests/test_liboqs_pin.py checks these hashes and that the version below equals the liboqs pin,
+# so moving the pin means re-copying the files from that liboqs tag (src/sig/falcon/pqclean_falcon-512_clean/).
+liboqs 0.16.0
+1d675b6ee18a0744ca6ab7966a2a72a44207c82fe5e3ac58f892bf1bd6be99a0  keygen.c
+2023cfb3633ac89bf93072f9e5d8e1284a9251e19fd015a67f5aa3e829f2f19c  codec.c
+2942a2ee1c3392de02d7e1ead6859163346039b5066804544ed27c7e43dfcb80  common.c
+a8761dbbd64f3b50f5a800aab8c61b9ac685ac8f72d2bc056065c9da5588c004  fft.c
+7e3d9cccd9c579d844fd32fcb84fdfbdb3d7c78fa6ecb64be095d7fddff04031  fpr.c
+3a3d0002f6aee2e68bfe7e22c0cd11ba65090230d58a31319f2985f352b14da4  rng.c
+93315cff7e968b5b4ed18d4b2175d1e3e19c3fa54c8d231b187cea403b10cf8c  vrfy.c
+d48522c618159a73eeaa8b073114e635af8982eff0cb0a84b69a3ec22abec182  inner.h
+70875e853e3ad46caff6b8c71bebe8b979054eba63f4457f9106e464c9680c14  fpr.h
+353ea62938c75e025276e5ae8499a7bd48c8234bb5b95b488198309695b88fcf  api.h
+22da67750d11d64e523e0f8eff2327ffc74784a0987c0e54588859fccd68e6b9  LICENSE

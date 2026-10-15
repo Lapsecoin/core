@@ -18,6 +18,7 @@ on:
       - scripts/install.ps1
       - scripts/check_prebuilt_linux.sh
       - scripts/check_prebuilt_windows.ps1
+      - native/falcon_seeded/**
 
 env:
   # Keep equal to LIBOQS_REF in release.yml and the version in the install
@@ -40,6 +41,8 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq cmake ninja-build gcc g++ git binutils libssl-dev ca-certificates
 
+      - uses: actions/checkout@v5
+
       - name: Build liboqs
         run: |
           git clone --depth 1 --branch "$LIBOQS_VERSION" https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
@@ -52,11 +55,25 @@ jobs:
           cmake --build /tmp/liboqs/build
           cmake --install /tmp/liboqs/build
 
+      # liboqs has no seeded key generation for signatures, which the HD
+      # wallet needs, so the same PQClean Falcon-512 sources are built with a
+      # seed argument (native/falcon_seeded) and shipped in the same download.
+      - name: Build the seeded Falcon library
+        run: |
+          cmake -S native/falcon_seeded -B /tmp/fs -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/oqs
+          cmake --build /tmp/fs
+          cmake --install /tmp/fs
+          test -f /tmp/oqs/lib/libfalcon_seeded.so
+
       - name: Check the glibc it needs
         run: |
-          max=$(objdump -T /tmp/oqs/lib/liboqs.so.$LIBOQS_VERSION | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-          echo "needs up to $max"
-          test "$(printf '%s\n' GLIBC_2.34 "$max" | sort -V | tail -1)" = "GLIBC_2.34"
+          for lib in /tmp/oqs/lib/liboqs.so.$LIBOQS_VERSION /tmp/oqs/lib/libfalcon_seeded.so; do
+            max=$(objdump -T "$lib" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "$lib needs up to $max"
+            test "$(printf '%s\n' GLIBC_2.34 "$max" | sort -V | tail -1)" = "GLIBC_2.34"
+          done
 
       - name: Pack it
         run: |
@@ -64,7 +81,7 @@ jobs:
           out="$PWD/dist"
           # The glob has to be expanded inside the install folder, so cd there
           # first: tar -C only changes directory after the shell has expanded it.
-          (cd /tmp/oqs && tar -czf "$out/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" lib/liboqs.so lib/liboqs.so.*)
+          (cd /tmp/oqs && tar -czf "$out/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" lib/liboqs.so lib/liboqs.so.* lib/libfalcon_seeded.so)
           tar -tzvf "$out/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz"
           cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
 
@@ -92,6 +109,8 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v5
+
       - name: Build liboqs
         shell: pwsh
         run: |
@@ -107,6 +126,14 @@ jobs:
           cmake --build C:/liboqs/build --config Release --parallel
           cmake --install C:/liboqs/build --config Release
           if (-not (Test-Path C:/oqs/bin/oqs.dll)) { Get-ChildItem -Recurse C:/oqs | Select-Object FullName; throw "oqs.dll was not built" }
+
+      - name: Build the seeded Falcon library
+        shell: pwsh
+        run: |
+          cmake -S native/falcon_seeded -B C:/fs -DCMAKE_INSTALL_PREFIX=C:/oqs
+          cmake --build C:/fs --config Release
+          cmake --install C:/fs --config Release
+          if (-not (Test-Path C:/oqs/bin/falcon_seeded.dll)) { Get-ChildItem -Recurse C:/oqs | Select-Object FullName; throw "falcon_seeded.dll was not built" }
 
       - name: Pack it
         shell: pwsh

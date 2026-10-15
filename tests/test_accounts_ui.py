@@ -62,8 +62,7 @@ def page(client, path="/addresses"):
     return client.get(path).get_data(as_text=True)
 
 
-# -- the page ---------------------------------------------------------------
-
+# The page
 def test_the_page_lists_every_address_with_its_balance(world):
     html = page(world.client)
     assert ADDR0 in html and ADDR1 in html
@@ -87,8 +86,7 @@ def test_no_page_shows_the_recovery_phrase(world):
         assert "abandon" not in page(world.client, path)
 
 
-# -- adding and naming -------------------------------------------------------------
-
+# Adding and naming
 def test_new_address_needs_the_passphrase(world):
     html = submit(world.client, "/addresses/new", page="/addresses", passphrase="nope nope nope").get_data(as_text=True)
     assert "not this wallet" in html
@@ -108,8 +106,7 @@ def test_a_name_can_be_set(world):
     assert "shop" in page(world.client)
 
 
-# -- exporting ------------------------------------------------------------------------
-
+# Exporting
 def test_export_shows_the_short_key_once_and_it_opens_that_account(world):
     html = submit(world.client, "/addresses/export", page="/addresses", account=1,
                   passphrase=PASS, new_passphrase=BOX).get_data(as_text=True)
@@ -142,8 +139,7 @@ def test_a_form_works_only_once(world):
     assert len(world.wf.accounts) == 3
 
 
-# -- choosing the address a send signs as -------------------------------------------
-
+# Choosing the address a send signs as
 def sent(world):
     return world.node.mempool.all_txs()
 
@@ -200,8 +196,7 @@ def test_a_single_key_node_shows_no_picker_and_cannot_add_addresses(tmp_path, mo
     assert "single key" in out
 
 
-# -- the board ----------------------------------------------------------------------
-
+# The board
 def test_the_board_offers_post_as_and_marks_every_address_as_mine(world):
     import tx as tx_mod
     html = page(world.client, "/board")

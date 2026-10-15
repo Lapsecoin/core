@@ -32,11 +32,17 @@ for _root in _search_roots:
     if _liboqs_bins:
         break
 
+# The HD wallet's seeded Falcon key generation (make -C native/falcon_seeded).
+# It sits beside liboqs in the bundle, where falcon_seeded.py looks first.
+_falcon_seeded = [(_p, ".") for _p in glob.glob("native/falcon_seeded/libfalcon_seeded.so")]
+if sys.platform != "win32" and not _falcon_seeded:
+    raise SystemExit("native/falcon_seeded/libfalcon_seeded.so is missing: run make -C native/falcon_seeded first")
+
 _msvc_dlls = []
 
 _all_binaries = [
     *nacl_binaries, *cffi_binaries, *oqs_binaries,
-    *chiavdf_binaries, *_liboqs_bins, *_msvc_dlls,
+    *chiavdf_binaries, *_liboqs_bins, *_falcon_seeded, *_msvc_dlls,
 ]
 _all_datas = [
     ("VERSION", "."),

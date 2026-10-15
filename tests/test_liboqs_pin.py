@@ -49,3 +49,24 @@ def test_the_install_scripts_look_for_the_release_the_workflow_publishes():
     assert "tag_name: liboqs-${{ env.LIBOQS_VERSION }}" in _read(".github", "workflows", "liboqs.yml")
     assert "liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" in _read("scripts", "install.sh")
     assert "liboqs-$LiboqsVersion-windows-x64.zip" in _read("scripts", "install.ps1")
+
+
+def _falcon_sources():
+    lines = [ln.split() for ln in _read("native", "falcon_seeded", "SOURCES").splitlines()
+             if ln.strip() and not ln.startswith("#")]
+    version = next(ln[1] for ln in lines if ln[0] == "liboqs")
+    return version, {name: digest for digest, name in (ln for ln in lines if ln[0] != "liboqs")}
+
+
+def test_the_vendored_falcon_sources_are_the_pinned_liboqs_ones():
+    """native/falcon_seeded builds the same PQClean files liboqs ships, so the
+    keys it derives are the ones the wallet page publishes. They must stay the
+    files of the pinned liboqs tag."""
+    import hashlib
+    version, hashes = _falcon_sources()
+    assert version == next(iter(set(_versions().values()))), (
+        "native/falcon_seeded/SOURCES names another liboqs than the pin: copy the files "
+        "from the new tag and update SOURCES")
+    for name, digest in hashes.items():
+        with open(os.path.join(ROOT, "native", "falcon_seeded", name), "rb") as f:
+            assert hashlib.sha256(f.read()).hexdigest() == digest, f"{name} was changed"

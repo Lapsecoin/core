@@ -53,6 +53,8 @@ lapsecoin_data = [
     "docs/whitepaper.md",
     "src/*.py",
     "src/bip39_english.txt",
+    "native/falcon_seeded/*.c",
+    "native/falcon_seeded/*.h",
     "templates_html/*.html",
     "vendor/*",
 ]

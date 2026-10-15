@@ -40,8 +40,7 @@ def make_legacy(path):
     return pk
 
 
-# -- choosing a source ---------------------------------------------------
-
+# Choosing a source
 def test_nothing_here_means_a_new_wallet(home):
     assert wallet.find_source().kind == "new"
 
@@ -87,8 +86,7 @@ def test_a_noise_line_in_front_of_old_key_text_is_ignored(home):
     assert wallet.find_source("liboqs-python faulthandler is disabled\n" + text + "\n").kind == "text"
 
 
-# -- unlocking each kind ---------------------------------------------------
-
+# Unlocking each kind
 def test_phrase_wallet_signs_for_its_account(home):
     w, kek, phrase = wallet.create_wallet(PASS, phrase=PHRASE)
     assert w.addr == ADDR0 and phrase == PHRASE
@@ -147,8 +145,7 @@ def test_create_flags_the_phrase_until_it_is_shown(home):
     assert not WalletFile.load(wallet.WALLET_FILE).phrase_shown
 
 
-# -- the console flow ---------------------------------------------------------
-
+# The console flow
 def test_console_creates_a_wallet_and_prints_the_phrase_once(home, monkeypatch, capsys):
     monkeypatch.setenv(wallet.PASSPHRASE_ENV, PASS)
     w, kek, passphrase = wallet.startup_console()
@@ -177,8 +174,7 @@ def test_console_exits_on_the_wrong_passphrase(home, monkeypatch):
         wallet.startup_console()
 
 
-# -- the commands -----------------------------------------------------------------
-
+# The commands
 def run_main(cwd, *args, stdin=None, env=None):
     return subprocess.run(
         [sys.executable, os.path.join(ROOT, "main.py"), *args],

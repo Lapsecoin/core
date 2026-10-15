@@ -82,3 +82,23 @@ $pyFile = Join-Path $work "verify.py"
 Set-Content -Path $pyFile -Value $py -Encoding ascii
 python $pyFile $oqsDir $want
 if ($LASTEXITCODE -ne 0) { throw "FAIL: the loaded liboqs is not the downloaded prebuilt" }
+
+# 5. the seeded Falcon library came in the same download, loads from there,
+#    and reproduces the public key the wallet page publishes for its first seed
+$py2 = @'
+import os, sys
+sys.path.insert(0, "src")
+import falcon_seeded
+assert falcon_seeded.available(), "the seeded Falcon library did not come with the prebuilt"
+p = os.path.realpath(falcon_seeded._lib._name)
+assert p.lower().startswith(os.path.realpath(sys.argv[1]).lower()), p
+print("seeded library verified:", p)
+'@
+$pyFile2 = Join-Path $work "verify_seeded.py"
+Set-Content -Path $pyFile2 -Value $py2 -Encoding ascii
+$env:OQS_INSTALL_PATH = $oqsDir
+Push-Location $repo
+python $pyFile2 $oqsDir
+$code = $LASTEXITCODE
+Pop-Location
+if ($code -ne 0) { throw "FAIL: the seeded Falcon library did not come with the prebuilt" }

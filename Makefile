@@ -25,9 +25,15 @@ DIST    = dist
 BUILD   = build
 APPDIR  = AppDir
 
-.PHONY: linux windows icons test clean
+.PHONY: linux windows icons native test clean
 
-linux: icons
+# The HD wallet's seeded Falcon key generation (needs a C compiler). The Linux
+# build bundles it; running from a checkout builds it the first time it is
+# needed if a compiler is there, or run this once.
+native:
+	$(MAKE) -C native/falcon_seeded
+
+linux: icons native
 	pyinstaller --clean --noconfirm $(SPEC)
 	@which appimagetool > /dev/null 2>&1 || (echo "appimagetool not found. See Makefile header." && exit 1)
 	rm -rf $(APPDIR)
@@ -57,5 +63,6 @@ test:
 	python3 -m pytest tests/ -q
 
 clean:
+	$(MAKE) -C native/falcon_seeded clean
 	rm -rf $(DIST) $(BUILD) $(APPDIR) __pycache__ lapsecoin_chain.db lapsecoin_chain.db-shm lapsecoin_chain.db-wal
 	find . -name "*.pyc" -delete

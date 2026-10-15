@@ -161,6 +161,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pytest-xdist
 
+      # The HD wallet's seeded Falcon key generation (native/falcon_seeded).
+      # Without it the tests that need it skip instead of running.
+      - name: Build the seeded Falcon library
+        run: make -C native/falcon_seeded
+
       # One worker per core. loadfile keeps each test file on a single
       # worker, so tests inside a file still run in order together.
       - name: Run tests
@@ -242,6 +247,10 @@ jobs:
           chmod +x appimagetool
           sudo mv appimagetool /usr/local/bin/appimagetool
 
+      # Bundled into the AppImage by lapsecoin.spec.
+      - name: Build the seeded Falcon library
+        run: make -C native/falcon_seeded
+
       - name: Build AppImage
         run: make linux
 
@@ -318,6 +327,16 @@ jobs:
       - name: Put liboqs on PATH
         shell: pwsh
         run: echo "C:\liboqs\install\bin" >> $env:GITHUB_PATH
+
+      # The HD wallet's seeded Falcon key generation (native/falcon_seeded),
+      # built next to oqs.dll so scripts/build_windows.ps1 packs it with it.
+      - name: Build the seeded Falcon library
+        shell: pwsh
+        run: |
+          cmake -S native/falcon_seeded -B C:/fs -DCMAKE_INSTALL_PREFIX=C:/liboqs/install
+          cmake --build C:/fs --config Release
+          cmake --install C:/fs --config Release
+          if (-not (Test-Path C:/liboqs/install/bin/falcon_seeded.dll)) { throw "falcon_seeded.dll was not built" }
 
       - name: Install Visual C++ redistributable
         run: choco install vcredist140 --no-progress -y

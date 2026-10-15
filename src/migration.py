@@ -49,8 +49,7 @@ class Migration:
     def done(self):
         return self.legacy is None and self.wf.pending_sweep is None
 
-    # -- one pass --------------------------------------------------------
-
+    # One pass
     def step(self, node, now=None):
         """Do whatever is due. Returns a short word for what happened."""
         now = time.monotonic() if now is None else now
@@ -121,8 +120,7 @@ class Migration:
         if self.legacy_path and os.path.exists(self.legacy_path):
             os.remove(self.legacy_path)
 
-    # -- the thread -------------------------------------------------------
-
+    # The thread
     def run(self, node):
         while node.running and not self.done:
             try:

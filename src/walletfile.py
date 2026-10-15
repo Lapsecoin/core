@@ -68,8 +68,7 @@ class WalletFile:
         self.path = path
         self._data = data
 
-    # -- creating and loading -------------------------------------------
-
+    # Creating and loading
     @classmethod
     def create(cls, path, phrase, passphrase, phrase_shown=True, scan_pending=False):
         """Seal `phrase` under `passphrase` and write the wallet with account
@@ -122,8 +121,7 @@ class WalletFile:
         except (OSError, ValueError, AttributeError):
             return False
 
-    # -- the public side (no passphrase needed) --------------------------
-
+    # The public side (no passphrase needed)
     @property
     def accounts(self):
         return [dict(a) for a in self._data["accounts"]]
@@ -148,8 +146,7 @@ class WalletFile:
     def public_key(self, index=0):
         return bytes.fromhex(self.account(index)["public_key"])
 
-    # -- unlocking -------------------------------------------------------
-
+    # Unlocking
     def derive_kek(self, passphrase):
         if not passphrase:
             raise ValueError("passphrase is mandatory")
@@ -183,8 +180,7 @@ class WalletFile:
         finally:
             del phrase
 
-    # -- using accounts --------------------------------------------------
-
+    # Using accounts
     def secret_key(self, kek, index=0):
         """The FALCON secret key for an account, derived now. The caller
         signs with it and drops it."""
@@ -285,7 +281,6 @@ class WalletFile:
         finally:
             del seed
 
-    # -- saving ----------------------------------------------------------
-
+    # Saving
     def _save(self):
         _atomic_write(self.path, self._data)

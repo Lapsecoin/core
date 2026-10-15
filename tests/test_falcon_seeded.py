@@ -38,3 +38,23 @@ def test_liboqs_signs_and_verifies_with_a_derived_key():
     sig = crypto.sign(b"hello", sk)
     assert crypto.verify(b"hello", sig, pk)
     assert not crypto.verify(b"hellp", sig, pk)
+
+
+def test_a_library_that_does_not_reproduce_the_published_key_is_refused(monkeypatch):
+    monkeypatch.setattr(falcon_seeded, "_KAT_PUBLIC_KEY_SHA256", "0" * 64)
+    lib = falcon_seeded._load()
+    with pytest.raises(RuntimeError, match="published key"):
+        falcon_seeded._self_test(lib)
+
+
+def test_it_builds_itself_from_the_source_when_no_library_is_found(tmp_path, monkeypatch):
+    import shutil
+    if not shutil.which("cc") and not shutil.which("gcc"):
+        pytest.skip("no C compiler")
+    monkeypatch.setattr(falcon_seeded, "_search_dirs", lambda: [str(tmp_path / "nothing")])
+    monkeypatch.setattr(falcon_seeded, "_cache_dir", lambda: str(tmp_path / "cache"))
+    monkeypatch.setattr(falcon_seeded, "_lib", None)
+    # the search finds nothing, so it compiles into the cache and then needs the cache searched
+    monkeypatch.setattr(falcon_seeded, "_search_dirs", lambda: [str(tmp_path / "nothing"), str(tmp_path / "cache")])
+    assert falcon_seeded.available()
+    assert (tmp_path / "cache").is_dir() and any((tmp_path / "cache").iterdir())
