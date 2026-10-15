@@ -68,6 +68,36 @@ def get_vdf_iterations(chain) -> int:
     return prior_iterations
 
 
+def retarget_progress(chain):
+    """Where the chain stands in the difficulty window that is open now.
+
+    The window is the one get_vdf_iterations will replay at the next
+    boundary: every block-to-block interval from the last boundary height up
+    to the tip. Display only, it decides nothing. Returns None before there
+    is a single interval, otherwise:
+      {"median": float, "mean": float, "blocks": int, "of": int,
+       "remaining": int, "start": int, "next_height": int,
+       "seconds_left": float, "threshold": int}
+    `remaining` is how many blocks must still be added before the window
+    closes, and `seconds_left` is that many blocks at the window's own
+    average pace (an estimate, since block times move).
+    """
+    n = len(chain)
+    if n < 2:
+        return None
+    start = ((n - 1) // VDF_ADJUST_INTERVAL) * VDF_ADJUST_INTERVAL
+    next_height = start + VDF_ADJUST_INTERVAL
+    deltas = [chain[h]["timestamp"] - chain[h - 1]["timestamp"]
+              for h in range(max(start, 1), n)]
+    mean = sum(deltas) / len(deltas)
+    remaining = next_height - n
+    return {"median": statistics.median(deltas), "mean": mean,
+            "blocks": len(deltas), "of": VDF_ADJUST_INTERVAL,
+            "remaining": remaining, "start": start, "next_height": next_height,
+            "seconds_left": remaining * mean,
+            "threshold": VDF_ADJUST_MIN_SECONDS}
+
+
 # Blocks looked at on either side of a given block when computing its
 # "vs median" block time for display, distinct from (and much smaller
 # than) the consensus retarget window in get_vdf_iterations.
@@ -261,7 +291,8 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="
        "own_pace_measured": bool, "entrants": int or None,
        "draw_window": float, "field_builders": int,
        "field_blocks": int, "own_blocks": int,
-       "win_share_pct": float or None}
+       "win_share_pct": float or None,
+       "retarget": retarget_progress(chain)}
 
     odds_pct is this node's share of the next height: 100/entrants when it
     is fast enough to be in the draw at all, and 0 when it is not.
@@ -412,7 +443,8 @@ def race_odds(chain, own_seconds, own_addr=None, draw_window=None, own_machine="
             "field_fastest": min(field_paces.values()) if field_paces else None,
             "field_blocks": len(field), "own_blocks": len(mine),
             "win_share_pct": (100.0 * len(mine) / len(window)
-                              if own_addr else None)}
+                              if own_addr else None),
+            "retarget": retarget_progress(chain)}
 
 
 def vdf_challenge(previous_hash: str, builder: str) -> bytes:
