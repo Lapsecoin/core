@@ -41,7 +41,7 @@
             <form method="POST" action="/addresses/label" class="label-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="account" value="{{ r.index }}">
-              <input type="text" name="label" value="{{ r.label }}" maxlength="60" placeholder="Address {{ r.index }}" aria-label="Name of address {{ r.index }}">
+              <input type="text" name="label" value="{{ r.label }}" maxlength="60" placeholder="Name this address" title="A name only you see. Press Enter to save." aria-label="Name of address {{ r.index }}">
             </form>
             {% else %}<span class="nm-text">{{ r.label or ('Address ' ~ r.index) }}</span>{% endif %}
             {% if r.active %}<span class="tag" title="This node mines and builds as this address">This node</span>{% endif %}

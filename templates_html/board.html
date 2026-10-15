@@ -4,12 +4,10 @@
 <div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
     {% if is_private %}
     <form method="POST" action="/board?page={{ page }}" class="board-compose" id="board-compose"
-          data-own-nick="{{ own_nick or '' }}" data-own-icon-idx="{{ own_icon_idx }}">
+>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="form_token" value="{{ form_token }}">
       <input type="hidden" name="passphrase" id="board-passphrase">
-      <input type="hidden" name="profile_changed" id="board-profile-changed" value="">
-      <input type="hidden" name="icon" id="board-icon-value" value="{{ own_icon_idx }}">
       <input type="hidden" name="reply_ref" id="board-reply-ref" value="">
       <input type="hidden" name="edit_ref" id="board-edit-ref" value="">
       <input type="hidden" name="edit_orig" id="board-edit-orig" value="">
@@ -28,7 +26,6 @@
 
       <div class="rc-text" id="board-preview" hidden></div>
       <div class="board-compose-row board-main">
-        <button type="button" id="board-icon-btn" class="board-icon-btn" title="Your icon and nickname (they ride along with your next post)">{{ own_icon }}</button>
         <textarea name="message" id="board-message" rows="1"
                placeholder="Say something" autocomplete="off">{{ message_value }}</textarea>
         <button type="submit" id="board-send">Send</button>
@@ -37,11 +34,11 @@
         {% if post_as %}
         <label class="board-as">as
           <select name="account" id="board-account" aria-label="Post as">
-            {% for a in post_as %}<option value="{{ a.index }}" data-nick="{{ a.nick }}" data-icon="{{ a.icon }}" data-icon-idx="{{ a.icon_idx }}"{% if a.index == selected_account %} selected{% endif %}>{{ a.nick or a.label or ('Address ' ~ a.index) }}</option>{% endfor %}
+            {% for a in post_as %}<option value="{{ a.index }}"{% if a.index == selected_account %} selected{% endif %}>{{ a.name }}</option>{% endfor %}
           </select>
         </label>
         {% endif %}
-        <span id="board-fee-live" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post (and any icon/nickname/reply riding along) costs more.">fee {{ board_fee_floor }}+</span>
+        <span id="board-fee-live" title="Set automatically to whatever clears the next block, never more, plus the {{ BOARD_POST_AMOUNT }}-tick burn. Updates as you type since a longer post (and a reply riding along) costs more.">fee {{ board_fee_floor }}+</span>
         <span id="board-msg-counter"></span>
         <button type="button" id="board-preview-btn" class="board-link">Preview</button>
         <span id="board-sent" hidden>sent</span>
@@ -56,17 +53,6 @@
           <md-link class="rc-toolbar-item" title="Link"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"/></svg></md-link>
         </div>
       </markdown-toolbar>
-      </div>
-
-      <div class="board-profile-panel" id="board-profile-panel" hidden>
-        <input type="text" name="nick" id="board-nick" maxlength="16" placeholder="nickname (optional)"
-               value="{{ own_nick or '' }}" autocomplete="off">
-        <span id="board-profile-note"></span>
-        <div class="board-icon-palette" id="board-icon-palette">
-          {% for ic in icon_palette %}
-          <button type="button" class="board-icon-choice" data-idx="{{ loop.index0 }}">{{ ic }}</button>
-          {% endfor %}
-        </div>
       </div>
     </form>
     <script type="module" src="/vendor/markdown-toolbar-element.js"></script>
@@ -203,17 +189,7 @@
 
   const composeForm = document.getElementById("board-compose");
   if (composeForm) {
-    let ownNick    = composeForm.dataset.ownNick || "";
-    let ownIconIdx = parseInt(composeForm.dataset.ownIconIdx, 10) || 0;
-
     const msgInput      = document.getElementById("board-message");
-    const nickInput     = document.getElementById("board-nick");
-    const iconBtn       = document.getElementById("board-icon-btn");
-    const iconPalette   = document.getElementById("board-icon-palette");
-    const profilePanel  = document.getElementById("board-profile-panel");
-    const iconValue     = document.getElementById("board-icon-value");
-    const profileChanged = document.getElementById("board-profile-changed");
-    const profileNote   = document.getElementById("board-profile-note");
     const replyRefInput = document.getElementById("board-reply-ref");
     const replyBanner   = document.getElementById("board-reply-banner");
     const replyText     = document.getElementById("board-reply-text");
@@ -260,44 +236,9 @@
       previewBtn.textContent = "Edit";
     });
 
-    function currentIconIdx() {
-      return parseInt(iconValue.value, 10) || 0;
-    }
-
-    // Only the fields that actually differ from what's already on chain
-    // for this address ride along -- an unchanged icon/nickname costs
-    // nothing extra, exactly the point of folding this into a post
-    // instead of giving it a post of its own.
-    function markProfileDirty() {
-      const dirty = currentIconIdx() !== ownIconIdx || nickInput.value.trim() !== ownNick;
-      profileChanged.value = dirty ? "1" : "";
-      profileNote.textContent = dirty ? "icon/nickname will update with this post" : "";
-      refreshCounter();
-    }
-
-    iconBtn.addEventListener("click", () => {
-      profilePanel.hidden = !profilePanel.hidden;
-    });
-    iconPalette.querySelectorAll(".board-icon-choice").forEach(btn => {
-      btn.addEventListener("click", () => {
-        iconValue.value = btn.dataset.idx;
-        iconBtn.textContent = btn.textContent;
-        markProfileDirty();
-      });
-    });
-    nickInput.addEventListener("input", markProfileDirty);
-
-    // Picking another address brings its own icon and nickname into the box.
+    // Picking another address re-quotes the fee and re-reads the board as it.
     const accountSel = document.getElementById("board-account");
     if (accountSel) accountSel.addEventListener("change", () => {
-      const opt = accountSel.selectedOptions[0];
-      ownNick = opt.dataset.nick || "";
-      ownIconIdx = parseInt(opt.dataset.iconIdx, 10) || 0;
-      nickInput.value = ownNick;
-      iconValue.value = String(ownIconIdx);
-      iconBtn.textContent = opt.dataset.icon || iconBtn.textContent;
-      profileChanged.value = "";
-      profileNote.textContent = "";
       refreshFee(new TextEncoder().encode(msgInput.value).length);
       pollBoard();
     });
@@ -353,15 +294,8 @@
 
     // Mirrors build_board_body's header exactly (see api.py) so the byte
     // budget shown here is the real one, not an approximation.
-    function cleanNick() {
-      return nickInput.value.trim().slice(0, 16).replace(/]/g, "").replace(/\n/g, "");
-    }
-
     function headerBytes() {
       let header = "";
-      if (profileChanged.value) {
-        header += "[p:" + currentIconIdx() + ":" + cleanNick() + "]";
-      }
       if (replyRefInput.value) {
         header += "[r:" + replyRefInput.value + "]";
       }
@@ -380,10 +314,6 @@
         const seq = ++feeSeq;
         try {
           const params = new URLSearchParams({bytes: String(bytes)});
-          if (profileChanged.value) {
-            params.set("icon", String(currentIconIdx()));
-            params.set("nick", cleanNick());
-          }
           if (pickedAccount() !== "") params.set("account", pickedAccount());
           if (replyRefInput.value) params.set("reply_ref", replyRefInput.value);
           if (editRefInput.value) {
@@ -479,11 +409,6 @@
         const data = await res.json();
         if (data.form_token) tokenInput.value = data.form_token;
         if (data.ok) {
-          if (profileChanged.value) {      // now on the chain: stop sending it
-            ownNick = nickInput.value.trim();
-            ownIconIdx = currentIconIdx();
-            markProfileDirty();
-          }
           msgInput.value = "";
           replyRefInput.value = "";
           replyBanner.hidden = true;

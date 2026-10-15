@@ -161,13 +161,12 @@ BOARD_FEE_RATIO = 3    # floor multiplies by this every BOARD_STEP_SIZE posts
 # A board post's memo body (everything after BOARD_MEMO_TAG) may start
 # with a small fixed-grammar header: an optional profile update (icon
 # index + nickname) and/or an optional reply reference, before the
-# literal text. This lives here rather than in the web UI because the
-# nickname it can carry is now consensus-relevant (see
-# _check_nickname_available below): the parser that decides what a post
-# claims has to be the same one that decides whether that claim is
-# valid, or the two could disagree about what a memo actually says.
-# Icon/reply-target resolution (palette lookup, quoting the parent post)
-# stay presentation-only concerns and are left to api.py.
+# literal text. Nicknames and icons no longer exist: nothing sets them,
+# nothing enforces them and nothing shows them. The header is still parsed so
+# that a post written when they did exist reads as just its text, and a
+# nickname is no longer unique (the rule that refused a taken one is gone).
+# Reply-target resolution (quoting the parent post) stays a presentation
+# concern and is left to api.py.
 _PROFILE_RE = re.compile(r'^\[p:(\d{1,2}):([^\]\n]{0,16})\]')
 _REPLY_RE   = re.compile(r'^\[r:([0-9a-f]{6})\]')
 REPLY_REF_LEN = 6
@@ -217,8 +216,8 @@ def build_board_body(text, icon=None, nick=None, reply_ref=None):
 
 def board_post_nickname(tx_dict):
     """The nickname this board post's own memo header claims, or None if
-    it carries no profile header or an empty one. The one piece of
-    parse_board_body's output _check_nickname_available actually needs."""
+    it carries no profile header or an empty one. Only state.py's old
+    registry reads it; no rule depends on it any more."""
     if not is_board_post(tx_dict):
         return None
     _icon, nick, _reply_ref, _text = parse_board_body(
@@ -366,28 +365,6 @@ def _check_board_fee(tx_dict, state, floor_override):
     return True, None
 
 
-def _check_nickname_available(tx_dict, state):
-    """A board post claiming a nickname state.nicknames already shows
-    owned by a different address is rejected outright, not just hidden
-    at display time: first-come-first-served, case-insensitive, exactly
-    like an address's own uniqueness -- see state.py's own comment on why
-    this needs no protocol-floor bump (a validation tightening that runs
-    the same for every node regardless of peer version, not a wire-format
-    change). No override parameter unlike _check_board_fee: nicknames
-    resolving in strict tx order within a single block (first claim
-    inside the block wins, same as across blocks) is exactly the
-    first-come-first-served behavior wanted here, not a hazard to freeze
-    against.
-    """
-    nick = board_post_nickname(tx_dict)
-    if not nick:
-        return True, None
-    owner = state.nicknames.get(nick.lower())
-    if owner is not None and owner != tx_dict["from"]:
-        return False, f"nickname '{nick}' is already taken"
-    return True, None
-
-
 def validate(tx_dict, state, board_fee_floor_override=None):
     """Validate a transaction. Returns (True, None) or (False, error_string).
 
@@ -416,7 +393,6 @@ def validate(tx_dict, state, board_fee_floor_override=None):
         (_check_nonce,                 (tx_dict, state)),
         (_check_balance,               (tx_dict, state)),
         (_check_board_fee,             (tx_dict, state, board_fee_floor_override)),
-        (_check_nickname_available,    (tx_dict, state)),
     ):
         ok, err = check(*args)
         if not ok:

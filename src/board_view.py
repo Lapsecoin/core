@@ -144,15 +144,9 @@ def apply_splice(text, pos, ndel, inserted):
 
 
 def _nickname_owned_by(state, nick):
-    """The address that owns nick (first board post to ever claim it,
-    case-insensitively), or None if nobody has. Now a thin read of
-    consensus state itself (tx.validate()'s _check_nickname_available
-    enforces the exact same registry, see state.py), not a separate scan
-    api.py used to run on its own. It is used to warn/refuse *before* a post
-    pays for a nickname that would fail validation, not just to decide
-    what to display after the fact.
-    """
-    return state.nicknames.get(nick.lower()) if nick else None
+    """Always None: board nicknames no longer exist, so no name belongs to an
+    address and nothing can be looked up by one."""
+    return None
 
 
 def _board_posts(chain):
@@ -176,24 +170,13 @@ def _board_posts(chain):
 
 def _board_profiles_and_votes(chain, nicknames, mempool=None):
     """One more full pass over the chain (see _board_posts' own docstring
-    on why that's fine at this scale), building the two pieces of state a
-    board post's header can affect but that no single post ever *is* by
-    itself:
+    on why that's fine at this scale), building the state that no single
+    post ever *is* by itself.
 
-    profiles: addr -> {"icon", "nick"}, from the latest (tip-first, so
-    first-seen-per-address) board post that address ever set a profile
-    header on. Every rendered row looks its poster up here rather than
-    trusting its own memo, so an old post always shows who its author
-    currently is, not who they were when they wrote it, the same
-    "avatar looked up live, not frozen at post time" behaviour any chat
-    client gives you.
-
-    nicknames: addr's claimed nick is only honored if it matches
-    state.nicknames (passed in, not recomputed here), first-come-first-
-    served, case-insensitive, enforced by tx.validate()'s own
-    _check_nickname_available, so this is a read of the same consensus
-    registry every node already maintains, not a separate, display-only
-    notion of ownership that could disagree with it.
+    profiles: always empty. Board nicknames and icons no longer exist, so a
+    poster shows as their address, or as the reader's own name for it when it
+    is one of the reader's addresses. The argument `nicknames` is kept so
+    callers do not change.
 
     votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
     (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain,
@@ -248,16 +231,7 @@ def _board_profiles_and_votes(chain, nicknames, mempool=None):
     for blk in reversed(chain):
         for t in reversed(blk.get("transactions", [])):
             memo = t.get("memo") or ""
-            if memo.startswith(BOARD_MEMO_TAG):
-                addr = t.get("from")
-                if addr in profiles:
-                    continue
-                icon, nick, _, _ = parse_board_body(memo[len(BOARD_MEMO_TAG):])
-                if nick and nicknames.get(nick.lower()) != addr:
-                    nick = None  # claimed by a different address; see state.nicknames
-                if icon is not None:
-                    profiles[addr] = {"icon": icon, "nick": nick}
-            else:
+            if not memo.startswith(BOARD_MEMO_TAG):
                 _tally_vote(t)
     return profiles, votes, pending_vote_refs
 
@@ -507,7 +481,8 @@ def board_ctx(reader, page_arg, own_addr, extra=None):
     quietly drops the "mine" styling in board.html rather than needing
     its own branch here.
 
-    The viewer's own icon and nickname come from reader.profile().
+    Board nicknames and icons no longer exist; a row from one of the reader's own
+    addresses shows the name the reader gave it (own_labels).
     """
     chunks = max(page_arg, 1)
     data = reader.board_page(chunks)
@@ -517,15 +492,9 @@ def board_ctx(reader, page_arg, own_addr, extra=None):
     for row in page_rows:
         _enrich_board_row(row, data["profiles"], data["votes"], data["targets"],
                           own_addr, pending_vote_refs)
-    own_profile = reader.profile(own_addr) if own_addr else None
-    own_icon_idx = own_profile["icon"] if own_profile else None
     ctx = dict(title="Board", rows=page_rows,
                post_count=data["post_count"], own_addr=own_addr,
-               own_icon=_icon_emoji(own_icon_idx),
-               own_icon_idx=own_icon_idx or 0,
-               own_nick=own_profile.get("nick") if own_profile else None,
-               icon_palette=ICON_PALETTE,
-               own_index={}, post_as=[], selected_account=0,
+               own_index={}, own_labels={}, post_as=[], selected_account=0,
                tag_len=len(BOARD_MEMO_TAG),
                page=chunks, has_more=data["has_more"])
     if extra:

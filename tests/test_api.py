@@ -822,18 +822,6 @@ class TestAddressLookupNicknameRedirect:
         pool = peerpool_mod.PeerPool()
         return api.create_private_app(node, pool).test_client()
 
-    def test_nickname_redirects_to_its_owner(self):
-        client = self._client_with_nickname(nick="Al", owner_index=0)
-        resp = client.get("/balance?addr=Al", follow_redirects=False)
-        assert resp.status_code == 302
-        assert f"addr={address(0)}" in resp.headers["Location"]
-
-    def test_lookup_is_case_insensitive(self):
-        client = self._client_with_nickname(nick="Al", owner_index=0)
-        resp = client.get("/balance?addr=AL", follow_redirects=False)
-        assert resp.status_code == 302
-        assert f"addr={address(0)}" in resp.headers["Location"]
-
     def test_unclaimed_name_is_not_redirected(self):
         client = self._client_with_nickname(nick="Al", owner_index=0)
         resp = client.get("/balance?addr=Nobody", follow_redirects=False)
@@ -1003,23 +991,6 @@ class TestBoardProfilesAndVotes:
             cs.state.apply_tx(t)
         return cs
 
-    def test_latest_profile_per_address_wins(self):
-        cs = self._chain_with(
-            (0, self.TAG + api.build_board_body("first", icon=1, nick="Old")),
-            (0, self.TAG + api.build_board_body("second", icon=5, nick="New")),
-        )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
-        assert profiles[address(0)] == {"icon": 5, "nick": "New"}
-
-    def test_different_addresses_keep_separate_profiles(self):
-        cs = self._chain_with(
-            (0, self.TAG + api.build_board_body("hi", icon=1, nick="A")),
-            (1, self.TAG + api.build_board_body("hi", icon=2, nick="B")),
-        )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
-        assert profiles[address(0)] == {"icon": 1, "nick": "A"}
-        assert profiles[address(1)] == {"icon": 2, "nick": "B"}
-
     def test_vote_is_replaced_not_summed_when_same_address_votes_twice(self):
         cs = self._chain_with(
             (0, api.VOTE_UP_TAG + "abcdef"),
@@ -1036,35 +1007,6 @@ class TestBoardProfilesAndVotes:
         )
         _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         assert votes["abcdef"]["up"] == 2
-
-    def test_nickname_is_first_come_first_served(self):
-        """A later address claiming an already-taken name (impersonation)
-        gets its icon but not the name -- see _board_profiles_and_votes'
-        own docstring on why first-claim-wins needs no consensus rule."""
-        cs = self._chain_with(
-            (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
-            (1, self.TAG + api.build_board_body("hey", icon=2, nick="Al")),
-        )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
-        assert profiles[address(0)] == {"icon": 1, "nick": "Al"}
-        assert profiles[address(1)] == {"icon": 2, "nick": None}
-
-    def test_nickname_ownership_is_case_insensitive(self):
-        cs = self._chain_with(
-            (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
-            (1, self.TAG + api.build_board_body("hey", icon=2, nick="al")),
-        )
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
-        assert profiles[address(1)]["nick"] is None
-
-    def test_nickname_owned_by_reports_the_first_claimant(self):
-        cs = self._chain_with(
-            (0, self.TAG + api.build_board_body("hi", icon=1, nick="Al")),
-        )
-        assert api._nickname_owned_by(cs.state, "AL") == address(0)
-        assert api._nickname_owned_by(cs.state, "Bob") is None
-        assert api._nickname_owned_by(cs.state, "") is None
-
 
     def test_vote_tag_is_not_a_board_post(self):
         """Confirms voting never shares the board's fee-floor staircase:
@@ -1109,31 +1051,10 @@ class TestCurrentNicknamesByAddress:
         profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
         return {addr: prof["nick"] for addr, prof in profiles.items()}
 
-    def test_latest_nickname_per_address(self):
-        # Second post overwrites the *display* nick, not the registry --
-        # "Old" stays permanently owned by address(0), it just isn't
-        # what's shown once a newer post says otherwise.
-        cs, _tx_mod = self._chain_with(
-            (0, api.BOARD_MEMO_TAG + api.build_board_body("a", icon=0, nick="Old")),
-            (0, api.BOARD_MEMO_TAG + api.build_board_body("b", icon=1, nick="New")),
-        )
-        result = self._nicknames_by_address(cs)
-        assert result[address(0)] == "New"
-
     def test_address_with_no_profile_post_is_absent(self):
         cs, _tx_mod = self._chain_with((0, api.BOARD_MEMO_TAG + "just text, no header"))
         result = self._nicknames_by_address(cs)
         assert address(0) not in result
-
-    def test_a_nickname_claimed_by_someone_else_never_displays(self):
-        cs, _tx_mod = self._chain_with(
-            (0, api.BOARD_MEMO_TAG + api.build_board_body("a", icon=0, nick="Al")),
-            (1, api.BOARD_MEMO_TAG + api.build_board_body("b", icon=1, nick="Al")),
-        )
-        result = self._nicknames_by_address(cs)
-        assert result[address(0)] == "Al"
-        assert result[address(1)] is None
-
 
 class TestRaceChartNicknames:
     """_race_chart(race, nicknames_by_addr): the odds page's builder
@@ -1223,12 +1144,6 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
         pool = peerpool_mod.PeerPool()
         app = api.create_private_app(node, pool)
         return app.test_client(), node
-
-    def test_nickname_shown_instead_of_raw_address(self):
-        client, _node = self._client()
-        html = client.get("/board").get_data(as_text=True)
-        assert ">Al<" in html
-        assert 'id="board-icon-btn"' in html  # own compose box picked up the same profile
 
     def test_reply_preview_quotes_the_parent_post(self):
         _client, node = self._client()
@@ -1480,12 +1395,6 @@ class TestDashboardNickname:
         assert "Al" in html
         assert node.addr in html
 
-    def test_api_info_carries_the_nickname_on_private_app(self):
-        node = self._node_with_nickname()
-        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
-        data = client.get("/api/info").get_json()
-        assert data["nick"] == "Al"
-
     def test_nickname_hidden_alongside_the_address_on_public_app_by_default(self):
         node = self._node_with_nickname()
         client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
@@ -1494,13 +1403,6 @@ class TestDashboardNickname:
         assert data["nick"] is None
         html = client.get("/").get_data(as_text=True)
         assert not re.search(r"\bAl\b", html)      # the word, not a substring of some script
-
-    def test_nickname_shown_on_public_app_when_hiding_is_off(self):
-        node = self._node_with_nickname(hide=False)
-        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
-        data = client.get("/api/info").get_json()
-        assert data["nick"] == "Al"
-
 
 def test_flatten_threads_newest_thread_first_replies_by_score():
     import api
@@ -1870,3 +1772,68 @@ class TestNoDhtNotice:
 
     def test_absent_when_libtorrent_is_installed(self, monkeypatch):
         assert 'id="no-dht-alert"' not in self._html(monkeypatch, True, 0)
+
+
+class TestBoardNicknamesNoLongerExist:
+    """Nicknames and icons are gone from the board: nothing shows them, nothing
+    resolves them, and a node's own addresses show the names its owner gave."""
+
+    def _memo(self, text="hi", nick="Al"):
+        import tx as tx_mod
+        return tx_mod.BOARD_MEMO_TAG + api.build_board_body(text, icon=3, nick=nick)
+
+    def _chain(self, *posts):
+        cs = ChainState.from_genesis()
+        for i in range(3):
+            seed_balance(cs.state, i, 1000.0)
+        for i, (sender, memo) in enumerate(posts):
+            t = {"from": address(sender), "nonce": i + 1, "fee": 100,
+                 "outputs": [{"to": "1" * 40, "amount": 1}], "memo": memo}
+            cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
+                             "transactions": [t], "hash": f"h{i}"})
+            cs.state.apply_tx(t)
+        return cs
+
+    def test_no_profile_is_ever_built_from_a_header(self):
+        from board_view import _board_profiles_and_votes
+        cs = self._chain((0, self._memo()))
+        profiles, _votes, _pending = _board_profiles_and_votes(cs.chain, cs.state.nicknames)
+        assert profiles == {}
+
+    def test_a_name_resolves_to_nobody(self):
+        from board_view import _nickname_owned_by
+        cs = self._chain((0, self._memo()))
+        assert _nickname_owned_by(cs.state, "Al") is None
+
+    def test_typing_a_name_into_the_lookup_is_just_an_invalid_address(self):
+        cs = self._chain((0, self._memo()))
+        node = _FakeNode(cs)
+        node.storage = SimpleNamespace(get_tx_heights_for_addr=lambda addr: [])
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        resp = client.get("/balance?addr=Al", follow_redirects=False)
+        assert resp.status_code == 200 and "Invalid address format" in resp.get_data(as_text=True)
+
+    def test_the_board_shows_the_address_not_the_nickname_in_the_header(self):
+        cs = self._chain((0, self._memo("hello there")))
+        node = _FakeNode(cs)
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/board").get_data(as_text=True)
+        assert "hello there" in html and ">Al<" not in html
+        assert address(0).split(".")[0] in html
+
+    def test_the_compose_box_has_no_nickname_or_icon_controls(self):
+        cs = self._chain()
+        client = api.create_private_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
+        html = client.get("/board").get_data(as_text=True)
+        for gone in ("board-nick", "board-icon-btn", "profile_changed", "board-profile-panel"):
+            assert gone not in html
+
+    def test_a_post_never_carries_a_profile_header_even_if_the_form_asks(self):
+        import re as _re
+        from tests.browser import submit
+        cs = self._chain()
+        node = _FakeNode(cs)
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        r = submit(client, "/board", message="x", passphrase="p", nick="Mallory",
+                   icon="2", profile_changed="1", follow=False)
+        assert not _re.search(r"\[p:", str(node.mempool.all_txs()))
