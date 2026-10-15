@@ -213,3 +213,22 @@ def test_a_key_file_path_is_refused_with_a_way_forward(home):
     (home / "k.json").write_text("{}")
     with pytest.raises(ValueError, match="key files are not read any more"):
         wallet.find_source(str(home / "k.json"))
+
+
+def test_a_cut_short_start_after_the_sweep_was_stored_also_moves_what_arrived_since(home, old_node, monkeypatch):
+    """Both the stored move and the old key survive a crash between the two
+    steps. Once the move confirms, the key is still there to move any rest."""
+    w = start(monkeypatch)
+    node = old_node.node
+    w.migration.step(node)                       # signs and stores, deletes the key
+    sweep = WalletFile.load(wallet.WALLET_FILE).pending_sweep
+    # put the old key file back, as if the process died before deleting it
+    sk, pk = crypto.generate_keypair()
+    old2 = wallet.Wallet(wallet.LEGACY_KEY_FILE, pk)
+    crypto.save_key(wallet.LEGACY_KEY_FILE, sk, pk, PASS)
+    m = migration.Migration(WalletFile.load(wallet.WALLET_FILE), old2,
+                            old2.derive_kek(PASS), wallet.LEGACY_KEY_FILE)
+    st = types.SimpleNamespace(get_nonce=lambda a: sweep["nonce"], get_balance=lambda a: 0)
+    node.view.state = st
+    assert m.step(node) == "confirmed"
+    assert not m.done                            # the key is still there to sweep the rest
