@@ -100,7 +100,12 @@ class Migration:
         if state.get_nonce(old) >= sweep["nonce"]:
             self.wf.clear_pending_sweep()
             left = state.get_balance(old)
-            if left:
+            if left and self.legacy is not None:
+                # A start that was cut short left the old key in place: what has
+                # arrived since is moved by the next pass, so nothing is stranded.
+                log.info("[migrate] the first move is confirmed; moving the %s that "
+                         "arrived at the old address since", left)
+            elif left:
                 log.warning("[migrate] done, but %s arrived at the old address %s after "
                             "it was moved and cannot be reached any more", left, old)
             else:
