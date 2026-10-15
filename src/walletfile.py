@@ -236,6 +236,21 @@ class WalletFile:
                 return
         raise KeyError(index)
 
+    @property
+    def pending_sweep(self):
+        """The signed transaction moving an old key's funds to account 0, kept
+        until it confirms. None when there is no move in progress."""
+        sweep = self._data.get("pending_sweep")
+        return dict(sweep) if sweep else None
+
+    def set_pending_sweep(self, tx):
+        self._data["pending_sweep"] = tx
+        self._save()
+
+    def clear_pending_sweep(self):
+        self._data.pop("pending_sweep", None)
+        self._save()
+
     def mark_phrase_shown(self):
         self._data["phrase_shown"] = True
         self._save()
