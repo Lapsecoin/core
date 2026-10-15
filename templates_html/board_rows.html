@@ -6,7 +6,7 @@
      show what those replies are replying to. #}
   <div class="rc-root rc-deleted" id="post-{{ row.ref6 }}"{% if row.depth %} style="--depth: {{ row.depth }}"{% endif %}>deleted</div>
   {% else %}
-  {% set mine = row.from == own_addr %}
+  {% set mine = row.from == own_addr or row.from in own_index %}
   {% set score = row.up - row.down %}
   <div class="rc-root {{ 'mine' if mine }} {{ 'pending' if row.pending }}" id="post-{{ row.ref6 }}"{% if row.depth %} style="--depth: {{ row.depth }}"{% endif %}>
     <div class="rc-info">
@@ -20,10 +20,10 @@
                 data-snippet="{{ row.text[:60] }}">Reply</button>
         {% if mine %}
         <button type="button" class="rc-replyBtn rc-editBtn"
-                data-ref="{{ row.ref6 }}" data-text="{{ row.text }}"
+                data-ref="{{ row.ref6 }}" data-text="{{ row.text }}" data-account="{{ own_index.get(row.from, '') }}"
                 title="Replace part of this post. Costs the same as a new post.">Edit</button>
         <button type="button" class="rc-replyBtn rc-deleteBtn"
-                data-ref="{{ row.ref6 }}"
+                data-ref="{{ row.ref6 }}" data-account="{{ own_index.get(row.from, '') }}"
                 title="Hide this post from readers. The text stays on the chain.">Delete</button>
         {% endif %}
       </span>

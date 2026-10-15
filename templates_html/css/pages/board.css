@@ -130,6 +130,8 @@
   gap: .2rem .8rem; padding-top: .45rem; border-top: 1px solid var(--rule);
 }
 .board-compose-sub #board-msg-counter { margin-left: auto; }
+.board-as { display: inline-flex; align-items: center; gap: .35rem; margin: 0; font-size: .78rem; color: var(--ink-dim); }
+.board-as select { height: 26px; width: auto; max-width: 11rem; padding: 0 1.4rem 0 .45rem; font-size: .78rem; }
 .board-link { font-size: .75rem; color: var(--link); text-decoration: underline; }
 #board-feed .board-link:hover { color: var(--ink-dim); }
 #board-sent { color: var(--gain); font-weight: 600; }

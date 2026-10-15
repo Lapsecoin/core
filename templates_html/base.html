@@ -37,6 +37,7 @@
 <symbol id="i-odds" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20v-9M12 20V4M19 20v-6"/></symbol>
 <symbol id="i-whitepaper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h8l4 4v14H7zM15 3v4h4M10 13h6M10 17h6"/></symbol>
 <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></symbol>
+<symbol id="i-addresses" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
 <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></symbol>
 </defs></svg>
 {#- The nav is written once. link() is a bar entry, entry() a dropdown row with
@@ -94,7 +95,7 @@
       {{ link('send', '/send', 'send', 'Send') }}
       {% else %}
       {{ link('dashboard', '/', 'dashboard', 'Dashboard') }}
-      {% if is_private %}{{ link('send', '/send', 'send', 'Send') }}{% endif %}
+      {% if is_private %}{{ link('send', '/send', 'send', 'Send') }}{{ link('addresses', '/addresses', 'addresses', 'Addresses') }}{% endif %}
       {{ community() }}
       {% call group(('blocks', 'address', 'mempool'), 'explorer', 'Explorer') %}
         {{ entry('blocks', '/blocks', 'blocks', 'Blocks', 'Recent blocks and transactions') }}
@@ -216,12 +217,14 @@
 (function () {
   if (!document.querySelector("[data-live]")) return;
   var busy = false;
-  var url = new URL(location.href);
-  url.searchParams.delete("note");
   async function tick() {
     if (busy || document.hidden) return;
     busy = true;
     try {
+      // Read each time: a page that changes its own address (the account
+      // picker on Send) refreshes what it now shows.
+      var url = new URL(location.href);
+      url.searchParams.delete("note");
       var res = await fetch(url, {cache: "no-store", headers: {"X-Live": "1"}});
       if (!res.ok) return;
       var doc = new DOMParser().parseFromString(await res.text(), "text/html");

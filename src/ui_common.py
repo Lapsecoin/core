@@ -23,6 +23,8 @@ NAV_ACTIVE = {
     "board": "board", "board_post": "board", "board_vote": "board", "board_delete": "board",
     "mempool": "mempool", "network": "network", "odds": "odds", "benchmark": "benchmark",
     "whitepaper": "whitepaper", "send": "send", "rewards": "rewards", "settings": "settings",
+    "addresses": "addresses", "addresses_new": "addresses", "addresses_label": "addresses",
+    "addresses_export": "addresses",
     "fees": "fees", "fees_public": "fees", "fees_submit": "fees", "fees_status": "fees",
 }
 
