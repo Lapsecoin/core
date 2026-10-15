@@ -130,3 +130,20 @@ def test_not_a_wallet_file(tmp_path):
 def test_no_temp_files_left_behind(wf):
     wf.new_account(wf.derive_kek(PASS))
     assert os.listdir(os.path.dirname(wf.path)) == ["w.json"]
+
+
+def test_a_change_from_another_process_is_not_overwritten_by_a_stale_copy(wf):
+    """The node holds the file loaded while --new-address adds an account."""
+    kek = wf.derive_kek(PASS)
+    other = WalletFile.load(wf.path)                  # the node's copy
+    wf.new_account(kek)                               # the command adds account 1
+    other.set_label(0, "mining")                      # the node writes something small
+    assert [a["index"] for a in WalletFile.load(wf.path).accounts] == [0, 1]
+    assert WalletFile.load(wf.path).account(0)["label"] == "mining"
+
+
+def test_a_stale_copy_sees_accounts_added_elsewhere(wf):
+    node_copy = WalletFile.load(wf.path)
+    wf.new_account(wf.derive_kek(PASS))
+    assert [a["index"] for a in node_copy.accounts] == [0, 1]
+    assert node_copy.address(1) == ADDR1

@@ -176,3 +176,40 @@ def test_restore_scan_lists_the_used_accounts_and_stops_after_a_gap(home, monkey
     assert [a["index"] for a in WalletFile.load(wallet.WALLET_FILE).accounts] == [0, 1, 3]
     assert not WalletFile.load(wallet.WALLET_FILE).scan_pending
     assert w.discovery.step(node) == "done"
+
+
+# What the move must not break
+
+def test_the_base_gas_wallet_is_sealed_under_the_new_key_and_still_opens(home, old_node, monkeypatch):
+    import base_wallet
+    legacy_kek = crypto.derive_kek(wallet.LEGACY_KEY_FILE, PASS)
+    address = base_wallet.create(base_wallet.default_path(), legacy_kek)
+    w = start(monkeypatch)
+    new_kek = w.derive_kek(PASS)
+    assert base_wallet.load_address(base_wallet.default_path()) == address
+    base_wallet.decrypt_secret(base_wallet.default_path(), new_kek)        # opens now
+    with pytest.raises(ValueError):
+        base_wallet.decrypt_secret(base_wallet.default_path(), legacy_kek)  # and no longer under the old
+
+
+def test_a_cut_short_start_still_reseals_the_gas_wallet_on_the_next_one(home, old_node, monkeypatch):
+    import base_wallet
+    legacy_kek = crypto.derive_kek(wallet.LEGACY_KEY_FILE, PASS)
+    start(monkeypatch)                                    # wallet made, then "crashed"
+    base_wallet.create(base_wallet.default_path(), legacy_kek)   # as if sealed under the old key
+    w = start(monkeypatch)
+    base_wallet.decrypt_secret(base_wallet.default_path(), w.derive_kek(PASS))
+
+
+def test_without_the_library_an_old_key_keeps_running_as_it_was(home, old_node, monkeypatch, capsys):
+    monkeypatch.setattr(falcon_seeded, "available", lambda: False)
+    w = start(monkeypatch)
+    assert isinstance(w, wallet.Wallet) and w.addr == old_node.addr
+    assert not os.path.exists(wallet.WALLET_FILE) and os.path.exists(wallet.LEGACY_KEY_FILE)
+    assert "make -C native/falcon_seeded" in capsys.readouterr().out
+
+
+def test_a_key_file_path_is_refused_with_a_way_forward(home):
+    (home / "k.json").write_text("{}")
+    with pytest.raises(ValueError, match="key files are not read any more"):
+        wallet.find_source(str(home / "k.json"))

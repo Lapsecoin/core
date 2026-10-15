@@ -67,6 +67,31 @@ class WalletFile:
     def __init__(self, path, data):
         self.path = path
         self._data = data
+        self._sig = self._stat()
+
+    def _stat(self):
+        try:
+            st = os.stat(self.path)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def _refresh(self):
+        """Take up what another process wrote since this one last looked. The
+        node runs with the file loaded while --new-address or --restore may
+        write it, so every read and every change starts from the file as it
+        is now, never from a copy that has gone stale."""
+        sig = self._stat()
+        if sig is None or sig == self._sig:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        if isinstance(data, dict) and data.get("kind") == "wallet":
+            self._data = data
+            self._sig = sig
 
     # Creating and loading
     @classmethod
@@ -124,17 +149,21 @@ class WalletFile:
     # The public side (no passphrase needed)
     @property
     def accounts(self):
+        self._refresh()
         return [dict(a) for a in self._data["accounts"]]
 
     @property
     def phrase_shown(self):
+        self._refresh()
         return bool(self._data.get("phrase_shown", True))
 
     @property
     def scan_pending(self):
+        self._refresh()
         return bool(self._data.get("scan_pending", False))
 
     def account(self, index):
+        self._refresh()
         for a in self._data["accounts"]:
             if a["index"] == index:
                 return dict(a)
@@ -196,6 +225,7 @@ class WalletFile:
 
     def new_account(self, kek):
         """Derive the next unused account, list it and save. Returns it."""
+        self._refresh()
         index = max(a["index"] for a in self._data["accounts"]) + 1
         phrase = self.phrase(kek)
         try:
@@ -208,11 +238,13 @@ class WalletFile:
 
     def finish_scan(self, kek, indexes):
         """List the accounts a history scan found and clear the restore flag."""
+        self._refresh()
         self._data["scan_pending"] = False
         self.add_discovered(kek, indexes)
 
     def add_discovered(self, kek, indexes):
         """List accounts found by scanning history after a restore."""
+        self._refresh()
         have = {a["index"] for a in self._data["accounts"]}
         phrase = self.phrase(kek)
         try:
@@ -225,6 +257,7 @@ class WalletFile:
         self._save()
 
     def set_label(self, index, label):
+        self._refresh()
         for a in self._data["accounts"]:
             if a["index"] == index:
                 a["label"] = str(label)[:60]
@@ -236,14 +269,17 @@ class WalletFile:
     def pending_sweep(self):
         """The signed transaction moving an old key's funds to account 0, kept
         until it confirms. None when there is no move in progress."""
+        self._refresh()
         sweep = self._data.get("pending_sweep")
         return dict(sweep) if sweep else None
 
     def set_pending_sweep(self, tx):
+        self._refresh()
         self._data["pending_sweep"] = tx
         self._save()
 
     def clear_pending_sweep(self):
+        self._refresh()
         self._data.pop("pending_sweep", None)
         self._save()
 
@@ -251,15 +287,18 @@ class WalletFile:
     def last_account(self):
         """The account last used to send or post, for the pickers to default
         to. Not a secret; None until something has been sent."""
+        self._refresh()
         return self._data.get("last_account")
 
     def set_last_account(self, index):
+        self._refresh()
         if self._data.get("last_account") != index and any(
                 a["index"] == index for a in self._data["accounts"]):
             self._data["last_account"] = index
             self._save()
 
     def mark_phrase_shown(self):
+        self._refresh()
         self._data["phrase_shown"] = True
         self._save()
 
@@ -284,3 +323,4 @@ class WalletFile:
     # Saving
     def _save(self):
         _atomic_write(self.path, self._data)
+        self._sig = self._stat()

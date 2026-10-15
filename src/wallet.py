@@ -187,8 +187,12 @@ def find_source(key_text=None, wallet_file=WALLET_FILE, legacy_file=LEGACY_KEY_F
             return Source("key", text)
         data = _legacy_text(text)
         if data is None:
+            hint = ""
+            if os.path.isfile(text):
+                hint = (f" {text} is a file, and key files are not read any more: put it in this "
+                        f"node's folder as {LEGACY_KEY_FILE} to move it to a recovery phrase")
             raise ValueError("--key takes the key text that --export prints "
-                             "(it starts with lc1-); key files are not read")
+                             "(it starts with lc1-)." + hint)
         return Source("text", data)
     if os.path.exists(wallet_file):
         return Source("wallet", wallet_file)
@@ -241,10 +245,22 @@ def _attach_jobs(w, kek, passphrase, legacy_file=LEGACY_KEY_FILE):
             log.warning("[startup] %s is there but does not open with this passphrase; "
                         "leaving it alone", legacy_file)
             legacy = legacy_kek = None
+    if legacy is not None:
+        _reseal_gas_wallet(legacy_kek, kek)
     if legacy is not None or wf.pending_sweep:
         w.migration = Migration(wf, legacy, legacy_kek, legacy_file if legacy else None)
     if wf.scan_pending:
         w.discovery = Discovery(wf, kek)
+
+
+def _reseal_gas_wallet(old_kek, new_kek):
+    """The Base gas wallet is sealed under the node's kek, which changes when
+    the node moves to a recovery phrase; seal it under the new one."""
+    try:
+        import base_wallet
+        base_wallet.reseal(base_wallet.default_path(), old_kek, new_kek)
+    except Exception as e:
+        log.warning("[startup] could not move the Base gas wallet to the new wallet key: %s", e)
 
 
 def begin_migration(passphrase, legacy, legacy_kek, legacy_file=LEGACY_KEY_FILE,
@@ -255,10 +271,16 @@ def begin_migration(passphrase, legacy, legacy_kek, legacy_file=LEGACY_KEY_FILE,
     wallet's `migration` job moves the old address's funds there."""
     from migration import Migration
     w, kek, phrase = create_wallet(passphrase, path)
+    _reseal_gas_wallet(legacy_kek, kek)
     w.migration = Migration(w.walletfile, legacy, legacy_kek, legacy_file)
     log.info("[startup] moving the old key %s to the new address %s", legacy.addr, w.addr)
     return w, kek, phrase
 
+
+NO_SEEDED_LIBRARY = (
+    "This node still runs on its old key because the seeded FALCON library is not installed here, "
+    "which a recovery-phrase wallet needs. Build it with 'make -C native/falcon_seeded' (needs a C "
+    "compiler), or re-run the install script, then restart to move to a recovery phrase.")
 
 MIGRATION_NOTICE = (
     "This node's old single key has been replaced by a recovery-phrase wallet.\n"
@@ -349,7 +371,10 @@ def startup_console(key_text=None, account=0):
         passphrase = resolve_passphrase("New passphrase: ")
         if not os.environ.get(PASSPHRASE_ENV):
             passphrase = prompt_new_passphrase(passphrase)
-        wallet, kek, phrase = create_wallet(passphrase, source.value)
+        try:
+            wallet, kek, phrase = create_wallet(passphrase, source.value)
+        except RuntimeError as e:
+            sys.exit(f"Error: {e}")
         show_phrase_console(phrase)
         del phrase
         wallet.walletfile.mark_phrase_shown()
@@ -359,8 +384,13 @@ def startup_console(key_text=None, account=0):
     passphrase = resolve_passphrase("Passphrase: ")
     try:
         wallet, kek = unlock(source, passphrase, account)
-    except (ValueError, WalletFileError) as e:
+    except (ValueError, WalletFileError, RuntimeError) as e:
         sys.exit(f"Error: {e}")
+    if source.kind == "legacy" and not falcon_seeded.available():
+        # An old key keeps working as it always did until the library is there.
+        log.warning("[startup] %s", NO_SEEDED_LIBRARY)
+        print(NO_SEEDED_LIBRARY)
+        return wallet, kek, passphrase
     if source.kind == "legacy":
         legacy, legacy_kek = wallet, kek
         wallet, kek, phrase = begin_migration(passphrase, legacy, legacy_kek, source.value)
