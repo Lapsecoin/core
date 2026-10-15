@@ -46,3 +46,8 @@ nuitka-cache/
 msi-work/
 stage/
 *.msi
+
+# Seeded FALCON library (built by make -C native/falcon_seeded)
+native/falcon_seeded/*.so
+native/falcon_seeded/*.dylib
+native/falcon_seeded/*.dll
