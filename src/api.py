@@ -126,7 +126,6 @@ import sys
 import threading
 import time
 
-import markdown
 import requests
 from flask import Response, jsonify, redirect, render_template, request, send_file
 from flask_limiter import Limiter
@@ -151,6 +150,7 @@ from version import LOCAL_VERSION
 from local_reader import (_get_address_history, _block_reward,  # noqa: F401
                           fee_estimate, local_reader_for)
 import embeds
+import whitepaper_render
 from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_amount,
                        _pagination_window, _base_dir,  # noqa: F401
                        fmt_duration, render_board_text)
@@ -1022,18 +1022,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
             page_window=_pagination_window(page, total_pages),
             has_prev=page > 1, has_next=end < total)
 
-    def _wp_sections(html):
-        """Wrap the flat markdown output as a header (title and byline) plus
-        one <section> per <h2>, so the page can lay each section out as its
-        own two-column block instead of one very long column."""
-        parts = re.split(r"(?=<h2[ >])", html)
-        out = ['<header class="wp-head">%s</header>' % parts[0]]
-        for part in parts[1:]:
-            end = part.find("</h2>") + len("</h2>")
-            out.append('<section class="wp-sec">%s<div class="wp-body">%s</div></section>'
-                       % (part[:end], part[end:]))
-        return "".join(out)
-
     @app.route("/whitepaper", endpoint=pfx+"whitepaper")
     def whitepaper():
         # Only the bundle root and this source tree. The working directory
@@ -1053,8 +1041,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             if os.path.isfile(candidate):
                 try:
                     with open(candidate) as f:
-                        rendered = _wp_sections(markdown.markdown(
-                            f.read(), extensions=["fenced_code", "tables"]))
+                        rendered = whitepaper_render.render(f.read())
                     return render_template("whitepaper.html", title="Whitepaper",
                                            og=embeds.whitepaper(), rendered=rendered)
                 except Exception:
