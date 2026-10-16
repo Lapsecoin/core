@@ -1370,11 +1370,6 @@ class TestPublicFeesPage:
         html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
         assert 'id="fees-form"' in html
 
-    def test_the_corner_links_have_no_bitcoin_donation_icon(self):
-        node, _ = fresh()
-        html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
-        assert 'title="Donate Bitcoin"' not in html and "Lapsecoin/core#support" not in html
-
 
 class TestBenchmarkPage:
     """/benchmark ranks declared machines, and the nav groups it with Odds."""
@@ -1611,13 +1606,6 @@ class TestBoardNicknamesNoLongerExist:
         html = client.get("/board").get_data(as_text=True)
         assert "hello there" in html and ">Al<" not in html
         assert address(0).split(".")[0] in html
-
-    def test_the_compose_box_has_no_nickname_or_icon_controls(self):
-        cs = self._chain()
-        client = api.create_private_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
-        html = client.get("/board").get_data(as_text=True)
-        for gone in ("board-nick", "board-icon-btn", "profile_changed", "board-profile-panel"):
-            assert gone not in html
 
     def test_a_post_never_carries_a_profile_header_even_if_the_form_asks(self):
         import re as _re

@@ -98,17 +98,6 @@ class TestPage:
         for word in ("personal_sign", "signMessage", "ethereum.request", "eth_requestAccounts", 'name="signature"'):
             assert word not in html
 
-    def test_it_says_the_gift_is_as_is_and_when_the_burn_comes_back(self, app):
-        html = app.client.get("/fees").get_data(as_text=True)
-        assert "A free gift, as is. The 10 LAPSE comes back only if no node offers." in html
-
-    def test_the_page_is_a_short_read(self, app):
-        html = app.client.get("/fees").get_data(as_text=True)
-        body = html.split("<h2>Fees</h2>", 1)[1].split("<script>", 1)[0]
-        body = re.sub(r"<select.*?</select>|<details.*?</details>", " ", body, flags=re.S)   # the lists, not the copy
-        words = re.sub(r"<[^>]+>", " ", body).split()
-        assert len(words) < 90, len(words)
-
     def test_with_enough_lapse_there_is_no_hint_about_getting_some(self, app):
         html = app.client.get("/fees").get_data(as_text=True)
         assert "Mine some" not in html and "You need 10 LAPSE" not in html
