@@ -937,7 +937,7 @@ def validate(blk, state, chain):
     return True, None
 
 
-def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None):
+def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None, prefer=()):
     """Assemble a candidate block from a mempool snapshot.
 
     Pure function: does not touch node state. Groups candidate transactions
@@ -955,6 +955,10 @@ def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None):
     adds vdf_output, vdf_proof, and recomputes the hash.
 
     txs:        candidate txs from the mempool, in any order.
+    prefer:     hashes of txs that go in ahead of fee order: ones that were
+                confirmed on a branch this node then lost in a reorg. A
+                sender's group holding any of them is placed first, whatever
+                its fee; the rest keep their fee-per-byte order.
     iterations: this block's required vdf_iterations, from
                 get_vdf_iterations(chain). Taken directly rather than
                 a chain argument so callers that already computed it
@@ -1013,9 +1017,11 @@ def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None):
     for group in by_sender.values():
         group.sort(key=lambda t: t["nonce"])
 
+    prefer = set(prefer)
     groups = sorted(
         by_sender.values(),
-        key=lambda g: g[0].get("fee", 0) / max(tx_mod.tx_size(g[0]), 1),
+        key=lambda g: (any(tx_mod.tx_hash(t) in prefer for t in g) if prefer else False,
+                       g[0].get("fee", 0) / max(tx_mod.tx_size(g[0]), 1)),
         reverse=True,
     )
 

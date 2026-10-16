@@ -143,7 +143,8 @@ def fee_estimate(node):
     iterations = block_mod.get_vdf_iterations(v.chain)
     board_floor = tx_mod.board_fee_floor(v.state.total_board_posts)
     candidate = block_mod.assemble(v.tip, pending, v.tip.get("builder") or "",
-                                   iterations, board_fee_floor=board_floor)
+                                   iterations, board_fee_floor=board_floor,
+                                   prefer=node.mempool.recovered_hashes())
     included = candidate["transactions"]
     # Full block: the going rate is the lowest fee-per-byte that still made
     # it in, whatever that is, congestion sets its own price. Otherwise

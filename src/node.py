@@ -828,13 +828,13 @@ class Node:
         first, so anything the chain has since moved past is dropped. The
         original entry time is kept, so a restart does not extend a tx's
         life."""
-        records = mempool_store.load(self._mempool_file)
+        records = mempool_store.load(self._mempool_file, with_recovered=True)
         if not records:
             return
         now = time.time()
         records.sort(key=lambda r: (r[0].get("from", ""), r[0].get("nonce", 0)))
         kept = dropped = 0
-        for t, entered in records:
+        for t, entered, recovered in records:
             if now - entered > mempool_mod.MEMPOOL_TTL_SECONDS:
                 dropped += 1
                 continue
@@ -842,7 +842,7 @@ class Node:
                 ok, _ = self._validate_for_mempool(t)
             except Exception:
                 ok = False
-            if ok and self.mempool.add(t, entered=entered)[0]:
+            if ok and self.mempool.add(t, entered=entered, recovered=recovered)[0]:
                 kept += 1
             else:
                 dropped += 1
@@ -860,7 +860,8 @@ class Node:
             if version == self._mempool_saved_at:
                 return
             try:
-                mempool_store.save(self._mempool_file, self.mempool.records())
+                mempool_store.save(self._mempool_file, self.mempool.records(),
+                                   self.mempool.recovered_hashes())
                 self._mempool_saved_at = version
             except OSError as e:
                 log.warning("[mempool] could not save pending transactions: %s", e)
@@ -1195,7 +1196,8 @@ class Node:
         board_floor = tx_mod.board_fee_floor(cs.state.total_board_posts)
         candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr,
                                         iterations, board_fee_floor=board_floor,
-                                        extra=self.block_extra())
+                                        extra=self.block_extra(),
+                                        prefer=self.mempool.recovered_hashes())
         candidate["vdf_output"]    = vdf_out
         candidate["vdf_proof"]     = vdf_proof
         candidate["vdf_iterations"] = iterations
@@ -2142,27 +2144,52 @@ class Node:
             return None
         return False
 
-    def _readd_valid_txs(self, txs, exclude_hashes, state):
+    def _readd_valid_txs(self, txs, exclude_hashes, state, recovered=False, entered=None):
         """Re-add unconfirmed txs to the mempool, each validated against
         state first, a stale-nonce or otherwise now-invalid tx must not
         be silently re-admitted. Also re-floods each one: it fell out of a
         reorged-away block, so other nodes on the now-canonical chain may
         never have seen it at all, and without this it would just sit in
-        our own mempool alone until we mine it ourselves or it expires."""
+        our own mempool alone until we mine it ourselves or it expires.
+
+        recovered: these were confirmed on our own branch before it was lost,
+        so they come back with priority (see Mempool.add). entered maps a tx
+        hash to when its block was stamped, which is when the network first
+        had it: the age they keep, capped so a deep reorg does not bring one
+        back already due to expire. One tx that cannot be put back never
+        stops the rest. Returns (put back, left out)."""
+        entered = entered or {}
+        now = time.time()
+        floor = now - mempool_mod.MEMPOOL_TTL_SECONDS / 2
+        back = left_out = 0
         for t in txs:
-            if tx_mod.tx_hash(t) in exclude_hashes:
+            h = tx_mod.tx_hash(t)
+            if h in exclude_hashes:
                 continue
-            # Against the state plus this sender's txs already re-queued, the
-            # same view a fresh submission gets. Against the bare state, a
-            # sender's second and third pending tx look like nonce gaps and
-            # only the first would ever come back. Blocks list a sender's txs
-            # in nonce order, so each one sees its predecessors.
-            probe = self.mempool.probe_state_for(t.get("from"), state)
-            ok, _ = tx_mod.validate(t, probe)
-            if ok:
-                added, _ = self.mempool.add(t)
-                if added:
-                    self._spread(t, gossip_mod.KIND_TX, tx_mod.tx_hash(t))
+            try:
+                when = max(min(entered[h], now), floor) if h in entered else None
+                ok = self._readd_one(t, h, state, recovered, when)
+            except Exception:
+                log.exception("[reorg] could not put back %s", h[:12])
+                ok = False
+            back, left_out = back + ok, left_out + (not ok)
+        return back, left_out
+
+    def _readd_one(self, t, h, state, recovered, entered):
+        """Put one tx back if it is still valid. True if it is in the pool."""
+        # Against the state plus this sender's txs already re-queued, the
+        # same view a fresh submission gets. Against the bare state, a
+        # sender's second and third pending tx look like nonce gaps and
+        # only the first would ever come back. Blocks list a sender's txs
+        # in nonce order, so each one sees its predecessors.
+        probe = self.mempool.probe_state_for(t.get("from"), state)
+        ok, _ = tx_mod.validate(t, probe)
+        if not ok:
+            return False
+        added, _ = self.mempool.add(t, entered=entered, recovered=recovered)
+        if added:
+            self._spread(t, gossip_mod.KIND_TX, h)
+        return added
 
     def _salvage_fork_txs(self, fork_point, tail):
         """Re-add unconfirmed, still-valid txs from a rejected fork into the
@@ -2266,10 +2293,20 @@ class Node:
         A tx that's no longer valid under the new chain must not be
         silently re-admitted, or it can stall this node's own block
         production every cycle until it's pruned)."""
-        old_txs = [t for blk in old_chain[fork_point:]
-                   for t in blk.get("transactions", [])]
+        old_txs, stamped = [], {}
+        for blk in old_chain[fork_point:]:
+            for t in blk.get("transactions", []):
+                old_txs.append(t)
+                stamped[tx_mod.tx_hash(t)] = blk.get("timestamp", time.time())
         new_confirmed = {tx_mod.tx_hash(t)
                          for blk in new_chain[fork_point:]
                          for t in blk.get("transactions", [])}
         self.mempool.remove_many(new_confirmed)
-        self._readd_valid_txs(old_txs, new_confirmed, new_state)
+        # These were confirmed on a branch of ours that lost, so they come
+        # back ahead of anything that is merely waiting (see Mempool.add).
+        back, left_out = self._readd_valid_txs(old_txs, new_confirmed, new_state,
+                                               recovered=True, entered=stamped)
+        if back or left_out:
+            log.info("[reorg] put back %d transaction%s from the blocks that were replaced%s",
+                     back, "" if back == 1 else "s",
+                     ", %d no longer valid or without room" % left_out if left_out else "")
