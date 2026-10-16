@@ -156,6 +156,7 @@ from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_a
 from board_view import (BOARD_MEMO_TAG, VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG,
                         _board_posts)
 import oblivious as oblivious_mod
+import decisions_ui
 import unlock_ui
 import watch_ui
 from wallet_ui import (register_address_page, register_board_pages,
@@ -1900,6 +1901,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node))
     unlock_ui.register(app, node, csrf_token, limiter)
     watch_ui.register(app, node)
+    decisions_ui.register(app, node)
     addresses_ui.register(app, local_reader_for(node), node, csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])

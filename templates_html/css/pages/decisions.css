@@ -1,0 +1,17 @@
+/* Decisions page. Laid out like Settings: groups of a title and a line of
+   what they cover, in flowing columns, each row a decision and the reason for it.
+   Every rule is scoped under .decisions. */
+.decisions .decisions-lede { color: var(--ink-dim); font-size: .9rem; margin: 0 0 1rem; max-width: 46rem; }
+.decisions .decision-cols { column-count: 2; column-gap: 2.5rem; }
+.decisions .decision-group { break-inside: avoid; margin-bottom: 1.1rem; }
+.decisions .group-title {
+  font-size: .85rem; font-weight: 650; letter-spacing: -.005em;
+  color: var(--ink-dim); margin: 0 0 .1rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line-strong);
+}
+.decisions .group-blurb { font-size: .8rem; color: var(--ink-dim); margin: .3rem 0 .2rem; }
+.decisions .decision-row { padding: .55rem 0; border-bottom: 1px solid var(--rule); }
+.decisions .decision-what { margin: 0; font-size: .9rem; font-weight: 550; overflow-wrap: anywhere; }
+.decisions .decision-why { margin: .15rem 0 0; font-size: .82rem; color: var(--ink-dim); max-width: 38rem; }
+@media (max-width: 900px) {
+  .decisions .decision-cols { column-count: 1; }
+}
