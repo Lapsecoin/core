@@ -1,59 +1,82 @@
-/* Addresses: the wallet's accounts in a table, two actions beside it.
-   Panels, fields and alerts come from wallet.css. Stacks below 900px, and the
-   table becomes one block per address below 640px. */
+/* Addresses: the wallet's accounts as one table that fits the screen, with a
+   prompt (a modal) for anything that needs a passphrase. Panels, fields and
+   alerts come from wallet.css. The table scrolls inside its panel when there
+   are more addresses than rows that fit; below 640px each address is a block. */
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.side-stack { display: flex; flex-direction: column; gap: .75rem; min-width: 0; }
-.panel-note { margin: 0; padding: .75rem 1rem; border-top: 1px solid var(--rule); font-size: .82rem; color: var(--ink-dim); line-height: 1.5; }
 .dim { color: var(--ink-dim); }
+.panel-note { margin: 0; padding: .75rem 1rem; border-top: 1px solid var(--rule); font-size: .82rem; color: var(--ink-dim); line-height: 1.5; }
 
-table.acct { width: 100%; min-width: 0; border-collapse: collapse; font-size: .85rem; }
-.acct th { text-align: left; padding: .5rem .9rem; border-bottom: 1px solid var(--rule); font-size: .78rem; font-weight: 600; color: var(--ink-dim); background: none; text-transform: none; letter-spacing: 0; }
-.acct td { padding: .6rem .9rem; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+/* The panel takes what is left of the screen under the header, so the page
+   itself never scrolls on a laptop; the rows scroll inside it with the header
+   row staying put. */
+.acct-scroll { max-height: calc(100vh - 175px); min-height: 8rem; overflow: auto; border-radius: var(--radius); }
+.alert + .acct-panel .acct-scroll, .alert ~ .acct-panel .acct-scroll { max-height: calc(100vh - 225px); }
+
+table.acct { width: 100%; min-width: 0; border-collapse: separate; border-spacing: 0; font-size: .85rem; }
+.acct th { position: sticky; top: 0; z-index: 1; background: var(--surface); text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--rule); font-size: .78rem; font-weight: 600; color: var(--ink-dim); text-transform: none; letter-spacing: 0; }
+.acct td { padding: .4rem .6rem; border-bottom: 1px solid var(--rule); vertical-align: middle; }
 .acct tbody tr:last-child td { border-bottom: 0; }
 .acct tbody tr:hover { background: var(--hover); }
 .acct .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .acct th.num { text-align: right; }
-.acct .c-idx { width: 2rem; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
-.acct .c-name { min-width: 0; }
-.acct .nm { display: flex; align-items: center; gap: .1rem; margin-bottom: .1rem; }
-.acct .nm-text { font-weight: 500; }
-.acct .addr-mono { font-family: var(--mono); font-size: .74rem; color: var(--ink-dim); line-height: 1.45; overflow-wrap: anywhere; }
+.acct .c-idx { width: 1.2rem; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.acct .c-name { white-space: nowrap; }
+.acct .c-addr { min-width: 0; }
+.acct .addr-mono { font-family: var(--mono); font-size: .72rem; color: var(--ink-dim); line-height: 1.4; overflow-wrap: anywhere; text-decoration: none; }
+.acct a.addr-mono:hover { color: var(--link); text-decoration: underline; }
 .acct .c-act { white-space: nowrap; text-align: right; }
-.acct .c-act .btn-sm { margin-left: .25rem; height: 28px; display: inline-flex; align-items: center; vertical-align: middle; }
+.acct .c-act .btn-sm { margin-left: .15rem; padding: 0 .55rem; height: 26px; display: inline-flex; align-items: center; vertical-align: middle; }
 /* actions appear on hover or focus where there is a pointer, and stay put on touch */
 @media (hover: hover) {
   .acct .c-act .btn-sm { opacity: 0; }
   .acct tr:hover .c-act .btn-sm, .acct tr:focus-within .c-act .btn-sm { opacity: 1; }
 }
 
-.label-form { display: inline-block; margin: 0; }
+.label-form { display: inline-block; margin: 0; vertical-align: middle; }
 .label-form input {
-  width: 11rem; height: 28px; padding: 0 .5rem; font-size: .85rem; font-weight: 500;
+  width: 8.5rem; height: 28px; padding: 0 .5rem; font-size: .85rem; font-weight: 500;
   background: var(--paper); border-color: var(--rule); box-shadow: none;
 }
 .label-form input:hover { border-color: var(--line-strong); }
 .label-form input:focus { background: var(--surface); border-color: var(--line-strong); box-shadow: none; }
 .label-form input::placeholder { color: var(--ink-dim); font-weight: 400; opacity: .8; }
-.tag { display: inline-block; margin-left: .35rem; padding: .05rem .45rem; border: 1px solid var(--rule); border-radius: 999px; font-size: .7rem; color: var(--ink-dim); vertical-align: 1px; }
+.tag { display: inline-block; margin-left: .35rem; padding: .05rem .45rem; border: 1px solid var(--rule); border-radius: 999px; font-size: .7rem; color: var(--ink-dim); vertical-align: middle; }
+.nm-text { font-weight: 500; }
 
-/* the exported key, shown once */
-.export-result { margin-bottom: .75rem; }
-.export-result textarea { width: 100%; min-height: 0; font-family: var(--mono); font-size: .78rem; line-height: 1.5; resize: none; overflow-wrap: anywhere; }
-.export-actions { display: flex; align-items: center; gap: .75rem; margin: .5rem 0; flex-wrap: wrap; }
-.export-actions .hint { margin: 0; font-family: var(--mono); font-size: .72rem; overflow-wrap: anywhere; }
-.export-result .hint code { font-family: var(--mono); font-size: .76rem; }
+/* the prompt */
+dialog.prompt {
+  width: min(24rem, calc(100vw - 2rem)); padding: 1.1rem 1.2rem 1rem; border: 1px solid var(--rule);
+  border-radius: var(--radius); background: var(--surface); color: var(--ink);
+  box-shadow: 0 12px 40px rgb(var(--ink-rgb) / .22);
+}
+dialog.prompt.wide { width: min(34rem, calc(100vw - 2rem)); }
+dialog.prompt::backdrop { background: rgb(var(--ink-rgb) / .35); }
+dialog.prompt h3 { margin: 0 0 .35rem; font-size: 1rem; font-weight: 650; }
+dialog.prompt label { display: block; margin: .8rem 0 .3rem; font-size: .82rem; font-weight: 500; }
+dialog.prompt input[type="password"] { width: 100%; }
+dialog.prompt .hint { margin: .3rem 0 0; }
+dialog.prompt .once { margin-left: .5rem; font-size: .75rem; font-weight: 400; color: var(--ink-dim); }
+dialog.prompt textarea { width: 100%; min-height: 0; margin-top: .6rem; font-family: var(--mono); font-size: .78rem; line-height: 1.5; resize: none; overflow-wrap: anywhere; }
+dialog.prompt .addr-mono { font-family: var(--mono); font-size: .72rem; overflow-wrap: anywhere; }
+dialog.prompt code { font-family: var(--mono); font-size: .76rem; }
+.prompt-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
+  .acct-scroll, .alert ~ .acct-panel .acct-scroll { max-height: none; }
+  .acct .addr-mono { font-size: .7rem; }
+}
+@media (max-width: 760px) {
   .acct thead { display: none; }
   .acct, .acct tbody { display: block; }
   .acct tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .75rem; padding: .7rem .9rem; border-bottom: 1px solid var(--rule); }
   .acct tbody tr:last-child { border-bottom: 0; }
   .acct td { display: block; padding: 0; border: 0; min-width: 0; }
   .acct .c-idx { display: none; }
-  .acct .c-name { grid-column: 1; grid-row: 1 / span 2; }
+  .acct .c-name { grid-column: 1; grid-row: 1; white-space: normal; }
   .acct .c-bal { grid-column: 2; grid-row: 1; }
+  .acct .c-addr { grid-column: 1 / -1; grid-row: 2; }
   .acct .c-act { grid-column: 1 / -1; grid-row: 3; text-align: left; margin-top: .35rem; }
-  .acct .c-act .btn-sm { margin: 0 .25rem 0 0; opacity: 1; }
+  .acct .c-act .btn-sm { margin: 0 .25rem .25rem 0; opacity: 1; }
   .label-form input { width: 100%; }
 }

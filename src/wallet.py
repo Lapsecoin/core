@@ -414,6 +414,28 @@ def startup_console(key_text=None, account=0):
 # Commands that run and exit (--export, --new-address, --restore)
 # ---------------------------------------------------------------------------
 
+def resolve_account(spec, wallet_file=WALLET_FILE):
+    """--account as a number: a number as typed, or the name given to an address
+    on the Addresses page (case does not matter). ValueError says what is wrong
+    and lists the names there are."""
+    if spec is None or str(spec).strip() == "":
+        return 0
+    text = str(spec).strip()
+    if text.isdigit():
+        return int(text)
+    if not os.path.exists(wallet_file):
+        raise ValueError(f"there is no wallet here to look the name '{text}' up in; use the number")
+    accounts = WalletFile.load(wallet_file).accounts
+    hits = [a["index"] for a in accounts if a.get("label", "").strip().lower() == text.lower()]
+    if len(hits) == 1:
+        return hits[0]
+    names = ", ".join(f"{a['label']} ({a['index']})" for a in accounts if a.get("label"))
+    if hits:
+        raise ValueError(f"more than one address is named '{text}'; use its number")
+    raise ValueError(f"no address is named '{text}'" + (f"; the names are: {names}" if names else
+                                                         "; none of the addresses has a name yet"))
+
+
 def _need_wallet(source, what):
     if source.kind == "wallet":
         return

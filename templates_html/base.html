@@ -95,7 +95,12 @@
       {{ link('send', '/send', 'send', 'Send') }}
       {% else %}
       {{ link('dashboard', '/', 'dashboard', 'Dashboard') }}
-      {% if is_private %}{{ link('send', '/send', 'send', 'Send') }}{{ link('addresses', '/addresses', 'addresses', 'Addresses') }}{% endif %}
+      {% if is_private %}
+      {% call group(('send', 'addresses'), 'balance', 'Wallet') %}
+        {{ entry('send', '/send', 'send', 'Send', 'Send LAPSE or ETH on Base') }}
+        {{ entry('addresses', '/addresses', 'addresses', 'Addresses', 'Your addresses and keys') }}
+      {% endcall %}
+      {% endif %}
       {{ community() }}
       {% call group(('blocks', 'address', 'mempool'), 'explorer', 'Explorer') %}
         {{ entry('blocks', '/blocks', 'blocks', 'Blocks', 'Recent blocks and transactions') }}
