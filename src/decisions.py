@@ -95,7 +95,7 @@ def about_local_wallet(notes):
 
 
 def network(*, public_port, requested_port, port_how, private_port, private_how,
-            peers=(), relay=True, public_url=None, public_url_how=""):
+            peers=(), public_url=None, public_url_how=""):
     out = []
     if public_port != requested_port:
         why = (f"Port {requested_port} (from {port_how}) was already in use, here or by another "
@@ -112,11 +112,9 @@ def network(*, public_port, requested_port, port_how, private_port, private_how,
     else:
         out.append(Entry("Finds peers on its own: LAN broadcast, saved peers and the DHT",
                          "No --peer was given."))
-    out.append(Entry("Passes light clients' sealed requests on" if relay
-                     else "Does not pass light clients' sealed requests on",
-                     "On by default." if relay else "--no-relay was given."))
     if public_url:
-        out.append(Entry(f"Advertises {public_url} for light clients", f"From {public_url_how}."))
+        out.append(Entry(f"Link previews use {public_url} as this node's address",
+                         f"From {public_url_how}."))
     return out
 
 

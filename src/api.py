@@ -68,15 +68,6 @@ Public app  (default port 8333, externally reachable):
          it back as If-None-Match and an unchanged board is a 304. Gzipped
          when the client accepts it.
 
-    POST /api/oblivious               a sealed request, answered sealed (see oblivious.py)
-    POST /api/relay                   pass a sealed request to a peer, unopened
-
-    GET  /api/peers/http
-         {"nodes": ["ip:port", ...]}: this node and the peers it has found
-         answering HTTP on its own chain. Short on purpose, unlike
-         /api/peers. Also "https": this node's own HTTPS address
-         (--public-url) and the ones its peers advertise.
-
     POST /api/tx/send                 rate-limited: 20 requests/second
          Request body (JSON): a signed plaintext tx dict, see tx.py
          (tx_mod.create): {"from", "pubkey", "outputs", "nonce", "fee",
@@ -113,7 +104,6 @@ Exchange / third-party integration:
   handle XRP- or Monero-style account-index coins.
 """
 
-import base64
 import collections
 from datetime import datetime, timezone
 import logging
@@ -125,8 +115,7 @@ import socket
 import threading
 import time
 
-import requests
-from flask import Response, jsonify, render_template, request, send_file
+from flask import jsonify, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -155,7 +144,6 @@ from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_a
                        fmt_duration)
 from board_view import (BOARD_MEMO_TAG, VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG,
                         _board_posts)
-import oblivious as oblivious_mod
 import decisions_ui
 import unlock_ui
 import watch_ui
@@ -756,80 +744,10 @@ class _NodeSigner:
         return t
 
 
-# What a sealed request may ask for: what a wallet needs to name its address
-# for, and nothing else. Anything else is refused sealed.
-_OBLIVIOUS_PATHS = re.compile(r"^/api/(state|fees|tx/send|address/[^/?#]+/page)$")
-
-
-def _register_oblivious(app, pool, limiter, pfx, oblivious, self_addr):
-    """The two ends of a one-hop oblivious request (see oblivious.py):
-    /api/oblivious opens a request sealed to this node and answers it
-    sealed, and /api/relay passes a sealed request to a peer without being
-    able to open it."""
-
-    @app.route("/api/oblivious", methods=["POST"], endpoint=pfx + "api_oblivious")
-    def api_oblivious():
-        blob = request.get_data(cache=False)
-        if len(blob) > oblivious_mod.MAX_BLOB:
-            return "", 413
-        try:
-            req, client_key = oblivious.open_request(blob)
-        except ValueError:
-            return "", 400
-        method = req["m"].upper()
-        path, _, query = req["p"].partition("?")
-        if (not _OBLIVIOUS_PATHS.match(path) or method not in ("GET", "POST")
-                or (method == "POST") != (path == "/api/tx/send")):
-            answer = oblivious.seal_response(client_key, 404, {"error": "not available this way"})
-        else:
-            # The request is answered by this same app, so a sealed one
-            # means exactly what an open one does, limits included. They
-            # are counted against whoever passed it on, not against this
-            # machine, which every sealed request would otherwise share.
-            inner = app.test_client().open(
-                path + ("?" + query if query else ""), method=method,
-                json=req.get("b") if method == "POST" else None,
-                environ_overrides={"REMOTE_ADDR": request.remote_addr})
-            answer = oblivious.seal_response(client_key, inner.status_code,
-                                             inner.get_json(silent=True))
-        return Response(answer, mimetype="application/octet-stream")
-
-    @app.route("/api/relay", methods=["POST"], endpoint=pfx + "api_relay")
-    @limiter.limit("60 per minute")
-    def api_relay():
-        data = request.get_json(silent=True)
-        if not isinstance(data, dict):
-            return "", 400
-        to, encoded = data.get("to"), data.get("blob")
-        # Only to a peer this node already knows answers HTTP, never to an
-        # address a caller chose, so this cannot be pointed at anything else.
-        reachable = {row[0] for row in pool.snapshot() if row[5] is True}
-        if (not isinstance(to, str) or to not in reachable or to == self_addr()
-                or not isinstance(encoded, str) or len(encoded) > oblivious_mod.MAX_BLOB * 2):
-            return "", 400
-        try:
-            blob = base64.b64decode(encoded, validate=True)
-        except ValueError:
-            return "", 400
-        if len(blob) > oblivious_mod.MAX_BLOB:
-            return "", 413
-        try:
-            reply = requests.post(f"http://{to}/api/oblivious", data=blob, timeout=5,
-                                  headers={"Content-Type": "application/octet-stream"},
-                                  stream=True)
-            body = next(reply.iter_content(oblivious_mod.MAX_BLOB + 1), b"")
-            ok = reply.status_code == 200 and len(body) <= oblivious_mod.MAX_BLOB
-        except requests.RequestException:
-            return "", 502
-        if not ok:
-            return "", 502
-        return Response(body, mimetype="application/octet-stream")
-
-
 def _shared_read_only_routes(app, node, pool, limiter,
                               private_port, public_port, is_private,
                               update_checker=None, csrf_token=None,
-                              updater=None, public_url=None, oblivious=None):
+                              updater=None, public_url=None):
     """Register all read-only UI and API routes on app."""
     app.config["PUBLIC_URL"] = public_url
     # Use a prefix so public and private apps don't collide on endpoint names
@@ -851,8 +769,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return signer.accounts(), signer.for_account(None).index
 
     reader = local_reader_for(node)
-    if oblivious is not None and not is_private:
-        _register_oblivious(app, pool, limiter, pfx, oblivious, lambda: _self_external_addr())
     register_static_routes(app, pfx)
     register_board_pages(app, reader, pfx, _own_addr_or_hidden, csrf_token,
                          accounts_fn=_board_accounts if is_private else None)
@@ -1348,36 +1264,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "attempting": pool.attempting(),
         })
 
-    @app.route("/api/peers/http", endpoint=pfx+"api_peers_http")
-    def api_peers_http():
-        """Only the nodes a light client can use: this node itself and the
-        peers it has found answering HTTP and believes are on its own
-        chain, best-connected first. /api/peers describes the whole peer
-        graph for the network page; a light client on a small data
-        allowance needs a short list of addresses and nothing else."""
-        rows = sorted(pool.snapshot(), key=lambda r: r[3] or 0, reverse=True)
-        nodes = [p["address"] for p in _peer_dicts(rows)
-                 if p["http_reachable"] and p["active"] and not p["is_fork"]]
-        me = _self_external_addr()
-        if me and me not in nodes:
-            nodes.insert(0, me)
-        # HTTPS addresses, this node's own first: the only ones a light
-        # client sends a wallet address to. Each peer's is what it says
-        # itself (see http_probe), and a client checks the certificate, so
-        # a false one only fails there.
-        known = pool.public_urls()
-        https = ([public_url] if public_url else []) + [
-            known[a] for a in nodes if a in known and known[a] != public_url]
-        # And the keys of those that take oblivious requests, this node's
-        # own included, so a client can pick a relay and a target from one
-        # answer without asking each node about itself.
-        held = pool.oblivious_keys()
-        keys = {a: held[a] for a in nodes if a in held}
-        if oblivious and me:
-            keys[me] = oblivious.public_b64
-        return jsonify({"nodes": nodes, "https": https, "keys": keys,
-                        "self_key": oblivious.public_b64 if oblivious else None})
-
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")
     def api_peers_download():
         # Same shape discovery.py's own PEER_CACHE_FILE reads and writes
@@ -1402,12 +1288,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def api_info():
         info = dict(node.get_info())
         info["iid"] = pool.instance_id
-        # The HTTPS address this node says it can also be reached at (see
-        # --public-url), so peers can tell light clients about it.
-        info["public_url"] = public_url
-        # The key a light client seals a request to when it asks this node
-        # something through another node (see oblivious.py).
-        info["oblivious_key"] = oblivious.public_b64 if oblivious else None
         info["address"] = _own_addr_or_hidden()
         chain = node.view.chain
         info["tip_timestamp"] = chain[-1].get("timestamp") if chain else None
@@ -1688,7 +1568,7 @@ def _admit_by_ping(node, pool, addr):
 
 
 def create_app(node, pool, private_port=8335, public_port=8333,
-               update_checker=None, updater=None, public_url=None, oblivious=None):
+               update_checker=None, updater=None, public_url=None):
     app = make_flask_app(__name__)
     app.wsgi_app = _TrustLoopbackProxy(app.wsgi_app)
     # Deliberately not touching the werkzeug logger. main.py already sets it
@@ -1709,7 +1589,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=False,
                              update_checker=update_checker, updater=updater,
-                             public_url=public_url, oblivious=oblivious)
+                             public_url=public_url)
 
     # Lets a node that cannot be reached ask this one to ping it first.
     # Behind most firewalls and NATs a node can send out but not be reached
@@ -1786,8 +1666,7 @@ def create_app(node, pool, private_port=8335, public_port=8333,
 # ---------------------------------------------------------------------------
 
 def create_private_app(node, pool, private_port=8335, public_port=8333,
-                       update_checker=None, updater=None, public_url=None,
-                       oblivious=None):
+                       update_checker=None, updater=None, public_url=None):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = make_flask_app(__name__)
     _close_db_after_request(app)
@@ -1808,8 +1687,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=True,
                              update_checker=update_checker, csrf_token=csrf_token,
-                             updater=updater, public_url=public_url,
-                             oblivious=oblivious)
+                             updater=updater, public_url=public_url)
 
     @app.route("/api/update/start", methods=["POST"])
     def api_update_start():

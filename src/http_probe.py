@@ -22,51 +22,34 @@ import json
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from oblivious import parse_key
-from public_url import parse_public_url
-
 log = logging.getLogger("ec.http_probe")
 
 # A cheap, always-present, unauthenticated endpoint, just confirms the
 # peer's HTTP server on this address answers at all. Whether the request
-# succeeds is what matters; the body is read only for the instance id (to
-# spot this node under another address) and for the HTTPS address the peer
-# advertises, if any, which light clients are told about (see
-# /api/peers/http).
+# succeeds is what matters; the body is read only for the instance id, to
+# spot this node under another address.
 PROBE_PATH = "/api/info"
 MAX_WORKERS = 20
 
 
 def _probe_one(addr, timeout, own_iid=None):
-    """(ok, public_url, oblivious_key) for addr. ok is True if it answers,
-    False if not, and None when the answer carries our own instance id, i.e.
-    addr is this node under another address. public_url is the HTTPS address
-    it advertises (see public_url.parse_public_url) and oblivious_key the
-    public key it advertises for oblivious requests (see oblivious.py), each
-    only if acceptable, else None."""
+    """True if addr's web port answers, False if not, and None when the answer
+    carries our own instance id, i.e. addr is this node under another
+    address."""
     url = f"http://{addr}{PROBE_PATH}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             if not 200 <= resp.status < 300:
-                return False, None, None
+                return False
             try:
                 info = json.loads(resp.read(1 << 20))
             except Exception:
-                return True, None, None
+                return True
             if own_iid and info.get("iid") == own_iid:
-                return None, None, None
-            try:
-                public_url = parse_public_url(info.get("public_url"))
-            except (ValueError, TypeError):
-                public_url = None
-            try:
-                parse_key(info.get("oblivious_key"))
-                key = info["oblivious_key"]
-            except (ValueError, TypeError):
-                key = None
-            return True, public_url, key
+                return None
+            return True
     except Exception:
-        return False, None, None
+        return False
 
 
 def run(pool, interval=120, timeout=2.5):
@@ -88,14 +71,12 @@ def run(pool, interval=120, timeout=2.5):
                            for addr in addrs}
                 for future in as_completed(futures):
                     try:
-                        ok, public_url, key = future.result()
+                        ok = future.result()
                     except Exception:
-                        ok, public_url, key = False, None, None
+                        ok = False
                     if ok is None:
                         pool.mark_self(futures[future])
                         continue
                     pool.set_http_reachable(futures[future], ok)
-                    pool.set_public_url(futures[future], public_url)
-                    pool.set_oblivious_key(futures[future], key)
                 log.debug("[http_probe] checked %d peers", len(addrs))
             time.sleep(interval)

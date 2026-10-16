@@ -16,7 +16,7 @@ payment, a post, an order. Two measures, which together settle it:
      Back button, a double click, a replay, the second copy finds its token
      spent and nothing happens, and the page says so.
 
-Light-safe: standard library and Flask only.
+Standard library and Flask only.
 """
 
 import collections

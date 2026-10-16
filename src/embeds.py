@@ -8,7 +8,7 @@ generic site card. The icon and the card's colour are the same on every page
 and live in base.html.
 
 Nothing here reaches into a node: each builder takes plain values, so the
-wording is testable without a chain. Light-safe: no node imports.
+wording is testable without a chain. No node imports.
 """
 
 import re

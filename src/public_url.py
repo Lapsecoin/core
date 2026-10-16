@@ -1,15 +1,15 @@
-"""A node's public HTTPS address: what an operator advertises and what a
-client agrees to follow.
+"""A node's public HTTPS address (--public-url): the address its link
+previews use, when a reverse proxy with a domain sits in front of it.
 
-Light-safe: imports nothing beyond the standard library.
+Imports nothing beyond the standard library.
 """
 
 import ipaddress
 from urllib.parse import urlsplit
 
 # Names that mean this machine or its own network, whatever they resolve to
-# in a certificate's eyes. A client follows addresses other nodes advertise,
-# so it must not be steered to one of these.
+# in a certificate's eyes. A link preview is for other people, so its address
+# must not point at this machine or its own network.
 _LOCAL_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".intranet")
 
 
