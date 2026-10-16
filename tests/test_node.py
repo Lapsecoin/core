@@ -306,7 +306,7 @@ class TestSubmitTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         ok, result = node.submit_tx(t)
         assert ok is True
         assert len(result) == 64
@@ -315,7 +315,7 @@ class TestSubmitTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         node.submit_tx(t)
         assert node.mempool.size() == 1
 
@@ -323,14 +323,14 @@ class TestSubmitTx:
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         node.submit_tx(t)
         gossip.spread.assert_called_once()
 
     def test_submit_invalid_tx_returns_false(self, node_env):
         node, *_ = node_env
         # No balance for address(5)
-        t = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         ok, err = node.submit_tx(t)
         assert ok is False
 
@@ -338,7 +338,7 @@ class TestSubmitTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         node.submit_tx(t)
         ok, err = node.submit_tx(t)
         assert ok is False
@@ -489,7 +489,7 @@ class TestDrainQueue:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         reply = queue.Queue()
         node.net_in_q.put({"type": "submit_tx", "tx": t, "reply": reply})
         node._drain_queue()
@@ -512,7 +512,7 @@ class TestHandleInboundTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         msg = {"tx": t, "sender": "1.2.3.4:1", "stemming": False}
         node._handle_inbound_tx(msg)
         assert node.mempool.size() == 1
@@ -520,7 +520,7 @@ class TestHandleInboundTx:
     def test_fluff_invalid_tx_not_added(self, node_env):
         node, *_ = node_env
         # No balance for address(5)
-        t = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         msg = {"tx": t, "sender": "1.2.3.4:1", "stemming": False}
         node._handle_inbound_tx(msg)
         assert node.mempool.size() == 0
@@ -529,7 +529,7 @@ class TestHandleInboundTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         msg = {"tx": t, "sender": "1.2.3.4:1", "stemming": False}
         node._handle_inbound_tx(msg)
         node._handle_inbound_tx(msg)  # second time, duplicate
@@ -542,7 +542,7 @@ class TestHandleInboundTx:
         bandwidth, and every downstream peer's, for one crafted datagram."""
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
         gossip.relay.assert_called_once()
         assert gossip.relay.call_args.args[3] == "1.2.3.4:1"
@@ -559,7 +559,7 @@ class TestHandleInboundTx:
     def test_public_tx_is_admitted_and_passed_on(self, node_env):
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": False})
         assert node.mempool.size() == 1
         gossip.relay.assert_called_once()
@@ -776,7 +776,7 @@ class TestReorgMempool:
         node._commit(b0)
         assert node.cs.height == 1
 
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         b1_old = make_block(2, b0["hash"], [t])
         node._commit(b1_old)
         assert node.cs.height == 2
@@ -802,7 +802,7 @@ class TestReorgMempool:
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         h = tx_mod.tx_hash(t)
         g = node.cs.chain[0]
 
@@ -830,7 +830,7 @@ class TestReorgMempool:
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
         g = node.cs.chain[0]
-        t_old = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)  # nonce 1
+        t_old = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")  # nonce 1
         b1_old = make_block(1, g["hash"], [t_old])
         node.cs = ChainState.from_genesis()
         node.cs.chain.append(b1_old)
@@ -858,14 +858,14 @@ class TestReorgMempool:
         st.total_minted += 100 * TICKS_PER_LAPSE
         txs = []
         for _ in range(n_txs):
-            t = make_tx(0, 1, TICKS_PER_LAPSE, st)
+            t = make_tx(0, 1, TICKS_PER_LAPSE, st, fee="floor")
             st.apply_tx(t)
             txs.append(t)
         node.cs = ChainState.from_genesis()
         node.cs.chain.append(make_block(1, g["hash"], txs))
         new_state = state_mod.State()
-        new_state.credit(address(0), new_balance * TICKS_PER_LAPSE)
-        new_state.total_minted += new_balance * TICKS_PER_LAPSE
+        new_state.credit(address(0), int(new_balance * TICKS_PER_LAPSE))
+        new_state.total_minted += int(new_balance * TICKS_PER_LAPSE)
         return txs, [g, make_block(1, g["hash"], [], builder_index=1)], new_state
 
     def test_a_run_of_nonces_from_one_sender_all_come_back(self, node_env):
@@ -892,9 +892,9 @@ class TestReorgMempool:
 
     def test_re_queueing_respects_the_senders_balance(self, node_env):
         """The new chain leaves the sender with enough for two of the three
-        sends, so the third must not come back."""
+        sends (and their fees), so the third must not come back."""
         node, *_ = node_env
-        txs, new_chain, new_state = self._abandoned_branch(node, 3, new_balance=2)
+        txs, new_chain, new_state = self._abandoned_branch(node, 3, new_balance=2.001)
         node._reorg_mempool(fork_point=1, old_chain=node.cs.chain,
                             new_chain=new_chain, new_state=new_state)
         got = [node.mempool.get(tx_mod.tx_hash(t)) is not None for t in txs]
@@ -2067,7 +2067,7 @@ class TestTheFluffingNodeKeepsTheTransaction:
     def test_a_stem_hop_that_fluffs_admits_it(self, node_env):
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         gossip.relay.return_value = True          # the walk ended here
         node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
         assert node.mempool.size() == 1
@@ -2075,7 +2075,7 @@ class TestTheFluffingNodeKeepsTheTransaction:
     def test_a_stem_hop_that_forwards_does_not(self, node_env):
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         gossip.relay.return_value = False         # still private, still moving
         node._handle_inbound_tx({"tx": t, "sender": "1.2.3.4:1", "stemming": True})
         assert node.mempool.size() == 0, \
@@ -2084,7 +2084,7 @@ class TestTheFluffingNodeKeepsTheTransaction:
     def test_it_is_still_relayed_either_way(self, node_env):
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 10 * TICKS_PER_LAPSE)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, fee="floor")
         for went_public in (True, False):
             gossip.relay.reset_mock()
             gossip.relay.return_value = went_public

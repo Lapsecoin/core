@@ -43,9 +43,12 @@ BLOCK_SIZE_LIMIT = 2_000_000
 
 # Minimum fee-per-byte a node relays or mines, independent of mempool
 # congestion. Mirrors Bitcoin's minrelaytxfee: a deliberate anti-spam
-# policy floor, not a consensus rule and not market pricing, which is why
-# real, uncongested networks never actually show a 0 fee even with spare
-# block space. Kept nominal in ticks (see TICKS_PER_LAPSE): the point is
+# policy floor, not a consensus rule and not market pricing. A node applies
+# it to what it admits to its pool (tx.check_relay_fee, used by
+# Node._validate_for_mempool), which is everything it relays or builds from;
+# a block is still valid if it carries a cheaper tx. It is also why real,
+# uncongested networks never actually show a 0 fee even with spare block
+# space. Kept nominal in ticks (see TICKS_PER_LAPSE): the point is
 # that relaying costs something, not that it costs anything noticeable.
 # A future node-software upgrade can move this the way Bitcoin Core does,
 # as the ticks-per-LAPSE value shifts.

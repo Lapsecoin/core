@@ -122,7 +122,7 @@ def _lost_branch(node, txs, stamp):
 def test_a_reorg_puts_them_back_with_priority_and_their_age(node_env):
     node, *_ = node_env
     st = funded(0)
-    t = make_tx(0, 1, TICKS_PER_LAPSE, st)
+    t = make_tx(0, 1, TICKS_PER_LAPSE, st, fee="floor")
     stamp = time.time() - 600
     new_chain = _lost_branch(node, [t], stamp)
     node._reorg_mempool(fork_point=1, old_chain=node.cs.chain, new_chain=new_chain, new_state=funded(0))
@@ -133,7 +133,7 @@ def test_a_reorg_puts_them_back_with_priority_and_their_age(node_env):
 
 def test_a_very_old_block_does_not_bring_a_tx_back_due_to_expire(node_env):
     node, *_ = node_env
-    t = make_tx(0, 1, TICKS_PER_LAPSE, funded(0))
+    t = make_tx(0, 1, TICKS_PER_LAPSE, funded(0), fee="floor")
     new_chain = _lost_branch(node, [t], time.time() - 10 * mempool_mod.MEMPOOL_TTL_SECONDS)
     node._reorg_mempool(fork_point=1, old_chain=node.cs.chain, new_chain=new_chain, new_state=funded(0))
     assert node.mempool.prune_stale(funded(0)) == []
@@ -142,7 +142,7 @@ def test_a_very_old_block_does_not_bring_a_tx_back_due_to_expire(node_env):
 def test_one_tx_that_cannot_come_back_does_not_stop_the_rest(node_env, monkeypatch):
     node, *_ = node_env
     st = funded(0, 1)
-    a, b = make_tx(0, 2, TICKS_PER_LAPSE, st), make_tx(1, 2, TICKS_PER_LAPSE, st)
+    a, b = make_tx(0, 2, TICKS_PER_LAPSE, st, fee="floor"), make_tx(1, 2, TICKS_PER_LAPSE, st, fee="floor")
     new_chain = _lost_branch(node, [a, b], time.time())
     real = tx_mod.validate
 
@@ -158,7 +158,7 @@ def test_one_tx_that_cannot_come_back_does_not_stop_the_rest(node_env, monkeypat
 
 def test_a_fork_we_rejected_gets_no_priority(node_env):
     node, *_ = node_env
-    t = make_tx(0, 1, TICKS_PER_LAPSE, funded(0))
+    t = make_tx(0, 1, TICKS_PER_LAPSE, funded(0), fee="floor")
     node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
     node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
     tail = [make_block(1, node.cs.chain[0]["hash"], [t], builder_index=1)]
@@ -180,7 +180,7 @@ def test_the_priority_survives_a_restart(tmp_path):
 # The limits
 def _branch(node, n, sender_base=0):
     st = funded(*range(sender_base, sender_base + n))
-    return [make_tx(sender_base + i, 9, TICKS_PER_LAPSE, st) for i in range(n)], st
+    return [make_tx(sender_base + i, 9, TICKS_PER_LAPSE, st, fee="floor") for i in range(n)], st
 
 
 def test_only_the_first_blocks_worth_gets_priority(node_env, monkeypatch):
