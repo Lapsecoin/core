@@ -135,6 +135,7 @@
     {% endif %}
   {% endif %}
 </header>
+<meta name="server-now" content="{{ server_now() }}">
 <div class="page">
 {% block content %}{% endblock %}
 </div>
@@ -327,5 +328,35 @@
 })();
 </script>
 {% endif %}
+<script>
+// Ages ("3m ago") count from the node's clock, not the viewer's: the page
+// carries the node's time, and every tick adds the time since the page loaded.
+// Same rule as fmt_age in src/ui_common.py.
+(function () {
+  var meta = document.querySelector('meta[name="server-now"]');
+  var offset = meta ? Number(meta.content) - Date.now() / 1000 : 0;
+  function dur(s) {
+    var units = [["y", 31536000], ["d", 86400], ["h", 3600], ["m", 60]], parts = [];
+    for (var i = 0; i < units.length; i++) {
+      if (s >= units[i][1] || parts.length) {
+        var n = Math.floor(s / units[i][1]); s -= n * units[i][1];
+        if (n || parts.length) parts.push(n + units[i][0]);
+        if (parts.length === 2) break;
+      }
+    }
+    return parts.join(" ");
+  }
+  window.lcAge = function (ts) {
+    var s = Math.max(Math.floor(Date.now() / 1000 + offset - ts), 0);
+    return s < 60 ? s + "s ago" : dur(s) + " ago";
+  };
+  function tick() {
+    document.querySelectorAll("[data-age-ts]").forEach(function (el) {
+      el.textContent = window.lcAge(Number(el.dataset.ageTs));
+    });
+  }
+  setInterval(tick, 1000);
+})();
+</script>
 </body>
 </html>

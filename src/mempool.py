@@ -172,6 +172,11 @@ class Mempool:
         entry = self._pool.get(tx_hash)
         return entry.tx if entry else None
 
+    def entered_at(self, tx_hash):
+        """When this node first saw the transaction, or None."""
+        entry = self._pool.get(tx_hash)
+        return entry.entered if entry else None
+
     def size(self):
         return len(self._pool)
 

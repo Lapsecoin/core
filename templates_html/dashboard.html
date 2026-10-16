@@ -46,7 +46,7 @@
       {% if tx_total_pages > 1 %}<span class="tx-pageno">page {{ tx_page }} of {{ tx_total_pages }}</span>{% endif %}
     </div>
     <table class="dt">
-      <thead><tr><th class="num">Block</th><th>Hash</th><th class="hide-sm">From</th><th class="num">Amount</th></tr></thead>
+      <thead><tr><th class="num">Block</th><th>Hash</th><th class="hide-sm">From</th><th class="num">Amount</th><th class="num">Age</th></tr></thead>
       <tbody id="live-recent-txs">
       {% if recent_txs %}
         {% for height, h, t, amount in recent_txs %}
@@ -56,10 +56,11 @@
           <td class="fill" data-label="Hash">{% if kind != "payment" %}<span class="tx-kind">{{ "Board" if kind == "board" else "Fee request" }}</span>{% endif %}<a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
           <td class="hide-sm dim" data-label="From">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</td>
           <td class="num" data-label="Amount">{{ fmt_lapse_dp(amount) }}</td>
+          <td class="num dim" data-label="Age">{% if tx_times[height] %}<span data-age-ts="{{ tx_times[height] }}" title="{{ utc_text(tx_times[height]) }}">{{ fmt_age(server_now() - tx_times[height]) }}</span>{% endif %}</td>
         </tr>
         {% endfor %}
       {% else %}
-        <tr class="empty"><td colspan="4">{{ "No transactions yet" if not tx_all else "No transactions of the selected types" }}</td></tr>
+        <tr class="empty"><td colspan="5">{{ "No transactions yet" if not tx_all else "No transactions of the selected types" }}</td></tr>
       {% endif %}
       </tbody>
     </table>
@@ -270,12 +271,14 @@
               (tx.from === SELF_ADDRESS ? "self" : tx.from.slice(0, 24) + "…") +
               "</td>" +
             "<td class=\"num\" data-label=\"Amount\">" + fmtLapse(tx.amount) + "</td>" +
+            "<td class=\"num dim\" data-label=\"Age\">" + (tx.timestamp
+              ? "<span data-age-ts=\"" + tx.timestamp + "\">" + window.lcAge(tx.timestamp) + "</span>" : "") + "</td>" +
             "</tr>";
         }).join("");
       } else {
         // Keep what the server rendered when it says why the list is empty.
         if (!txBody.querySelector(".empty")) {
-          txBody.innerHTML = "<tr class=\"empty\"><td colspan=\"4\">No transactions of the selected types</td></tr>";
+          txBody.innerHTML = "<tr class=\"empty\"><td colspan=\"5\">No transactions of the selected types</td></tr>";
         }
       }
 

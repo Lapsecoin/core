@@ -5,9 +5,10 @@
     <td data-label="From" class="hash-short">{{ row.tx.from[:24] }}&hellip;</td>
     <td data-label="Fee" class="num">{{ row.tx.fee }}</td>
     <td data-label="Outputs" class="num">{{ row.tx.outputs|length }}</td>
+    <td data-label="Age" class="num">{% if row.entered %}<span data-age-ts="{{ row.entered }}">{{ fmt_age(server_now() - row.entered) }}</span>{% endif %}</td>
     <td data-label="Status" class="mempool-status">pending</td>
   </tr>
   {% endfor %}
 {% else %}
-  <tr><td colspan="5" class="mempool-empty">No pending transactions</td></tr>
+  <tr><td colspan="6" class="mempool-empty">No pending transactions</td></tr>
 {% endif %}

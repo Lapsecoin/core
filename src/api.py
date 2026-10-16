@@ -343,7 +343,11 @@ def _mempool_rows(mempool):
     """Return pending transactions in the order block assembly prefers."""
     txs = mempool.all_txs()
     txs.sort(key=lambda t: (-tx_mod.fee_rate(t), tx_mod.tx_hash(t)))
-    return [{"hash": tx_mod.tx_hash(t), "tx": t} for t in txs]
+    rows = []
+    for t in txs:
+        h = tx_mod.tx_hash(t)
+        rows.append({"hash": h, "tx": t, "entered": mempool.entered_at(h)})
+    return rows
 
 
 
@@ -965,10 +969,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
         total_pages = max(-(-total // DASHBOARD_TXS_PER_PAGE), 1)
         page  = min(max(request.args.get("tx_page", 1, type=int) or 1, 1), total_pages)
         offset = (page - 1) * DASHBOARD_TXS_PER_PAGE
+        recent = _recent_committed_txs(chain, DASHBOARD_TXS_PER_PAGE, offset, kinds)
         return render_template("dashboard.html", title="Dashboard",
             info=info, supply_cap=SUPPLY_CAP, og=embeds.dashboard(info, SUPPLY_CAP),
             no_dht=not HAS_LIBTORRENT, no_peers=pool.count() == 0, discord=fees_ui.DISCORD,
-            recent_txs=_recent_committed_txs(chain, DASHBOARD_TXS_PER_PAGE, offset, kinds),
+            recent_txs=recent, tx_times={r[0]: chain[r[0]].get("timestamp") for r in recent},
             tx_page=page, tx_total_pages=total_pages,
             tx_page_window=_pagination_window(page, total_pages),
             tx_has_prev=page > 1, tx_has_next=page < total_pages,
@@ -1030,9 +1035,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 message="Transaction not found."), 404
         location = (f"Block {found_height}"
                     if found_height is not None else "Mempool (unconfirmed)")
+        seen_at = (node.view.chain[found_height].get("timestamp") if found_height is not None
+                   else node.mempool.entered_at(tx_hash))
         gas_request = found.get("memo", "").startswith(gaslock.REQUEST_TAG)
         return render_template("tx_detail.html", title="Transaction",
             tx_hash=tx_hash, tx=found, location=location, gas_request=gas_request,
+            seen_at=seen_at, confirmed=found_height is not None,
             og=embeds.transaction(tx_hash, found, location, gas_request))
 
     def _holder_histogram():
@@ -1406,7 +1414,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         kinds = _tx_kinds_from(_tx_kinds_arg(request.args))
         info["recent_txs"] = [
             {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount,
-             "kind": _tx_kind(t)}
+             "kind": _tx_kind(t), "timestamp": chain[height].get("timestamp")}
             for height, h, t, amount in _recent_committed_txs(
                 chain, DASHBOARD_TXS_PER_PAGE, 0, kinds)
         ]
