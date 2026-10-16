@@ -973,6 +973,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return render_template("dashboard.html", title="Dashboard",
             info=info, supply_cap=SUPPLY_CAP, og=embeds.dashboard(info, SUPPLY_CAP),
             no_dht=not HAS_LIBTORRENT, no_peers=pool.count() == 0, discord=fees_ui.DISCORD,
+            tip_time=chain[-1].get("timestamp") if chain else None,
             recent_txs=recent, tx_times={r[0]: chain[r[0]].get("timestamp") for r in recent},
             tx_page=page, tx_total_pages=total_pages,
             tx_page_window=_pagination_window(page, total_pages),
@@ -1409,6 +1410,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         info["oblivious_key"] = oblivious.public_b64 if oblivious else None
         info["address"] = _own_addr_or_hidden()
         chain = node.view.chain
+        info["tip_timestamp"] = chain[-1].get("timestamp") if chain else None
         # The dashboard passes its filter so the live refresh lists the same
         # kinds as the page it is on.
         kinds = _tx_kinds_from(_tx_kinds_arg(request.args))

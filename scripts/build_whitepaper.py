@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import sys
+import time
 
 import jinja2
 
@@ -54,6 +55,7 @@ def write(path, text):
 def render_page():
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(TEMPLATES),
                              autoescape=jinja2.select_autoescape(["html"]))
+    env.globals["server_now"] = lambda: int(time.time())
     page = env.get_template("whitepaper.html").render(
         title="Whitepaper",
         rendered=whitepaper_render.render(read("docs", "whitepaper.md")),
@@ -80,7 +82,9 @@ def main():
     base_css = read("templates_html", "css", "base.css")
     if '"/css/fonts/' not in base_css:
         raise SystemExit("base.css no longer loads its fonts from /css/fonts/; update this script")
-    write(os.path.join(out, "css", "base.css"), base_css.replace('"/css/fonts/', '"fonts/'))
+    # The corner logo is a mask of /favicon.svg, which sits one level up here.
+    write(os.path.join(out, "css", "base.css"),
+          base_css.replace('"/css/fonts/', '"fonts/').replace("url(/favicon.svg)", "url(../favicon.svg)"))
     write(os.path.join(out, "css", "pages", "whitepaper.css"),
           read("templates_html", "css", "pages", "whitepaper.css"))
     fonts = os.path.join(ROOT, "templates_html", "css", "fonts")

@@ -29,6 +29,7 @@
       {% endif %}
     </div>
     <div class="tip-figs">
+      <div><span class="tip-label">Last block</span><span class="tip-fig" id="live-last-block">{% if tip_time %}<span data-age-ts="{{ tip_time }}" title="{{ utc_text(tip_time) }}">{{ fmt_age(server_now() - tip_time) }}</span>{% endif %}</span></div>
       <a href="/network"><span class="tip-label">Peers</span><span class="tip-fig" id="live-peers"><span class="stat-spinner"></span></span></a>
       <div><span class="tip-label">Pending</span><span class="tip-fig" id="live-mempool"><span class="stat-spinner"></span></span></div>
       <div><span class="tip-label">Sync</span><span class="tip-fig" id="live-sync"><span class="stat-spinner"></span></span></div>
@@ -212,6 +213,11 @@
 
       document.getElementById("live-height").textContent = info.height;
       document.getElementById("live-height-link").href = "/block/" + info.height;
+      const lastBlock = document.querySelector("#live-last-block [data-age-ts]");
+      if (lastBlock && info.tip_timestamp) {
+        lastBlock.dataset.ageTs = info.tip_timestamp;
+        lastBlock.textContent = window.lcAge(info.tip_timestamp);
+      }
       document.getElementById("live-mempool").textContent = info.mempool_size;
       document.getElementById("live-peers").textContent = info.peer_count;
       const noDht = document.getElementById("no-dht-alert");
