@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/unlock.css?v={{ local_version }}">{% endblock %}
+{% block content %}
+<div class="unlock">
+  <h2>This node holds no key</h2>
+  <p class="unlock-lede">It mines for this address and cannot send, post, vote or answer fee requests. Do those from the wallet that holds the key.</p>
+  <div class="unlock-card">
+    <label>Mining for</label>
+    <div class="hash">{{ address }}</div>
+  </div>
+</div>
+{% endblock %}

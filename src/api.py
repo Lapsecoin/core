@@ -162,6 +162,7 @@ from board_view import (BOARD_MEMO_TAG, parse_board_body, build_board_body,  # n
                         BOARD_THREADS_PER_CHUNK)
 import oblivious as oblivious_mod
 import unlock_ui
+import watch_ui
 from wallet_ui import (register_address_page, register_board_pages,
                        register_data_api, register_wallet_routes)
 
@@ -879,6 +880,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 # trigger button, is only ever rendered when is_private.
                 "csrf_token": csrf_token,
                 "nav_active": nav_active,
+                # True on a node that holds no key: its signing pages and
+                # buttons are not offered (watch_ui.py).
+                "watch_only": not getattr(node, "can_sign", True),
                 "local_version": LOCAL_VERSION}
 
     @app.route("/api/update/status", endpoint=pfx+"api_update_status")
@@ -1900,6 +1904,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
                            base=BaseSend(node))
     fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node))
     unlock_ui.register(app, node, csrf_token, limiter)
+    watch_ui.register(app, node)
     addresses_ui.register(app, local_reader_for(node), node, csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])

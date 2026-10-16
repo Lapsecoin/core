@@ -32,7 +32,7 @@ they saw the packet arrive from). This replaces both UPnP and the
 ipify.org HTTP call. Also updated every time any PONG arrives.
 
 External public interface (called from main.py):
-  Discovery(udp, pool, genesis_hash, port, node_pubkey_hex)
+  Discovery(udp, pool, genesis_hash, port)
   .enqueue_candidate(addr)
   .add_bootstrap_peer(addr)
   .run()   blocking, run as daemon thread
@@ -97,7 +97,7 @@ PEX_FANOUT            = 5     # how many already-known peers get it each round
 
 class Discovery:
 
-    def __init__(self, udp, pool, genesis_hash, port, node_pubkey_hex=""):
+    def __init__(self, udp, pool, genesis_hash, port):
         self.udp          = udp       # UDPTransport instance
         self.pool         = pool
         self.genesis_hash = genesis_hash
@@ -112,11 +112,7 @@ class Discovery:
         # instead of resting on chance repeatedly picking the same ones.
         self._last_regossiped = {}
 
-        if not node_pubkey_hex:
-            log.warning("[dht] no node_pubkey_hex; all such nodes share slot 0")
-
-        self._dht   = DHTDiscovery(self.enqueue_candidate, genesis_hash,
-                                   port, node_pubkey_hex)
+        self._dht   = DHTDiscovery(self.enqueue_candidate, genesis_hash, port)
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="disc")
 
     # ------------------------------------------------------------------

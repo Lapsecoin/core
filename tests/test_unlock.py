@@ -21,6 +21,7 @@ pytestmark = pytest.mark.skipif(
 
 
 class LockedNode(WalletNode):
+    can_sign = Node.can_sign
     unlock = Node.unlock
     unlock_with_passphrase = Node.unlock_with_passphrase
 

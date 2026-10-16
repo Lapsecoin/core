@@ -13,7 +13,7 @@
       {% set own_name = own_labels.get(row.from) %}
       <a href="/balance?addr={{ row.from }}" class="rc-username {{ 'hash-short' if not own_name }}"
          title="{{ row.from }}">{{ own_name or (row.from.split('.')[:3] | join('.')) ~ '…' }}</a>
-      {% if is_private and not row.pending %}
+      {% if is_private and not watch_only and not row.pending %}
       <span class="rc-actions">
         <button type="button" class="rc-replyBtn"
                 data-ref="{{ row.ref6 }}" data-addr="{{ row.from }}"
@@ -35,7 +35,7 @@
       {% endif %}
       {% if row.edited %}<span class="rc-time rc-edited" title="Its author edited this post. The original is still on the chain.">edited</span>{% endif %}
       <span class="rc-vote-root">
-        {% if is_private %}
+        {% if is_private and not watch_only %}
         <button type="button" class="rc-voteButton rc-downVoteButton {{ 'rc-downVoteButtonActive' if row.my_vote == 'down' }}"
                 data-ref="{{ row.ref6 }}" data-dir="-" title="Vote down"
                 {{ 'disabled' if row.my_vote == 'down' }}>
@@ -44,7 +44,7 @@
         {% endif %}
         <span class="rc-votes {{ 'rc-votesPositive' if score > 0 else ('rc-votesNegative' if score < 0 else '') }} {{ 'rc-votesPending' if row.vote_pending }}"
               title="{{ 'Includes a vote not yet in a block' if row.vote_pending else 'Votes score' }}">{{ score }}</span>
-        {% if is_private %}
+        {% if is_private and not watch_only %}
         <button type="button" class="rc-voteButton rc-upVoteButton rc-upVoteIcon {{ 'rc-upVoteButtonActive' if row.my_vote == 'up' }}"
                 data-ref="{{ row.ref6 }}" data-dir="+" title="Vote up"
                 {{ 'disabled' if row.my_vote == 'up' }}>

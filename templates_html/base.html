@@ -58,7 +58,7 @@
 {% macro community() -%}
 {% call group(('board', 'fees'), 'community', 'Community') %}
   {{ entry('board', '/board', 'board', 'Board', 'Threads and replies') }}
-  {{ entry('fees', '/fees', 'fees', 'Fees', 'Request and track a fee') }}
+  {% if not (is_private and watch_only) %}{{ entry('fees', '/fees', 'fees', 'Fees', 'Request and track a fee') }}{% endif %}
 {% endcall %}
 {%- endmacro %}
 <header class="masthead{% if lock_screen %} locked{% endif %}">
@@ -93,7 +93,7 @@
       {{ link('send', '/send', 'send', 'Send') }}
       {% else %}
       {{ link('dashboard', '/', 'dashboard', 'Dashboard') }}
-      {% if is_private %}
+      {% if is_private and not watch_only %}
       {% call group(('send', 'addresses'), 'balance', 'Wallet') %}
         {{ entry('send', '/send', 'send', 'Send', 'Send LAPSE or ETH on Base') }}
         {{ entry('addresses', '/addresses', 'addresses', 'Addresses', 'Your addresses and keys') }}

@@ -2,7 +2,7 @@
 {% block head %}<link rel="stylesheet" href="/css/pages/board.css?v={{ local_version }}">{% endblock %}
 {% block content %}
 <div id="board-feed" data-csrf="{{ csrf_token }}" data-burn="{{ BOARD_POST_AMOUNT }}">
-    {% if is_private %}
+    {% if is_private and not watch_only %}
     <form method="POST" action="/board?page={{ page }}" class="board-compose" id="board-compose"
 >
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

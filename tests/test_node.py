@@ -2029,7 +2029,7 @@ class TestReorgStats:
         node, keyfile, *_ = node_env
         node._record_reorg(7)
         reopened = node_mod.Node(
-            Wallet(keyfile, node.pk), gossip=node.gossip,
+            Wallet(keyfile, node.wallet.pk), gossip=node.gossip,
             syncer=node.syncer, pool=node.pool, net_in_q=node.net_in_q,
             db_path=node.storage.path)
         assert reopened.reorg_stats()["deepest"] == 7

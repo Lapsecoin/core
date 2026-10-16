@@ -261,8 +261,6 @@ class Node:
 
     def __init__(self, wallet, gossip, syncer, pool, net_in_q, db_path=None):
         self.wallet       = wallet
-        self.pk           = self.wallet.pk
-        self.pk_hex       = self.wallet.pk_hex
         self.addr         = self.wallet.addr
         self.gossip       = gossip
         self.syncer       = syncer
@@ -763,6 +761,11 @@ class Node:
             threading.Thread(target=self._calibrate_vdf, daemon=True,
                              name="vdf-calibrate").start()
 
+    @property
+    def can_sign(self):
+        """False for a node that was given just an address."""
+        return getattr(self.wallet, "can_sign", True)
+
     def unlock(self, kek, jobs=()):
         """Give a node that started without its passphrase the key. Jobs that
         were waiting for it start now, or with the loop if it is not up yet;
@@ -781,6 +784,8 @@ class Node:
         for a wrong one, and the node stays locked."""
         import base_wallet
         import wallet as wallet_mod
+        if not self.can_sign:
+            raise ValueError("this node holds no key")
         kek, jobs = wallet_mod.unlock_open(self.wallet, passphrase)
         path = getattr(self, "base_wallet_path", None)
         if path:
@@ -947,10 +952,11 @@ class Node:
 
     def accounts(self):
         """Every account of the wallet this node runs on: dicts with index,
-        address, public_key and label. A node on a single key has one."""
+        address and label (and the public key, for a wallet file). A node on
+        a single key, or on just an address, has one."""
         wf = getattr(self.wallet, "walletfile", None)
         if wf is None:
-            return [{"index": 0, "address": self.addr, "public_key": self.pk_hex, "label": ""}]
+            return [{"index": 0, "address": self.addr, "label": ""}]
         return wf.accounts
 
     def wallet_for(self, account=None):

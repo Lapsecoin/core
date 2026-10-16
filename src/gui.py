@@ -208,14 +208,14 @@ class _StartupDialog:
         return self.result
 
 
-def startup_gui(key_text=None, account=0, preset_passphrase=None):
+def startup_gui(key_text=None, account=0, preset_passphrase=None, source=None):
     """GUI equivalent of wallet.startup_console. Returns
     (wallet, kek, passphrase), or exits the process if the user cancels."""
     import wallet as wallet_mod
     try:
-        source = wallet_mod.find_source(key_text)
+        source = source or wallet_mod.find_source(key_text)
     except ValueError as e:
-        sys.exit(f"Error: --key: {e}")
+        sys.exit(f"Error: {e}")
     result = _StartupDialog(source, account, preset_passphrase).run()
     if result is None:
         sys.exit(0)

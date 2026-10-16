@@ -72,8 +72,7 @@ class TestOwnSlotCheck:
 
     def _dht(self):
         dht = discovery_dht_mod.DHTDiscovery(
-            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333,
-            node_pubkey_hex="ab" * 32)
+            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333)
         dht._pk_to_slot = {}
         return dht
 
