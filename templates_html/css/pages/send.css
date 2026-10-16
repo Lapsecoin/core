@@ -11,10 +11,24 @@
 .seg label:has(> input[type="radio"]:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .seg input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; margin: 0; }
 
-/* recipients: the one big field of the page */
-.upload { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .75rem; margin-top: .6rem; }
-.upload label { margin: 0; font-size: .78rem; color: var(--ink-dim); }
-.memo-field { margin-top: 1.1rem; }
+/* recipients: the one big field of the page. The CSV upload sits in its label
+   row and Sign & Send beside the memo (or the destination address), so the
+   form is one block of fields with no row of its own for the button. */
+.upload { display: inline-flex; align-items: center; gap: .5rem; }
+.upload label { margin: 0; font-size: .78rem; font-weight: 400; color: var(--ink-dim); }
+.upload input[type="file"] { width: auto; padding: 0; border: 0; background: none; font-size: .78rem; }
+.upload input[type="file"]::file-selector-button { height: 26px; padding: 0 .6rem; font-size: .78rem; }
+.memo-row { margin-top: .9rem; }
+.memo-note { font-weight: 400; color: var(--ink-dim); }
+.memo-note::before { content: "\00b7\00a0"; }
+@media (max-width: 640px) {
+  .label-row { flex-wrap: wrap; }
+  .label-row .hint { white-space: nowrap; }
+  .memo-note { display: block; }
+  .memo-note::before { content: none; }
+  .upload { max-width: 100%; }
+  .upload input[type="file"] { min-width: 0; max-width: 11rem; }
+}
 .fee-market { line-height: 1.45; }
 .fee-market strong { font-weight: 600; }
 
