@@ -2,7 +2,6 @@
 alongside the source (or the PyInstaller bundle root when frozen)."""
 
 import os
-import sys
 
 
 def _load_local_version():

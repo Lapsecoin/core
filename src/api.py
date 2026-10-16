@@ -122,12 +122,11 @@ import re
 import statistics
 import secrets
 import socket
-import sys
 import threading
 import time
 
 import requests
-from flask import Response, jsonify, redirect, render_template, request, send_file
+from flask import Response, jsonify, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -160,7 +159,7 @@ from board_view import (BOARD_MEMO_TAG, parse_board_body, build_board_body,  # n
                         REPLY_REF_LEN,
                         VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG,
                         _board_posts, _board_votes,
-                        BOARD_THREADS_PER_CHUNK, _flatten_threads)
+                        BOARD_THREADS_PER_CHUNK)
 import oblivious as oblivious_mod
 from wallet_ui import (register_address_page, register_board_pages,
                        register_data_api, register_wallet_routes)

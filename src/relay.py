@@ -210,10 +210,6 @@ def transaction_of(q):
     return q["steps"][0]["items"][0]["data"]
 
 
-def request_id(q) -> str:
-    return q["requestId"] if "requestId" in q else q["steps"][0]["requestId"]
-
-
 def deposit(q, secret: bytes, rpc_url: str) -> str:
     """Sign and send the quote's deposit. Returns the Base transaction hash.
 

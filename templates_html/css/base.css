@@ -171,7 +171,6 @@ nav.mainnav { overflow: visible; }
 @media (max-width: 760px) {
   nav.mainnav a { padding: .5rem .65rem; }
 }
-nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: none; }
 .live-status { order: 3; flex: 0 0 auto; color: var(--ink-dim); font-size: .72rem; white-space: nowrap; }
 .corner-links { order: 4; flex: 0 0 auto; display: flex; gap: .15rem; }
 .corner-links a { color: var(--ink-dim); line-height: 0; padding: .4rem; border-radius: var(--radius-sm); }
@@ -221,9 +220,7 @@ h2 { font-size: 1.35rem; font-weight: 650; letter-spacing: -.02em; line-height: 
    page fits without scrolling, and stack them below 900px. */
 .cols { display: grid; gap: .75rem; grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); align-items: start; margin-bottom: .75rem; }
 .cols > * { margin-bottom: 0; }
-.cols-wide-left { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
-.cols-wide-right { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
-@media (max-width: 900px) { .cols, .cols-wide-left, .cols-wide-right { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .cols { grid-template-columns: minmax(0, 1fr); } }
 h3 { font-size: 1rem; font-weight: 600; letter-spacing: -.01em; margin-bottom: .5rem; }
 
 /* ===================================================== components ===== */
@@ -261,18 +258,6 @@ h3 { font-size: 1rem; font-weight: 600; letter-spacing: -.01em; margin-bottom: .
 .stat .stat-sub {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* Several small figures sharing one box, each keeping its own label so
-   none of them has to be guessed from context. Same label and value
-   type as a box holding one figure, just in columns. */
-/* A box holding three figures gets about twice the room of one holding
-   a single figure, so its columns stay on one line at the widths that
-   matter. */
-.stat.stat-trio { flex: 1 1 250px; }
-.stat-group { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; }
-/* Figures, so they never break mid-number the way .stat-value's
-   break-word (there for addresses) would: the column wraps to the next
-   line instead, which stays readable. */
-.stat-group .stat-value { font-size: 1.15rem; overflow-wrap: normal; white-space: nowrap; }
 
 /* A stat whose first real value hasn't arrived yet (page just loaded,
    the live poll below hasn't answered once): a fresh node briefly at
@@ -298,13 +283,6 @@ th {
 td { padding: .55rem .8rem; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; white-space: nowrap; }
 tbody tr:hover td { background: var(--hover); }
 tr:last-child td { border-bottom: none; }
-
-/* Fixed layout plus an explicit colgroup (in peers.html) stops the
-   browser's default column-width algorithm from dumping all of a
-   table's leftover width into whichever column it picks, which on
-   the peers table left a large empty gap in one column instead of
-   the table simply being however wide its content needs. */
-table.stacked-wide { table-layout: fixed; }
 
 table.kv-table { min-width: 0; }
 table.kv-table td { white-space: normal; font-size: .9rem; }
@@ -340,34 +318,6 @@ table.kv-table td:first-child {
   table.stacked td[colspan]::before { content: none; }
 }
 
-/* The peers table has six columns (wider than any other table on the
-   site) and stops fitting the page's own 900px content width before
-   640px, so it needs to switch to the stacked layout earlier than
-   everything else does. Same rules as above, just a wider trigger,
-   so this table never gets a horizontal scrollbar at any width where
-   the general 640px breakpoint would otherwise leave it in table
-   mode. */
-@media (max-width: 900px) {
-  table.stacked-wide { min-width: 0; }
-  table.stacked-wide thead { display: none; }
-  table.stacked-wide, table.stacked-wide tbody, table.stacked-wide tr, table.stacked-wide td { display: block; width: 100%; }
-  table.stacked-wide tr {
-    border: 1px solid var(--rule-lt); margin-bottom: .75rem; padding: .6rem .75rem;
-  }
-  table.stacked-wide tr:last-child { margin-bottom: 0; }
-  table.stacked-wide td {
-    border-bottom: 1px dotted var(--rule-lt); padding: .4rem 0; white-space: normal; word-break: break-all;
-  }
-  table.stacked-wide td:last-child { border-bottom: none; }
-  table.stacked-wide td[colspan] { text-align: center; border-bottom: none; }
-  table.stacked-wide td::before {
-    content: attr(data-label); display: block; font-family: var(--serif);
-    font-size: .78rem; color: var(--ink-dim); margin-bottom: .15rem;
-  }
-  table.stacked-wide td[colspan]::before { content: none; }
-}
-
-.form-group { margin-bottom: .5rem; }
 label { display: block; font-size: .82rem; font-weight: 500; color: var(--ink-dim); margin-bottom: .35rem; }
 :where(input:not([type="radio"], [type="checkbox"], [type="file"], [type="hidden"], [type="range"]), textarea, select) {
   width: 100%; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--ink);
@@ -416,108 +366,6 @@ button:disabled, button:disabled:hover {
 .alert-err { background: #fdf0ee; border-color: rgb(180 35 24 / .25); color: #98201a; }
 
 .hash { font-family: var(--mono); }
-table.kv-table td:first-child {
-  color: var(--ink-dim); white-space: nowrap; width: 1%; padding-right: 1.5rem;
-}
-
-/* Below this width a multi-column data table no longer fits without
-   scrolling, so it's presented as a stack of labelled rows (one card
-   per record) instead of asking the reader to scroll sideways. Label
-   sits above its value (rather than side by side) so a long hash or
-   address can still wrap across multiple lines without the layout
-   fighting it. */
-@media (max-width: 640px) {
-  .table-wrap { overflow-x: visible; margin: 0; padding: 0; }
-  table.stacked { min-width: 0; }
-  table.stacked thead { display: none; }
-  table.stacked, table.stacked tbody, table.stacked tr, table.stacked td { display: block; width: 100%; }
-  table.stacked tr {
-    border: 1px solid var(--rule-lt); margin-bottom: .75rem; padding: .6rem .75rem;
-  }
-  table.stacked tr:last-child { margin-bottom: 0; }
-  table.stacked td {
-    border-bottom: 1px dotted var(--rule-lt); padding: .4rem 0; white-space: normal; word-break: break-all;
-  }
-  table.stacked td:last-child { border-bottom: none; }
-  table.stacked td[colspan] { text-align: center; border-bottom: none; }
-  table.stacked td::before {
-    content: attr(data-label); display: block; font-family: var(--serif);
-    font-size: .78rem; color: var(--ink-dim); margin-bottom: .15rem;
-  }
-  table.stacked td[colspan]::before { content: none; }
-}
-
-/* The peers table has six columns (wider than any other table on the
-   site) and stops fitting the page's own 900px content width before
-   640px, so it needs to switch to the stacked layout earlier than
-   everything else does. Same rules as above, just a wider trigger,
-   so this table never gets a horizontal scrollbar at any width where
-   the general 640px breakpoint would otherwise leave it in table
-   mode. */
-@media (max-width: 900px) {
-  table.stacked-wide { min-width: 0; }
-  table.stacked-wide thead { display: none; }
-  table.stacked-wide, table.stacked-wide tbody, table.stacked-wide tr, table.stacked-wide td { display: block; width: 100%; }
-  table.stacked-wide tr {
-    border: 1px solid var(--rule-lt); margin-bottom: .75rem; padding: .6rem .75rem;
-  }
-  table.stacked-wide tr:last-child { margin-bottom: 0; }
-  table.stacked-wide td {
-    border-bottom: 1px dotted var(--rule-lt); padding: .4rem 0; white-space: normal; word-break: break-all;
-  }
-  table.stacked-wide td:last-child { border-bottom: none; }
-  table.stacked-wide td[colspan] { text-align: center; border-bottom: none; }
-  table.stacked-wide td::before {
-    content: attr(data-label); display: block; font-family: var(--serif);
-    font-size: .78rem; color: var(--ink-dim); margin-bottom: .15rem;
-  }
-  table.stacked-wide td[colspan]::before { content: none; }
-}
-
-.form-group { margin-bottom: .5rem; }
-label { display: block; font-size: .82rem; font-weight: 500; color: var(--ink-dim); margin-bottom: .35rem; }
-:where(input:not([type="radio"], [type="checkbox"], [type="file"], [type="hidden"], [type="range"]), textarea, select) {
-  width: 100%; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--ink);
-  padding: 0 .75rem; height: 36px; font-family: var(--serif); font-size: .9rem;
-  border-radius: var(--radius-sm); transition: border-color .12s;
-}
-:where(input[type="radio"], input[type="checkbox"]) { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; margin: 0 .4rem 0 0; vertical-align: -.2em; }
-select { appearance: none; padding-right: 2rem !important; cursor: pointer;
-  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235a5547' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right .75rem center; }
-input[type="file"] { font-family: var(--serif); font-size: .85rem; max-width: 100%; }
-input[type="file"]::file-selector-button {
-  background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  padding: .35rem .8rem; margin-right: .6rem; font: inherit; font-weight: 600; cursor: pointer;
-}
-label:has(> input[type="radio"]) {
-  display: inline-flex; align-items: center; margin: 0; padding: .35rem .8rem; cursor: pointer;
-  font-size: .88rem; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-}
-label:has(> input[type="radio"]:checked) { border-color: var(--ink); background: var(--ink); color: var(--surface); font-weight: 600; }
-input::placeholder, textarea::placeholder { color: rgb(var(--ink-rgb) / .38); }
-input:focus, textarea:focus, select:focus { outline: 2px solid rgb(194 87 12 / .35); outline-offset: 1px; border-color: var(--accent); }
-
-button {
-  background: var(--ink); color: var(--surface); border: 1px solid var(--ink);
-  padding: 0 1.1rem; height: 36px; font-size: .88rem; font-family: var(--serif); font-weight: 550; cursor: pointer;
-  border-radius: var(--radius-sm); transition: background .12s, transform .06s;
-}
-button:active:not(:disabled) { transform: translateY(1px); }
-button:hover { background: rgb(var(--ink-rgb) / .82); }
-button:disabled, button:disabled:hover {
-  background: rgb(var(--ink-rgb) / .08); color: rgb(var(--ink-rgb) / .38); border-color: transparent;
-  cursor: not-allowed;
-}
-.btn-ghost { background: var(--surface); color: var(--ink); border-color: var(--line-strong); }
-.btn-ghost:hover { background: var(--hover); }
-
-.btn-sm {
-  display: inline-block; background: var(--surface); color: var(--ink);
-  border: 1px solid var(--line-strong); border-radius: 6px; padding: .22rem .65rem; font-size: .75rem;
-  font-family: var(--serif); font-weight: 550; text-decoration: none; white-space: nowrap;
-}
-.btn-sm:hover { background: var(--hover); text-decoration: none; }
-
 .alert { padding: .65rem 1rem; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); font-size: .9rem; margin-bottom: 1rem; }
 .alert-ok  { border-left: 4px solid var(--gain); color: var(--gain); }
 .alert-err { border-left: 4px solid var(--loss); color: var(--loss); }

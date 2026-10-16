@@ -4,7 +4,6 @@ nothing that pulls in the VDF, the chain database, or the node."""
 import logging
 import os
 import re
-import sys
 import time
 
 from flask import Flask, request, send_file, send_from_directory

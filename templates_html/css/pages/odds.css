@@ -10,7 +10,6 @@
 .odds-page .stats > .stat:first-child .stat-value { color: var(--accent); }
 
 /* Chart */
-.odds-cols { align-items: start; }
 .odds-title {
   font-size: .85rem; font-weight: 650; letter-spacing: -.005em;
   color: var(--ink-dim); margin-bottom: .45rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line-strong);
