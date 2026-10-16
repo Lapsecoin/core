@@ -269,8 +269,8 @@ def test_send_and_addresses_sit_in_one_wallet_menu_active_on_both(world):
     assert not re.search(r'<nav class="mainnav".*?<a href="/send" class="[^"]*"><svg', html, re.S)
 
 
-def test_a_light_client_keeps_its_plain_send_link():
-    """Only the full node's private app has the Wallet menu."""
+def test_the_public_app_has_no_wallet_menu():
+    """Only the node's private app has the Wallet menu."""
     cs = ChainState.from_genesis()
     client = api.create_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
     html = client.get("/fees").get_data(as_text=True)

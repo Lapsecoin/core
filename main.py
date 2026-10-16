@@ -39,7 +39,6 @@ from gossip import Gossip
 from node import Node
 from params import DB_PATH, PEERS_PER_MESSAGE_LIMIT
 from peer_udp import LAN_DISCOVERY_PORT, PORT_BIND_RETRIES, UDPTransport, probe_lan_ports
-from oblivious import ObliviousService
 from peerpool import PeerPool
 from public_url import parse_public_url
 from syncer import Syncer
@@ -388,15 +387,10 @@ def main():
     net.add_argument("--max-peers", type=int, default=params.MAX_PEERS, metavar="N",
                      help=f"Most peers to keep (default {params.MAX_PEERS}).")
     net.add_argument("--public-url", default=os.environ.get("LAPSECOIN_PUBLIC_URL"), metavar="URL",
-                     help="The https:// address this node can also be reached at, when you have "
-                          "put a TLS-terminating reverse proxy (Caddy, nginx) with a domain in "
-                          "front of its web port. It is advertised so light clients can send "
-                          "their wallet address over an encrypted connection instead of plain "
-                          "http. (env: LAPSECOIN_PUBLIC_URL)")
-    net.add_argument("--no-relay", action="store_true",
-                     help="Do not pass light clients' sealed requests on to other nodes, or "
-                          "answer ones sealed to this node. On by default: it is how a light "
-                          "client keeps its wallet address from the node that sees its IP.")
+                     help="The https:// address this node is reached at, when a TLS-terminating "
+                          "reverse proxy (Caddy, nginx) with a domain sits in front of its web "
+                          "port. The link previews of its pages use it for their addresses, since "
+                          "a proxy often hides the scheme from the node. (env: LAPSECOIN_PUBLIC_URL)")
 
     data = parser.add_argument_group("data and logs")
     data.add_argument("--db", default=DB_PATH, metavar="FILE",
@@ -735,7 +729,7 @@ def main():
     decisions.add("Network", decisions_mod.network(
         public_port=port, requested_port=args.port, port_how=_how("--port", "LAPSECOIN_PORT"),
         private_port=private_port, private_how="--private-port" if args.private_port else "",
-        peers=args.peer, relay=not args.no_relay,
+        peers=args.peer,
         public_url=public_url, public_url_how=_how("--public-url", "LAPSECOIN_PUBLIC_URL")))
     decisions.add("Window and updates", decisions_mod.window_and_updates(
         window=use_gui, no_gui=args.no_gui, update_check=not args.no_update_check))
@@ -813,19 +807,16 @@ def main():
         # ------------------------------------------------------------------
         # HTTP servers: browser UI only, no peer routes
         # ------------------------------------------------------------------
-        oblivious = None if args.no_relay else ObliviousService(node.storage)
         app = create_app(node, pool, private_port=private_port,
                          public_port=port, update_checker=update_checker,
-                         updater=updater, public_url=public_url,
-                         oblivious=oblivious)
+                         updater=updater, public_url=public_url)
         _serve(app, args.host, port)
         log.info("[startup] public API on http://%s:%d", args.host, port)
 
         private_app = create_private_app(node, pool, private_port=private_port,
                                          public_port=port,
                                          update_checker=update_checker,
-                                         updater=updater, public_url=public_url,
-                                         oblivious=oblivious)
+                                         updater=updater, public_url=public_url)
         _serve(private_app, "127.0.0.1", private_port)
         log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
         log.info("[startup] genesis=%s", genesis["hash"][:12])

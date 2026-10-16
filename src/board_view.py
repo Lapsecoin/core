@@ -1,7 +1,6 @@
-"""Board reading rules shared by the full node's web app and the light
-client: parsing a post, threading, votes, and rendering context.
-Light-safe: imports nothing that pulls in the VDF, the chain database, or
-the node, and a test keeps it that way."""
+"""Board reading rules: parsing a post, threading, votes, and rendering
+context. Imports nothing that pulls in the VDF, the chain database, or the
+node."""
 
 import re
 
@@ -382,10 +381,9 @@ def board_page_data(snapshot, chunks):
     that carries a public key and a signature, over two kilobytes of hex
     that nothing on the page shows.
 
-    This is the one shape the board is exchanged in. A full node builds it
-    from its own snapshot, and serves it as /api/board/page, and a light
-    client reads that same dict from a remote node, so both feed the same
-    rendering code."""
+    This is the one shape the board is exchanged in: the node builds it from
+    its own snapshot and serves it as /api/board/page, and the board page
+    renders from that same dict."""
     flat, starts, votes, pending_vote_refs, hash6_index, post_count = snapshot
     limit = max(chunks, 1) * BOARD_THREADS_PER_CHUNK
     cut = starts[limit] if limit < len(starts) else len(flat)

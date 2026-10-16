@@ -88,16 +88,15 @@ def test_the_network_statement_says_why_a_port_moved_and_where_it_came_from():
     assert "From --port." in kept and "already in use" not in kept and "From --private-port." in kept
 
 
-def test_peers_and_relay_and_public_url_are_stated():
+def test_peers_and_the_public_url_are_stated():
     out = text(decisions.network(public_port=1, requested_port=1, port_how="--port", private_port=3,
-                                 private_how="", peers=["1.2.3.4:8333", "5.6.7.8:8333"], relay=False,
+                                 private_how="", peers=["1.2.3.4:8333", "5.6.7.8:8333"],
                                  public_url="https://node.example", public_url_how="--public-url"))
     assert "2 nodes you named first: 1.2.3.4:8333, 5.6.7.8:8333" in out
-    assert "Does not pass light clients" in out and "--no-relay was given" in out
-    assert "https://node.example" in out
+    assert "Link previews use https://node.example" in out and "From --public-url" in out
     alone = text(decisions.network(public_port=1, requested_port=1, port_how="--port", private_port=3,
                                    private_how=""))
-    assert "Finds peers on its own" in alone and "Passes light clients" in alone
+    assert "Finds peers on its own" in alone and "Link previews" not in alone
 
 
 def test_the_window_and_update_statements_name_the_option_or_the_reason():

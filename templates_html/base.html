@@ -43,8 +43,7 @@
 <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></symbol>
 </defs></svg>
 {#- The nav is written once. link() is a bar entry, entry() a dropdown row with
-    a one-line description, group() a dropdown. The light client and the full
-    node differ only in which of them they list. -#}
+    a one-line description, group() a dropdown. -#}
 {% macro link(key, href, icon, label) -%}
 <a href="{{ href }}" class="{{ 'active' if nav_active == key }}"><svg class="ni" aria-hidden="true"><use href="#i-{{ icon }}"/></svg>{{ label }}</a>
 {%- endmacro %}
@@ -89,10 +88,6 @@
       {{ link('home', 'https://lapsecoin.github.io/', 'dashboard', 'Website') }}
       {{ link('download', 'https://lapsecoin.github.io/downloads.html', 'blocks', 'Download') }}
       {{ link('whitepaper', 'https://lapsecoin.github.io/core/whitepaper.html', 'whitepaper', 'Whitepaper') }}
-      {% elif light %}
-      {{ community() }}
-      {{ link('address', '/balance', 'balance', 'Balance') }}
-      {{ link('send', '/send', 'send', 'Send') }}
       {% else %}
       {{ link('dashboard', '/', 'dashboard', 'Dashboard') }}
       {% if is_private and not watch_only %}
