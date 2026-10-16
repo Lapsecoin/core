@@ -177,7 +177,8 @@ nav.mainnav a.nav-disabled { color: rgb(var(--ink-rgb) / .3); pointer-events: no
 .corner-links a { color: var(--ink-dim); line-height: 0; padding: .4rem; border-radius: var(--radius-sm); }
 .corner-links a:hover { color: var(--ink); background: var(--hover); text-decoration: none; }
 .corner-links svg { width: 17px; height: 17px; }
-.corner-links img { width: 17px; height: 17px; display: block; }
+.corner-links .logo-mask { width: 17px; height: 17px; display: block; background: currentColor;
+  -webkit-mask: url(/favicon.svg) center / contain no-repeat; mask: url(/favicon.svg) center / contain no-repeat; }
 .masthead-inner > div:not([class]) { order: 5; }
 /* The update notice is its own slim row under the bar, so it never takes
    room from the nav. */
