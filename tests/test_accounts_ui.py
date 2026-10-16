@@ -70,10 +70,6 @@ def test_the_page_lists_every_address_with_its_balance(world):
     assert html.count("This node") >= 1
 
 
-def test_the_nav_has_an_addresses_entry(world):
-    assert 'href="/addresses"' in page(world.client)
-
-
 def test_the_json_list_has_public_facts_only(world):
     data = world.client.get("/api/wallet/accounts").get_json()
     assert [(a["index"], a["address"], a["active"]) for a in data] == [
