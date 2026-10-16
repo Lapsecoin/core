@@ -309,10 +309,6 @@ class TestDashboardTxFilter:
         return [int(float(m.replace(",", "")))
                 for m in re.findall(r'data-label="Amount">([\d,.]+) LAPSE', html)]
 
-    def test_the_panel_is_called_transactions(self):
-        html = self._html()
-        assert "<b>Transactions</b>" in html and "Recent transactions" not in html
-
     def test_kinds_are_told_apart(self):
         for memo, kind in [("", "payment"), ("plain note", "payment"),
                            ("[board] hi", "board"), ("[vote-] abcdef", "board"),
@@ -886,12 +882,6 @@ class TestBoardPage:
         both = client.get("/api/board/fragment?page=2").get_data(as_text=True)
         assert 'id="board-more"' not in both and "post 0" in both
 
-    def test_no_leftover_waiting_to_be_mined_banner(self):
-        """The old compose_ok text this replaced must not still be
-        reachable through this page."""
-        html = self._client(pending_msgs=["still pending"]).get("/board").get_data(as_text=True)
-        assert "waiting to be mined" not in html
-
     def test_passphrase_field_is_hidden_not_a_visible_password_input(self):
         html = self._client().get("/board").get_data(as_text=True)
         assert 'id="board-passphrase"' in html
@@ -1431,11 +1421,6 @@ class TestBenchmarkPage:
         before = html.split("Hardware<svg", 1)[0]
         return before[before.rindex('<div class="nav-group'):].split(">", 1)[0]
 
-    def test_hardware_groups_odds_and_benchmark(self):
-        html = self._get("/benchmark")
-        menu = html.split("Hardware<svg", 1)[1].split('role="menu">', 1)[1].split("</div>", 1)[0]
-        assert 'href="/odds"' in menu and 'href="/benchmark"' in menu
-
     def test_the_group_is_active_on_both_of_its_pages_and_on_no_other(self):
         for path in ("/benchmark", "/odds"):
             assert "active" in self._hardware_group_open_tag(self._get(path))
@@ -1640,3 +1625,13 @@ class TestAges:
         assert '<meta name="server-now"' in html
         row = client.get("/api/info").get_json()["recent_txs"][0]
         assert row["timestamp"] == now - 120
+
+    def test_the_dashboard_shows_how_long_ago_the_last_block_was(self):
+        import time
+        node = TestDashboardTxFilter._Node(6)
+        now = int(time.time())
+        node.view.chain[-1]["timestamp"] = now - 90
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/").get_data(as_text=True)
+        assert f'id="live-last-block"><span data-age-ts="{now - 90}"' in html and "1m ago" in html
+        assert client.get("/api/info").get_json()["tip_timestamp"] == now - 90

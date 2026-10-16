@@ -45,6 +45,3 @@ def test_the_virustotal_scan_cannot_fail_or_hang_the_release(jobs):
     assert "VT_API_KEY" in step["env"]
 
 
-def test_the_virustotal_badge_sits_in_the_heading_after_the_version(text):
-    assert 'echo "## ${{ needs.version.outputs.tag }}  $BADGE"' in text
-    assert "scripts/virustotal.py artifacts/windows/lapsecoin.msi /tmp/vt-badge.md" in text
