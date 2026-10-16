@@ -258,3 +258,55 @@ def test_a_single_address_wallet_shows_no_made_up_name_on_its_own_posts(tmp_path
     submit(client, "/board", passphrase=PASS, message="solo")
     html = page(client, "/board")
     assert "Address 0" not in html and 'id="board-account"' not in html
+
+
+# -- the Wallet menu and the prompts -------------------------------------------------
+
+def test_send_and_addresses_sit_in_one_wallet_menu_active_on_both(world):
+    for path in ("/send", "/addresses"):
+        html = page(world.client, path)
+        head = html.split("Wallet<svg", 1)[0]
+        assert "active" in head[head.rindex('<div class="nav-group'):].split(">", 1)[0]
+        menu = html.split("Wallet<svg", 1)[1].split('role="menu">', 1)[1].split("</div>", 1)[0]
+        assert 'href="/send"' in menu and 'href="/addresses"' in menu
+    # they are no longer top level links beside the other menus
+    html = page(world.client, "/addresses")
+    assert not re.search(r'<nav class="mainnav".*?<a href="/send" class="[^"]*"><svg', html, re.S)
+
+
+def test_a_light_client_keeps_its_plain_send_link():
+    """Only the full node's private app has the Wallet menu."""
+    cs = ChainState.from_genesis()
+    client = api.create_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
+    html = client.get("/fees").get_data(as_text=True)
+    assert "Wallet<svg" not in html
+
+
+def test_passphrases_are_asked_in_prompts_not_in_the_page(world):
+    html = page(world.client)
+    body = html.split('<div class="page">', 1)[1].split("<dialog", 1)[0]
+    assert 'type="password"' not in body                  # nothing on the page itself asks
+    assert html.count("<dialog") == 2                      # new address, export key
+    assert 'id="new-btn"' in html and html.count("data-export=") == 2
+
+
+def test_the_prompts_post_where_the_forms_always_did(world):
+    html = page(world.client)
+    assert 'action="/addresses/new"' in html and 'action="/addresses/export"' in html
+    assert 'name="passphrase"' in html and 'name="new_passphrase"' in html
+
+
+def test_the_exported_key_opens_in_a_prompt_once(world):
+    html = submit(world.client, "/addresses/export", page="/addresses", account=1,
+                  passphrase=PASS, new_passphrase=BOX).get_data(as_text=True)
+    assert 'id="dlg-key"' in html and "lc1-" in html
+    assert 'id="dlg-key"' not in page(world.client)
+
+
+def test_a_single_key_node_has_no_prompts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sk, pk = crypto.generate_keypair()
+    crypto.save_key(str(tmp_path / "k.json"), sk, pk, PASS)
+    node = WalletNode(ChainState.from_genesis(), wallet_mod.Wallet(str(tmp_path / "k.json"), pk))
+    html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/addresses").get_data(as_text=True)
+    assert "<dialog" not in html and 'id="new-btn"' not in html

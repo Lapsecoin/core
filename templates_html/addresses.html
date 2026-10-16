@@ -2,41 +2,24 @@
 {% block head %}<link rel="stylesheet" href="/css/pages/wallet.css?v={{ local_version }}">
 <link rel="stylesheet" href="/css/pages/addresses.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<div class="wl">
+<div class="wl addr-page">
 <div class="page-head">
 <h2>Addresses</h2>
+{% if has_phrase %}<button type="button" id="new-btn">New address</button>{% endif %}
 </div>
 
 {% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 
-{% if exported %}
-<section class="panel export-result" aria-live="polite">
-  <div class="panel-head">Key for address {{ exported.index }}<span>shown once</span></div>
-  <div class="panel-body">
-    <textarea id="export-key" readonly rows="2" spellcheck="false" aria-label="Exported key">{{ exported.key }}</textarea>
-    <div class="export-actions">
-      <button type="button" class="btn-sm" data-copy-from="export-key">Copy key</button>
-      <span class="hint">{{ exported.address }}</span>
-    </div>
-    <p class="hint">This key opens address {{ exported.index }} only, under the passphrase you just chose.
-      It does not contain your recovery phrase. On the other machine, use it as
-      <code>--key</code> or <code>$LAPSECOIN_KEY</code>.</p>
-  </div>
-</section>
-{% endif %}
-
-<div class="wl-grid">
-  <section class="panel">
-    <div class="panel-head">Your addresses<span>{{ rows | length }}</span></div>
+<section class="panel acct-panel">
+  <div class="acct-scroll">
     <table class="acct">
-      <thead><tr><th class="c-idx">#</th><th>Address</th><th class="num">Balance</th><th class="c-act"><span class="sr-only">Actions</span></th></tr></thead>
+      <thead><tr><th class="c-idx">#</th><th>Name</th><th>Address</th><th class="num">Balance</th><th class="c-act"><span class="sr-only">Actions</span></th></tr></thead>
       <tbody>
       {% for r in rows %}
         <tr>
-          <td class="c-idx" data-label="#">{{ r.index }}</td>
+          <td class="c-idx">{{ r.index }}</td>
           <td class="c-name">
-            <div class="nm">
             {% if has_phrase %}
             <form method="POST" action="/addresses/label" class="label-form">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -45,72 +28,103 @@
             </form>
             {% else %}<span class="nm-text">{{ r.label or ('Address ' ~ r.index) }}</span>{% endif %}
             {% if r.active %}<span class="tag" title="This node mines and builds as this address">This node</span>{% endif %}
-            </div>
-            <div class="addr-mono">{{ r.address | replace('.', '.<wbr>') | safe }}</div>
           </td>
+          <td class="c-addr"><a class="addr-mono" href="/balance?addr={{ r.address }}" title="History of this address">{{ r.address | replace('.', '.<wbr>') | safe }}</a></td>
           <td class="c-bal num">{% if r.balance is none %}<span class="dim">unavailable</span>{% else %}{{ fmt_balance(r.balance) }}{% endif %}</td>
           <td class="c-act">
             <button type="button" class="btn-sm" data-copy="{{ r.address }}">Copy</button>
             <a class="btn-sm" href="/send?account={{ r.index }}">Send</a>
-            <a class="btn-sm" href="/balance?addr={{ r.address }}">History</a>
+            {% if has_phrase %}<button type="button" class="btn-sm" data-export="{{ r.index }}" data-name="{{ r.label or ('Address ' ~ r.index) }}">Export key</button>{% endif %}
           </td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
-    {% if not has_phrase %}
-    <p class="panel-note">This node runs on a single exported key, so it has one address and no
-      recovery phrase. Addresses are added where the recovery-phrase wallet lives.</p>
-    {% endif %}
-  </section>
-
-  {% if has_phrase %}
-  <div class="side-stack">
-    <section class="panel">
-      <div class="panel-head">New address</div>
-      <form method="POST" action="/addresses/new" class="panel-body">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="form_token" value="{{ form_token }}">
-        <div class="field">
-          <label for="new-pass">Wallet passphrase</label>
-          <input type="password" id="new-pass" name="passphrase" autocomplete="current-password">
-          <div class="hint">Each address is its own account with its own balance. Funds are not merged.</div>
-        </div>
-        <button type="submit">Add address</button>
-      </form>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">Export a key</div>
-      <form method="POST" action="/addresses/export" class="panel-body">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="form_token" value="{{ form_token }}">
-        <div class="field">
-          <label for="export-account">Address</label>
-          <select id="export-account" name="account">
-            {% for r in rows %}<option value="{{ r.index }}">{{ r.label or ('Address ' ~ r.index) }}</option>{% endfor %}
-          </select>
-        </div>
-        <div class="field">
-          <label for="export-pass">Wallet passphrase</label>
-          <input type="password" id="export-pass" name="passphrase" autocomplete="current-password">
-        </div>
-        <div class="field">
-          <label for="export-new">Passphrase for the key</label>
-          <input type="password" id="export-new" name="new_passphrase" minlength="{{ min_passphrase }}" autocomplete="new-password">
-          <div class="hint">For a machine that should mine without holding your recovery phrase. Use a different passphrase from the wallet's, at least {{ min_passphrase }} characters.</div>
-        </div>
-        <button type="submit">Export key</button>
-      </form>
-    </section>
   </div>
+  {% if not has_phrase %}
+  <p class="panel-note">This node runs on a single exported key, so it has one address and no
+    recovery phrase. Addresses are added where the recovery-phrase wallet lives.</p>
   {% endif %}
+</section>
 </div>
-</div>
+
+{% if has_phrase %}
+<dialog id="dlg-new" class="prompt">
+  <form method="POST" action="/addresses/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <h3>New address</h3>
+    <p class="hint">Each address is its own account with its own balance. Funds are not merged.</p>
+    <label for="new-pass">Wallet passphrase</label>
+    <input type="password" id="new-pass" name="passphrase" autocomplete="current-password" required>
+    <div class="prompt-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Add address</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-export" class="prompt">
+  <form method="POST" action="/addresses/export">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <input type="hidden" name="account" id="export-account" value="0">
+    <h3>Export a key: <span id="export-name"></span></h3>
+    <p class="hint">For a machine that should mine without holding your recovery phrase. The key opens this address only.</p>
+    <label for="export-pass">Wallet passphrase</label>
+    <input type="password" id="export-pass" name="passphrase" autocomplete="current-password" required>
+    <label for="export-new">Passphrase for the key</label>
+    <input type="password" id="export-new" name="new_passphrase" minlength="{{ min_passphrase }}" autocomplete="new-password" required>
+    <p class="hint">Different from the wallet's, at least {{ min_passphrase }} characters.</p>
+    <div class="prompt-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Export key</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
+
+{% if exported %}
+<dialog id="dlg-key" class="prompt wide">
+  <h3>Key for address {{ exported.index }}<span class="once">shown once</span></h3>
+  <textarea id="export-key" readonly rows="3" spellcheck="false" aria-label="Exported key">{{ exported.key }}</textarea>
+  <p class="hint addr-mono">{{ exported.address }}</p>
+  <p class="hint">This key opens address {{ exported.index }} only, under the passphrase you just chose.
+    It does not contain your recovery phrase. On the other machine, use it as
+    <code>--key</code> or <code>$LAPSECOIN_KEY</code>.</p>
+  <div class="prompt-actions">
+    <button type="button" class="btn-ghost" data-copy-from="export-key">Copy key</button>
+    <button type="button" data-close>Done</button>
+  </div>
+</dialog>
+{% endif %}
+
 <script>
 (function () {
-  // Copy buttons and the name fields: a name saves when you leave the field.
+  // Passphrases are asked in a prompt, not in a form that takes up the page.
+  function open(id) {
+    var d = document.getElementById(id);
+    if (!d) return null;
+    d.showModal();
+    var first = d.querySelector("input[type=password], textarea");
+    if (first) first.focus();
+    return d;
+  }
+  var nb = document.getElementById("new-btn");
+  if (nb) nb.addEventListener("click", function () { open("dlg-new"); });
   document.addEventListener("click", function (e) {
+    var ex = e.target.closest("[data-export]");
+    if (ex) {
+      document.getElementById("export-account").value = ex.dataset.export;
+      document.getElementById("export-name").textContent = ex.dataset.name;
+      open("dlg-export");
+      return;
+    }
+    if (e.target.closest("[data-close]")) {
+      var d = e.target.closest("dialog");
+      if (d) d.close();
+      return;
+    }
     var b = e.target.closest("[data-copy], [data-copy-from]");
     if (!b || !navigator.clipboard) return;
     var text = b.dataset.copy;
@@ -121,10 +135,17 @@
       setTimeout(function () { b.textContent = was; }, 1200);
     });
   });
+  // A click on the dimmed backdrop closes a prompt.
+  document.querySelectorAll("dialog.prompt").forEach(function (d) {
+    d.addEventListener("click", function (e) { if (e.target === d) d.close(); });
+  });
+  // A name saves when you leave the field.
   document.querySelectorAll(".label-form input[name=label]").forEach(function (input) {
     var start = input.value;
     input.addEventListener("change", function () { if (input.value !== start) input.form.submit(); });
   });
+  var key = document.getElementById("dlg-key");
+  if (key && key.showModal) { key.showModal(); }
 })();
 </script>
 {% endblock %}

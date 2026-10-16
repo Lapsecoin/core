@@ -233,8 +233,8 @@ def _tx_amount(t):
 # The addresses are also in README.md and on https://lapsecoin.github.io.
 SUPPORT = {
     "github": "https://github.com/Lapsecoin/core",
-    "lapse": ("report.crane.scan.sound.raccoon.orient.exercise."
-              "patient.vital.season.point.cabbage"),
+    "lapse": ("quality.occur.weird.force.hawk.joy.dice."
+              "kid.someone.box.cushion.quarter"),
     "bitcoin": "bc1q8qxvr5zuws78650wz9rgzpqxfx7dqzl38rdtsw",
     "listings": [
         ("Product Hunt", "https://www.producthunt.com/products/lapsecoin"),

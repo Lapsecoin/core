@@ -307,9 +307,10 @@ def main():
                         help="Run as one exported account: the lc1- text that --export "
                              "prints (default: $LAPSECOIN_KEY). Without it the node uses "
                              "lapsecoin_wallet.json, its recovery-phrase wallet.")
-    parser.add_argument("--account", type=int, default=0, metavar="N",
-                        help="Which account of the wallet this node runs as, or --export "
-                             "writes out (default 0).")
+    parser.add_argument("--account", default="0", metavar="N|NAME",
+                        help="Which address of the wallet this node runs as, or --export "
+                             "writes out: its number, or the name you gave it on the "
+                             "Addresses page (default 0).")
     parser.add_argument("--export", action="store_true",
                         help="Print one account's key (--account N) as short lc1- text, "
                              "sealed under a new passphrase, and exit. Use it as --key or "
@@ -381,6 +382,10 @@ def main():
         # CI only: checks the update restart target, starts nothing.
         import updater as _updater
         sys.exit(_updater.restart_check(args.check_restart_exe))
+    try:
+        args.account = wallet_mod.resolve_account(args.account)
+    except ValueError as e:
+        sys.exit(f"Error: --account: {e}")
     if args.restore:
         wallet_mod.cmd_restore()
         sys.exit(0)

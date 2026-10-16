@@ -231,3 +231,44 @@ def test_export_of_an_old_key_file_prints_it_as_before(home):
     out = run_main(home, "--export")
     assert out.returncode == 0, out.stderr
     assert wallet.find_source(out.stdout).kind == "text"
+
+
+# -- --account takes a number or a name ------------------------------------------------
+
+def test_account_by_number_or_by_name(home):
+    w, kek, _ = wallet.create_wallet(PASS, phrase=PHRASE)
+    w.walletfile.new_account(kek)
+    w.walletfile.set_label(1, "Shop")
+    assert wallet.resolve_account("1") == 1 and wallet.resolve_account(None) == 0
+    assert wallet.resolve_account("shop") == 1 and wallet.resolve_account("SHOP") == 1
+
+
+def test_an_unknown_or_repeated_name_says_what_the_names_are(home):
+    w, kek, _ = wallet.create_wallet(PASS, phrase=PHRASE)
+    w.walletfile.new_account(kek)
+    w.walletfile.new_account(kek)
+    w.walletfile.set_label(0, "mining")
+    w.walletfile.set_label(1, "shop")
+    w.walletfile.set_label(2, "shop")
+    with pytest.raises(ValueError, match="mining"):
+        wallet.resolve_account("nobody")
+    with pytest.raises(ValueError, match="more than one"):
+        wallet.resolve_account("shop")
+
+
+def test_a_name_needs_a_wallet_to_look_it_up_in(home):
+    with pytest.raises(ValueError, match="no wallet"):
+        wallet.resolve_account("shop")
+
+
+def test_export_accepts_the_name(home):
+    w, kek, _ = wallet.create_wallet(PASS, phrase=PHRASE)
+    w.walletfile.new_account(kek)
+    w.walletfile.set_label(1, "shop")
+    env = {wallet.PASSPHRASE_ENV: PASS, wallet.EXPORT_PASSPHRASE_ENV: BOX}
+    out = run_main(home, "--export", "--account", "shop", env=env)
+    assert out.returncode == 0, out.stderr
+    text = [ln for ln in out.stdout.splitlines() if ln.startswith("lc1-")][0]
+    assert wallet.unlock(wallet.find_source(text), BOX)[0].addr == ADDR1
+    bad = run_main(home, "--export", "--account", "nobody", env=env)
+    assert bad.returncode != 0 and "shop" in bad.stderr
