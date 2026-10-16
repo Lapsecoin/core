@@ -24,7 +24,7 @@ def _make_discovery(our_external_addr=None, local_ips=frozenset()):
     udp.our_external_addr = our_external_addr
     udp._local_ips = local_ips
     pool = MagicMock()
-    return discovery_mod.Discovery(udp, pool, genesis_hash="a" * 64, port=8333), udp
+    return discovery_mod.Discovery(udp, pool, genesis_hash="a" * 64, port=8333, node_address="tree.mention.pride.mix.industry.lottery.can.swap.cram.share.park.wide"), udp
 
 
 class TestIsOwnAddr:

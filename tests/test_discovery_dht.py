@@ -22,12 +22,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import discovery_dht as discovery_dht_mod
 
+ADDR = "tree.mention.pride.mix.industry.lottery.can.swap.cram.share.park.wide"
+
 
 class TestStartWithoutLibtorrent:
     def test_start_returns_none_session_instead_of_raising(self, monkeypatch):
         monkeypatch.setattr(discovery_dht_mod, "lt", None)
         dht = discovery_dht_mod.DHTDiscovery(
-            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333)
+            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333, node_address=ADDR)
 
         ses, my_offset = dht.start()
 
@@ -37,7 +39,7 @@ class TestStartWithoutLibtorrent:
     def test_start_logs_why_instead_of_failing_silently(self, monkeypatch, caplog):
         monkeypatch.setattr(discovery_dht_mod, "lt", None)
         dht = discovery_dht_mod.DHTDiscovery(
-            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333)
+            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333, node_address=ADDR)
 
         with caplog.at_level("WARNING", logger="ec.discovery.dht"):
             dht.start()
@@ -60,7 +62,7 @@ class TestStartWithoutLibtorrent:
         import unittest.mock as mock
         with mock.patch.object(discovery_dht_mod, "lt", fake_lt):
             dht = discovery_dht_mod.DHTDiscovery(
-                enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333)
+                enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333, node_address=ADDR)
             with mock.patch("os.path.exists", return_value=False):
                 ses, my_offset = dht.start()
 
@@ -72,7 +74,7 @@ class TestOwnSlotCheck:
 
     def _dht(self):
         dht = discovery_dht_mod.DHTDiscovery(
-            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333)
+            enqueue_fn=lambda addr: None, genesis_hash="a" * 64, port=8333, node_address=ADDR)
         dht._pk_to_slot = {}
         return dht
 

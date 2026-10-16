@@ -4,7 +4,7 @@ Owns the libtorrent session. Calls enqueue_candidate() on Discovery
 (the coordinator) when a peer address arrives from either source.
 
 Public interface used by the coordinator:
-  DHTDiscovery(enqueue_fn, genesis_hash, port)
+  DHTDiscovery(enqueue_fn, genesis_hash, port, node_address)
   .start()          create session, return (session, my_offset)
   .process_alerts(ses)
   .put(ses, slot, addr)
@@ -49,10 +49,14 @@ MAX_SLOT_MOVES       = 6
 
 class DHTDiscovery:
 
-    def __init__(self, enqueue_fn, genesis_hash, port):
+    def __init__(self, enqueue_fn, genesis_hash, port, node_address):
         self._enqueue       = enqueue_fn
         self.genesis_hash   = genesis_hash
         self.port           = port
+        # The node's own LapseCoin address: a stable identity that is the same
+        # on every start and differs between nodes, which is all the slot and
+        # the write time below need from it. Not a secret, and it needs no key.
+        self.node_address   = node_address
         self.bootstrapped   = False  # set once dht_bootstrap_alert is seen
         self._slot_keys     = {}     # slot index -> (sk_64, pk), see _slot_keypair
         self._pk_to_slot    = None   # public key bytes -> slot index, for logging
@@ -332,20 +336,22 @@ class DHTDiscovery:
         return sk_64, pk
 
     def slot_for(self, addr):
-        """Deterministic slot for this node's published ip:port, stable while
-        the node keeps its address. Nothing about who runs the node goes into
-        it: the slot only has to differ between nodes, and where they can be
-        reached already does that."""
-        ident = addr
+        """Deterministic slot for this node's published ip:port and address.
+        Stable while the node keeps both, and both parts matter: the address
+        spreads nodes that share an ip:port, the ip:port keeps one address run
+        from two places from landing on the same slot. Only the node itself can
+        compute its slot: readers just look at every slot."""
+        ident = f"{self.node_address}:{addr}"
         if self._slot_nonce:
             ident += f":{self._slot_nonce}"
         return int(hashlib.sha256(ident.encode()).hexdigest()[:8], 16) % BEP44_SLOT_COUNT
 
     def _my_write_offset(self):
         """Where in the hour this node's writes fall, so nodes started
-        together do not all write at once. Only spreading is wanted, so it is
-        simply random for this run."""
-        return random.randrange(3600)
+        together do not all write at once. Stable per node, like the slot."""
+        return int(hashlib.sha256(
+            (self.node_address + "-offset").encode()
+        ).hexdigest()[:8], 16) % 3600
 
     def _make_session(self):
         settings = lt.default_settings()

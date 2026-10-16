@@ -26,7 +26,7 @@ def make(known=(), external=None, max_peers=50):
     pool.count.return_value = len(known)
     pool._max_peers = max_peers
     pool.get_all.return_value = []
-    return discovery_mod.Discovery(udp, pool, genesis_hash="a" * 64, port=8333), udp, pool
+    return discovery_mod.Discovery(udp, pool, genesis_hash="a" * 64, port=8333, node_address="tree.mention.pride.mix.industry.lottery.can.swap.cram.share.park.wide"), udp, pool
 
 
 @pytest.fixture(autouse=True)
