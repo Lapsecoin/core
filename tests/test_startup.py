@@ -301,3 +301,103 @@ def test_the_command_line_stops_on_a_bad_address_and_says_which_word(home):
 def test_wallet_commands_refuse_an_address(home):
     r = run_main("--address", ADDR_A, "--export", "1", cwd=home)
     assert r.returncode != 0 and "holds no key" in (r.stdout + r.stderr)
+
+
+# Conflicts, and what is passed over
+@pytest.mark.parametrize("other, name", [({"key_text": LC1}, "--key"), ({"address_text": ADDR_A}, "--address")])
+def test_account_with_a_key_or_an_address_is_an_error(home, other, name):
+    with pytest.raises(ValueError, match=f"{name} and --account both given"):
+        wallet_mod.find_source(account_given=True, **other)
+
+
+@needs_native
+def test_account_runs_the_wallet_file_and_beats_the_environment(home, monkeypatch):
+    make_wallet_file()
+    monkeypatch.setenv(wallet_mod.KEY_ENV, LC1)
+    notes = []
+    source = wallet_mod.find_source(account_given=True, notes=notes)
+    assert source.kind == "wallet"
+    assert any("$LAPSECOIN_KEY is ignored: --account was given" in n for n in notes)
+
+
+def test_account_without_a_wallet_file_is_an_error(home):
+    with pytest.raises(ValueError, match="--account picks an address of .* and there is none here"):
+        wallet_mod.find_source(account_given=True)
+
+
+def test_account_with_only_an_old_key_file_says_how_to_move_it(home):
+    open(wallet_mod.LEGACY_KEY_FILE, "w").write("{}")
+    with pytest.raises(ValueError, match="start without --account to move it"):
+        wallet_mod.find_source(account_given=True)
+
+
+def test_what_the_command_line_passes_over_is_reported(home, monkeypatch):
+    monkeypatch.setenv(wallet_mod.KEY_ENV, LC1)
+    notes = []
+    assert wallet_mod.find_source(address_text=ADDR_A, notes=notes).kind == "address"
+    assert notes == ["$LAPSECOIN_KEY is ignored: --address was given"]
+
+
+@pytest.mark.parametrize("which, word", [("burn", "burn"), ("escrow", "escrow")])
+def test_an_address_that_destroys_the_reward_is_refused(home, which, word):
+    import crypto
+    address = crypto.burn_address() if which == "burn" else crypto.escrow_address()
+    with pytest.raises(ValueError, match=f"that is the {word} address"):
+        wallet_mod.find_source(address_text=address)
+
+
+@needs_native
+def test_the_wallet_files_addresses_are_found_without_a_passphrase(home):
+    make_wallet_file()
+    first = WalletFile.load(wallet_mod.WALLET_FILE).accounts[0]["address"]
+    assert wallet_mod.local_account_of(first) == (0, "")
+    assert wallet_mod.local_account_of(ADDR_B) is None      # account 1 of that phrase, not in the file
+
+
+def test_no_wallet_file_or_a_broken_one_means_no_match(home):
+    assert wallet_mod.local_account_of(ADDR_A) is None
+    open(wallet_mod.WALLET_FILE, "w").write("not json")
+    assert wallet_mod.local_account_of(ADDR_A) is None
+
+
+@needs_native
+def test_an_address_that_is_one_of_the_wallets_is_pointed_out_and_still_watch_only(home):
+    make_wallet_file()
+    mine = WalletFile.load(wallet_mod.WALLET_FILE).accounts[0]["address"]
+    [note] = wallet_mod.notes_about_local_wallet("address", mine)
+    assert "address 0" in note and "Running with no key, as asked" in note and "--account 0" in note
+    assert wallet_mod.notes_about_local_wallet("address", ADDR_B) == []
+
+
+@needs_native
+def test_a_key_is_compared_with_the_wallet_file_after_it_is_opened(home):
+    make_wallet_file()
+    mine = WalletFile.load(wallet_mod.WALLET_FILE).accounts[0]["address"]
+    [same] = wallet_mod.notes_about_local_wallet("key", mine)
+    assert "this key is address 0" in same and "wallet file is not used" in same
+    [other] = wallet_mod.notes_about_local_wallet("key", ADDR_B)
+    assert "not an address of" in other and "wallet file is not used" in other
+
+
+def test_nothing_is_said_about_a_wallet_file_that_is_not_there(home):
+    assert wallet_mod.notes_about_local_wallet("address", ADDR_A) == []
+    assert wallet_mod.notes_about_local_wallet("key", ADDR_A) == []
+
+
+def test_the_command_line_stops_on_account_with_a_key(home):
+    r = run_main("--account", "1", "--key", LC1, cwd=home)
+    assert r.returncode != 0 and "--key and --account both given" in (r.stdout + r.stderr)
+
+
+def test_the_command_line_stops_on_account_with_no_wallet(home):
+    r = run_main("--account", "1", cwd=home)
+    assert r.returncode != 0 and "there is none here" in (r.stdout + r.stderr)
+
+
+def test_help_explains_who_the_node_runs_as_and_every_variable_it_reads():
+    out = subprocess.run([sys.executable, os.path.join(ROOT, "main.py"), "-h"], capture_output=True,
+                         text=True, timeout=60, env={**os.environ, "PYTHONPATH": os.path.join(ROOT, "src")}).stdout
+    for needle in ("who this node runs as", "wallet commands", "network", "data and logs",
+                   wallet_mod.ADDRESS_ENV, wallet_mod.KEY_ENV, wallet_mod.PASSPHRASE_ENV,
+                   wallet_mod.EXPORT_PASSPHRASE_ENV, "LAPSECOIN_PORT", "LAPSECOIN_MINING_ENABLED"):
+        assert needle in out, needle
