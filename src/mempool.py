@@ -20,6 +20,16 @@ MEMPOOL_TTL_SECONDS = 24 * 60 * 60
 # same eviction policy as Bitcoin Core's mempool.
 MEMPOOL_MAX_BYTES = 10 * BLOCK_SIZE_LIMIT
 
+# Putting transactions back after a reorg is bounded, because the branch that
+# was lost can be as long as a partition lasted and an attacker can fill a
+# block of their own with transactions that cost them nothing. Only the
+# oldest RECOVERED_PRIORITY_BYTES of a lost branch (two blocks' worth) come
+# back with priority; the rest come back as ordinary, fee-ordered entries. No
+# more than RECOVERED_SCAN_BYTES (a full pool's worth) is even looked at, since
+# the pool could not hold more and each one costs a signature check.
+RECOVERED_PRIORITY_BYTES = 2 * BLOCK_SIZE_LIMIT
+RECOVERED_SCAN_BYTES = MEMPOOL_MAX_BYTES
+
 
 class _Overlay:
     """A writable view over a State that copies nothing.

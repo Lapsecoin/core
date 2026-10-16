@@ -937,6 +937,11 @@ def validate(blk, state, chain):
     return True, None
 
 
+# The most of a block that transactions recovered from a lost branch may take
+# ahead of fee order. Local policy, not consensus.
+PRIORITY_BLOCK_SHARE = 0.5
+
+
 def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None, prefer=()):
     """Assemble a candidate block from a mempool snapshot.
 
@@ -957,8 +962,11 @@ def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None, 
     txs:        candidate txs from the mempool, in any order.
     prefer:     hashes of txs that go in ahead of fee order: ones that were
                 confirmed on a branch this node then lost in a reorg. A
-                sender's group holding any of them is placed first, whatever
-                its fee; the rest keep their fee-per-byte order.
+                sender's group holding any of them goes in first, whatever
+                its fee, but only up to PRIORITY_BLOCK_SHARE of the block;
+                everything after that, the rest of those groups included,
+                is in fee-per-byte order, so a flood of them cannot shut
+                out what others are paying for.
     iterations: this block's required vdf_iterations, from
                 get_vdf_iterations(chain). Taken directly rather than
                 a chain argument so callers that already computed it
@@ -1020,21 +1028,34 @@ def assemble(tip, txs, builder_addr, iterations, board_fee_floor=0, extra=None, 
     prefer = set(prefer)
     groups = sorted(
         by_sender.values(),
-        key=lambda g: (any(tx_mod.tx_hash(t) in prefer for t in g) if prefer else False,
-                       g[0].get("fee", 0) / max(tx_mod.tx_size(g[0]), 1)),
+        key=lambda g: g[0].get("fee", 0) / max(tx_mod.tx_size(g[0]), 1),
         reverse=True,
     )
 
-    for group in groups:
-        for t in group:
+    taken = {}      # sender group -> how many of its txs are already in
+
+    def fill(group, limit):
+        nonlocal running
+        i = taken.get(id(group), 0)
+        for t in group[i:]:
             # Size of this tx as it would appear serialized inside the
             # block. We add 1 for the "," separator between txs (except
             # the first).
             t_size = tx_mod.tx_size_in_block(t, position=len(valid_txs))
-            if running + t_size > BLOCK_SIZE_LIMIT:
+            if running + t_size > limit:
                 break  # this sender's remaining txs would leave a nonce gap
             valid_txs.append(t)
             running += t_size
+            i += 1
+        taken[id(group)] = i
+
+    if prefer:
+        share_limit = base_size + int(PRIORITY_BLOCK_SHARE * (BLOCK_SIZE_LIMIT - base_size))
+        for group in groups:
+            if any(tx_mod.tx_hash(t) in prefer for t in group):
+                fill(group, share_limit)
+    for group in groups:
+        fill(group, BLOCK_SIZE_LIMIT)
 
     skeleton["transactions"] = valid_txs
     skeleton["tx_bytes"]     = running - base_size

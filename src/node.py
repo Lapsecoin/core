@@ -2157,25 +2157,41 @@ class Node:
         hash to when its block was stamped, which is when the network first
         had it: the age they keep, capped so a deep reorg does not bring one
         back already due to expire. One tx that cannot be put back never
-        stops the rest. Returns (put back, left out)."""
+        stops the rest.
+
+        Bounded, because the branch that was lost can be as long as a
+        partition lasted, and a builder can fill a block of their own with
+        transactions that cost them nothing (see mempool.RECOVERED_*): only
+        the first RECOVERED_PRIORITY_BYTES of them (oldest block first) get
+        priority and are re-sent, the rest come back as ordinary entries, and
+        nothing past RECOVERED_SCAN_BYTES is even checked. Returns
+        (put back, left out)."""
         entered = entered or {}
         now = time.time()
         floor = now - mempool_mod.MEMPOOL_TTL_SECONDS / 2
-        back = left_out = 0
+        back = left_out = scanned = prioritised = 0
         for t in txs:
             h = tx_mod.tx_hash(t)
             if h in exclude_hashes:
                 continue
+            size = tx_mod.tx_size(t)
+            if scanned + size > mempool_mod.RECOVERED_SCAN_BYTES:
+                left_out += 1
+                continue
+            scanned += size
+            first = recovered and prioritised + size <= mempool_mod.RECOVERED_PRIORITY_BYTES
             try:
                 when = max(min(entered[h], now), floor) if h in entered else None
-                ok = self._readd_one(t, h, state, recovered, when)
+                ok = self._readd_one(t, h, state, first, when, spread=first or not recovered)
             except Exception:
                 log.exception("[reorg] could not put back %s", h[:12])
                 ok = False
+            if ok and first:
+                prioritised += size
             back, left_out = back + ok, left_out + (not ok)
         return back, left_out
 
-    def _readd_one(self, t, h, state, recovered, entered):
+    def _readd_one(self, t, h, state, recovered, entered, spread=True):
         """Put one tx back if it is still valid. True if it is in the pool."""
         # Against the state plus this sender's txs already re-queued, the
         # same view a fresh submission gets. Against the bare state, a
@@ -2187,7 +2203,7 @@ class Node:
         if not ok:
             return False
         added, _ = self.mempool.add(t, entered=entered, recovered=recovered)
-        if added:
+        if added and spread:
             self._spread(t, gossip_mod.KIND_TX, h)
         return added
 
