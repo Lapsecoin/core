@@ -13,6 +13,8 @@ import logging
 import os
 import time
 
+import tx as tx_mod
+
 log = logging.getLogger(__name__)
 
 FORMAT_VERSION = 1
@@ -24,12 +26,21 @@ def path_for(db_path):
     return base + "_mempool.json"
 
 
-def save(path, records):
-    """Write [(tx, entered)] atomically. Returns the number written."""
+def save(path, records, recovered=()):
+    """Write [(tx, entered)] atomically. `recovered` is the set of tx hashes
+    that came back from a lost branch (see Mempool.recovered_hashes), kept so
+    a restart does not take their priority away. Returns the number written."""
+    recovered = set(recovered)
+    txs = []
+    for tx, entered in records:
+        rec = {"tx": tx, "entered": entered}
+        if recovered and tx_mod.tx_hash(tx) in recovered:
+            rec["recovered"] = True
+        txs.append(rec)
     body = {
         "version": FORMAT_VERSION,
         "saved":   time.time(),
-        "txs":     [{"tx": tx, "entered": entered} for tx, entered in records],
+        "txs":     txs,
     }
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -40,8 +51,9 @@ def save(path, records):
     return len(records)
 
 
-def load(path):
-    """Read [(tx, entered)], oldest first. Missing file is an empty pool. A
+def load(path, with_recovered=False):
+    """Read [(tx, entered)], oldest first, or [(tx, entered, recovered)] with
+    with_recovered. Missing file is an empty pool. A
     file that cannot be read or has the wrong shape is renamed to .bad and
     treated as empty, so a damaged snapshot never stops a node starting."""
     if not os.path.exists(path):
@@ -56,9 +68,9 @@ def load(path):
             tx, entered = rec["tx"], float(rec["entered"])
             if not isinstance(tx, dict):
                 raise ValueError("entry is not a transaction")
-            out.append((tx, entered))
+            out.append((tx, entered, bool(rec.get("recovered", False))))
         out.sort(key=lambda r: r[1])
-        return out
+        return out if with_recovered else [(t, e) for t, e, _ in out]
     except (OSError, ValueError, KeyError, TypeError) as e:
         log.warning("[mempool] ignoring unreadable snapshot %s: %s", path, e)
         try:

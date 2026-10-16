@@ -97,10 +97,16 @@ class _Entry:
     """One pending transaction plus the two facts about it that never
     change and used to be recomputed constantly."""
 
-    __slots__ = ("tx", "entered", "size", "fee_rate")
+    __slots__ = ("tx", "entered", "size", "fee_rate", "recovered")
 
-    def __init__(self, tx_dict, entered=None):
+    def __init__(self, tx_dict, entered=None, recovered=False):
         self.tx       = tx_dict
+        # Came back from blocks this node had on its chain and then lost in a
+        # reorg. Such a transaction was already confirmed once, so it goes
+        # into blocks ahead of fee order and is not evicted to make room for
+        # a new arrival. Local policy only: block validity does not depend on
+        # which valid transactions a builder picks first.
+        self.recovered = recovered
         # Wall-clock seconds, not time.monotonic(): this survives a restart
         # (see Mempool.records and mempool_store), a monotonic reading does not.
         self.entered  = time.time() if entered is None else entered
@@ -128,24 +134,27 @@ class Mempool:
         # moved since it last wrote without comparing contents.
         self.version = 0
 
-    def add(self, tx_dict, entered=None) -> tuple:
+    def add(self, tx_dict, entered=None, recovered=False) -> tuple:
         """entered: wall-clock time the tx was first seen, only passed when
-        restoring a saved pool so the original age is kept."""
+        restoring a saved pool or putting back a reorged-away tx so its
+        original age is kept. recovered: see _Entry; a recovered tx may push
+        out any ordinary one to fit, whatever its fee, and is never pushed
+        out by an ordinary one."""
         h = tx_mod.tx_hash(tx_dict)
         if h in self._pool:
             return False, "duplicate"
 
-        entry = _Entry(tx_dict, entered)
+        entry = _Entry(tx_dict, entered, recovered)
         overflow = self._total_bytes + entry.size - MEMPOOL_MAX_BYTES
         to_evict = []
         if overflow > 0:
-            by_worst_first = sorted(self._pool.items(),
+            by_worst_first = sorted(((h2, e) for h2, e in self._pool.items() if not e.recovered),
                                     key=lambda item: item[1].fee_rate)
             freed = 0
             for h2, other in by_worst_first:
                 if freed >= overflow:
                     break
-                if other.fee_rate >= entry.fee_rate:
+                if not recovered and other.fee_rate >= entry.fee_rate:
                     break
                 to_evict.append(h2)
                 freed += other.size
@@ -191,6 +200,10 @@ class Mempool:
 
     def hashes(self):
         return list(self._pool)
+
+    def recovered_hashes(self):
+        """Hashes of the pending txs that came back from a lost branch."""
+        return {h for h, e in list(self._pool.items()) if e.recovered}
 
     def pending_nonce(self, addr):
         """Highest nonce in the mempool for addr, or 0 if none. Lets a
