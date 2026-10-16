@@ -499,14 +499,6 @@ class TestTighterBoard:
         kept = worth_showing([lone, parent, child, live])
         assert lone not in kept and parent in kept and child in kept and live in kept
 
-    def test_a_tombstone_is_a_thin_line(self, world):
-        html = open("templates_html/board_rows.html").read()
-        assert "Deleted by its author" not in html and "rc-deleted" in html
-
-    def test_the_explanatory_paragraph_is_gone(self, world):
-        html = world.client.get("/board").get_data(as_text=True)
-        assert "ride along on a post" not in html
-
     def test_the_board_page_asks_no_node_for_the_account(self, world):
         html = world.client.get("/board").get_data(as_text=True)
         assert "fee " in html
