@@ -1628,3 +1628,27 @@ class TestBoardNicknamesNoLongerExist:
         r = submit(client, "/board", message="x", passphrase="p", nick="Mallory",
                    icon="2", profile_changed="1", follow=False)
         assert not _re.search(r"\[p:", str(node.mempool.all_txs()))
+
+
+class TestAges:
+    """Rows say how long ago, counted from block time and the node's clock."""
+
+    def test_fmt_age_counts_seconds_then_two_units(self):
+        from ui_common import fmt_age
+        assert fmt_age(5) == "5s ago" and fmt_age(59) == "59s ago"
+        assert fmt_age(60) == "1m ago" and fmt_age(7500) == "2h 5m ago"
+        assert fmt_age(-30) == "0s ago"
+
+    def test_the_dashboard_has_an_age_column_from_the_block_time(self):
+        import time
+        node = TestDashboardTxFilter._Node(6)
+        now = int(time.time())
+        for blk in node.view.chain[1:]:
+            blk["timestamp"] = now - 120
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/").get_data(as_text=True)
+        assert "<th class=\"num\">Age</th>" in html
+        assert f'data-age-ts="{now - 120}"' in html and "2m ago" in html
+        assert '<meta name="server-now"' in html
+        row = client.get("/api/info").get_json()["recent_txs"][0]
+        assert row["timestamp"] == now - 120

@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sys
+import time
 
 from flask import Flask, request, send_file, send_from_directory
 from markupsafe import Markup, escape
@@ -58,6 +59,17 @@ def fmt_lapse_dp(ticks, places=4):
     if 0 < ticks * 2 * 10 ** places < TICKS_PER_LAPSE:
         return f"{ticks:,} tick" + ("" if ticks == 1 else "s")
     return f"{ticks / TICKS_PER_LAPSE:,.{places}f} LAPSE"
+
+
+def fmt_age(seconds):
+    """How long ago, for a row: "42s ago", "3m ago", "2h 5m ago". Keep the
+    age script in templates_html/base.html on the same rule."""
+    seconds = max(int(seconds or 0), 0)
+    return f"{seconds}s ago" if seconds < 60 else f"{fmt_duration(seconds)} ago"
+
+
+def utc_text(ts):
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ts))
 
 
 def fmt_duration(seconds):
@@ -250,7 +262,8 @@ def make_flask_app(import_name):
     app = Flask(import_name,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
-                                 fmt_duration=fmt_duration,
+                                 fmt_duration=fmt_duration, fmt_age=fmt_age,
+                                 utc_text=utc_text, server_now=lambda: int(time.time()),
                                  fmt_lapse_dp=fmt_lapse_dp, SUPPORT=SUPPORT,
                                  TICKS_PER_LAPSE=TICKS_PER_LAPSE,
                                  BURN_ADDRESS=crypto_mod.burn_address(),
