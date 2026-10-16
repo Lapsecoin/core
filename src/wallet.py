@@ -464,9 +464,30 @@ def _unlocked_wallet_file(key_text, what):
     return wf, kek, passphrase
 
 
+def _account_for_export(wf, kek, spec):
+    """(index, created) for `--export SPEC`: an address's number, or its name.
+    A name no address has yet makes a new address with that name, so
+    `--export rig1` and `--export rig2` give two rigs an address each, kept in
+    this wallet where their balances can be watched."""
+    text = str(spec).strip() if spec is not None else ""
+    if text == "":
+        return 0, False
+    if text.isdigit():
+        return int(text), False
+    hits = [a["index"] for a in wf.accounts if a.get("label", "").strip().lower() == text.lower()]
+    if len(hits) == 1:
+        return hits[0], False
+    if hits:
+        sys.exit(f"Error: more than one address is named '{text}'; use its number")
+    entry = wf.new_account(kek)
+    wf.set_label(entry["index"], text)
+    return entry["index"], True
+
+
 def cmd_export(key_text=None, account=0):
     """Print one account's key as lc1- text, sealed under a NEW passphrase
-    (never the wallet's), for --key or $LAPSECOIN_KEY on another machine."""
+    (never the wallet's), for --key or $LAPSECOIN_KEY on another machine.
+    `account` is a number or a name; a name nobody has yet creates the address."""
     try:
         source = find_source(key_text)
     except ValueError as e:
@@ -488,10 +509,15 @@ def cmd_export(key_text=None, account=0):
             if new_pass != passphrase:
                 break
             print("Use a different passphrase from the wallet's, so the box never holds it.")
+    index, created = _account_for_export(wf, kek, account)
     try:
-        print(wf.export_account_key(kek, account, new_pass, passphrase))
+        text = wf.export_account_key(kek, index, new_pass, passphrase)
     except (ValueError, KeyError) as e:
-        sys.exit(f"Error: {e}" if isinstance(e, ValueError) else f"Error: account {account} is not in this wallet")
+        sys.exit(f"Error: {e}" if isinstance(e, ValueError) else f"Error: account {index} is not in this wallet")
+    if created:
+        print(f"Created address {index} named '{wf.account(index)['label']}': {wf.address(index)}",
+              file=sys.stderr)
+    print(text)
 
 
 def cmd_new_address(key_text=None):

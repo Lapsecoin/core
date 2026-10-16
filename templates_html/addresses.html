@@ -55,6 +55,8 @@
     <input type="hidden" name="form_token" value="{{ form_token }}">
     <h3>New address</h3>
     <p class="hint">Each address is its own account with its own balance. Funds are not merged.</p>
+    <label for="new-name">Name <span class="dim">(optional, only you see it)</span></label>
+    <input type="text" id="new-name" name="label" maxlength="60" placeholder="rig1" autocomplete="off">
     <label for="new-pass">Wallet passphrase</label>
     <input type="password" id="new-pass" name="passphrase" autocomplete="current-password" required>
     <div class="prompt-actions">

@@ -311,10 +311,12 @@ def main():
                         help="Which address of the wallet this node runs as, or --export "
                              "writes out: its number, or the name you gave it on the "
                              "Addresses page (default 0).")
-    parser.add_argument("--export", action="store_true",
-                        help="Print one account's key (--account N) as short lc1- text, "
-                             "sealed under a new passphrase, and exit. Use it as --key or "
-                             "$LAPSECOIN_KEY on another machine; it never holds the "
+    parser.add_argument("--export", nargs="?", const="", default=None, metavar="N|NAME",
+                        help="Print one address's key as short lc1- text, sealed under a new "
+                             "passphrase, and exit: its number or name (default: --account). "
+                             "A name no address has yet creates that address, so --export rig1 "
+                             "and --export rig2 give two machines an address each. Use it as "
+                             "--key or $LAPSECOIN_KEY on that machine; it never holds the "
                              "recovery phrase.")
     parser.add_argument("--new-address", action="store_true",
                         help="Add the wallet's next account, print its address and exit.")
@@ -383,7 +385,8 @@ def main():
         import updater as _updater
         sys.exit(_updater.restart_check(args.check_restart_exe))
     try:
-        args.account = wallet_mod.resolve_account(args.account)
+        if args.export is None:      # --export may name an address that does not exist yet
+            args.account = wallet_mod.resolve_account(args.account)
     except ValueError as e:
         sys.exit(f"Error: --account: {e}")
     if args.restore:
@@ -392,8 +395,8 @@ def main():
     if args.new_address:
         wallet_mod.cmd_new_address(args.key)
         sys.exit(0)
-    if args.export:
-        wallet_mod.cmd_export(args.key, args.account)
+    if args.export is not None:
+        wallet_mod.cmd_export(args.key, args.export or args.account)
         sys.exit(0)
     public_url = None
     if args.public_url:
