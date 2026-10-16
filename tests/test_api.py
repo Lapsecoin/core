@@ -1345,7 +1345,7 @@ class TestPublicFeesPage:
     def test_the_public_port_explains_the_service_without_a_form(self):
         node, _ = fresh()
         html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
-        assert "How to use it" in html and "releases" in html and "<form" not in html
+        assert "How to use it" in html and "downloads.html" in html and "<form" not in html
 
     def test_it_is_in_the_public_menu(self):
         node, _ = fresh()
