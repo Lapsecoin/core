@@ -1,26 +1,32 @@
 {% extends "base.html" %}
-{% block head %}<link rel="stylesheet" href="/css/pages/wallet.css?v={{ local_version }}">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/css/pages/unlock.css?v={{ local_version }}">{% endblock %}
 {% block content %}
-<div class="wl">
-<h2>Unlock</h2>
-{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
-<p class="wl-lede">Your node is running. Enter your passphrase to switch on the rest.</p>
-<section class="panel">
-  <div class="panel-head">The passphrase starts</div>
-  <ul class="panel-body">
-    {% for item in work %}<li>{{ item }}</li>{% endfor %}
-  </ul>
-  <form method="POST" action="/unlock" autocomplete="off" class="panel-body">
+<div class="unlock">
+  <h2>Unlock your node</h2>
+  <p class="unlock-lede">Your node is running. Enter your passphrase to finish starting it.</p>
+  <form method="POST" action="/unlock" autocomplete="off" class="unlock-card">
+    {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="next" value="{{ next_path }}">
-    <div class="submit-row">
-      <div class="field">
-        <label for="passphrase">Your passphrase</label>
-        <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" required autofocus>
-      </div>
-      <button type="submit" style="flex:0 0 auto">Unlock</button>
+    <label for="passphrase">Passphrase</label>
+    <input type="password" id="passphrase" name="passphrase" required autofocus>
+    <button type="submit">Unlock</button>
+    <div class="unlock-work" id="unlock-work"{% if not work %} hidden{% endif %}>
+      <span>This also starts</span>
+      <ul id="unlock-work-list">{% for item in work %}<li>{{ item }}</li>{% endfor %}</ul>
     </div>
   </form>
-</section>
 </div>
+<script>
+// What needs the key can depend on a balance read from the network, so the
+// page draws at once and adds that line when it arrives.
+(function () {
+  var box = document.getElementById("unlock-work"), list = document.getElementById("unlock-work-list");
+  fetch("/unlock/work", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (d) {
+    list.textContent = "";
+    (d.items || []).forEach(function (t) { var li = document.createElement("li"); li.textContent = t; list.appendChild(li); });
+    box.hidden = !list.children.length;
+  }).catch(function () {});
+})();
+</script>
 {% endblock %}

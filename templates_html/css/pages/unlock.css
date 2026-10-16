@@ -1,0 +1,15 @@
+/* The lock page: one small card in the middle, nothing else on the page. */
+.unlock { max-width: 24rem; margin: 9vh auto 0; }
+.unlock h2 { margin-bottom: .3rem; }
+.unlock-lede { color: var(--ink-dim); font-size: .9rem; margin: 0 0 1rem; }
+.unlock-card {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 1.1rem 1.1rem 1rem;
+}
+.unlock-card label { margin-bottom: .3rem; }
+.unlock-card button { width: 100%; margin-top: .75rem; }
+.unlock-card .alert { margin-bottom: .9rem; }
+.unlock-work { margin-top: .9rem; padding-top: .8rem; border-top: 1px solid var(--rule); font-size: .8rem; color: var(--ink-dim); }
+.unlock-work[hidden] { display: none; }
+.unlock-work ul { margin: .25rem 0 0 1.1rem; padding: 0; }
+@media (max-width: 640px) { .unlock { margin-top: 3vh; } }

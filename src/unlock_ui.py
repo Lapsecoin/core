@@ -15,6 +15,8 @@ from urllib.parse import quote
 
 from flask import jsonify, redirect, render_template, request
 
+import base_wallet
+import evm
 import wallet as wallet_mod
 
 log = logging.getLogger("ec.unlock")
@@ -24,13 +26,27 @@ WRONG_PASSPHRASE = "That is not this node's passphrase."
 _ALWAYS_OPEN = ("css", "favicon", "icon_png", "icon_png_sized")
 
 
-def pending_work(node):
-    """What the passphrase will switch on, in plain words, for this node's state."""
-    base_path = getattr(node, "base_wallet_path", None)
-    if base_path and os.path.isfile(base_path):
-        items = ["Answer gas requests from your Base wallet"]
-    else:
-        items = ["Create your Base wallet and answer gas requests from it"]
+def _base_wallet_holds_funds(node):
+    """Whether the Base wallet has something in it. False when it is empty or
+    the balance cannot be read: a line about it is only worth showing when
+    answering gas requests is something this node will actually do."""
+    path = getattr(node, "base_wallet_path", None)
+    addr = base_wallet.load_address(path) if path else None
+    if not addr:
+        return False
+    try:
+        return evm.get_balance_wei(evm.DEFAULT_BASE_RPC, addr) > 0
+    except evm.EVMError:
+        return False
+
+
+def pending_work(node, check_balance=False):
+    """What the passphrase will switch on, in plain words, for this node's
+    state. Reading the Base balance goes to the network, so it is only done
+    when asked to; the page draws without it and asks for it after."""
+    items = []
+    if check_balance and _base_wallet_holds_funds(node):
+        items.append("Answer gas requests from your Base wallet")
     wf = getattr(getattr(node, "wallet", None), "walletfile", None)
     if wf is not None:
         if wf.pending_sweep or os.path.exists(wallet_mod.LEGACY_KEY_FILE):
@@ -57,7 +73,7 @@ def register(app, node, csrf_token, limiter):
         if not _locked():
             return None
         endpoint = request.endpoint or ""
-        if endpoint in ("unlock_page", "unlock_submit") or endpoint.removeprefix("priv_") in _ALWAYS_OPEN:
+        if endpoint in ("unlock_page", "unlock_submit", "unlock_work") or endpoint.removeprefix("priv_") in _ALWAYS_OPEN:
             return None
         if request.path.startswith("/api/"):
             return jsonify(error="locked"), 423
@@ -74,6 +90,12 @@ def register(app, node, csrf_token, limiter):
         if not _locked():
             return redirect(_local_path(request.args.get("next", "/")))
         return _page(_local_path(request.args.get("next", "/")))
+
+    @app.route("/unlock/work", endpoint="unlock_work")
+    def unlock_work():
+        if not _locked():
+            return jsonify(items=[])
+        return jsonify(items=pending_work(node, check_balance=True))
 
     @app.route("/unlock", methods=["POST"], endpoint="unlock_submit")
     @limiter.limit("10 per minute")

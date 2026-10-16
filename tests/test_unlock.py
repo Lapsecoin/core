@@ -1,6 +1,7 @@
 """A node that starts without its passphrase: which starts can wait for it, the
 lock page, and what the passphrase switches on when it is typed."""
 
+import os
 import threading
 import types
 
@@ -45,6 +46,7 @@ def locked(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     w, _kek, _ = wallet_mod.create_wallet(PASS, phrase=PHRASE)
     w = wallet_mod.PhraseWallet(w.walletfile, 0)
+    w.walletfile._data["scan_pending"] = False   # a restore starts with one; each test sets what it needs
     node = LockedNode(ChainState.from_genesis(), w)
     client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
     return types.SimpleNamespace(node=node, client=client, wf=w.walletfile)
@@ -86,9 +88,38 @@ def test_the_lock_page_and_its_styles_stay_open(locked):
     assert locked.client.get("/css/base.css").status_code == 200
 
 
-def test_the_lock_page_lists_what_the_passphrase_starts(locked):
+def test_the_lock_page_has_no_list_when_nothing_waits(locked):
     html = locked.client.get("/unlock").get_data(as_text=True)
-    assert "Create your Base wallet" in html
+    assert 'id="unlock-work" hidden' in html
+
+
+def _with_base_wallet(locked, tmp_path, monkeypatch, wei):
+    import base_wallet
+    import evm
+    locked.node.base_wallet_path = str(tmp_path / "base_wallet.json")
+    if os.path.exists(locked.node.base_wallet_path):
+        os.remove(locked.node.base_wallet_path)
+    base_wallet.create(locked.node.base_wallet_path, b"k" * 32)
+    if isinstance(wei, Exception):
+        def read(url, addr):
+            raise wei
+    else:
+        def read(url, addr):
+            return wei
+    monkeypatch.setattr(evm, "get_balance_wei", read)
+
+
+def test_the_base_wallet_is_listed_only_when_it_holds_something(locked, tmp_path, monkeypatch):
+    _with_base_wallet(locked, tmp_path, monkeypatch, 10**15)
+    assert "Answer gas requests" in locked.client.get("/unlock/work").get_data(as_text=True)
+
+
+def test_an_empty_or_unreachable_base_wallet_is_not_mentioned(locked, tmp_path, monkeypatch):
+    import evm
+    _with_base_wallet(locked, tmp_path, monkeypatch, 0)
+    assert locked.client.get("/unlock/work").get_json() == {"items": []}
+    _with_base_wallet(locked, tmp_path, monkeypatch, evm.EVMError("down"))
+    assert locked.client.get("/unlock/work").get_json() == {"items": []}
 
 
 def test_the_list_follows_the_wallets_state(locked):
