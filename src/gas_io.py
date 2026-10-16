@@ -4,7 +4,6 @@ worker all ask the world the same way, and tests swap one object for a fake.
 """
 
 import evm
-import gas
 import relay
 import sanctions
 
@@ -19,9 +18,6 @@ class ChainIO:
         proxies = {"http": url, "https": url} if url else {}
         evm._session.proxies = proxies
         relay._session.proxies = proxies
-
-    def _setting(self, setting):
-        return self.settings.get(setting).strip() if self.settings is not None else ""
 
     def base_rpc(self):
         return evm.DEFAULT_BASE_RPC

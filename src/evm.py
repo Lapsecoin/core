@@ -388,10 +388,6 @@ def get_fee_params(url: str):
     return 2 * base + tip, tip
 
 
-def estimate_gas(url: str, tx: dict) -> int:
-    return _hex_int(rpc(url, "eth_estimateGas", [tx]))
-
-
 def gas_price_wei(url: str) -> int:
     """Current gas price, for sizing a request. The base fee plus the tip."""
     max_fee, tip = get_fee_params(url)
@@ -400,11 +396,6 @@ def gas_price_wei(url: str) -> int:
 
 def send_raw_transaction(url: str, raw: bytes) -> str:
     return rpc(url, "eth_sendRawTransaction", ["0x" + raw.hex()])
-
-
-def get_receipt(url: str, tx_hash: str):
-    """The receipt dict, or None while the transaction is still pending."""
-    return rpc(url, "eth_getTransactionReceipt", [tx_hash])
 
 
 def dumps(obj) -> str:
