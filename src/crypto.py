@@ -6,6 +6,7 @@ Key storage: Argon2id + NaCl secretbox. Passphrase mandatory.
              Secret key decrypted per signing call, reference dropped immediately.
 """
 
+import re
 import base64
 import hashlib
 import json
@@ -130,6 +131,22 @@ def escrow_address():
     Built like burn_address: a fixed word sequence nobody holds the key to,
     taken from further along the wordlist so the two never coincide."""
     return ".".join(_WORDLIST[ADDRESS_WORD_COUNT:2 * ADDRESS_WORD_COUNT])
+
+
+def normalize_address(text):
+    """The dotted address in `text`, however it was typed or pasted: words
+    split by dots, spaces, commas or line breaks, in any case. ValueError says
+    what is wrong (how many words there are, or which word is not in the
+    list), because a person is reading it. It cannot tell a mistyped address
+    from another person's: addresses carry no checksum."""
+    words = [w for w in re.split(r"[.\s,;]+", str(text).strip().lower()) if w]
+    if len(words) != ADDRESS_WORD_COUNT:
+        raise ValueError(f"an address is {ADDRESS_WORD_COUNT} words, like "
+                         f"tree.mention.pride..., and this has {len(words)}")
+    for i, w in enumerate(words, 1):
+        if w not in _WORDLIST_SET:
+            raise ValueError(f"word {i} of the address, '{w[:20]}', is not in the word list")
+    return ".".join(words)
 
 
 def is_valid_address(addr):

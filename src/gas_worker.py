@@ -262,7 +262,7 @@ class LiveIO(ChainIO):
         outputs = [{"to": crypto.burn_address(), "amount": 1}]
         reader = local_reader_for(node)
         acct = reader.account(node.addr, fees=True, fresh=True)
-        fee = wallet_ui.auto_fee(acct, node.addr, node.pk_hex, outputs, memo=memo)
+        fee = wallet_ui.auto_fee(acct, node.addr, node.wallet.pk_hex, outputs, memo=memo)
         t, _ = node._build_and_sign_tx_with_kek(outputs, fee, node._kek, memo)
         return reader.submit(t)
 

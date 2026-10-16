@@ -40,6 +40,7 @@ log = logging.getLogger("ec.main")
 # the data directory is what tells a node to move to a recovery phrase.
 LEGACY_KEY_FILE = "lapsecoin_key.json"
 KEY_ENV = "LAPSECOIN_KEY"
+ADDRESS_ENV = "LAPSECOIN_ADDRESS"
 PASSPHRASE_ENV = "LAPSECOIN_PASSPHRASE"
 EXPORT_PASSPHRASE_ENV = "LAPSECOIN_EXPORT_PASSPHRASE"
 MIN_PASSPHRASE = 8
@@ -52,6 +53,8 @@ MIN_PASSPHRASE = 8
 class _Signer:
     """Building and signing a transaction, shared by every kind of wallet.
     A kind supplies pk, pk_hex, addr, derive_kek and secret_key."""
+
+    can_sign = True
 
     def sign_tx(self, outputs, nonce, fee, memo="", passphrase=None, kek=None):
         """Build and sign a transaction from this wallet. Supply exactly
@@ -66,6 +69,24 @@ class _Signer:
         finally:
             del sk
         return t, fee
+
+
+class WatchWallet:
+    """Just an address: a node that mines for it and holds no key, so there is
+    no passphrase to ask for and nothing to unlock. It can run, relay and build
+    blocks (a block names its builder by address and carries no signature) and
+    it cannot send, post, answer fee requests or sign anything else."""
+
+    can_sign = False
+    pk = pk_hex = None
+
+    def __init__(self, addr):
+        self.addr = addr
+
+    def derive_kek(self, passphrase):
+        raise ValueError("this node holds no key: it was given an address only")
+
+    secret_key = sign_tx = derive_kek
 
 
 class Wallet(_Signer):
@@ -158,8 +179,9 @@ class PhraseWallet(_Signer):
 # ---------------------------------------------------------------------------
 
 Source = namedtuple("Source", "kind value")
-# kinds: "key" (lc1 text), "text" (old single-key text), "wallet" (the phrase
-# file), "legacy" (an old lapsecoin_key.json to move), "new" (nothing yet).
+# kinds: "address" (an address only, no key), "key" (lc1 text), "text" (old
+# single-key text), "wallet" (the phrase file), "legacy" (an old
+# lapsecoin_key.json to move), "new" (nothing yet).
 
 
 def _legacy_text(text):
@@ -177,23 +199,42 @@ def _legacy_text(text):
     return data
 
 
-def find_source(key_text=None, wallet_file=WALLET_FILE, legacy_file=LEGACY_KEY_FILE):
-    """What this start-up should run as. Key text (--key, else $LAPSECOIN_KEY)
-    wins; otherwise the wallet file; otherwise an old key file to move;
-    otherwise there is nothing yet and a wallet gets created."""
-    text = (key_text or os.environ.get(KEY_ENV) or "").strip()
-    if text:
-        if shortkey.looks_like(text):
-            return Source("key", text)
-        data = _legacy_text(text)
-        if data is None:
-            hint = ""
-            if os.path.isfile(text):
-                hint = (f" {text} is a file, and key files are not read any more: put it in this "
-                        f"node's folder as {LEGACY_KEY_FILE} to move it to a recovery phrase")
-            raise ValueError("--key takes the key text that --export prints "
-                             "(it starts with lc1-)." + hint)
-        return Source("text", data)
+def find_source(key_text=None, *, address_text=None, wallet_file=WALLET_FILE,
+                legacy_file=LEGACY_KEY_FILE):
+    """What this start-up should run as. In order of priority:
+
+      1. --address or --key on the command line (one of them: both is an error)
+      2. $LAPSECOIN_ADDRESS or $LAPSECOIN_KEY (again one), only when neither
+         was given on the command line
+      3. the wallet file
+      4. an old key file, which is moved to a wallet
+      5. nothing yet, so a new wallet gets made
+
+    An address starts a node that holds no key (no passphrase, no signing).
+    Key text is an lc1- text from --export, or an old single-key text.
+    ValueError says what is wrong and where it was given."""
+    # (text, where it was given, is it an address)
+    given = [(text.strip(), where, is_address) for text, where, is_address in
+             ((address_text, "--address", True), (key_text, "--key", False))
+             if text and text.strip()]
+    if len(given) > 1:
+        raise ValueError("--address and --key both given: use one. An address runs a "
+                         "node that holds no key; a key runs one that can sign.")
+    if not given:
+        given = [(os.environ.get(name, "").strip(), "$" + name, is_address)
+                 for name, is_address in ((ADDRESS_ENV, True), (KEY_ENV, False))]
+        given = [g for g in given if g[0]]
+        if len(given) > 1:
+            raise ValueError(f"${ADDRESS_ENV} and ${KEY_ENV} are both set: keep one, or "
+                             "give --address or --key to say which this start uses.")
+    if given:
+        text, where, is_address = given[0]
+        if not is_address:
+            return _key_source(text)
+        try:
+            return Source("address", crypto.normalize_address(text))
+        except ValueError as e:
+            raise ValueError(f"{where}: {e}") from None
     if os.path.exists(wallet_file):
         return Source("wallet", wallet_file)
     if os.path.exists(legacy_file):
@@ -201,10 +242,26 @@ def find_source(key_text=None, wallet_file=WALLET_FILE, legacy_file=LEGACY_KEY_F
     return Source("new", wallet_file)
 
 
+def _key_source(text):
+    if shortkey.looks_like(text):
+        return Source("key", text)
+    data = _legacy_text(text)
+    if data is None:
+        hint = ""
+        if os.path.isfile(text):
+            hint = (f" {text} is a file, and key files are not read any more: put it in this "
+                    f"node's folder as {LEGACY_KEY_FILE} to move it to a recovery phrase")
+        raise ValueError("--key takes the key text that --export prints "
+                         "(it starts with lc1-)." + hint)
+    return Source("text", data)
+
+
 def unlock(source, passphrase, account=0):
     """(wallet, kek) for a source that already exists. ValueError for a wrong
     passphrase or a key text that is cut off."""
     kind, value = source
+    if kind == "address":
+        raise ValueError("this node was given an address only, so there is no key to unlock")
     if kind == "key":
         parts = shortkey.decode(value)
         kek = shortkey.derive_kek(parts, passphrase)
@@ -238,6 +295,8 @@ def open_locked(source, account=0):
     wallet (a new address and a phrase to show), and a wallet whose phrase was
     never acknowledged has to show it first."""
     kind, value = source
+    if kind == "address":
+        return WatchWallet(value)
     if kind == "text":
         return TextWallet(value)
     if kind == "wallet":
@@ -389,13 +448,14 @@ def show_phrase_console(phrase, out=None):
               file=out)
 
 
-def startup_console(key_text=None, account=0):
+def startup_console(key_text=None, account=0, source=None):
     """Console start-up: returns (wallet, kek, passphrase). Exits with a
-    message on a wrong passphrase or a bad key."""
+    message on a wrong passphrase or a bad key. `source` is what find_source
+    already found, when the caller has it."""
     try:
-        source = find_source(key_text)
+        source = source or find_source(key_text)
     except ValueError as e:
-        sys.exit(f"Error: --key: {e}")
+        sys.exit(f"Error: {e}")
 
     if source.kind == "new":
         print("No wallet found. Creating a new one.")
@@ -471,6 +531,8 @@ def _need_wallet(source, what):
     if source.kind == "wallet":
         return
     messages = {
+        "address": "this node was given an address only (no key); run this where the "
+                   "recovery-phrase wallet is",
         "new": f"there is no wallet here to {what}",
         "key": "this node runs on a single exported key; run this where the recovery-phrase wallet is",
         "text": "this node runs on an old single key; it has no recovery phrase",
@@ -483,7 +545,7 @@ def _unlocked_wallet_file(key_text, what):
     try:
         source = find_source(key_text)
     except ValueError as e:
-        sys.exit(f"Error: --key: {e}")
+        sys.exit(f"Error: {e}")
     _need_wallet(source, what)
     passphrase = resolve_passphrase("Wallet passphrase: ")
     try:
@@ -522,7 +584,7 @@ def cmd_export(key_text=None, account=0):
     try:
         source = find_source(key_text)
     except ValueError as e:
-        sys.exit(f"Error: --key: {e}")
+        sys.exit(f"Error: {e}")
     if source.kind == "legacy":
         # An old key file has no seed to shorten: print it as it always was
         # (still encrypted under its own passphrase).

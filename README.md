@@ -26,9 +26,9 @@ chmod +x lapsecoin         lapsecoin.msi
 ./lapsecoin
 ```
 
-You'll be prompted for a signing passphrase, then the wallet is at `http://localhost:8335` and the block explorer at `http://localhost:8333`.
+The node starts at once. Its wallet is at `http://localhost:8335`, which asks for your passphrase the first time you open it (that is what lets the node answer fee requests from its Base wallet), and the block explorer is at `http://localhost:8333`. The very first start, an old key file being moved, and a wallet whose recovery phrase was never confirmed ask for the passphrase in the window before starting, because they have a phrase to show.
 
-For headless environments (Docker/systemd/CI, no GUI), set the passphrase non-interactively and pass `--no-gui`:
+For headless environments (Docker/systemd/CI, no GUI), pass `--no-gui`. With a terminal it prompts for the passphrase; without one it starts anyway and asks on the wallet page, or you can set it up front:
 
 ```bash
 export LAPSECOIN_PASSPHRASE="your passphrase"
@@ -41,6 +41,8 @@ The first start creates a wallet and shows its **recovery phrase** (12 words) on
 
 - **More addresses.** The **Addresses** page adds one, names them and shows each balance (`--new-address` does the same from the terminal). Each address is its own account. The node mines and builds as the one it started with (`--account N`, default 0; a name you gave the address works too); Send and the board let you pick which address signs, and remember the last one you used.
 - **A key for another machine.** On a box that should mine without holding your recovery phrase, run it with one address's key only: **Addresses > Export a key**, or `./lapsecoin --export 1`. Give a name instead (`./lapsecoin --export rig1`) and the address is created on the spot if you have none by that name, so `rig1` and `rig2` each get their own key to paste on their own machine, and you watch them all from here. It prints about 120 characters (`lc1-...`) sealed under a *new* passphrase. On that machine use it as `--key` or `$LAPSECOIN_KEY` (with `LAPSECOIN_PASSPHRASE`). It never holds the phrase, so losing the machine exposes that one address and nothing else. Nothing is written to disk there.
+- **A miner with no key at all.** Give a machine just an address: `./lapsecoin --address tree.mention.pride...` (or `LAPSECOIN_ADDRESS`). It builds blocks and the reward goes to that address; there is no passphrase, nothing to unlock, and nothing on the machine that can spend. It cannot send, post, vote or answer fee requests, and says so on those pages. The address can be pasted with dots, spaces, commas or line breaks between the words. Addresses have no checksum, so check the words before you start. Give each machine its own address (**Addresses > New address**); two machines on one address compute the same block. 
+- **What wins when more than one is given.** On the command line, `--address` or `--key` (never both). If neither, `LAPSECOIN_ADDRESS` or `LAPSECOIN_KEY` (never both). If neither, the wallet file, then an old key file to move, then a new wallet. Whatever is given on the command line beats the environment, and either beats what is on disk.
 - **Restoring.** In an empty folder, `./lapsecoin --restore` asks for the phrase (hidden input, or piped in) and a passphrase. When the node has synced it finds the other addresses the phrase has used.
 - **Upgrading an older node.** A node that still has `lapsecoin_key.json` moves to a recovery phrase at its next start: it creates the wallet under the same passphrase, shows the phrase once and runs as the new address. Once synced it sends the old address's funds to it in one ordinary transaction and deletes the old key. Without a terminal or window (Docker, systemd) the phrase is printed once to the program's output, never to the log file.
 

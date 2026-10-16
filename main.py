@@ -47,6 +47,7 @@ from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from updater import Updater
 from version import LOCAL_VERSION
+import startup
 import wallet as wallet_mod
 
 LOG_FILE = "lapsecoin.log"
@@ -305,7 +306,14 @@ def main():
                         default=_env_port("LAPSECOIN_PORT", 8333))
     parser.add_argument("--key", dest="key", default=None, metavar="KEY",
                         help="Run as one exported account: the lc1- text that --export "
-                             "prints (default: $LAPSECOIN_KEY). Without it the node uses "
+                             "prints (default: $LAPSECOIN_KEY). It asks for its passphrase.")
+    parser.add_argument("--address", dest="address", default=None, metavar="ADDRESS",
+                        help="Mine for this address and hold no key: the 12 words of an "
+                             "address (dots, spaces or commas between them). No passphrase "
+                             "and no signing; the node builds blocks and the reward goes to "
+                             "the address (default: $LAPSECOIN_ADDRESS). Use one of --address "
+                             "and --key, on the command line or in the environment; the "
+                             "command line wins. With neither, the node uses "
                              "lapsecoin_wallet.json, its recovery-phrase wallet.")
     parser.add_argument("--account", default="0", metavar="N|NAME",
                         help="Which address of the wallet this node runs as, or --export "
@@ -389,6 +397,9 @@ def main():
             args.account = wallet_mod.resolve_account(args.account)
     except ValueError as e:
         sys.exit(f"Error: --account: {e}")
+    if args.address and (args.restore or args.new_address or args.export is not None):
+        sys.exit("Error: --address runs a node that holds no key; --restore, --new-address "
+                 "and --export work on the recovery-phrase wallet. Run them without it.")
     if args.restore:
         wallet_mod.cmd_restore()
         sys.exit(0)
@@ -509,29 +520,33 @@ def main():
             else:
                 print("Not installing. Re-run with --no-gui to start headless.")
                 sys.exit(1)
-    # With the window up, a node whose address is public starts at once and
-    # asks for the passphrase on its private pages instead (unlock_ui.py).
-    # A passphrase given in the environment, or a start that has to show a
-    # recovery phrase or make a new wallet, asks first as before.
-    early_wallet = None
-    if use_gui and not os.environ.get("LAPSECOIN_PASSPHRASE"):
-        try:
-            early_wallet = wallet_mod.open_locked(
-                wallet_mod.find_source(args.key), args.account)
-        except ValueError:
-            early_wallet = None      # the ordinary start below says what is wrong
-    if early_wallet is not None:
-        wallet, kek, passphrase = early_wallet, None, None
-        log.info("[startup] running as %s until the passphrase is entered", wallet.addr)
+    # Who this node runs as, and whether it asks for a passphrase before
+    # starting, after (on the private pages, see unlock_ui.py) or never. The
+    # rules are in startup.py; every case is a line in tests/test_startup.py.
+    env_passphrase = os.environ.get(wallet_mod.PASSPHRASE_ENV) or None
+    try:
+        source = wallet_mod.find_source(args.key, address_text=args.address)
+        start = startup.plan(source, gui=use_gui, tty=sys.stdin.isatty(),
+                             env_passphrase=bool(env_passphrase))
+    except ValueError as e:
+        sys.exit(f"Error: {e}")
+    if source.kind != "wallet" and args.account != 0:
+        log.warning("[startup] --account is ignored: it picks an address of the "
+                    "recovery-phrase wallet, and this node was given %s",
+                    "an address" if source.kind == "address" else "a key")
+    if start.how in (startup.WATCH, startup.DEFER):
+        wallet, kek, passphrase = wallet_mod.open_locked(source, args.account), None, None
+        if start.how == startup.WATCH:
+            log.info("[startup] mining for %s and holding no key", wallet.addr)
+        else:
+            log.info("[startup] running as %s until the passphrase is entered", wallet.addr)
     elif use_gui:
-        env_passphrase = os.environ.get("LAPSECOIN_PASSPHRASE") or None
         wallet, kek, passphrase = gui.startup_gui(
-            args.key, args.account, env_passphrase)
+            args.key, args.account, env_passphrase, source=source)
     else:
-        wallet, kek, passphrase = wallet_mod.startup_console(args.key, args.account)
-    pk = wallet.pk
+        wallet, kek, passphrase = wallet_mod.startup_console(
+            args.key, args.account, source=source)
     genesis  = block_mod.create_genesis()
-    pk_hex   = pk.hex()
 
     pool     = PeerPool(max_peers=args.max_peers)
     # Bounded so a flood can't grow memory without limit while the node
@@ -635,7 +650,7 @@ def main():
     # ------------------------------------------------------------------
     gossip    = Gossip(pool, udp)
     syncer    = Syncer(pool, udp)
-    discovery = Discovery(udp, pool, genesis["hash"], port, pk_hex)
+    discovery = Discovery(udp, pool, genesis["hash"], port)
     private_port = args.private_port if args.private_port else port + 2
     del passphrase   # nothing past startup needs it; the kek is what signs
 
@@ -657,7 +672,7 @@ def main():
         node = Node(wallet, gossip, syncer, pool, net_in_q, db_path=args.db)
         node.background_jobs = [j for j in (getattr(wallet, "migration", None),
                                             getattr(wallet, "discovery", None)) if j]
-        node.needs_unlock = kek is None
+        node.needs_unlock = kek is None and wallet.can_sign
         node_wrapper.real_node = node
 
         def _chain_provider(from_h, to_h):
