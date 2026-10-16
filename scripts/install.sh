@@ -172,6 +172,42 @@ PY
   fi
 }
 
+# The HD wallet needs seeded FALCON key generation, which liboqs does not have;
+# a small library built from the same sources provides it (native/falcon_seeded).
+# The prebuilt download carries it. Without the prebuilt, or if it is missing
+# from it, it is compiled from the sources the app was installed with, which
+# needs a C compiler (installed here if it has to be). Runs after the app is
+# installed, because the sources come with it.
+finish_falcon_seeded() {
+  local py check
+  py="$(python_cmd)"
+  [ -n "$py" ] || return 0
+  check() {
+    OQS_INSTALL_PATH="$OQS_DIR" "$py" - <<'PY'
+import os, sys
+import lapsecoin_data
+sys.path.insert(0, os.path.join(list(lapsecoin_data.__path__)[0], "src"))
+import falcon_seeded
+sys.exit(0 if falcon_seeded.available() else 1)
+PY
+  }
+  if check; then
+    echo "FALCON seeded key generation is ready."
+    return 0
+  fi
+  if [ "$REQUIRE_PREBUILT" = "1" ]; then
+    echo "The seeded FALCON library is not in the prebuilt download." >&2
+    exit 1
+  fi
+  [ "$TOOLS_READY" = "1" ] || ensure_build_tools
+  if check; then
+    echo "FALCON seeded key generation is ready (built here)."
+  else
+    echo "Could not build the seeded FALCON library. The node still runs on an old key, but a new" >&2
+    echo "recovery-phrase wallet needs it: install a C compiler and re-run this script." >&2
+  fi
+}
+
 # pip cannot replace a package the system installed without a RECORD file
 # (Debian's python3-blinker on Colab and many cloud images), and that one
 # error aborts the whole install, leaving every other dependency uninstalled
@@ -224,6 +260,7 @@ pip_install_with_tools() {
 #        other failure surfaces as-is rather than getting masked. ---
 if pip_install_with_tools lapsecoin; then
   finish_liboqs
+  finish_falcon_seeded
   echo
   echo "Installed. Run: lapsecoin"
   exit 0
@@ -251,5 +288,6 @@ pip_install_with_tools lapsecoin --no-deps
 rm -f "$REQS_TMP" "$REQS_TMP.nolt"
 
 finish_liboqs
+finish_falcon_seeded
 echo
 echo "Installed without libtorrent. Run: lapsecoin"

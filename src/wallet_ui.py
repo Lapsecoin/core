@@ -6,9 +6,7 @@ The private app registers these handlers, handed:
           reads this node's own chain. It answers:
 
             fee_estimate()                    -> fee market dict
-            account(addr, nick=, fees=)
-                                              -> balance, nonce, board_floor, ...
-            profile(addr)                     -> board icon and nickname, or None
+            account(addr, fees=)              -> balance, nonce, board_floor, ...
             submit(tx)                        -> (ok, tx_hash | error)
             address_page(addr, page)          -> one page of history
             board_etag(chunks), board_page(chunks)
@@ -158,13 +156,12 @@ def register_data_api(app, reader, pfx):
     @app.route("/api/state", endpoint=pfx + "api_state")
     def api_state():
         """reader.account() over HTTP: balance, nonce, the board fee floor,
-        and optionally the fee market and a nickname's owner, in one
+        and optionally the fee market, in one
         answer."""
         addr = request.args.get("addr") or None
         if addr is not None and not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
-        nick = (request.args.get("nick") or "")[:16] or None
-        return _json(reader.account(addr, nick=nick, fees=bool(request.args.get("fees"))))
+        return _json(reader.account(addr, fees=bool(request.args.get("fees"))))
 
     @app.route("/api/address/<addr>/page", endpoint=pfx + "api_address_page")
     def api_address_page(addr):

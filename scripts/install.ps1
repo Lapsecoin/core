@@ -222,6 +222,43 @@ function Install-LapseCoin {
         }
     }
 
+    # The HD wallet needs seeded FALCON key generation, which liboqs does not
+    # have; a small library built from the same sources provides it
+    # (native/falcon_seeded). The prebuilt download carries it. Without the
+    # prebuilt, or if it is missing from it, it is built here from the sources
+    # the app was installed with. Runs after the app is installed, because the
+    # sources come with it.
+    function Finish-FalconSeeded {
+        $check = "import os, sys, lapsecoin_data; sys.path.insert(0, os.path.join(list(lapsecoin_data.__path__)[0], 'src')); import falcon_seeded; sys.exit(0 if falcon_seeded.available() else 1)"
+        $env:OQS_INSTALL_PATH = $oqsDir
+        python -c $check
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "FALCON seeded key generation is ready."
+            return
+        }
+        if ($requirePrebuilt) {
+            Write-Error "The seeded FALCON library is not in the prebuilt download."
+            $script:installFailed = $true
+            return
+        }
+        if (-not $script:toolsReady) {
+            Ensure-BuildTools | Out-Null
+            if (-not $script:buildToolsOk) { return }
+        }
+        $src = python -c "import os, lapsecoin_data; print(os.path.join(list(lapsecoin_data.__path__)[0], 'native', 'falcon_seeded'))"
+        $build = Join-Path ([IO.Path]::GetTempPath()) ("falcon-" + [Guid]::NewGuid().ToString("N"))
+        cmake -S $src -B $build "-DCMAKE_INSTALL_PREFIX=$oqsDir"
+        cmake --build $build --config Release
+        cmake --install $build --config Release
+        Remove-Item -Recurse -Force $build -ErrorAction SilentlyContinue
+        python -c $check
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "FALCON seeded key generation is ready (built here)."
+        } else {
+            Write-Warning "Could not build the seeded FALCON library. The node still runs on an old key, but a new recovery-phrase wallet needs it."
+        }
+    }
+
     # --- 2. install the app. Try the full install first; only fall back to
     #        skipping libtorrent if THAT is specifically what failed -- any
     #        other failure surfaces as-is rather than getting masked. ---
@@ -229,6 +266,7 @@ function Install-LapseCoin {
     pip install lapsecoin 2>&1 | Tee-Object -FilePath $installLog
     if ($LASTEXITCODE -eq 0) {
         Finish-Liboqs
+        Finish-FalconSeeded
         Write-Host ""
         Write-Host "Installed. Run: lapsecoin"
         Remove-Item $installLog -ErrorAction SilentlyContinue
@@ -249,6 +287,7 @@ function Install-LapseCoin {
         pip install lapsecoin 2>&1 | Tee-Object -FilePath $installLog
         if ($LASTEXITCODE -eq 0) {
             Finish-Liboqs
+            Finish-FalconSeeded
             Write-Host ""
             Write-Host "Installed. Run: lapsecoin"
             Remove-Item $installLog -ErrorAction SilentlyContinue
@@ -283,6 +322,7 @@ function Install-LapseCoin {
     Remove-Item $reqsTmp, $reqsNoLt -ErrorAction SilentlyContinue
 
     Finish-Liboqs
+    Finish-FalconSeeded
     Write-Host ""
     Write-Host "Installed without libtorrent. Run: lapsecoin"
 }

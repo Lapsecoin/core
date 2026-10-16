@@ -178,3 +178,42 @@ class TestTheQuestionWithoutAWindow:
         import migrate_ui
         monkeypatch.setattr(sys, "argv", ["lapsecoin", "--no-gui"])
         assert migrate_ui.ask([]) == ("fresh", None)
+
+
+class TestOldInstallMovesToARecoveryPhrase:
+    """The single .exe's folder is copied into the installed build's data
+    folder; its lapsecoin_key.json there is what makes the node move to a
+    recovery phrase at its first start."""
+
+    def _old_install(self, folder):
+        import crypto
+        sk, pk = crypto.generate_keypair()
+        crypto.save_key(os.path.join(folder, "lapsecoin_key.json"), sk, pk, "old passphrase")
+        _write(folder, "base_gas.key", "gas")
+        return crypto.public_key_to_address(pk)
+
+    def test_the_old_key_is_found_and_copied_and_means_move_to_a_phrase(self, tmp_path, monkeypatch):
+        import wallet
+        old, new = tmp_path / "Downloads" / "lapsecoin", tmp_path / "data"
+        old.mkdir(parents=True)
+        self._old_install(str(old))
+        assert datadir.find_legacy_folders(str(tmp_path)) == [str(old)]
+        copied = datadir.migrate(str(old), str(new))
+        assert {"lapsecoin_key.json", "base_gas.key"} <= set(copied)
+        source = wallet.find_source(wallet_file=str(new / "lapsecoin_wallet.json"),
+                                    legacy_file=str(new / "lapsecoin_key.json"))
+        assert source.kind == "legacy"
+
+    def test_a_folder_with_only_a_recovery_phrase_wallet_is_found_and_copied_too(self, tmp_path):
+        old, new = tmp_path / "Desktop" / "ln", tmp_path / "data"
+        old.mkdir(parents=True)
+        _write(str(old), "lapsecoin_wallet.json", "{}")
+        assert datadir.find_legacy_folders(str(tmp_path)) == [str(old)]
+        assert "lapsecoin_wallet.json" in datadir.migrate(str(old), str(new))
+
+    def test_the_old_folder_is_left_as_it_was(self, tmp_path):
+        old, new = tmp_path / "old", tmp_path / "data"
+        old.mkdir()
+        self._old_install(str(old))
+        datadir.migrate(str(old), str(new))
+        assert (old / "lapsecoin_key.json").exists()      # a copy, never a move

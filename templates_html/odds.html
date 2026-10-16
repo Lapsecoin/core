@@ -84,7 +84,7 @@
     {% set prev = chart.points[loop.index0 - 1] %}
     <line x1="{{ prev.x }}" y1="{{ prev.y }}" x2="{{ p.x }}" y2="{{ p.y }}"
           stroke="{{ p.color }}" stroke-width="1.75">
-      <title>Block {{ p.height }}: {{ "%.1f"|format(p.seconds) }}s{{ ", " ~ p.nick ~ " (" ~ p.builder ~ ")" if p.nick else (", " ~ p.builder if p.builder) }}{{ " (off scale, clipped to the edge)" if p.clipped }}</title>
+      <title>Block {{ p.height }}: {{ "%.1f"|format(p.seconds) }}s{{ ", " ~ p.builder if p.builder }}{{ " (off scale, clipped to the edge)" if p.clipped }}</title>
     </line>
     {% endif %}
     {% endfor %}
@@ -123,12 +123,11 @@
     <span class="lg" tabindex="0">
       <span class="lg-dot" style="background:{{ entry.color }}"></span>
       {% if entry.label %}
-        {% if entry.nick %}<span class="lg-name">{{ entry.nick }}</span>
-        {% else %}<span class="lg-name hash-short">{{ entry.label[:10] }}&hellip;</span>{% endif %}
+        <span class="lg-name hash-short">{{ entry.label[:10] }}&hellip;</span>
       {% else %}<span class="lg-name">Other</span>{% endif %}
       <span class="n">({{ entry.count }})</span>
       <span class="lg-pop" role="tooltip">
-        <span class="lg-who">{% if entry.label %}{{ entry.nick or "Builder" }}{% else %}All other builders{% endif %}</span>
+        <span class="lg-who">{% if entry.label %}Builder{% else %}All other builders{% endif %}</span>
         {% if entry.label %}<span class="lg-addr">{{ entry.label }}</span>{% endif %}
         <span class="lg-sub">{{ entry.count }} of {{ entry.total }} blocks</span>
         {% if entry.machines %}
@@ -151,12 +150,9 @@
   function fmt1(n) { return n.toFixed(1); }
   function fmt0(n) { return Math.round(n); }
 
-  // A nickname is free-form user text (see api.py's build_board_body),
-  // unlike an address (a fixed BIP39 word list, no special characters
-  // possible), so it's the one thing here that has to be escaped before
-  // going into innerHTML below -- the server-rendered legend gets this
-  // for free from Jinja's own auto-escaping, this JS-rebuilt one (the
-  // live /api/odds refresh) does not.
+  // Escaped before it goes into innerHTML below: the server-rendered legend
+  // gets that from Jinja's own auto-escaping, this JS-rebuilt one (the live
+  // /api/odds refresh) does not.
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -305,8 +301,7 @@
       const x = xOf(chart, p.idx);
       if (i > 0) {
         const prev = chart.points[i - 1];
-        const label = p.nick ? ", " + escapeHtml(p.nick) + " (" + escapeHtml(p.builder) + ")"
-                     : (p.builder ? ", " + escapeHtml(p.builder) : "");
+        const label = p.builder ? ", " + escapeHtml(p.builder) : "";
         const off = p.clipped ? " (off scale, clipped to the edge)" : "";
         s += `<line x1="${prevX}" y1="${prev.y}" x2="${x}" y2="${p.y}" stroke="${p.color}" stroke-width="1.75">` +
              `<title>Block ${p.height}: ${fmt1(p.seconds)}s${label}${off}</title></line>`;
@@ -394,17 +389,16 @@
     return legend.map(function (entry) {
       let name = "Other";
       if (entry.label) {
-        name = entry.nick ? escapeHtml(entry.nick)
-                          : escapeHtml(entry.label.slice(0, 10)) + "&hellip;";
+        name = escapeHtml(entry.label.slice(0, 10)) + "&hellip;";
       }
-      const who = entry.label ? escapeHtml(entry.nick || "Builder") : "All other builders";
+      const who = entry.label ? "Builder" : "All other builders";
       const rows = (entry.machines || []).map(function (m) {
         return `<span class="lg-row"><span>${escapeHtml(m.name)}</span>` +
                `<span>${m.blocks}</span><span>${Math.round(m.pace)}s</span></span>`;
       }).join("");
       const head = rows ? `<span class="lg-head"><span>Machine, fastest first</span><span>Blocks</span><span>Median</span></span>` : "";
       return `<span class="lg" tabindex="0"><span class="lg-dot" style="background:${entry.color}"></span>` +
-             `<span class="lg-name${entry.label && !entry.nick ? " hash-short" : ""}">${name}</span>` +
+             `<span class="lg-name${entry.label ? " hash-short" : ""}">${name}</span>` +
              `<span class="n">(${entry.count})</span>` +
              `<span class="lg-pop" role="tooltip"><span class="lg-who">${who}</span>` +
              (entry.label ? `<span class="lg-addr">${escapeHtml(entry.label)}</span>` : "") +

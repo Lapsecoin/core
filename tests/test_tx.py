@@ -532,12 +532,10 @@ class TestBoardFeeFloor:
         assert ok is True, err
 
 
-class TestBoardNicknameConsensus:
-    """_check_nickname_available: a board post claiming a name
-    state.nicknames already shows owned by a different address is
-    rejected by validate() itself, not just hidden at display time (see
-    api.py's own docstrings on why the two used to be separate and now
-    read the same registry)."""
+class TestBoardPostsWithAProfileHeader:
+    """A board post that still carries the old profile header (icon and
+    nickname) validates like any other post, and state keeps its old,
+    now inert registry of who claimed a name first."""
 
     def _post(self, sender, s, nick, fee=1000):
         outputs = [{"to": address((sender + 1) % 3), "amount": 1}]

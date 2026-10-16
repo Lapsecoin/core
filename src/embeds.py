@@ -28,9 +28,8 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 
 
 def _clean(text, limit):
-    """One line of plain text, cut at limit with an ellipsis. Board posts and
-    nicknames come from anyone, so control characters and runs of space
-    never reach a tag."""
+    """One line of plain text, cut at limit with an ellipsis. Board posts
+    come from anyone, so control characters and runs of space never reach a tag."""
     text = _CONTROL.sub(" ", str(text)).strip()
     text = re.sub(r" {2,}", " ", text)
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
@@ -129,7 +128,7 @@ def address(addr, balance, tx_count):
 
 def balance_lookup(holder_count):
     return _embed("Balance lookup",
-                  "Look up any address or board nickname.",
+                  "Look up any address.",
                   f"{_count(holder_count, 'holder')} on chain" if holder_count else "")
 
 
@@ -180,7 +179,7 @@ def board(post_count, rows):
     lines = [f"{_count(post_count, 'post')} on chain"]
     for row in rows:
         if not row.get("reply_ref"):
-            who = row.get("nick") or short_addr(row["from"])
+            who = short_addr(row["from"])
             lines.append(f"{who}: {row['text']}")
             break
     return _embed("Board", *lines)

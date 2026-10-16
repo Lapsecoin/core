@@ -175,14 +175,13 @@ class LocalReader:
 
     # One account
 
-    def account(self, addr=None, *, nick=None, fees=False, fresh=False):
+    def account(self, addr=None, *, fees=False, fresh=False):
         """Everything a wallet page needs to know about one address in a
         single answer, so a remote reader costs one request, not four.
 
         Always carries board_floor. With addr: balance and nonce (the
         highest nonce either confirmed or still pending, so the next
-        transaction is nonce + 1). With nick: nick_owner, the address that
-        owns it or None. With fees: the fee_estimate dict. `fresh` is for
+        transaction is nonce + 1). With fees: the fee_estimate dict. `fresh` is for
         readers that keep answers for a while; this one always reads the
         live state.
         """
@@ -193,8 +192,6 @@ class LocalReader:
             out["balance"] = v.state.get_balance(addr)
             out["nonce"] = max(v.state.get_nonce(addr),
                                node.mempool.pending_nonce(addr))
-        if nick:
-            out["nick_owner"] = board_view._nickname_owned_by(v.state, nick)
         if fees:
             out["fees"] = fee_estimate(node)
         return out
@@ -236,7 +233,7 @@ class LocalReader:
 
     def _board_snapshot(self):
         # The heavy part of the board (a scan of the whole chain plus the
-        # vote and profile pass) only changes when a block lands or a
+        # vote pass) only changes when a block lands or a
         # board/vote tx enters or leaves the mempool, so it is computed
         # once per such state and every viewer, poll and scroll chunk
         # reuses it.
@@ -245,14 +242,9 @@ class LocalReader:
         if cached is not None and self._board_cache["key"] == key:
             return key, cached
         node = self.node
-        value = board_view.build_board_snapshot(
-            node.view.chain, node.view.state.nicknames, node.mempool)
+        value = board_view.build_board_snapshot(node.view.chain, node.mempool)
         self._board_cache["key"], self._board_cache["value"] = key, value
         return key, value
-
-    def profile(self, addr):
-        """addr's current board icon and nickname, or None."""
-        return self._board_snapshot()[1][2].get(addr)
 
     def board_etag(self, chunks):
         key = self._board_state_key()
