@@ -77,6 +77,7 @@ class TestPool:
     def test_prune_uses_wall_clock_age(self, monkeypatch):
         mp = mempool_mod.Mempool()
         s = state_mod.State()
+        seed_balance(s, 3, 100.0)       # age alone is under test, so the sender can pay
         mp.add(tx_from(3))
         now = time.time()
         monkeypatch.setattr(mempool_mod.time, "time", lambda: now + 23 * 3600)
