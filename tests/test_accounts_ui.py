@@ -310,3 +310,17 @@ def test_a_single_key_node_has_no_prompts(tmp_path, monkeypatch):
     node = WalletNode(ChainState.from_genesis(), wallet_mod.Wallet(str(tmp_path / "k.json"), pk))
     html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/addresses").get_data(as_text=True)
     assert "<dialog" not in html and 'id="new-btn"' not in html
+
+
+def test_a_new_address_can_be_named_in_the_prompt(world):
+    html = submit(world.client, "/addresses/new", page="/addresses", passphrase=PASS,
+                  label="rig1").get_data(as_text=True)
+    assert "Added address 2 named rig1" in html
+    assert world.wf.account(2)["label"] == "rig1"
+
+
+def test_send_asks_for_the_passphrase_in_a_prompt_not_in_the_form(world):
+    html = page(world.client, "/send")
+    form = html.split('<form method="POST" enctype', 1)[1].split("</form>", 1)[0]
+    assert 'type="password"' not in form and 'name="passphrase"' in form
+    assert 'id="dlg-pass"' in html and 'id="dlg-pass-input"' in html

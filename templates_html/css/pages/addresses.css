@@ -44,24 +44,6 @@ table.acct { width: 100%; min-width: 0; border-collapse: separate; border-spacin
 .tag { display: inline-block; margin-left: .35rem; padding: .05rem .45rem; border: 1px solid var(--rule); border-radius: 999px; font-size: .7rem; color: var(--ink-dim); vertical-align: middle; }
 .nm-text { font-weight: 500; }
 
-/* the prompt */
-dialog.prompt {
-  width: min(24rem, calc(100vw - 2rem)); padding: 1.1rem 1.2rem 1rem; border: 1px solid var(--rule);
-  border-radius: var(--radius); background: var(--surface); color: var(--ink);
-  box-shadow: 0 12px 40px rgb(var(--ink-rgb) / .22);
-}
-dialog.prompt.wide { width: min(34rem, calc(100vw - 2rem)); }
-dialog.prompt::backdrop { background: rgb(var(--ink-rgb) / .35); }
-dialog.prompt h3 { margin: 0 0 .35rem; font-size: 1rem; font-weight: 650; }
-dialog.prompt label { display: block; margin: .8rem 0 .3rem; font-size: .82rem; font-weight: 500; }
-dialog.prompt input[type="password"] { width: 100%; }
-dialog.prompt .hint { margin: .3rem 0 0; }
-dialog.prompt .once { margin-left: .5rem; font-size: .75rem; font-weight: 400; color: var(--ink-dim); }
-dialog.prompt textarea { width: 100%; min-height: 0; margin-top: .6rem; font-family: var(--mono); font-size: .78rem; line-height: 1.5; resize: none; overflow-wrap: anywhere; }
-dialog.prompt .addr-mono { font-family: var(--mono); font-size: .72rem; overflow-wrap: anywhere; }
-dialog.prompt code { font-family: var(--mono); font-size: .76rem; }
-.prompt-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
-
 @media (max-width: 900px) {
   .acct-scroll, .alert ~ .acct-panel .acct-scroll { max-height: none; }
   .acct .addr-mono { font-size: .7rem; }

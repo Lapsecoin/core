@@ -52,12 +52,9 @@
         <input type="text" name="memo" id="memo-input" value="{{ memo_value }}" placeholder="What this payment is for">
         <div class="hint">Public and permanent. Not encrypted.</div>
       </div>
+      <input type="hidden" name="passphrase" value="">
       <div class="submit-row">
-        <div class="field">
-          <label for="passphrase" title="Fee is set automatically to whatever clears the next block, never more.">Your signing passphrase</label>
-          <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase">
-        </div>
-        <button type="submit" id="lapse-send">Sign &amp; Send</button>
+        <button type="submit" id="lapse-send" title="Asks for your passphrase. The fee is set automatically to whatever clears the next block, never more.">Sign &amp; Send</button>
       </div>
     </form>
   </section>
@@ -124,11 +121,8 @@
                placeholder="0x..." autocomplete="off" spellcheck="false">
         <p class="hint" id="base-quote"></p>
       </div>
+      <input type="hidden" name="passphrase" value="">
       <div class="submit-row">
-        <div class="field">
-          <label for="base-passphrase">Your signing passphrase</label>
-          <input type="password" id="base-passphrase" name="passphrase" placeholder="Passphrase">
-        </div>
         <button type="submit" id="base-send" disabled>Sign &amp; Send</button>
       </div>
     </form>
@@ -152,7 +146,51 @@
 {% endif %}
 </div>
 
+<dialog id="dlg-pass" class="prompt">
+  <form method="dialog" id="dlg-pass-form">
+    <h3>Sign &amp; Send</h3>
+    <p class="hint">Your wallet passphrase signs this. The fee is set automatically to whatever clears the next block, never more.</p>
+    <label for="dlg-pass-input">Wallet passphrase</label>
+    <input type="password" id="dlg-pass-input" autocomplete="current-password" required>
+    <div class="prompt-actions">
+      <button type="button" class="btn-ghost" id="dlg-pass-cancel">Cancel</button>
+      <button type="submit">Sign &amp; Send</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
+(function () {
+  // The passphrase is asked in a prompt when a send is submitted, so the form
+  // itself stays short. The forms still post it as the same "passphrase" field.
+  const dlg = document.getElementById("dlg-pass");
+  const input = document.getElementById("dlg-pass-input");
+  let pending = null;
+  document.querySelectorAll("form").forEach(function (form) {
+    if (!form.querySelector('input[name="passphrase"]')) return;
+    form.addEventListener("submit", function (e) {
+      if (form.dataset.signed) return;               // the one that follows the prompt
+      e.preventDefault();
+      pending = form;
+      input.value = "";
+      dlg.showModal();
+      input.focus();
+    });
+  });
+  document.getElementById("dlg-pass-cancel").addEventListener("click", function () {
+    pending = null; input.value = ""; dlg.close();
+  });
+  dlg.addEventListener("click", function (e) { if (e.target === dlg) { pending = null; input.value = ""; dlg.close(); } });
+  document.getElementById("dlg-pass-form").addEventListener("submit", function () {
+    if (!pending || !input.value) return;
+    pending.querySelector('input[name="passphrase"]').value = input.value;
+    input.value = "";
+    pending.dataset.signed = "1";
+    const f = pending; pending = null;
+    f.requestSubmit(f.querySelector('button[type="submit"]'));
+  });
+})();
+
 (function () {
   // Bytes, not characters: the server caps memo by its UTF-8 byte length
   // (see tx.MAX_MEMO_BYTES), and one emoji or accented character can cost

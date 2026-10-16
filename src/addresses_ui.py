@@ -88,10 +88,14 @@ def register(app, reader, node, csrf_token):
             return _done({"alert_err": why})
         try:
             entry = wf.new_account(kek)
+            label = request.form.get("label", "").strip()
+            if label:
+                wf.set_label(entry["index"], label)
         except (OSError, ValueError, WalletFileError) as e:
             log.warning("[wallet] could not add an address: %s", e)
             return _done({"alert_err": f"Could not add an address: {e}"})
-        return _done({"alert_ok": f"Added address {entry['index']}: {entry['address']}"})
+        named = f" named {label}" if label else ""
+        return _done({"alert_ok": f"Added address {entry['index']}{named}: {entry['address']}"})
 
     @app.route("/addresses/label", methods=["POST"], endpoint="addresses_label")
     def addresses_label():

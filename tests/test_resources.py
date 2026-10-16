@@ -42,7 +42,8 @@ def test_a_nuitka_build_is_found_by_its_marker_and_keeps_files_beside_the_module
 def test_liboqs_shipped_with_a_build_is_pointed_at_before_it_is_imported(monkeypatch, tmp_path):
     (tmp_path / "_oqs" / "bin").mkdir(parents=True)
     monkeypatch.setattr(resources, "bundle_dir", lambda: str(tmp_path))
-    monkeypatch.delenv("OQS_INSTALL_PATH", raising=False)
+    monkeypatch.setenv("OQS_INSTALL_PATH", "x")   # so the value is restored afterwards
+    monkeypatch.delenv("OQS_INSTALL_PATH")
     assert resources.prepare_oqs() is True
     assert os.environ["OQS_INSTALL_PATH"] == str(tmp_path / "_oqs")
 

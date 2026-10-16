@@ -270,5 +270,56 @@ def test_export_accepts_the_name(home):
     assert out.returncode == 0, out.stderr
     text = [ln for ln in out.stdout.splitlines() if ln.startswith("lc1-")][0]
     assert wallet.unlock(wallet.find_source(text), BOX)[0].addr == ADDR1
-    bad = run_main(home, "--export", "--account", "nobody", env=env)
-    assert bad.returncode != 0 and "shop" in bad.stderr
+
+
+# -- --export NAME makes the address when there is none ---------------------------------
+
+def test_export_by_a_new_name_creates_that_address_and_keeps_stdout_clean(home):
+    wallet.create_wallet(PASS, phrase=PHRASE)
+    env = {wallet.PASSPHRASE_ENV: PASS, wallet.EXPORT_PASSPHRASE_ENV: BOX}
+    out = run_main(home, "--export", "rig1", env=env)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1].startswith("lc1-")
+    assert [ln for ln in out.stdout.splitlines() if not ln.startswith("lc1-") and ln.strip()
+            ] == [ln for ln in out.stdout.splitlines() if "faulthandler" in ln]
+    assert "Created address 1 named 'rig1'" in out.stderr and ADDR1 in out.stderr
+    wf = WalletFile.load(str(home / wallet.WALLET_FILE))
+    assert wf.account(1)["label"] == "rig1" and wf.address(1) == ADDR1
+
+
+def test_two_rigs_get_two_addresses_and_a_rig_keeps_its_own(home):
+    wallet.create_wallet(PASS, phrase=PHRASE)
+    env = {wallet.PASSPHRASE_ENV: PASS, wallet.EXPORT_PASSPHRASE_ENV: BOX}
+    keys = {}
+    for name in ("rig1", "rig2", "RIG1"):
+        out = run_main(home, "--export", name, env=env)
+        assert out.returncode == 0, out.stderr
+        keys[name] = [ln for ln in out.stdout.splitlines() if ln.startswith("lc1-")][0]
+    addr = lambda n: wallet.unlock(wallet.find_source(keys[n]), BOX)[0].addr
+    assert addr("rig1") != addr("rig2")
+    assert addr("RIG1") == addr("rig1")                  # same name: the same address again
+    assert [a["index"] for a in WalletFile.load(str(home / wallet.WALLET_FILE)).accounts] == [0, 1, 2]
+
+
+def test_export_without_a_value_still_uses_account(home):
+    w, kek, _ = wallet.create_wallet(PASS, phrase=PHRASE)
+    w.walletfile.new_account(kek)
+    env = {wallet.PASSPHRASE_ENV: PASS, wallet.EXPORT_PASSPHRASE_ENV: BOX}
+    out = run_main(home, "--export", "--account", "1", env=env)
+    assert out.returncode == 0, out.stderr
+    text = [ln for ln in out.stdout.splitlines() if ln.startswith("lc1-")][0]
+    assert wallet.unlock(wallet.find_source(text), BOX)[0].addr == ADDR1
+
+
+def test_a_number_that_is_not_there_is_not_created(home):
+    wallet.create_wallet(PASS, phrase=PHRASE)
+    env = {wallet.PASSPHRASE_ENV: PASS, wallet.EXPORT_PASSPHRASE_ENV: BOX}
+    out = run_main(home, "--export", "7", env=env)
+    assert out.returncode != 0 and "account 7" in out.stderr
+    assert len(WalletFile.load(str(home / wallet.WALLET_FILE)).accounts) == 1
+
+
+def test_the_node_does_not_invent_an_address_from_an_unknown_name(home):
+    wallet.create_wallet(PASS, phrase=PHRASE)
+    out = run_main(home, "--new-address", "--account", "nobody", env={wallet.PASSPHRASE_ENV: PASS})
+    assert out.returncode != 0 and "no address is named" in out.stderr
