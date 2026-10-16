@@ -35,25 +35,25 @@
       </div>
       {% endif %}
       <div class="field">
-        <label for="outputs">Recipients and amounts</label>
-        <textarea name="outputs" id="outputs" rows="4" placeholder="word1.word2...word12,1000&#10;burn,500">{{ outputs_value }}</textarea>
-        <div class="hint">One <code>address,amount</code> per line. Only lines changed to a nonzero amount get sent.
-          Use <code>burn</code> in place of an address to destroy the amount instead of paying anyone.</div>
-        <div class="upload">
-          <label for="csv_file">Or upload a CSV file</label>
-          <input type="file" id="csv_file" name="csv_file" accept=".csv,.txt">
-        </div>
-      </div>
-      <div class="field memo-field">
         <div class="label-row">
-          <label for="memo-input" title="Plaintext, permanent, visible to everyone; not encrypted.">Memo, optional</label>
-          <span class="hint" id="memo-counter"></span>
+          <label for="outputs">Recipients and amounts</label>
+          <span class="upload">
+            <label for="csv_file">Or upload a CSV file</label>
+            <input type="file" id="csv_file" name="csv_file" accept=".csv,.txt">
+          </span>
         </div>
-        <input type="text" name="memo" id="memo-input" value="{{ memo_value }}" placeholder="What this payment is for">
-        <div class="hint">Public and permanent. Not encrypted.</div>
+        <textarea name="outputs" id="outputs" rows="3" placeholder="word1.word2...word12,1000&#10;burn,500">{{ outputs_value }}</textarea>
+        <div class="hint">One <code>address,amount</code> per line; lines with a zero amount are skipped. <code>burn</code> in place of an address destroys the amount.</div>
       </div>
       <input type="hidden" name="passphrase" value="">
-      <div class="submit-row">
+      <div class="submit-row memo-row">
+        <div class="field memo-field">
+          <div class="label-row">
+            <label for="memo-input" title="Plaintext, permanent, visible to everyone; not encrypted.">Memo, optional <span class="memo-note">public and permanent, not encrypted</span></label>
+            <span class="hint" id="memo-counter"></span>
+          </div>
+          <input type="text" name="memo" id="memo-input" value="{{ memo_value }}" placeholder="What this payment is for">
+        </div>
         <button type="submit" id="lapse-send" title="Asks for your passphrase. The fee is set automatically to whatever clears the next block, never more.">Sign &amp; Send</button>
       </div>
     </form>
@@ -115,16 +115,16 @@
           </div>
         </div>
       </div>
-      <div class="field">
-        <label for="base-to">Destination address</label>
-        <input type="text" id="base-to" name="base_to" value="{{ base_to_value }}"
-               placeholder="0x..." autocomplete="off" spellcheck="false">
-        <p class="hint" id="base-quote"></p>
-      </div>
       <input type="hidden" name="passphrase" value="">
       <div class="submit-row">
+        <div class="field">
+          <label for="base-to">Destination address</label>
+          <input type="text" id="base-to" name="base_to" value="{{ base_to_value }}"
+                 placeholder="0x..." autocomplete="off" spellcheck="false">
+        </div>
         <button type="submit" id="base-send" disabled>Sign &amp; Send</button>
       </div>
+      <p class="hint" id="base-quote"></p>
     </form>
   </section>
   <aside class="panel panel-side">
