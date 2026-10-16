@@ -380,3 +380,6 @@ button:disabled, button:disabled:hover {
 .pager { display: flex; flex-wrap: wrap; gap: .8rem; align-items: baseline; margin-top: .25rem; font-size: .9rem; }
 .pager-current { font-weight: 650; }
 .pager-ellipsis { color: rgb(var(--ink-rgb) / .35); }
+
+/* The lock page: nothing else is open yet, so the menu is not shown. */
+.masthead.locked .mainnav, .masthead.locked .nav-toggle, .masthead.locked .nav-panel { display: none; }

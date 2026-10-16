@@ -509,7 +509,21 @@ def main():
             else:
                 print("Not installing. Re-run with --no-gui to start headless.")
                 sys.exit(1)
-    if use_gui:
+    # With the window up, a node whose address is public starts at once and
+    # asks for the passphrase on its private pages instead (unlock_ui.py).
+    # A passphrase given in the environment, or a start that has to show a
+    # recovery phrase or make a new wallet, asks first as before.
+    early_wallet = None
+    if use_gui and not os.environ.get("LAPSECOIN_PASSPHRASE"):
+        try:
+            early_wallet = wallet_mod.open_locked(
+                wallet_mod.find_source(args.key), args.account)
+        except ValueError:
+            early_wallet = None      # the ordinary start below says what is wrong
+    if early_wallet is not None:
+        wallet, kek, passphrase = early_wallet, None, None
+        log.info("[startup] running as %s until the passphrase is entered", wallet.addr)
+    elif use_gui:
         env_passphrase = os.environ.get("LAPSECOIN_PASSPHRASE") or None
         wallet, kek, passphrase = gui.startup_gui(
             args.key, args.account, env_passphrase)
@@ -643,6 +657,7 @@ def main():
         node = Node(wallet, gossip, syncer, pool, net_in_q, db_path=args.db)
         node.background_jobs = [j for j in (getattr(wallet, "migration", None),
                                             getattr(wallet, "discovery", None)) if j]
+        node.needs_unlock = kek is None
         node_wrapper.real_node = node
 
         def _chain_provider(from_h, to_h):
@@ -684,7 +699,8 @@ def main():
         # on first start. It holds nothing until funded, so a fresh node is
         # not made to sit locked for lack of an address nobody has used.
         node.base_wallet_path = base_wallet.default_path()
-        base_wallet.ensure(node.base_wallet_path, kek)
+        if kek is not None:
+            base_wallet.ensure(node.base_wallet_path, kek)
         # Answers fee requests while the gas wallet holds enough to pay for
         # one; an operator who does not want to simply does not fund it.
         gas_worker.GasWorker(node, gas_worker.LiveIO(node)).start()

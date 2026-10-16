@@ -61,7 +61,7 @@
   {{ entry('fees', '/fees', 'fees', 'Fees', 'Request and track a fee') }}
 {% endcall %}
 {%- endmacro %}
-<header class="masthead">
+<header class="masthead{% if lock_screen %} locked{% endif %}">
   <div class="masthead-inner">
     <div class="live-status" id="live-status">{{ live_status or "" }}</div>
     <div class="corner-links">

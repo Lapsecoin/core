@@ -161,6 +161,7 @@ from board_view import (BOARD_MEMO_TAG, parse_board_body, build_board_body,  # n
                         _board_posts, _board_votes,
                         BOARD_THREADS_PER_CHUNK)
 import oblivious as oblivious_mod
+import unlock_ui
 from wallet_ui import (register_address_page, register_board_pages,
                        register_data_api, register_wallet_routes)
 
@@ -1898,6 +1899,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
                            base=BaseSend(node))
     fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node))
+    unlock_ui.register(app, node, csrf_token, limiter)
     addresses_ui.register(app, local_reader_for(node), node, csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])

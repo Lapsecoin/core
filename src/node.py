@@ -285,7 +285,12 @@ class Node:
         self._draw_closes = 0.0
         self.running      = False
         self._kek         = None
+        # True while the node runs without its passphrase (see wallet.open_locked):
+        # the private pages ask for it first, and the jobs that need the key wait.
+        self.needs_unlock = False
         self.background_jobs = []   # objects with start(node); run once the loop is up
+        self._jobs_lock   = threading.Lock()
+        self._jobs_up     = False
         self._loop_thread = None
         # Set by _handle_inbound_block when a peer shows evidence of a
         # higher chain: the address to sync from next. Evidence, not proof
@@ -758,8 +763,33 @@ class Node:
             threading.Thread(target=self._calibrate_vdf, daemon=True,
                              name="vdf-calibrate").start()
 
-    def start(self, kek):
-        self._kek         = kek
+    def unlock(self, kek, jobs=()):
+        """Give a node that started without its passphrase the key. Jobs that
+        were waiting for it start now, or with the loop if it is not up yet;
+        each starts exactly once."""
+        with self._jobs_lock:
+            self._kek = kek
+            self.needs_unlock = False
+            self.background_jobs.extend(jobs)
+            up = self._jobs_up
+        if up:
+            for job in jobs:
+                job.start(self)
+
+    def unlock_with_passphrase(self, passphrase):
+        """Check the passphrase, then unlock. ValueError (or WalletFileError)
+        for a wrong one, and the node stays locked."""
+        import base_wallet
+        import wallet as wallet_mod
+        kek, jobs = wallet_mod.unlock_open(self.wallet, passphrase)
+        path = getattr(self, "base_wallet_path", None)
+        if path:
+            base_wallet.ensure(path, kek)
+        self.unlock(kek, jobs)
+
+    def start(self, kek=None):
+        if kek is not None:
+            self._kek     = kek
         self.running      = True
         self._loop_thread = threading.current_thread()
         log.info("[startup] node ready, our address is %s", self.addr)
@@ -767,7 +797,10 @@ class Node:
         self._load_mempool()
         threading.Thread(target=self._mempool_saver, daemon=True,
                          name="mempool-save").start()
-        for job in self.background_jobs:
+        with self._jobs_lock:
+            self._jobs_up = True
+            jobs = list(self.background_jobs)
+        for job in jobs:
             job.start(self)
         try:
             while self.running:

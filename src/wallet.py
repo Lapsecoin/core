@@ -229,6 +229,37 @@ def unlock(source, passphrase, account=0):
     raise ValueError("nothing to unlock")
 
 
+def open_locked(source, account=0):
+    """The wallet for a start that does not need the passphrase yet, or None
+    when it does. A recovery-phrase wallet and a pasted old key both carry
+    their public key in the open, so the node can run as that address and take
+    the passphrase later. Everything else needs it now: an lc1- text hides its
+    own address in the sealed seed, an old key file starts by making a new
+    wallet (a new address and a phrase to show), and a wallet whose phrase was
+    never acknowledged has to show it first."""
+    kind, value = source
+    if kind == "text":
+        return TextWallet(value)
+    if kind == "wallet":
+        wf = WalletFile.load(value)
+        if wf.phrase_shown:
+            return PhraseWallet(wf, account)
+    return None
+
+
+def unlock_open(w, passphrase):
+    """(kek, jobs) for a wallet that was opened without its passphrase. The
+    jobs are the background work that was waiting for it. ValueError or
+    WalletFileError for a wrong passphrase."""
+    kek = w.derive_kek(passphrase)
+    if isinstance(w, PhraseWallet):
+        w.walletfile.verify(kek)
+        _attach_jobs(w, kek, passphrase)
+        return kek, [j for j in (w.migration, w.discovery) if j]
+    crypto.decrypt_secret_key_data(w._data, kek)
+    return kek, []
+
+
 def _attach_jobs(w, kek, passphrase, legacy_file=LEGACY_KEY_FILE):
     """A wallet that still has an old key to move (a start that was cut short
     leaves the old file beside the new one), a move waiting to confirm, or a

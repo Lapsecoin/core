@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="/css/pages/wallet.css?v={{ local_version }}">{% endblock %}
+{% block content %}
+<div class="wl">
+<h2>Unlock</h2>
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+<p class="wl-lede">Your node is running. Enter your passphrase to switch on the rest.</p>
+<section class="panel">
+  <div class="panel-head">The passphrase starts</div>
+  <ul class="panel-body">
+    {% for item in work %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+  <form method="POST" action="/unlock" autocomplete="off" class="panel-body">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next_path }}">
+    <div class="submit-row">
+      <div class="field">
+        <label for="passphrase">Your passphrase</label>
+        <input type="password" id="passphrase" name="passphrase" placeholder="Passphrase" required autofocus>
+      </div>
+      <button type="submit" style="flex:0 0 auto">Unlock</button>
+    </div>
+  </form>
+</section>
+</div>
+{% endblock %}
