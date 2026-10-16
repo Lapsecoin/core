@@ -251,15 +251,57 @@ class Mempool:
             key=lambda t: t["nonce"],
         )
         for t in pending:
-            probe.apply_tx(t)
+            try:
+                probe.apply_tx(t)
+            except ValueError:
+                # One the chain can no longer fund (see prune_stale). Nothing
+                # after it can follow, and a new submission must not fail on
+                # an error that belongs to a transaction already in the pool.
+                break
         return probe
 
     def prune_stale(self, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
         """Evict txs that can never become valid: a nonce already superseded
-        on chain, or simply too old. Returns list of pruned hashes."""
+        on chain, too old, or no longer payable. Returns list of pruned hashes.
+
+        The last one matters more than it looks. Every tx here was payable
+        from confirmed state plus its sender's earlier pending txs when it was
+        admitted, and block building (assemble) relies on that without
+        checking funds again. Two ordinary things break it: a reorg that
+        removes the money a tx was spending, and a conflicting tx of the
+        sender's at an earlier nonce being confirmed instead of the one this
+        pool held (a double-spend attempt, or just two wallets racing). The
+        tx after it is then unpayable but still in step on nonce, so nothing
+        above removes it, and every block built from this pool would fail its
+        own validation, for as long as it stayed: a sender could stall every
+        node holding it for the full ttl for the price of two transactions."""
         now = time.time()
         pruned = [h for h, e in list(self._pool.items())
                   if e.tx["nonce"] <= state.get_nonce(e.tx["from"])
                   or now - e.entered > ttl_seconds]
         self.remove_many(pruned)
-        return pruned
+        unpayable = self._unpayable(state)
+        self.remove_many(unpayable)
+        return pruned + unpayable
+
+    def _unpayable(self, state):
+        """Hashes of pending txs the state cannot pay for, with every later
+        one from the same sender (each depends on the one before). The
+        signature was checked on the way in and has not changed."""
+        by_sender = {}
+        for h, e in self._pool.items():
+            by_sender.setdefault(e.tx["from"], []).append((e.tx["nonce"], h, e.tx))
+        bad = []
+        for items in by_sender.values():
+            items.sort(key=lambda item: item[0])
+            view = _Overlay(state)
+            broken = False
+            for _nonce, h, t in items:
+                if not broken:
+                    ok, _ = tx_mod.validate(t, view, check_signature=False)
+                    if ok:
+                        view.apply_tx(t)
+                        continue
+                    broken = True
+                bad.append(h)
+        return bad

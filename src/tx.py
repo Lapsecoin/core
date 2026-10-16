@@ -365,7 +365,7 @@ def _check_board_fee(tx_dict, state, floor_override):
     return True, None
 
 
-def validate(tx_dict, state, board_fee_floor_override=None):
+def validate(tx_dict, state, board_fee_floor_override=None, check_signature=True):
     """Validate a transaction. Returns (True, None) or (False, error_string).
 
     state: object with .get_balance(addr), .get_nonce(addr),
@@ -384,6 +384,10 @@ def validate(tx_dict, state, board_fee_floor_override=None):
     avoid. A caller validating a single transaction in isolation (mempool
     admission) leaves this out and gets the live floor, which is correct
     there: an individual submission just needs today's real number.
+
+    check_signature=False is for re-checking a transaction already admitted,
+    whose signature cannot have changed, against a state that has: it is the
+    expensive check and would add nothing.
     """
     for check, args in (
         (_check_fields_and_outputs,    (tx_dict,)),
@@ -394,6 +398,8 @@ def validate(tx_dict, state, board_fee_floor_override=None):
         (_check_balance,               (tx_dict, state)),
         (_check_board_fee,             (tx_dict, state, board_fee_floor_override)),
     ):
+        if check is _check_signature and not check_signature:
+            continue
         ok, err = check(*args)
         if not ok:
             return False, err

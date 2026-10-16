@@ -2318,6 +2318,9 @@ class Node:
                          for blk in new_chain[fork_point:]
                          for t in blk.get("transactions", [])}
         self.mempool.remove_many(new_confirmed)
+        # What was already waiting may have been paid for with money that was
+        # in the blocks just lost; see Mempool.prune_stale.
+        self.mempool.prune_stale(new_state)
         # These were confirmed on a branch of ours that lost, so they come
         # back ahead of anything that is merely waiting (see Mempool.add).
         back, left_out = self._readd_valid_txs(old_txs, new_confirmed, new_state,
