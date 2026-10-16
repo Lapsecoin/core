@@ -199,47 +199,103 @@ def _legacy_text(text):
     return data
 
 
-def find_source(key_text=None, *, address_text=None, wallet_file=WALLET_FILE,
-                legacy_file=LEGACY_KEY_FILE):
+def find_source(key_text=None, *, address_text=None, account_given=False,
+                wallet_file=WALLET_FILE, legacy_file=LEGACY_KEY_FILE, notes=None):
     """What this start-up should run as. In order of priority:
 
-      1. --address or --key on the command line (one of them: both is an error)
-      2. $LAPSECOIN_ADDRESS or $LAPSECOIN_KEY (again one), only when neither
-         was given on the command line
+      1. the command line: --address, --key or --account (at most one: each
+         one says who the node is). --account is the address of the wallet
+         file here, so it needs that file.
+      2. $LAPSECOIN_ADDRESS or $LAPSECOIN_KEY (at most one), when the command
+         line said nothing
       3. the wallet file
       4. an old key file, which is moved to a wallet
       5. nothing yet, so a new wallet gets made
 
     An address starts a node that holds no key (no passphrase, no signing).
     Key text is an lc1- text from --export, or an old single-key text.
-    ValueError says what is wrong and where it was given."""
-    # (text, where it was given, is it an address)
-    given = [(text.strip(), where, is_address) for text, where, is_address in
-             ((address_text, "--address", True), (key_text, "--key", False))
-             if text and text.strip()]
-    if len(given) > 1:
-        raise ValueError("--address and --key both given: use one. An address runs a "
-                         "node that holds no key; a key runs one that can sign.")
-    if not given:
-        given = [(os.environ.get(name, "").strip(), "$" + name, is_address)
-                 for name, is_address in ((ADDRESS_ENV, True), (KEY_ENV, False))]
-        given = [g for g in given if g[0]]
-        if len(given) > 1:
-            raise ValueError(f"${ADDRESS_ENV} and ${KEY_ENV} are both set: keep one, or "
-                             "give --address or --key to say which this start uses.")
-    if given:
-        text, where, is_address = given[0]
-        if not is_address:
+    ValueError says what is wrong and where it was given. `notes` (a list)
+    collects what was passed over, for the caller to tell the person."""
+    notes = [] if notes is None else notes
+    # (text, where it was given, what it is)
+    cli = [(text.strip(), where, kind) for text, where, kind in
+           ((address_text, "--address", "address"), (key_text, "--key", "key"))
+           if text and text.strip()]
+    if account_given:
+        cli.append(("", "--account", "account"))
+    if len(cli) > 1:
+        raise ValueError(" and ".join(where for _, where, _ in cli) + " both given: use one. "
+                         "Each says who this node is: --address is an address and no key, --key "
+                         "is one exported account, --account is an address of the wallet file here.")
+    env = [(os.environ.get(name, "").strip(), "$" + name, kind)
+           for name, kind in ((ADDRESS_ENV, "address"), (KEY_ENV, "key"))]
+    env = [e for e in env if e[0]]
+    if cli:
+        for _text, where, _kind in env:
+            notes.append(f"{where} is ignored: {cli[0][1]} was given")
+        chosen = cli[0]
+    elif len(env) > 1:
+        raise ValueError(f"${ADDRESS_ENV} and ${KEY_ENV} are both set: keep one, or give "
+                         "--address, --key or --account to say which this start uses.")
+    else:
+        chosen = env[0] if env else None
+    if chosen:
+        text, where, kind = chosen
+        if kind == "account":
+            if os.path.exists(wallet_file):
+                return Source("wallet", wallet_file)
+            raise ValueError(f"--account picks an address of {wallet_file}, and there is none here"
+                             + (f" ({legacy_file} is: start without --account to move it to one)"
+                                if os.path.exists(legacy_file) else ""))
+        if kind == "key":
             return _key_source(text)
         try:
-            return Source("address", crypto.normalize_address(text))
+            address = crypto.normalize_address(text)
         except ValueError as e:
             raise ValueError(f"{where}: {e}") from None
+        if address in (crypto.burn_address(), crypto.escrow_address()):
+            raise ValueError(f"{where}: that is the {'burn' if address == crypto.burn_address() else 'escrow'} "
+                             "address; whatever is sent there is gone")
+        return Source("address", address)
     if os.path.exists(wallet_file):
         return Source("wallet", wallet_file)
     if os.path.exists(legacy_file):
         return Source("legacy", legacy_file)
     return Source("new", wallet_file)
+
+
+def local_account_of(address, wallet_file=WALLET_FILE):
+    """(index, name) of `address` among the wallet file here's addresses, or
+    None: it is not one of them, or there is no readable wallet file. Only the
+    public list is read, so no passphrase is needed."""
+    try:
+        for a in WalletFile.load(wallet_file).accounts:
+            if a["address"] == address:
+                return a["index"], a.get("label", "")
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def notes_about_local_wallet(kind, addr, wallet_file=WALLET_FILE):
+    """What a person should be told about the wallet file in this folder when
+    the node runs as something that is not it: an address (kind "address") or
+    a key that has just been opened (kind "key"). Nothing is overridden: what
+    was given on purpose is what runs. Empty when there is no wallet here."""
+    if not os.path.exists(wallet_file):
+        return []
+    hit = local_account_of(addr, wallet_file)
+    name = f" ({hit[1]})" if hit and hit[1] else ""
+    if kind == "address":
+        if hit:
+            return [f"{addr} is address {hit[0]}{name} of {wallet_file} here. Running with no key, "
+                    f"as asked; --account {hit[0]} runs as it and can sign."]
+        return []
+    if hit:
+        return [f"this key is address {hit[0]}{name} of {wallet_file} here. Running from the key, "
+                f"as asked; the wallet file is not used (--account {hit[0]} would use it)."]
+    return [f"this key is not an address of {wallet_file} here. Running from the key, as asked; "
+            "the wallet file is not used."]
 
 
 def _key_source(text):

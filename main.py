@@ -297,94 +297,121 @@ def _serve(app, host, port):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LapseCoin node")
-    parser.add_argument("--host",    default="0.0.0.0")
+    import settings as settings_mod
+    setting_vars = "\n".join("  " + x.env_name for x in settings_mod.ALL)
+    parser = argparse.ArgumentParser(
+        description="LapseCoin node: mines, relays and serves the explorer and your wallet.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Who the node runs as (the command line wins over the environment, which wins\n"
+            "over what is in the folder):\n"
+            "  1. --address, --key or --account on the command line (one of them)\n"
+            "  2. $LAPSECOIN_ADDRESS or $LAPSECOIN_KEY (one of them)\n"
+            "  3. lapsecoin_wallet.json, then an old lapsecoin_key.json to move, then a new wallet\n"
+            "\n"
+            "When it asks for the passphrase: never with --address; with --key before it starts;\n"
+            "with a wallet, on its private pages (window or no terminal) or at the prompt\n"
+            "(terminal). A new wallet, an old key file to move and an unconfirmed recovery\n"
+            "phrase ask first. Without a window or a terminal, set LAPSECOIN_PASSPHRASE.\n"
+            "\n"
+            "Environment variables:\n"
+            "  LAPSECOIN_ADDRESS            same as --address\n"
+            "  LAPSECOIN_KEY                same as --key\n"
+            "  LAPSECOIN_PASSPHRASE         the passphrase of the wallet or key, for starts nobody\n"
+            "                               can type at\n"
+            "  LAPSECOIN_EXPORT_PASSPHRASE  the new passphrase --export seals a key under\n"
+            "  LAPSECOIN_PORT               same as --port\n"
+            "  LAPSECOIN_LOG_LEVEL          same as --log-level\n"
+            "  LAPSECOIN_PUBLIC_URL         same as --public-url\n"
+            "\n"
+            "Settings (each can also be set on the Settings page, which shows which are set from\n"
+            "the environment):\n"
+            + setting_vars + "\n"
+        ),
+    )
+
+    who = parser.add_argument_group(
+        "who this node runs as (give at most one)",
+        "Each of these says who the node is. With none, it uses the wallet in this folder.")
+    who.add_argument("--address", dest="address", default=None, metavar="ADDRESS",
+                     help="Mine for this address and hold no key: its 12 words (dots, spaces or "
+                          "commas between them). No passphrase and no signing; the node builds "
+                          "blocks and the reward goes to the address. Give each machine its own "
+                          "address. (env: LAPSECOIN_ADDRESS)")
+    who.add_argument("--key", dest="key", default=None, metavar="KEY",
+                     help="Run as one exported account: the lc1- text that --export prints. It "
+                          "asks for that key's passphrase before starting, and the wallet file "
+                          "is not used. (env: LAPSECOIN_KEY)")
+    who.add_argument("--account", default=None, metavar="N|NAME",
+                     help="Run as this address of the wallet file here: its number, or the name "
+                          "you gave it on the Addresses page. Default: address 0.")
+
+    cmds = parser.add_argument_group(
+        "wallet commands (work on the wallet file, do one thing and exit)")
+    cmds.add_argument("--export", nargs="?", const="", default=None, metavar="N|NAME",
+                      help="Print one address's key as short lc1- text, sealed under a new "
+                           "passphrase, and exit: its number or name (default: --account, else "
+                           "0). A name no address has yet creates that address, so --export rig1 "
+                           "and --export rig2 give two machines an address each. Use the text as "
+                           "--key on that machine; it never holds the recovery phrase.")
+    cmds.add_argument("--new-address", action="store_true",
+                      help="Add the wallet's next address, print it and exit.")
+    cmds.add_argument("--restore", action="store_true",
+                      help="Rebuild the wallet from a recovery phrase (typed hidden, or piped "
+                           "in) into an empty folder and exit.")
+
+    net = parser.add_argument_group("network")
+    net.add_argument("--host", default="0.0.0.0", metavar="HOST",
+                     help="Interface the public explorer and API listen on (default 0.0.0.0, all "
+                          "of them). The private wallet port only ever listens on 127.0.0.1.")
     # An explicit --port still wins: the flag is the more specific of the
     # two, and a unit file setting the variable should not override what
     # someone typed on the command line to override it.
-    parser.add_argument("--port",    type=int,
-                        default=_env_port("LAPSECOIN_PORT", 8333))
-    parser.add_argument("--key", dest="key", default=None, metavar="KEY",
-                        help="Run as one exported account: the lc1- text that --export "
-                             "prints (default: $LAPSECOIN_KEY). It asks for its passphrase.")
-    parser.add_argument("--address", dest="address", default=None, metavar="ADDRESS",
-                        help="Mine for this address and hold no key: the 12 words of an "
-                             "address (dots, spaces or commas between them). No passphrase "
-                             "and no signing; the node builds blocks and the reward goes to "
-                             "the address (default: $LAPSECOIN_ADDRESS). Use one of --address "
-                             "and --key, on the command line or in the environment; the "
-                             "command line wins. With neither, the node uses "
-                             "lapsecoin_wallet.json, its recovery-phrase wallet.")
-    parser.add_argument("--account", default="0", metavar="N|NAME",
-                        help="Which address of the wallet this node runs as, or --export "
-                             "writes out: its number, or the name you gave it on the "
-                             "Addresses page (default 0).")
-    parser.add_argument("--export", nargs="?", const="", default=None, metavar="N|NAME",
-                        help="Print one address's key as short lc1- text, sealed under a new "
-                             "passphrase, and exit: its number or name (default: --account). "
-                             "A name no address has yet creates that address, so --export rig1 "
-                             "and --export rig2 give two machines an address each. Use it as "
-                             "--key or $LAPSECOIN_KEY on that machine; it never holds the "
-                             "recovery phrase.")
-    parser.add_argument("--new-address", action="store_true",
-                        help="Add the wallet's next account, print its address and exit.")
-    parser.add_argument("--restore", action="store_true",
-                        help="Rebuild the wallet from a recovery phrase (typed hidden, or "
-                             "piped in) into an empty folder and exit.")
-    parser.add_argument("--db",      default=DB_PATH
-                        ).completer = FilesCompleter()
-    parser.add_argument("--peer",       action="append", default=[])
-    parser.add_argument(
-        "--private-port", type=int, default=None,
-        help="Port for private API (send/burn). Defaults to --port+2.",
-    )
-    parser.add_argument(
-        "--max-peers", type=int, default=params.MAX_PEERS,
-    )
-    parser.add_argument(
-        "--log-level", default=os.environ.get("LAPSECOIN_LOG_LEVEL", "INFO"),
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-    )
-    parser.add_argument(
-        "--update-check-url", default=DEFAULT_VERSION_URL,
-        help="Raw VERSION file URL to poll for newer releases. "
-             "Point this at your own fork's VERSION file if you maintain one.",
-    )
-    parser.add_argument(
-        "--public-url", default=os.environ.get("LAPSECOIN_PUBLIC_URL"), metavar="URL",
-        help="The https:// address this node can also be reached at, when you "
-             "have put a TLS-terminating reverse proxy (Caddy, nginx) with a "
-             "domain in front of its web port. It is advertised so light "
-             "clients can send their wallet address over an encrypted "
-             "connection instead of plain http. Default: $LAPSECOIN_PUBLIC_URL.",
-    )
-    parser.add_argument(
-        "--no-relay", action="store_true",
-        help="Do not pass light clients' sealed requests on to other nodes, or "
-             "answer ones sealed to this node. On by default: it is how a light "
-             "client keeps its wallet address from the node that sees its IP.",
-    )
-    parser.add_argument(
-        "--releases-url", default=DEFAULT_RELEASES_URL,
-        help="Where the UI's 'new version available' link points.",
-    )
-    parser.add_argument(
-        "--no-update-check", action="store_true",
-        help="Disable the periodic check for newer releases entirely.",
-    )
-    parser.add_argument(
-        "--no-gui", action="store_true",
-           help="Always use the console (passphrase prompt, Ctrl+C to stop) "
-               "instead of the desktop status window.",
-    )
-    parser.add_argument(
-        "--update", action="store_true",
-        help="Check for a newer release and, if this install is one that "
-             "can safely update itself (a prebuilt binary/AppImage, or a "
-             "`pip install lapsecoin`), offer to do so, then exit. Does "
-             "nothing to a source checkout beyond printing the releases "
-             "URL: never touches a git working tree.",
-    )
+    net.add_argument("--port", type=int, default=_env_port("LAPSECOIN_PORT", 8333), metavar="PORT",
+                     help="Peer (UDP) and public explorer (TCP) port, the same number "
+                          "(default 8333). (env: LAPSECOIN_PORT)")
+    net.add_argument("--private-port", type=int, default=None, metavar="PORT",
+                     help="Port of the private wallet pages, on 127.0.0.1 (default: --port + 2).")
+    net.add_argument("--peer", action="append", default=[], metavar="HOST:PORT",
+                     help="A node to try first. Repeat for several.")
+    net.add_argument("--max-peers", type=int, default=params.MAX_PEERS, metavar="N",
+                     help=f"Most peers to keep (default {params.MAX_PEERS}).")
+    net.add_argument("--public-url", default=os.environ.get("LAPSECOIN_PUBLIC_URL"), metavar="URL",
+                     help="The https:// address this node can also be reached at, when you have "
+                          "put a TLS-terminating reverse proxy (Caddy, nginx) with a domain in "
+                          "front of its web port. It is advertised so light clients can send "
+                          "their wallet address over an encrypted connection instead of plain "
+                          "http. (env: LAPSECOIN_PUBLIC_URL)")
+    net.add_argument("--no-relay", action="store_true",
+                     help="Do not pass light clients' sealed requests on to other nodes, or "
+                          "answer ones sealed to this node. On by default: it is how a light "
+                          "client keeps its wallet address from the node that sees its IP.")
+
+    data = parser.add_argument_group("data and logs")
+    data.add_argument("--db", default=DB_PATH, metavar="FILE",
+                      help=f"Chain database (default {DB_PATH}, in the current folder)."
+                      ).completer = FilesCompleter()
+    data.add_argument("--log-level", default=os.environ.get("LAPSECOIN_LOG_LEVEL", "INFO"),
+                      choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                      help="How much to log (default INFO). (env: LAPSECOIN_LOG_LEVEL)")
+
+    app = parser.add_argument_group("window and updates")
+    app.add_argument("--no-gui", action="store_true",
+                     help="Always use the console (a passphrase prompt if it needs one, Ctrl+C to "
+                          "stop) instead of the desktop status window.")
+    app.add_argument("--update", action="store_true",
+                     help="Check for a newer release and, if this install is one that can safely "
+                          "update itself (a prebuilt binary/AppImage, or a `pip install "
+                          "lapsecoin`), offer to do so, then exit. Does nothing to a source "
+                          "checkout beyond printing the releases URL: never touches a git "
+                          "working tree.")
+    app.add_argument("--no-update-check", action="store_true",
+                     help="Disable the periodic check for newer releases entirely.")
+    app.add_argument("--update-check-url", default=DEFAULT_VERSION_URL, metavar="URL",
+                     help="Raw VERSION file URL to poll for newer releases. Point this at your "
+                          "own fork's VERSION file if you maintain one.")
+    app.add_argument("--releases-url", default=DEFAULT_RELEASES_URL, metavar="URL",
+                     help="Where the UI's 'new version available' link points.")
     parser.add_argument("--check-restart-exe", metavar="FILE", help=argparse.SUPPRESS)
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
@@ -392,11 +419,14 @@ def main():
         # CI only: checks the update restart target, starts nothing.
         import updater as _updater
         sys.exit(_updater.restart_check(args.check_restart_exe))
-    try:
-        if args.export is None:      # --export may name an address that does not exist yet
-            args.account = wallet_mod.resolve_account(args.account)
-    except ValueError as e:
-        sys.exit(f"Error: --account: {e}")
+    account_given = args.account is not None     # "--account 0" is not the same as nothing
+    if account_given and (args.restore or args.new_address):
+        # Only --export NAME may make an address from a name; here a name nobody
+        # has is a mistake to report, as it always was.
+        try:
+            wallet_mod.resolve_account(args.account)
+        except ValueError as e:
+            sys.exit(f"Error: --account: {e}")
     if args.address and (args.restore or args.new_address or args.export is not None):
         sys.exit("Error: --address runs a node that holds no key; --restore, --new-address "
                  "and --export work on the recovery-phrase wallet. Run them without it.")
@@ -407,7 +437,7 @@ def main():
         wallet_mod.cmd_new_address(args.key)
         sys.exit(0)
     if args.export is not None:
-        wallet_mod.cmd_export(args.key, args.export or args.account)
+        wallet_mod.cmd_export(args.key, args.export or (args.account if account_given else 0))
         sys.exit(0)
     public_url = None
     if args.public_url:
@@ -423,6 +453,26 @@ def main():
     # commentary. Asking for DEBUG asks for it.
     if args.log_level == "DEBUG":
         logging.getLogger("werkzeug").setLevel(logging.INFO)
+
+    # Who the node runs as, settled before anything starts (ports, window,
+    # lock) so a conflict between what was given is reported at once. The rules
+    # are in wallet.find_source; when it asks for a passphrase is startup.plan.
+    notes = []
+    try:
+        source = wallet_mod.find_source(args.key, address_text=args.address,
+                                        account_given=account_given, notes=notes)
+    except ValueError as e:
+        sys.exit(f"Error: {e}")
+    try:
+        args.account = wallet_mod.resolve_account(args.account) if source.kind == "wallet" else 0
+    except ValueError as e:
+        sys.exit(f"Error: --account: {e}")
+    if source.kind == "address":
+        notes += wallet_mod.notes_about_local_wallet("address", source.value)
+        if os.environ.get(wallet_mod.PASSPHRASE_ENV):
+            notes.append(f"${wallet_mod.PASSPHRASE_ENV} is ignored: an address has no key to unlock")
+    for note in notes:
+        log.info("[startup] %s", note)
 
     # Single-instance guard, checked before anything else (ports, GUI,
     # passphrase prompt, tray icon) so a second launch exits fast and
@@ -525,15 +575,10 @@ def main():
     # rules are in startup.py; every case is a line in tests/test_startup.py.
     env_passphrase = os.environ.get(wallet_mod.PASSPHRASE_ENV) or None
     try:
-        source = wallet_mod.find_source(args.key, address_text=args.address)
         start = startup.plan(source, args.account, gui=use_gui, tty=sys.stdin.isatty(),
                              env_passphrase=bool(env_passphrase))
     except ValueError as e:
         sys.exit(f"Error: {e}")
-    if source.kind != "wallet" and args.account != 0:
-        log.warning("[startup] --account is ignored: it picks an address of the "
-                    "recovery-phrase wallet, and this node was given %s",
-                    "an address" if source.kind == "address" else "a key")
     if start.how in (startup.WATCH, startup.DEFER):
         wallet, kek, passphrase = start.wallet, None, None
         if start.how == startup.WATCH:
@@ -546,6 +591,9 @@ def main():
     else:
         wallet, kek, passphrase = wallet_mod.startup_console(
             args.key, args.account, source=source)
+    if source.kind == "key":
+        for note in wallet_mod.notes_about_local_wallet("key", wallet.addr):
+            log.info("[startup] %s", note)
     genesis  = block_mod.create_genesis()
 
     pool     = PeerPool(max_peers=args.max_peers)
