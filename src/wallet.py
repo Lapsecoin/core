@@ -178,7 +178,17 @@ class PhraseWallet(_Signer):
 # Where the key comes from
 # ---------------------------------------------------------------------------
 
-Source = namedtuple("Source", "kind value")
+class Source(namedtuple("Source", "kind value")):
+    """What the node runs as. `where` says how it was chosen ("--address",
+    "$LAPSECOIN_KEY", "lapsecoin_wallet.json here", ...), set by find_source,
+    for the Decisions page; it takes no part in comparing two sources."""
+    where = ""
+
+
+def _chosen(kind, value, where):
+    source = Source(kind, value)
+    source.where = where
+    return source
 # kinds: "address" (an address only, no key), "key" (lc1 text), "text" (old
 # single-key text), "wallet" (the phrase file), "legacy" (an old
 # lapsecoin_key.json to move), "new" (nothing yet).
@@ -243,12 +253,12 @@ def find_source(key_text=None, *, address_text=None, account_given=False,
         text, where, kind = chosen
         if kind == "account":
             if os.path.exists(wallet_file):
-                return Source("wallet", wallet_file)
+                return _chosen("wallet", wallet_file, "--account")
             raise ValueError(f"--account picks an address of {wallet_file}, and there is none here"
                              + (f" ({legacy_file} is: start without --account to move it to one)"
                                 if os.path.exists(legacy_file) else ""))
         if kind == "key":
-            return _key_source(text)
+            return _chosen(*_key_source(text), where)
         try:
             address = crypto.normalize_address(text)
         except ValueError as e:
@@ -256,12 +266,12 @@ def find_source(key_text=None, *, address_text=None, account_given=False,
         if address in (crypto.burn_address(), crypto.escrow_address()):
             raise ValueError(f"{where}: that is the {'burn' if address == crypto.burn_address() else 'escrow'} "
                              "address; whatever is sent there is gone")
-        return Source("address", address)
+        return _chosen("address", address, where)
     if os.path.exists(wallet_file):
-        return Source("wallet", wallet_file)
+        return _chosen("wallet", wallet_file, f"{wallet_file} here")
     if os.path.exists(legacy_file):
-        return Source("legacy", legacy_file)
-    return Source("new", wallet_file)
+        return _chosen("legacy", legacy_file, f"{legacy_file} here")
+    return _chosen("new", wallet_file, "nothing here yet")
 
 
 def local_account_of(address, wallet_file=WALLET_FILE):

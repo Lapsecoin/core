@@ -47,6 +47,7 @@ from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from updater import Updater
 from version import LOCAL_VERSION
+import decisions as decisions_mod
 import startup
 import wallet as wallet_mod
 
@@ -203,6 +204,16 @@ class _WerkzeugFilter(logging.Filter):
 logging.getLogger("werkzeug").addFilter(_WerkzeugFilter())
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 log = logging.getLogger("ec.main")
+
+
+def _how(flag, env=None):
+    """Where a value came from, for the Decisions page: the option, the
+    variable, or the default."""
+    if any(a == flag or a.startswith(flag + "=") for a in sys.argv[1:]):
+        return flag
+    if env and os.environ.get(env):
+        return "$" + env
+    return "the default"
 
 
 def _env_port(name, fallback):
@@ -467,11 +478,12 @@ def main():
         args.account = wallet_mod.resolve_account(args.account) if source.kind == "wallet" else 0
     except ValueError as e:
         sys.exit(f"Error: --account: {e}")
+    wallet_notes = []     # what matched the wallet file here, told apart from what was passed over
     if source.kind == "address":
-        notes += wallet_mod.notes_about_local_wallet("address", source.value)
+        wallet_notes += wallet_mod.notes_about_local_wallet("address", source.value)
         if os.environ.get(wallet_mod.PASSPHRASE_ENV):
             notes.append(f"${wallet_mod.PASSPHRASE_ENV} is ignored: an address has no key to unlock")
-    for note in notes:
+    for note in notes + wallet_notes:
         log.info("[startup] %s", note)
 
     # Single-instance guard, checked before anything else (ports, GUI,
@@ -579,6 +591,12 @@ def main():
                              env_passphrase=bool(env_passphrase))
     except ValueError as e:
         sys.exit(f"Error: {e}")
+    phrase_unconfirmed = False       # read before the dialog shows it and marks it confirmed
+    if source.kind == "wallet":
+        try:
+            phrase_unconfirmed = not wallet_mod.WalletFile.load(source.value).phrase_shown
+        except ValueError:
+            pass
     if start.how in (startup.WATCH, startup.DEFER):
         wallet, kek, passphrase = start.wallet, None, None
         if start.how == startup.WATCH:
@@ -592,7 +610,8 @@ def main():
         wallet, kek, passphrase = wallet_mod.startup_console(
             args.key, args.account, source=source)
     if source.kind == "key":
-        for note in wallet_mod.notes_about_local_wallet("key", wallet.addr):
+        wallet_notes += wallet_mod.notes_about_local_wallet("key", wallet.addr)
+        for note in wallet_notes:
             log.info("[startup] %s", note)
     genesis  = block_mod.create_genesis()
 
@@ -702,6 +721,28 @@ def main():
     private_port = args.private_port if args.private_port else port + 2
     del passphrase   # nothing past startup needs it; the kek is what signs
 
+    # What was decided from what was given, for the Decisions page.
+    decisions = decisions_mod.Decisions()
+    wf = getattr(wallet, "walletfile", None)
+    account_name = next((a.get("label", "") for a in wf.accounts if a["index"] == args.account),
+                        "") if wf is not None and source.kind == "wallet" else ""
+    decisions.add("Who this node is", decisions_mod.who(
+        source, wallet.addr, args.account, account_name, account_given))
+    decisions.add("Passphrase and signing", decisions_mod.passphrase(
+        source, start.how, bool(env_passphrase), window=use_gui, phrase_unconfirmed=phrase_unconfirmed))
+    decisions.add("Passed over", decisions_mod.passed_over(notes))
+    decisions.add("About the wallet here", decisions_mod.about_local_wallet(wallet_notes))
+    decisions.add("Network", decisions_mod.network(
+        public_port=port, requested_port=args.port, port_how=_how("--port", "LAPSECOIN_PORT"),
+        private_port=private_port, private_how="--private-port" if args.private_port else "",
+        peers=args.peer, relay=not args.no_relay,
+        public_url=public_url, public_url_how=_how("--public-url", "LAPSECOIN_PUBLIC_URL")))
+    decisions.add("Window and updates", decisions_mod.window_and_updates(
+        window=use_gui, no_gui=args.no_gui, update_check=not args.no_update_check))
+    decisions.add("Data and logs", decisions_mod.data(
+        db_path=os.path.abspath(args.db), db_how=_how("--db"),
+        log_level=args.log_level, log_how=_how("--log-level", "LAPSECOIN_LOG_LEVEL")))
+
     class NodeWrapper:
         def __init__(self):
             self.real_node = None
@@ -721,6 +762,7 @@ def main():
         node.background_jobs = [j for j in (getattr(wallet, "migration", None),
                                             getattr(wallet, "discovery", None)) if j]
         node.needs_unlock = kek is None and wallet.can_sign
+        node.decisions = decisions
         node_wrapper.real_node = node
 
         def _chain_provider(from_h, to_h):
