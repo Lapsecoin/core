@@ -147,19 +147,14 @@ import params
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from peerpool import is_routable_peer_addr
 from version import LOCAL_VERSION
-from local_reader import (_get_address_history, _block_reward,  # noqa: F401
-                          fee_estimate, local_reader_for)
+from local_reader import _get_address_history, _block_reward, local_reader_for
 import embeds
 import whitepaper_render
 from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_amount,
                        _pagination_window, _base_dir,  # noqa: F401
-                       fmt_duration, render_board_text)
-# The board names the tests and other modules still reach through api.
-from board_view import (BOARD_MEMO_TAG, parse_board_body, build_board_body,  # noqa: F401
-                        REPLY_REF_LEN,
-                        VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG,
-                        _board_posts, _board_votes,
-                        BOARD_THREADS_PER_CHUNK)
+                       fmt_duration)
+from board_view import (BOARD_MEMO_TAG, VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG,
+                        _board_posts)
 import oblivious as oblivious_mod
 import unlock_ui
 import watch_ui

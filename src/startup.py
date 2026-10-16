@@ -26,43 +26,37 @@ rather than hanging on a prompt nobody can see.
 
 from collections import namedtuple
 
-from walletfile import WalletFile
+import wallet as wallet_mod
 
 WATCH = "watch"     # no key, nothing to ask now or later
 DEFER = "defer"     # run now as the address; the passphrase is asked for on the private pages
 ASK = "ask"         # ask for the passphrase (or take it from the environment) before starting
 
-Plan = namedtuple("Plan", "source how")
+# wallet is the node's wallet for WATCH and DEFER (nothing can sign yet), and
+# None for ASK, where the passphrase is needed to make it.
+Plan = namedtuple("Plan", "source how wallet")
 
 
-def can_wait(source):
-    """Whether this start can run before the passphrase is known: its address
-    is readable without it and nothing has to be shown first. An lc1- key
-    hides its address in the sealed seed; an old key file starts by making a
-    new wallet (a new address and a phrase to show); and a wallet whose phrase
-    was never confirmed must show it."""
-    kind, value = source
-    if kind == "text":
-        return True
-    if kind == "wallet":
-        return WalletFile.load(value).phrase_shown
-    return False
-
-
-def plan(source, *, gui, tty, env_passphrase):
+def plan(source, account=0, *, gui, tty, env_passphrase):
     """The Plan for `source`, or ValueError saying what is missing.
 
+    account: which address of a wallet file the node runs as.
     gui: the window is available. tty: a terminal is attached (stdin).
-    env_passphrase: $LAPSECOIN_PASSPHRASE is set."""
+    env_passphrase: $LAPSECOIN_PASSPHRASE is set.
+
+    Whether a start can wait for its passphrase is decided in one place,
+    wallet.open_locked: it can when the address is readable without it and
+    nothing has to be shown first."""
+    wallet = wallet_mod.open_locked(source, account)
     if source.kind == "address":
-        return Plan(source, WATCH)
-    if can_wait(source):
+        return Plan(source, WATCH, wallet)
+    if wallet is not None:
         if env_passphrase:
-            return Plan(source, ASK)
+            return Plan(source, ASK, None)
         if gui or not tty:
-            return Plan(source, DEFER)
-        return Plan(source, ASK)
+            return Plan(source, DEFER, wallet)
+        return Plan(source, ASK, None)
     if gui or tty or env_passphrase:
-        return Plan(source, ASK)
+        return Plan(source, ASK, None)
     raise ValueError("this start needs a passphrase and cannot ask for one: there is no "
                      "window and no terminal. Set LAPSECOIN_PASSPHRASE, or run it in a terminal.")

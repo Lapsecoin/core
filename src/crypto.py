@@ -186,26 +186,6 @@ _MEM  = nacl.pwhash.argon2id.MEMLIMIT_MODERATE
 _KLEN = nacl.secret.SecretBox.KEY_SIZE  # 32 bytes
 
 
-def save_key(path, secret_key_bytes, public_key_bytes, passphrase):
-    """Encrypt keypair to disk. Passphrase mandatory. File written 0o600."""
-    if not passphrase:
-        raise ValueError("passphrase is mandatory")
-    salt = nacl.utils.random(nacl.pwhash.argon2id.SALTBYTES)
-    key  = nacl.pwhash.argon2id.kdf(_KLEN, passphrase.encode(), salt,
-                                     opslimit=_OPS, memlimit=_MEM)
-    box        = nacl.secret.SecretBox(key)
-    ciphertext = box.encrypt(secret_key_bytes)
-    data = {
-        "public_key": public_key_bytes.hex(),
-        "ciphertext": base64.b64encode(ciphertext).decode(),
-        "salt":       base64.b64encode(salt).decode(),
-        "ops": _OPS, "mem": _MEM,
-    }
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-    os.chmod(path, 0o600)
-
-
 def load_pubkey(path):
     """Load public key from key file (no passphrase needed)."""
     with open(path) as f:
@@ -262,13 +242,3 @@ def decrypt_secret_key(path, passphrase=None, kek=None):
     else:
         raise ValueError("passphrase or kek is required")
     return decrypt_secret_key_data(data, derived)
-
-
-def sign_with_keyfile(message_bytes, keyfile_path, kek):
-    """Decrypt, sign, discard. The only way the node signs.
-    kek must be a derived key-encryption key from derive_kek(), never a
-    raw passphrase string."""
-    sk  = decrypt_secret_key(keyfile_path, kek=kek)
-    sig = sign(message_bytes, sk)
-    del sk
-    return sig

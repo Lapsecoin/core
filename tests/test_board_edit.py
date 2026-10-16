@@ -5,7 +5,6 @@ every client. An edit is itself a board post (it pays what a post pays and
 counts as one), a delete is a small tagged transaction like a vote.
 """
 
-import json
 import os
 import random
 import re
@@ -32,6 +31,7 @@ from state import State
 from tests.fixtures import address, make_tx, seed_balance
 from tests.browser import submit, tokens
 from wallet import Wallet
+from tests.legacy_key import save_key
 
 ALICE, BOB = "alice-addr", "bob-addr"
 
@@ -303,7 +303,7 @@ def world(tmp_path):
     """A funded wallet that has one post on the board, and Bob's."""
     sk, pk = crypto.generate_keypair()
     keyfile = str(tmp_path / "wallet.key")
-    crypto.save_key(keyfile, sk, pk, PASS)
+    save_key(keyfile, sk, pk, PASS)
     wallet = Wallet(keyfile, pk)
     cs = ChainState.from_genesis()
     cs.state.credit(wallet.addr, 1000 * TICKS_PER_LAPSE)
@@ -442,7 +442,7 @@ class TestFullNodeToo:
     def test_private_app_deletes_through_the_same_handler(self, tmp_path):
         sk, pk = crypto.generate_keypair()
         keyfile = str(tmp_path / "node.key")
-        crypto.save_key(keyfile, sk, pk, PASS)
+        save_key(keyfile, sk, pk, PASS)
         addr = crypto.public_key_to_address(pk)
         cs = ChainState.from_genesis()
         cs.state.credit(addr, 1000 * TICKS_PER_LAPSE)

@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import evm
 import gas
+import gaslock
 
 KEY = (7).to_bytes(32, "big")
 ADDR = evm.address_from_secret(KEY)
@@ -192,15 +193,15 @@ class TestClaimMemo:
 
 class TestWindowAndOrder:
     def test_no_claim_waits_the_whole_window(self):
-        assert gas.window_close(100) == 100 + gas.CLAIM_WINDOW_BLOCKS
+        assert gaslock.close_height({"height": 100, "claim": None}) == 100 + gas.CLAIM_WINDOW_BLOCKS
 
     def test_a_claim_closes_the_window_one_block_later(self):
-        assert gas.window_close(100, 101) == 102
-        assert gas.window_close(100, 103) == 104
+        assert gaslock.close_height({"height": 100, "claim": 101}) == 102
+        assert gaslock.close_height({"height": 100, "claim": 103}) == 104
 
     def test_a_late_claim_never_extends_the_window(self):
-        assert gas.window_close(100, 105) == 105
-        assert gas.window_close(100, 110) == 105
+        assert gaslock.close_height({"height": 100, "claim": 105}) == 105
+        assert gaslock.close_height({"height": 100, "claim": 110}) == 105
 
     def test_order_is_the_same_whatever_order_claims_arrive_in(self):
         claimers = [f"node{i}" for i in range(10)]

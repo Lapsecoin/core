@@ -3,7 +3,7 @@ Unit tests for crypto.py
 
 Covers: FALCON-512 keygen, sign, verify; SHA-256 helpers; address derivation;
 address validation; canonical JSON; serialization for signing; key storage
-(save_key / load_pubkey / decrypt_secret_key / derive_kek / sign_with_keyfile).
+(load_pubkey / decrypt_secret_key / derive_kek).
 
 All tests are pure and local. No network, no chain, no disk (key-file tests
 use a tmp_path fixture).
@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import crypto
 from params import ADDRESS_WORD_COUNT
+from tests.legacy_key import save_key
 
 
 # ---------------------------------------------------------------------------
@@ -273,53 +274,45 @@ class TestSerializeForSigning:
 class TestKeyStorage:
     def test_save_and_load_pubkey(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="testpass")
+        save_key(path, sk, pk, passphrase="testpass")
         loaded_pk = crypto.load_pubkey(path)
         assert loaded_pk == pk
 
     def test_file_permissions_are_0600(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="testpass")
+        save_key(path, sk, pk, passphrase="testpass")
         mode = oct(os.stat(path).st_mode)[-3:]
         assert mode == "600"
 
     def test_decrypt_with_correct_passphrase(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="correctpass")
+        save_key(path, sk, pk, passphrase="correctpass")
         recovered = crypto.decrypt_secret_key(path, passphrase="correctpass")
         assert recovered == sk
 
     def test_decrypt_with_wrong_passphrase_raises(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="correctpass")
+        save_key(path, sk, pk, passphrase="correctpass")
         with pytest.raises(ValueError, match="wrong passphrase"):
             crypto.decrypt_secret_key(path, passphrase="wrongpass")
 
     def test_save_without_passphrase_raises(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
         with pytest.raises(ValueError, match="passphrase"):
-            crypto.save_key(path, sk, pk, passphrase="")
+            save_key(path, sk, pk, passphrase="")
 
     def test_derive_kek_and_decrypt(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="kekpass")
+        save_key(path, sk, pk, passphrase="kekpass")
         kek = crypto.derive_kek(path, "kekpass")
         assert isinstance(kek, bytes)
         assert len(kek) == 32
         recovered = crypto.decrypt_secret_key(path, kek=kek)
         assert recovered == sk
 
-    def test_sign_with_keyfile(self, tmp_path, sk, pk):
-        path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="signpass")
-        kek = crypto.derive_kek(path, "signpass")
-        msg = b"sign me"
-        sig = crypto.sign_with_keyfile(msg, path, kek)
-        assert crypto.verify(msg, sig, pk) is True
-
     def test_key_file_is_valid_json(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="testpass")
+        save_key(path, sk, pk, passphrase="testpass")
         with open(path) as f:
             data = json.load(f)
         assert "public_key" in data
@@ -328,7 +321,7 @@ class TestKeyStorage:
 
     def test_derive_kek_without_passphrase_raises(self, tmp_path, sk, pk):
         path = str(tmp_path / "key.json")
-        crypto.save_key(path, sk, pk, passphrase="testpass")
+        save_key(path, sk, pk, passphrase="testpass")
         with pytest.raises(ValueError, match="passphrase"):
             crypto.derive_kek(path, "")
 
@@ -339,7 +332,7 @@ def test_key_files_are_written_with_the_production_argon2id_cost(tmp_path):
     This one keeps the real cost, so weakening it in crypto.py is caught."""
     import nacl.pwhash
     path = tmp_path / "key.json"
-    crypto.save_key(str(path), b"s" * 32, b"p" * 32, "passphrase")
+    save_key(str(path), b"s" * 32, b"p" * 32, "passphrase")
     data = json.loads(path.read_text())
     assert data["ops"] == nacl.pwhash.argon2id.OPSLIMIT_MODERATE
     assert data["mem"] == nacl.pwhash.argon2id.MEMLIMIT_MODERATE

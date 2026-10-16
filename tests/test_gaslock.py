@@ -286,7 +286,7 @@ class TestSettlement:
 
     def test_two_requests_settle_independently(self):
         c = Chain()
-        a = c.ask(sender=1)
+        c.ask(sender=1)
         first = c.request
         h = c.cs.height
         c.ask(sender=2, lock=LOCK * 2)

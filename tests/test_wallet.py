@@ -14,6 +14,7 @@ import hdwallet
 import shortkey
 import wallet
 from walletfile import WalletFile
+from tests.legacy_key import save_key
 
 pytestmark = pytest.mark.skipif(
     not falcon_seeded.available(), reason="native/falcon_seeded is not built")
@@ -36,7 +37,7 @@ def home(tmp_path, monkeypatch):
 
 def make_legacy(path):
     sk, pk = crypto.generate_keypair()
-    crypto.save_key(str(path), sk, pk, PASS)
+    save_key(str(path), sk, pk, PASS)
     return pk
 
 

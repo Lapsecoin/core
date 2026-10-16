@@ -225,12 +225,6 @@ def is_valid_address(addr) -> bool:
     return _checksum(body) == addr
 
 
-def to_checksum_address(addr: str) -> str:
-    if not isinstance(addr, str) or not _ADDR_RE.match(addr):
-        raise ValueError("not an EVM address")
-    return _checksum(addr[2:])
-
-
 def address_from_public_key(pub_uncompressed: bytes) -> str:
     """pub_uncompressed is the 65-byte 0x04 form."""
     return _checksum(keccak256(pub_uncompressed[1:])[-20:].hex())

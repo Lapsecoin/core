@@ -1,7 +1,7 @@
 """
 Unit tests for storage.py
 
-Covers: save_block, load_block, load_all_blocks, chain_height,
+Covers: save_block, load_all_blocks,
 save_state, load_state, state_exists, save_block_and_state,
 replace_chain_and_state, TxIndex, AddrIndex, get_meta, set_meta.
 
@@ -30,6 +30,17 @@ from params import TICKS_PER_LAPSE
 # Fixture: fresh Storage pointing at a temp file
 # ---------------------------------------------------------------------------
 
+def block_at(store, height):
+    """The stored block at `height`, or None."""
+    return next((b for b in store.load_all_blocks() if b["height"] == height), None)
+
+
+def height_of(store):
+    """The height of the stored chain, -1 when empty."""
+    blocks = store.load_all_blocks()
+    return blocks[-1]["height"] if blocks else -1
+
+
 @pytest.fixture
 def store(tmp_path):
     path = str(tmp_path / "test_chain.db")
@@ -50,25 +61,25 @@ class TestBlockPersistence:
     def test_save_and_load_genesis(self, store):
         g = genesis()
         store.save_block(g)
-        loaded = store.load_block(0)
+        loaded = block_at(store, 0)
         assert loaded["hash"] == g["hash"]
 
     def test_load_nonexistent_block_returns_none(self, store):
-        assert store.load_block(999) is None
+        assert block_at(store, 999) is None
 
     def test_chain_height_empty(self, store):
-        assert store.chain_height() == -1
+        assert height_of(store) == -1
 
     def test_chain_height_after_genesis(self, store):
         store.save_block(genesis())
-        assert store.chain_height() == 0
+        assert height_of(store) == 0
 
     def test_chain_height_after_two_blocks(self, store):
         g = genesis()
         b1 = make_block(1, g["hash"], [])
         store.save_block(g)
         store.save_block(b1)
-        assert store.chain_height() == 1
+        assert height_of(store) == 1
 
     def test_load_all_blocks_empty(self, store):
         assert store.load_all_blocks() == []
@@ -85,7 +96,7 @@ class TestBlockPersistence:
         g = genesis()
         store.save_block(g)
         store.save_block(g)  # should not raise
-        assert store.chain_height() == 0
+        assert height_of(store) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -293,15 +304,15 @@ class TestReplaceChain:
         # Reorg: replace from height 1 with a new block
         b1_new = make_block(1, g["hash"], [], builder_index=1)
         store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=fresh_state())
-        assert store.chain_height() == 1
-        assert store.load_block(2) is None
+        assert height_of(store) == 1
+        assert block_at(store, 2) is None
 
     def test_replace_chain_adds_new_blocks(self, store):
         g = genesis()
         store.save_block(g)
         b1_new = make_block(1, g["hash"], [], builder_index=1)
         store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=fresh_state())
-        loaded = store.load_block(1)
+        loaded = block_at(store, 1)
         assert loaded["builder"] == address(1)
 
 
@@ -317,7 +328,7 @@ class TestSaveBlockAndState:
         s = fresh_state()
         s.credit(address(0), 42_000)
         store.save_block_and_state(b1, s)
-        assert store.chain_height() == 1
+        assert height_of(store) == 1
         balances, _, _, _bp, _nn = store.load_state()
         assert balances[address(0)] == 42_000
 
@@ -341,7 +352,7 @@ class TestReplaceChainAndState:
         s2.credit(address(0), 9999)
         store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=s2)
 
-        assert store.chain_height() == 1
+        assert height_of(store) == 1
         balances, _, _, _bp, _nn = store.load_state()
         assert balances[address(0)] == 9999
 
@@ -412,7 +423,7 @@ class TestSchemaMigration:
 
         store = Storage(str(path))
         assert store.load_all_blocks() == blocks
-        assert store.load_block(7) == blocks[7]
+        assert block_at(store, 7) == blocks[7]
         store.close()
 
     def test_migration_records_its_version_and_does_not_repeat(self, tmp_path):
@@ -573,7 +584,7 @@ class TestAddrIndexMemoMigration:
         store = Storage(str(tmp_path / "new.db"))
         blk = make_block(0, "00" * 32, [])
         store.save_block(blk)
-        assert store.load_block(0) == blk
+        assert block_at(store, 0) == blk
         store.close()
 
 

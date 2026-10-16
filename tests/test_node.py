@@ -31,14 +31,13 @@ import node as node_mod
 import state as state_mod
 import tx as tx_mod
 from chainstate import ChainState
-import gossip as gossip_mod
-from gossip import Gossip
 from node import Node, NodeView, _validate_tail
 from wallet import Wallet
 from params import TICKS_PER_LAPSE
 from tests.fixtures import (
     address, genesis, keypair, make_block, make_tx,
 )
+from tests.legacy_key import save_key
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +59,7 @@ def node_env(tmp_path):
     sk, pk = keypair(0)
     keyfile = str(tmp_path / "node.key")
     passphrase = "testpass"
-    crypto.save_key(keyfile, sk, pk, passphrase)
+    save_key(keyfile, sk, pk, passphrase)
     kek = crypto.derive_kek(keyfile, passphrase)
 
     gossip  = MagicMock()
@@ -176,7 +175,7 @@ class TestLoadCs:
         """Second Node creation with same db_path reloads existing chain."""
         sk, pk = keypair(1)
         keyfile = str(tmp_path / "node2.key")
-        crypto.save_key(keyfile, sk, pk, "pass")
+        save_key(keyfile, sk, pk, "pass")
         db_path = str(tmp_path / "chain2.db")
 
         # First node, creates genesis
@@ -206,7 +205,7 @@ class TestLoadCs:
         from tests.fixtures import make_block, make_tx
         sk, pk = keypair(1)
         keyfile = str(tmp_path / "node3.key")
-        crypto.save_key(keyfile, sk, pk, "pass")
+        save_key(keyfile, sk, pk, "pass")
         db_path = str(tmp_path / "chain3.db")
 
         def start():

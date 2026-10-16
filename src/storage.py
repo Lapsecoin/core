@@ -280,18 +280,10 @@ class Storage:
                 .order_by(AddrIndex.block_height.desc()))
         return [(r.block_height, r.tx_hash) for r in rows]
 
-    def load_block(self, height):
-        row = Block.get_or_none(Block.height == height)
-        return _unpack_block(row) if row else None
-
     def load_all_blocks(self):
         """Load and return the full chain as a list. The entire chain is kept
         in memory by design; this is called once at startup."""
         return [_unpack_block(r) for r in Block.select().order_by(Block.height)]
-
-    def chain_height(self):
-        row = Block.select(Block.height).order_by(Block.height.desc()).first()
-        return row.height if row else -1
 
     # ------------------------------------------------------------------
     # State snapshots

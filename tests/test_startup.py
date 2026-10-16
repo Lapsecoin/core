@@ -184,7 +184,7 @@ def test_the_plan(home, kind, gui, tty, env, expected):
         source = wallet_mod.Source("text", {"public_key": "00"})
     else:
         source = wallet_mod.Source(kind, "x")
-    assert startup.plan(source, gui=gui, tty=tty, env_passphrase=env).how == expected
+    assert startup.plan(source, 0, gui=gui, tty=tty, env_passphrase=env).how == expected
 
 
 @needs_native
@@ -196,7 +196,7 @@ def test_a_start_that_must_ask_and_cannot_stops_and_says_why(home, kind):
     else:
         source = wallet_mod.Source(kind, "x")
     with pytest.raises(ValueError, match="cannot ask.*LAPSECOIN_PASSPHRASE"):
-        startup.plan(source, gui=False, tty=False, env_passphrase=False)
+        startup.plan(source, 0, gui=False, tty=False, env_passphrase=False)
 
 
 # The pages of a node that holds no key

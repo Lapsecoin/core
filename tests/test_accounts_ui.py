@@ -10,13 +10,13 @@ import api
 import crypto
 import falcon_seeded
 import peerpool as peerpool_mod
-import shortkey
 import wallet as wallet_mod
 from chainstate import ChainState
 from node import Node
 from params import TICKS_PER_LAPSE
 from tests.browser import submit, tokens
 from tests.test_api import _FakeNode
+from tests.legacy_key import save_key
 
 pytestmark = pytest.mark.skipif(
     not falcon_seeded.available(), reason="native/falcon_seeded is not built")
@@ -180,7 +180,7 @@ def test_the_fee_check_uses_the_picked_address(world):
 def test_a_single_key_node_shows_no_picker_and_cannot_add_addresses(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     sk, pk = crypto.generate_keypair()
-    crypto.save_key(str(tmp_path / "k.json"), sk, pk, PASS)
+    save_key(str(tmp_path / "k.json"), sk, pk, PASS)
     w = wallet_mod.Wallet(str(tmp_path / "k.json"), pk)
     cs = ChainState.from_genesis()
     node = WalletNode(cs, w)
@@ -194,7 +194,6 @@ def test_a_single_key_node_shows_no_picker_and_cannot_add_addresses(tmp_path, mo
 
 # The board
 def test_the_board_offers_post_as_and_marks_every_address_as_mine(world):
-    import tx as tx_mod
     html = page(world.client, "/board")
     assert 'id="board-account"' in html
     submit(world.client, "/board", passphrase=PASS, message="from the shop", account=1)
@@ -302,7 +301,7 @@ def test_the_exported_key_opens_in_a_prompt_once(world):
 def test_a_single_key_node_has_no_prompts(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     sk, pk = crypto.generate_keypair()
-    crypto.save_key(str(tmp_path / "k.json"), sk, pk, PASS)
+    save_key(str(tmp_path / "k.json"), sk, pk, PASS)
     node = WalletNode(ChainState.from_genesis(), wallet_mod.Wallet(str(tmp_path / "k.json"), pk))
     html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/addresses").get_data(as_text=True)
     assert "<dialog" not in html and 'id="new-btn"' not in html

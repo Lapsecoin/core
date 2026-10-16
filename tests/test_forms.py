@@ -25,6 +25,7 @@ from params import TICKS_PER_LAPSE
 from tests.browser import submit, tokens
 from tests.fixtures import address
 from wallet import Wallet
+from tests.legacy_key import save_key
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ class TestFormsForAnApp:
 def world(tmp_path):
     sk, pk = crypto.generate_keypair()
     keyfile = str(tmp_path / "wallet.key")
-    crypto.save_key(keyfile, sk, pk, PASS)
+    save_key(keyfile, sk, pk, PASS)
     wallet = Wallet(keyfile, pk)
     cs = ChainState.from_genesis()
     cs.state.credit(wallet.addr, 1000 * TICKS_PER_LAPSE)
@@ -160,7 +161,6 @@ def world(tmp_path):
     cs.chain.append({"height": 1, "timestamp": int(time.time()),
                      "transactions": [root], "hash": "h1"})
     node = _FullNode(cs)
-    app = api.create_app(node, peerpool_mod.PeerPool())
     light = create_wallet_app(local_reader.LocalReader(node), wallet)
     return type("W", (), dict(wallet=wallet, node=node, client=light.test_client(),
                               app=light, ref=tx_mod.tx_hash(root)[:6]))

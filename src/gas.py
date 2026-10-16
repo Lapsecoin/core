@@ -326,13 +326,6 @@ def verify_claim_signature(claim: dict, lapse_from: str) -> bool:
 # Timing and order, derived from chain data every node shares
 # ---------------------------------------------------------------------------
 
-def window_close(request_height: int, first_claim_height=None) -> int:
-    """The last block a claim may land in. The first claim, at x, closes the
-    window at x+1 (one block for everyone else to show they saw the request),
-    never later than the request's block plus CLAIM_WINDOW_BLOCKS."""
-    return gaslock.close_height({"height": request_height, "claim": first_claim_height})
-
-
 def rank_key(request_txid: str, window_close_block_hash: str, claimer_addr: str) -> str:
     return hashlib.sha256(
         (request_txid + window_close_block_hash + claimer_addr).encode()).hexdigest()

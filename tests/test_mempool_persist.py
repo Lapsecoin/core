@@ -4,7 +4,6 @@ The pool itself stays I/O free (mempool.py); mempool_store.py writes and reads
 the snapshot, and Node wires it to startup, a timer, shutdown and gossip.
 """
 
-import json
 import os
 import sys
 import time

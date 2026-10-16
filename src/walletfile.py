@@ -138,14 +138,6 @@ class WalletFile:
                 raise WalletFileError(f"the wallet file is missing '{field}'")
         return cls(path, data)
 
-    @staticmethod
-    def is_wallet_file(path):
-        try:
-            with open(path) as f:
-                return json.load(f).get("kind") == "wallet"
-        except (OSError, ValueError, AttributeError):
-            return False
-
     # The public side (no passphrase needed)
     @property
     def accounts(self):

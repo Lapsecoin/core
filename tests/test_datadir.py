@@ -4,6 +4,7 @@ import sys
 import pytest
 
 import datadir
+from tests.legacy_key import save_key
 
 
 def _write(directory, name, text="x"):
@@ -188,7 +189,7 @@ class TestOldInstallMovesToARecoveryPhrase:
     def _old_install(self, folder):
         import crypto
         sk, pk = crypto.generate_keypair()
-        crypto.save_key(os.path.join(folder, "lapsecoin_key.json"), sk, pk, "old passphrase")
+        save_key(os.path.join(folder, "lapsecoin_key.json"), sk, pk, "old passphrase")
         _write(folder, "base_gas.key", "gas")
         return crypto.public_key_to_address(pk)
 

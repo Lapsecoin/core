@@ -526,7 +526,7 @@ def main():
     env_passphrase = os.environ.get(wallet_mod.PASSPHRASE_ENV) or None
     try:
         source = wallet_mod.find_source(args.key, address_text=args.address)
-        start = startup.plan(source, gui=use_gui, tty=sys.stdin.isatty(),
+        start = startup.plan(source, args.account, gui=use_gui, tty=sys.stdin.isatty(),
                              env_passphrase=bool(env_passphrase))
     except ValueError as e:
         sys.exit(f"Error: {e}")
@@ -535,7 +535,7 @@ def main():
                     "recovery-phrase wallet, and this node was given %s",
                     "an address" if source.kind == "address" else "a key")
     if start.how in (startup.WATCH, startup.DEFER):
-        wallet, kek, passphrase = wallet_mod.open_locked(source, args.account), None, None
+        wallet, kek, passphrase = start.wallet, None, None
         if start.how == startup.WATCH:
             log.info("[startup] mining for %s and holding no key", wallet.addr)
         else:
