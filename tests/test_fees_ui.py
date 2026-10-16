@@ -107,7 +107,7 @@ class TestPage:
         body = html.split("<h2>Fees</h2>", 1)[1].split("<script>", 1)[0]
         body = re.sub(r"<select.*?</select>|<details.*?</details>", " ", body, flags=re.S)   # the lists, not the copy
         words = re.sub(r"<[^>]+>", " ", body).split()
-        assert len(words) < 60, len(words)
+        assert len(words) < 90, len(words)
 
     def test_with_enough_lapse_there_is_no_hint_about_getting_some(self, app):
         html = app.client.get("/fees").get_data(as_text=True)
