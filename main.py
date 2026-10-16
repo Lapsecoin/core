@@ -650,7 +650,7 @@ def main():
     # ------------------------------------------------------------------
     gossip    = Gossip(pool, udp)
     syncer    = Syncer(pool, udp)
-    discovery = Discovery(udp, pool, genesis["hash"], port)
+    discovery = Discovery(udp, pool, genesis["hash"], port, wallet.addr)
     private_port = args.private_port if args.private_port else port + 2
     del passphrase   # nothing past startup needs it; the kek is what signs
 

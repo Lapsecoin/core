@@ -258,11 +258,19 @@ def test_a_node_given_a_passphrase_cannot_unlock_what_has_no_key():
 
 
 # What was removed because it was never needed
-def test_the_discovery_slot_depends_on_where_the_node_is_and_on_nothing_else():
+def test_the_discovery_slot_and_write_time_come_from_the_nodes_address():
     import discovery_dht
-    a = discovery_dht.DHTDiscovery(lambda addr: None, "a" * 64, 8333)
-    b = discovery_dht.DHTDiscovery(lambda addr: None, "b" * 64, 9999)
-    assert a.slot_for("1.2.3.4:8333") == b.slot_for("1.2.3.4:8333")
+
+    def dht(address):
+        return discovery_dht.DHTDiscovery(lambda addr: None, "a" * 64, 8333, address)
+
+    a, same = dht(ADDR_A), dht(ADDR_A)
+    where = "1.2.3.4:8333"
+    assert a.slot_for(where) == same.slot_for(where) and a._my_write_offset() == same._my_write_offset()
+    # different nodes spread out: over a handful of addresses and places they do not all coincide
+    slots = {dht(w).slot_for(where) for w in (ADDR_A, ADDR_B, ADDR_A + "x", ADDR_B + "x", "a.b", "c.d")}
+    offsets = {dht(w)._my_write_offset() for w in (ADDR_A, ADDR_B, ADDR_A + "x", ADDR_B + "x", "a.b", "c.d")}
+    assert len(slots) > 1 and len(offsets) > 1
     assert not hasattr(a, "node_pubkey_hex")
 
 
