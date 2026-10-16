@@ -1370,10 +1370,10 @@ class TestPublicFeesPage:
         html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
         assert 'id="fees-form"' in html
 
-    def test_every_page_carries_the_bitcoin_donation_link(self):
+    def test_the_corner_links_have_no_bitcoin_donation_icon(self):
         node, _ = fresh()
         html = api.create_app(node, peerpool_mod.PeerPool()).test_client().get("/fees").get_data(as_text=True)
-        assert 'title="Donate Bitcoin"' in html and "Lapsecoin/core#support" in html
+        assert 'title="Donate Bitcoin"' not in html and "Lapsecoin/core#support" not in html
 
 
 class TestBenchmarkPage:
