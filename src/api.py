@@ -51,11 +51,11 @@ Public app  (default port 8333, externally reachable):
          {"pending", "min", "median", "max", "next_block"}: the fee market,
          in ticks per byte. next_block is what clears the next block.
 
-    GET  /api/state[?addr=<addr>&nick=<n>&fees=1]
+    GET  /api/state[?addr=<addr>&fees=1]
          What a wallet needs about one address in a
          single answer. Always "board_floor". With addr: "balance" and
-         "nonce" (highest confirmed or pending; send nonce + 1). With nick:
-         "nick_owner". With fees: "fees", as /api/fees.
+         "nonce" (highest confirmed or pending; send nonce + 1). With fees:
+         "fees", as /api/fees.
 
     GET  /api/address/<addr>/page[?page=<n>]
          One page of an address's history with its totals, as the Balance
@@ -63,7 +63,7 @@ Public app  (default port 8333, externally reachable):
          "rows": [[height, hash, direction, amount, kind], ...]}.
 
     GET  /api/board/page[?chunks=<n>]
-         The board, resolved (profiles, votes, replies), as the Board page
+         The board, resolved (votes, replies), as the Board page
          shows it, in the first n chunks of threads. Carries an ETag; send
          it back as If-None-Match and an unchanged board is a 304. Gzipped
          when the client accepts it.
@@ -157,9 +157,9 @@ from ui_common import (NAV_ACTIVE, make_flask_app, register_static_routes, _tx_a
                        fmt_duration, render_board_text)
 # The board names the tests and other modules still reach through api.
 from board_view import (BOARD_MEMO_TAG, parse_board_body, build_board_body,  # noqa: F401
-                        REPLY_REF_LEN, ICON_PALETTE, ICON_GHOST, _icon_emoji,
-                        VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG, _nickname_owned_by,
-                        _board_posts, _board_profiles_and_votes,
+                        REPLY_REF_LEN,
+                        VOTE_UP_TAG, VOTE_DOWN_TAG, DELETE_TAG,
+                        _board_posts, _board_votes,
                         BOARD_THREADS_PER_CHUNK, _flatten_threads)
 import oblivious as oblivious_mod
 from wallet_ui import (register_address_page, register_board_pages,
@@ -496,15 +496,8 @@ def _chart_dims():
     return pick("w", _CHART_W, 480, 1800), pick("h", _CHART_H, 170, 600)
 
 
-def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
+def _race_chart(race, width=None, height=None):
     """Precompute SVG pixel geometry for the race-odds chart.
-
-    nicknames_by_addr: addr -> nickname (built from _board_profiles_and_votes'
-    own profiles dict), or None for a caller that doesn't
-    have one handy -- every "nick" this function attaches then just
-    reads as None, which the template already treats as "show the
-    address" (unchanged behaviour), so a caller that skips wiring this
-    up isn't required to.
 
     Axis range is a display decision, kept separate from the stats: it
     hugs the typical cluster of values (within 2x of the median either
@@ -521,7 +514,6 @@ def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
     entry, rather than an unbounded set of generated colors, see
     _BUILDER_COLOR_SLOTS.
     """
-    nicknames_by_addr = nicknames_by_addr or {}
     rows = race["window"]
     n = len(rows)
     chart_w = width or _CHART_W
@@ -572,7 +564,7 @@ def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
     points = [{"x": round(x_at(idx), 1), "y": round(y_at(seconds), 1),
                "idx": idx, "height": h, "seconds": seconds,
                "clipped": seconds > axis_hi or seconds < axis_lo,
-               "builder": builder, "nick": nicknames_by_addr.get(builder),
+               "builder": builder,
                "color": color_by_builder.get(builder, _OTHER_COLOR)}
               for idx, (h, seconds, builder) in enumerate(rows)]
 
@@ -592,7 +584,7 @@ def _race_chart(race, nicknames_by_addr=None, width=None, height=None):
         out.sort(key=lambda r: (r["pace"], -r["blocks"], r["machine"]))
         return out
 
-    legend = [{"label": b, "nick": nicknames_by_addr.get(b),
+    legend = [{"label": b,
                "color": color_by_builder[b], "count": builder_counts[b],
                "total": n, "machines": machines_of(lambda x, b=b: x == b)}
               for b in top_builders]
@@ -966,11 +958,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def dashboard():
         info = dict(node.get_info())
         info["address"] = _own_addr_or_hidden()
-        # Only ever looked up when the address itself is already showing:
-        # a nickname here would be exactly the identity-revealing side
-        # channel HIDE_ADDRESS_PUBLICLY exists to close if it appeared
-        # while the address itself stayed hidden.
-        info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
         kinds = _tx_kinds_from(_tx_kinds_arg(request.args))
         counts = _cached_kind_counts(chain)
@@ -1249,27 +1236,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
             odds_cache["key"], odds_cache["race"] = key, race
         return race
 
-    # Same tip-keyed cache pattern as odds_cache, kept separate since this
-    # depends only on the chain's board posts and state.nicknames, not on
-    # the draw window or own_vdf_median odds_cache's own key includes.
-    nickname_cache = {}
-
-    def _builder_nicknames_for():
-        tip = node.view.chain[-1]
-        key = (tip.get("hash"), tip.get("height"))
-        with odds_lock:
-            if nickname_cache.get("key") == key:
-                return nickname_cache["nicknames"]
-        profiles, _votes, _pending = _board_profiles_and_votes(node.view.chain, node.view.state.nicknames)
-        nicknames = {addr: prof["nick"] for addr, prof in profiles.items()}
-        with odds_lock:
-            nickname_cache["key"], nickname_cache["nicknames"] = key, nicknames
-        return nicknames
-
     @app.route("/odds", endpoint=pfx+"odds")
     def odds():
         race = _race_for()
-        chart = _race_chart(race, _builder_nicknames_for(), *_chart_dims()) if race else None
+        chart = _race_chart(race, *_chart_dims()) if race else None
         hardware = (hardware_info.describe()
                     if node.settings.get(settings_mod.SHOW_HARDWARE_DETAILS)
                     else None)
@@ -1339,7 +1309,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "machines": race["machines"],
             "fastest_machine": _fastest_machine(),
             "window_len": len(race["window"]),
-            "chart": _race_chart(race, _builder_nicknames_for(), *_chart_dims()),
+            "chart": _race_chart(race, *_chart_dims()),
             "reorgs": node.reorg_stats(),
             "mining_enabled": node.settings.get(settings_mod.MINING_ENABLED),
             "waiting_zero_odds": getattr(node, "status_line", "").startswith("waiting"),
@@ -1430,7 +1400,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # something through another node (see oblivious.py).
         info["oblivious_key"] = oblivious.public_b64 if oblivious else None
         info["address"] = _own_addr_or_hidden()
-        info["nick"] = _builder_nicknames_for().get(info["address"]) if info["address"] else None
         chain = node.view.chain
         # The dashboard passes its filter so the live refresh lists the same
         # kinds as the page it is on.

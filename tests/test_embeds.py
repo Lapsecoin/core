@@ -46,7 +46,7 @@ def _page(path, public=True, public_url=None):
 
 class TestWording:
     def test_a_post_cannot_smuggle_lines_or_length_into_a_card(self):
-        card = embeds.board(1, [{"from": "a.b.c.d", "nick": "eve", "reply_ref": "",
+        card = embeds.board(1, [{"from": "a.b.c.d", "reply_ref": "",
                                  "text": "hi\nthere\r\n" + "x" * 500}])
         assert "\r" not in card["description"]
         assert card["description"].count("\n") == 1
@@ -54,9 +54,9 @@ class TestWording:
         assert card["description"].endswith("…")
 
     def test_the_board_shows_the_newest_top_level_post_not_a_reply(self):
-        rows = [{"from": "w.x.y.z", "nick": None, "reply_ref": "abc123", "text": "a reply"},
-                {"from": "a.b.c.d.e", "nick": "ann", "reply_ref": "", "text": "the root"}]
-        assert "ann: the root" in embeds.board(2, rows)["description"]
+        rows = [{"from": "w.x.y.z", "reply_ref": "abc123", "text": "a reply"},
+                {"from": "a.b.c.d.e", "reply_ref": "", "text": "the root"}]
+        assert "a.b.c…: the root" in embeds.board(2, rows)["description"]
 
     def test_addresses_are_shortened_to_three_words(self):
         assert embeds.short_addr("one.two.three.four.five") == "one.two.three…"
@@ -143,8 +143,8 @@ class TestPages:
         assert meta["og:title"] == embeds.short_addr(addr)
         assert "LAPSE" in meta["og:description"]
 
-    def test_a_hostile_nickname_or_post_is_escaped_in_the_tag(self):
-        card = embeds.board(1, [{"from": "a.b.c", "nick": None, "reply_ref": "",
+    def test_a_hostile_post_is_escaped_in_the_tag(self):
+        card = embeds.board(1, [{"from": "a.b.c", "reply_ref": "",
                                  "text": '"><script>alert(1)</script>'}])
         rendered = api.make_flask_app(__name__).jinja_env.from_string(
             '<meta content="{{ c.description }}">').render(c=card)

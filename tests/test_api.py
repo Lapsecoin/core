@@ -942,27 +942,15 @@ class TestBoardMemoParsing:
         assert text == "hi"
 
     def test_out_of_range_icon_index_parses_as_a_raw_int(self):
-        # Hand-built rather than through build_board_body, which would
-        # never emit an out-of-range index itself: this simulates an
-        # older/newer client with a differently sized palette.
-        # parse_board_body itself doesn't bounds-check (that's tx.py's
-        # job now, a consensus-neutral parser) -- see _icon_emoji below
-        # for where the fallback to the ghost placeholder actually lives.
-        idx = len(api.ICON_PALETTE) + 5
-        icon, nick, reply_ref, text = api.parse_board_body(f"[p:{idx}:X]hi")
-        assert icon == idx
+        # parse_board_body does not bounds-check the icon; nothing shows icons
+        # any more, so an old post's header just has to parse to its text.
+        icon, nick, reply_ref, text = api.parse_board_body("[p:29:X]hi")
+        assert icon == 29
         assert text == "hi"
-
-    def test_icon_emoji_falls_back_to_ghost_when_out_of_range(self):
-        idx = len(api.ICON_PALETTE) + 5
-        assert api._icon_emoji(idx) == api.ICON_GHOST
-        assert api._icon_emoji(None) == api.ICON_GHOST
-        assert api._icon_emoji(0) == api.ICON_PALETTE[0]
 
 
 class TestBoardProfilesAndVotes:
-    """_board_profiles_and_votes: the address->profile lookup and the
-    per-target vote tally, including the "latest wins, not summed"
+    """_board_votes: the per-target vote tally, including the "latest wins, not summed"
     semantics a vote needs (see the function's own docstring) and pending
     (mempool) votes counting immediately instead of only once mined."""
 
@@ -986,7 +974,7 @@ class TestBoardProfilesAndVotes:
                              "transactions": [t], "hash": f"h{i}"})
             # apply_tx (not just appending to the chain list) so
             # cs.state.nicknames -- now the real source
-            # _board_profiles_and_votes reads -- comes out exactly like a
+            # _board_votes reads -- comes out exactly like a
             # node's own would after accepting these same transactions.
             cs.state.apply_tx(t)
         return cs
@@ -996,7 +984,7 @@ class TestBoardProfilesAndVotes:
             (0, api.VOTE_UP_TAG + "abcdef"),
             (0, api.VOTE_DOWN_TAG + "abcdef"),
         )
-        _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
+        votes, _pending = api._board_votes(cs.chain)
         assert votes["abcdef"]["up"] == 0
         assert votes["abcdef"]["down"] == 1
 
@@ -1005,7 +993,7 @@ class TestBoardProfilesAndVotes:
             (0, api.VOTE_UP_TAG + "abcdef"),
             (1, api.VOTE_UP_TAG + "abcdef"),
         )
-        _profiles, votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
+        votes, _pending = api._board_votes(cs.chain)
         assert votes["abcdef"]["up"] == 2
 
     def test_vote_tag_is_not_a_board_post(self):
@@ -1019,70 +1007,14 @@ class TestBoardProfilesAndVotes:
         node = _FakeNode(cs)
         t = make_tx(0, 1, 1, cs.state, fee=100, memo=api.VOTE_UP_TAG + "abcdef")
         node.mempool.add(t)
-        _profiles, votes, pending_refs = api._board_profiles_and_votes(cs.chain, cs.state.nicknames, node.mempool)
+        votes, pending_refs = api._board_votes(cs.chain, node.mempool)
         assert votes["abcdef"]["up"] == 1
         assert "abcdef" in pending_refs
 
     def test_confirmed_vote_is_not_marked_pending(self):
         cs = self._chain_with((0, api.VOTE_UP_TAG + "abcdef"))
-        _profiles, _votes, pending_refs = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
+        _votes, pending_refs = api._board_votes(cs.chain)
         assert pending_refs == set()
-
-
-class TestCurrentNicknamesByAddress:
-    """The odds page's builder labels and the dashboard's own-address line
-    both derive addr -> nick from _board_profiles_and_votes' own profiles
-    dict, rather than a second scan -- this just checks that derivation."""
-
-    def _chain_with(self, *memos_by_sender):
-        import tx as tx_mod
-        cs = ChainState.from_genesis()
-        for i in range(3):
-            seed_balance(cs.state, i, 1000.0)
-        for i, (sender, memo) in enumerate(memos_by_sender):
-            t = {"from": address(sender), "nonce": i + 1, "fee": 100,
-                 "outputs": [{"to": "1" * 40, "amount": 1}], "memo": memo}
-            cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
-                             "transactions": [t], "hash": f"h{i}"})
-            cs.state.apply_tx(t)
-        return cs, tx_mod
-
-    def _nicknames_by_address(self, cs):
-        profiles, _votes, _pending = api._board_profiles_and_votes(cs.chain, cs.state.nicknames)
-        return {addr: prof["nick"] for addr, prof in profiles.items()}
-
-    def test_address_with_no_profile_post_is_absent(self):
-        cs, _tx_mod = self._chain_with((0, api.BOARD_MEMO_TAG + "just text, no header"))
-        result = self._nicknames_by_address(cs)
-        assert address(0) not in result
-
-class TestRaceChartNicknames:
-    """_race_chart(race, nicknames_by_addr): the odds page's builder
-    labels, wired to the same registry the board itself reads."""
-
-    def _race(self, builders):
-        """builders: list of address strings, oldest first, one 100s
-        block-interval row each."""
-        window = [(i + 1, 100.0, b) for i, b in enumerate(builders)]
-        return {"window": window, "median": 100.0, "own_pace": 100.0}
-
-    def test_points_carry_the_builders_nickname(self):
-        race = self._race([address(0), address(1)])
-        chart = api._race_chart(race, {address(0): "Al"})
-        by_height = {p["height"]: p for p in chart["points"]}
-        assert by_height[1]["nick"] == "Al"
-        assert by_height[2]["nick"] is None
-
-    def test_legend_carries_the_builders_nickname(self):
-        race = self._race([address(0)] * 5)
-        chart = api._race_chart(race, {address(0): "Al"})
-        assert chart["legend"][0]["label"] == address(0)
-        assert chart["legend"][0]["nick"] == "Al"
-
-    def test_missing_nicknames_dict_defaults_to_no_nicknames_shown(self):
-        race = self._race([address(0)])
-        chart = api._race_chart(race)  # no nicknames_by_addr at all
-        assert chart["points"][0]["nick"] is None
 
 
 class TestRenderBoardText:
@@ -1364,148 +1296,6 @@ class TestAddressHiddenPublicly:
         client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
         data = client.get("/api/board").get_json()
         assert data["own_addr"] == node.addr
-
-
-class TestDashboardNickname:
-    """The dashboard's own-address card shows a nickname when this node
-    has claimed one, but only ever alongside the address itself -- never
-    as a substitute that would keep showing identity once
-    HIDE_ADDRESS_PUBLICLY has hidden the address it's derived from (see
-    dashboard()'s own comment on why)."""
-
-    def _node_with_nickname(self, nick="Al", hide=None):
-        import tx as tx_mod
-        cs = ChainState.from_genesis()
-        seed_balance(cs.state, 0, 1000.0)
-        t = {"from": address(0), "nonce": 1, "fee": 100,
-             "outputs": [{"to": "1" * 40, "amount": 1}],
-             "memo": tx_mod.BOARD_MEMO_TAG + tx_mod.build_board_body("hi", icon=0, nick=nick)}
-        cs.chain.append({"height": len(cs.chain), "timestamp": 1000,
-                         "transactions": [t], "hash": "h0"})
-        cs.state.apply_tx(t)
-        node = _InfoNode(cs)
-        if hide is not None:
-            node.settings.set(settings_mod.HIDE_ADDRESS_PUBLICLY, hide)
-        return node
-
-    def test_nickname_shown_on_private_dashboard(self):
-        node = self._node_with_nickname()
-        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
-        html = client.get("/").get_data(as_text=True)
-        assert "Al" in html
-        assert node.addr in html
-
-    def test_nickname_hidden_alongside_the_address_on_public_app_by_default(self):
-        node = self._node_with_nickname()
-        client = api.create_app(node, peerpool_mod.PeerPool()).test_client()
-        data = client.get("/api/info").get_json()
-        assert data["address"] is None
-        assert data["nick"] is None
-        html = client.get("/").get_data(as_text=True)
-        assert not re.search(r"\bAl\b", html)      # the word, not a substring of some script
-
-def test_flatten_threads_newest_thread_first_replies_by_score():
-    import api
-    entries = [{"ref6": "a", "reply_ref": None},
-               {"ref6": "c", "reply_ref": "a"},
-               {"ref6": "d", "reply_ref": "a"},
-               {"ref6": "e", "reply_ref": "c"},
-               {"ref6": "b", "reply_ref": None},
-               {"ref6": "z", "reply_ref": "zzzzzz"}]  # unknown parent: own thread
-    score = {"c": 1, "d": 5}.get
-    flat, starts = api._flatten_threads(entries, lambda r: score(r["ref6"], 0))
-    assert len(starts) == 3
-    assert [(e["ref6"], d) for e, d in flat] == [
-        ("z", 0), ("b", 0), ("a", 0), ("d", 1), ("c", 1), ("e", 2)]
-    assert [flat[i][0]["ref6"] for i in starts] == ["z", "b", "a"]
-
-
-def test_board_reply_memos_round_trip_into_nested_render():
-    """Replies built the way the compose path builds them (build_board_body
-    with the parent's tx-hash prefix) come back nested under that parent."""
-    import re
-    import tx as tx_mod
-    TAG = tx_mod.BOARD_MEMO_TAG
-    cs = ChainState.from_genesis()
-    for i in range(3):
-        seed_balance(cs.state, i, 1000.0)
-    posts = {}
-
-    def post(name, msg, parent=None, who=0):
-        ref = tx_mod.tx_hash(posts[parent])[:tx_mod.REPLY_REF_LEN] if parent else None
-        t = {"from": address(who), "nonce": len(posts) + 1, "fee": 100,
-             "outputs": [{"to": "1" * 40, "amount": 1}],
-             "memo": TAG + api.build_board_body(msg, reply_ref=ref)}
-        posts[name] = t
-        cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + len(posts),
-                         "transactions": [t], "hash": f"h{len(cs.chain)}"})
-
-    post("A", "root A")
-    post("B", "root B")
-    post("A1", "reply A1", "A", 1)
-    post("A1a", "reply to A1", "A1", 2)
-    cs.state.total_board_posts = len(posts)
-    client = api.create_private_app(_FakeNode(cs), peerpool_mod.PeerPool()).test_client()
-    html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
-    margins = {}
-    for m in re.finditer(r'<div class="rc-root[^"]*"[^>]*?(?:--depth: (\d+))?">'
-                         r'.*?<div class="rc-text">(.*?)</div>', html, re.S):
-        margins[m.group(2).strip()] = float(m.group(1) or 0)
-    assert margins == {"root B": 0, "root A": 0, "reply A1": 1, "reply to A1": 2}
-    assert (html.index("root B") < html.index("root A")
-            < html.index("reply A1") < html.index("reply to A1"))
-
-
-def test_board_post_form_encodes_reply_ref_and_renders_nested(tmp_path):
-    """The real compose path: POST /board with a reply_ref, signed by a
-    real keyfile, lands in the mempool as a reply and renders nested."""
-    import re
-    import time
-    import crypto as crypto_mod
-    import tx as tx_mod
-    from params import TICKS_PER_LAPSE
-    PASS = "correct horse battery staple"
-    sk, pk = crypto_mod.generate_keypair()
-    keyfile = str(tmp_path / "node.key")
-    crypto_mod.save_key(keyfile, sk, pk, PASS)
-    addr = crypto_mod.public_key_to_address(pk)
-    cs = ChainState.from_genesis()
-    cs.state.credit(addr, 1000 * TICKS_PER_LAPSE)
-
-    class SigningNode(_FakeNode):
-        pk_hex = pk.hex()
-
-        def __init__(self):
-            super().__init__(cs, addr=addr)
-            self.keyfile = keyfile
-
-        def build_and_sign_tx(self, outs, fee=0, passphrase=None, memo=""):
-            kek = crypto_mod.derive_kek(self.keyfile, passphrase)
-            nonce = max(cs.state.get_nonce(addr), self.mempool.pending_nonce(addr)) + 1
-            s = crypto_mod.decrypt_secret_key(self.keyfile, kek=kek)
-            return tx_mod.create(addr, self.pk_hex, outs, nonce, fee, s, memo=memo), fee
-
-        def submit_tx_from_api(self, t, timeout=5):
-            ok, why = self.mempool.add(t)
-            return ok, (tx_mod.tx_hash(t) if ok else why)
-
-    node = SigningNode()
-    root = {"from": addr, "pubkey": pk.hex(), "nonce": 1, "fee": 100,
-            "outputs": [{"to": "1" * 40, "amount": 1}],
-            "memo": tx_mod.BOARD_MEMO_TAG + "the root"}
-    cs.chain.append({"height": 1, "timestamp": int(time.time()),
-                     "transactions": [root], "hash": "h1"})
-    cs.state.apply_tx(root)
-    app = api.create_private_app(node, peerpool_mod.PeerPool())
-    client = app.test_client()
-    ref = tx_mod.tx_hash(root)[:tx_mod.REPLY_REF_LEN]
-    from tests.browser import submit
-    html = submit(client, "/board", message="the reply", passphrase=PASS,
-                  reply_ref=ref).get_data(as_text=True)
-    pending = list(node.mempool.all_txs())
-    assert [t["memo"] for t in pending] == [tx_mod.BOARD_MEMO_TAG + f"[r:{ref}]the reply"]
-    assert html.index("the root") < html.index("the reply")
-    assert "--depth: 1" in html
 
 
 class TestBoardCachingAndQuotes:
@@ -1794,16 +1584,17 @@ class TestBoardNicknamesNoLongerExist:
             cs.state.apply_tx(t)
         return cs
 
-    def test_no_profile_is_ever_built_from_a_header(self):
-        from board_view import _board_profiles_and_votes
-        cs = self._chain((0, self._memo()))
-        profiles, _votes, _pending = _board_profiles_and_votes(cs.chain, cs.state.nicknames)
-        assert profiles == {}
+    def test_nothing_resolves_a_name_to_an_address(self):
+        import board_view
+        assert not hasattr(board_view, "_nickname_owned_by")
+        assert not hasattr(board_view, "_icon_emoji")
 
-    def test_a_name_resolves_to_nobody(self):
-        from board_view import _nickname_owned_by
-        cs = self._chain((0, self._memo()))
-        assert _nickname_owned_by(cs.state, "Al") is None
+    def test_a_post_with_an_old_profile_header_reads_as_just_its_text(self):
+        cs = self._chain((0, self._memo("plain words")))
+        node = _FakeNode(cs)
+        client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
+        html = client.get("/board").get_data(as_text=True)
+        assert "plain words" in html and "[p:" not in html
 
     def test_typing_a_name_into_the_lookup_is_just_an_invalid_address(self):
         cs = self._chain((0, self._memo()))

@@ -36,10 +36,10 @@ class State:
         self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
         self.total_minted = 0   # ticks minted via block rewards since genesis
         self.total_board_posts = 0  # confirmed board posts since genesis
-        # nickname (lowercased) -> address that first claimed it. Consensus
-        # state, not a display cache: tx.validate()'s
-        # _check_nickname_available reads this directly, so every node
-        # enforces the exact same first-come-first-served ownership.
+        # nickname (lowercased) -> address that first claimed it. Inert: board
+        # nicknames no longer exist, nothing reads this and no rule enforces
+        # it. It is still filled and stored only so the saved state keeps its
+        # shape; dropping it means changing how a node's database is read.
         self.nicknames = {}
         # Open fee-request locks: request txid -> {"sender", "amount",
         # "height", "claim"}. Consensus state, like nicknames (see

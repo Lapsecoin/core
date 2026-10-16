@@ -1,5 +1,5 @@
 """Board reading rules shared by the full node's web app and the light
-client: parsing a post, threading, profiles, votes, and rendering context.
+client: parsing a post, threading, votes, and rendering context.
 Light-safe: imports nothing that pulls in the VDF, the chain database, or
 the node, and a test keeps it that way."""
 
@@ -17,12 +17,9 @@ BOARD_MEMO_TAG    = tx_mod.BOARD_MEMO_TAG
 BOARD_POST_AMOUNT = tx_mod.BOARD_POST_AMOUNT
 
 
-# Profile (icon + nickname) and reply-reference parsing/building now
-# lives in tx.py, not here: the nickname a profile header carries is
-# consensus-relevant (tx.validate()'s _check_nickname_available), so the
-# code that decides what a post claims and the code that decides whether
-# that claim is valid have to be the same one, or api.py's own idea of a
-# memo's contents could quietly drift from what tx.py actually enforces.
+# Parsing and building a post's header (reply reference, and the old profile
+# header that nothing writes or shows any more) lives in tx.py, so the code
+# that reads a memo is the same wherever a post is looked at.
 parse_board_body  = tx_mod.parse_board_body
 
 
@@ -30,34 +27,6 @@ build_board_body  = tx_mod.build_board_body
 
 
 REPLY_REF_LEN     = tx_mod.REPLY_REF_LEN
-
-
-# Small built-in set so "icon" never means an uploaded image or a URL --
-# both would cost far more bytes than this feature is worth and an <img>
-# is exactly what render_board_text's whitelist refuses to ever emit.
-# Index into this list is all a profile header carries; unknown/out of
-# range indexes (an older client's palette was shorter, say) just fall
-# back to the ghost placeholder rather than failing to render.
-ICON_PALETTE = ["\U0001F47B", "\U0001F600", "\U0001F42C", "\U0001F984",
-                "\U0001F41D", "\U0001F340", "\U0001F525", "\U0001F30A",
-                "\U0001F31F", "\U0001F3AF", "\U0001F9E9", "\U0001F680",
-                "\U0001F338", "\U0001F9CA", "\U0001F98A", "\U0001F989",
-                "\U0001F42D", "\U0001F419", "\U0001F995", "\U0001F43C",
-                "\U0001F98B", "\U0001F41B", "\U0001F340", "\U0001F32E"]
-
-
-ICON_GHOST = "\U0001F47B"  # shown for an address with no profile post yet
-
-
-def _icon_emoji(idx):
-    """ICON_PALETTE[idx], or the ghost placeholder for an index outside
-    it. tx.parse_board_body deliberately doesn't bounds-check icon (see
-    its own docstring: that's a display concern, not a consensus one),
-    so an older/newer client's differently sized palette, or simply
-    nobody having set an icon at all, has to fall back safely here
-    instead of indexing out of range.
-    """
-    return ICON_PALETTE[idx] if idx is not None and 0 <= idx < len(ICON_PALETTE) else ICON_GHOST
 
 
 # Votes are ordinary transactions, not board posts: a different tag family
@@ -143,12 +112,6 @@ def apply_splice(text, pos, ndel, inserted):
     return new
 
 
-def _nickname_owned_by(state, nick):
-    """Always None: board nicknames no longer exist, so no name belongs to an
-    address and nothing can be looked up by one."""
-    return None
-
-
 def _board_posts(chain):
     """Every board post on chain, tip first.
 
@@ -168,15 +131,10 @@ def _board_posts(chain):
     return rows
 
 
-def _board_profiles_and_votes(chain, nicknames, mempool=None):
+def _board_votes(chain, mempool=None):
     """One more full pass over the chain (see _board_posts' own docstring
-    on why that's fine at this scale), building the state that no single
-    post ever *is* by itself.
-
-    profiles: always empty. Board nicknames and icons no longer exist, so a
-    poster shows as their address, or as the reader's own name for it when it
-    is one of the reader's addresses. The argument `nicknames` is kept so
-    callers do not change.
+    on why that's fine at this scale), tallying the votes, which no single
+    post ever *is* by itself:
 
     votes: 6-hex tx-hash prefix -> {"up", "down"}, tallied from ordinary
     (non-board) VOTE_UP_TAG/VOTE_DOWN_TAG transactions anywhere on chain,
@@ -190,14 +148,12 @@ def _board_profiles_and_votes(chain, nicknames, mempool=None):
     is one stored value per user per comment, overwritten by a later
     click, never summed). Walking mempool-then-tip-first and keeping only
     the first vote seen per (address, target) pair gets that same
-    "latest replaces, doesn't add" semantics for free, the same trick
-    profiles above already uses for "latest icon/nickname wins".
+    "latest replaces, doesn't add" semantics for free.
 
     pending_vote_refs: the set of target refs with an unconfirmed vote
     counted above, so a row can show its score as still-settling instead
     of implying a mined, final number.
     """
-    profiles = {}
     votes = {}
     voted = set()  # (address, target ref) already counted, most recent/pending first
     pending_vote_refs = set()
@@ -233,15 +189,13 @@ def _board_profiles_and_votes(chain, nicknames, mempool=None):
             memo = t.get("memo") or ""
             if not memo.startswith(BOARD_MEMO_TAG):
                 _tally_vote(t)
-    return profiles, votes, pending_vote_refs
+    return votes, pending_vote_refs
 
 
 
 
-def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_vote_refs=frozenset()):
-    """Attach everything board.html actually renders for one row: the
-    poster's current icon/nickname (looked up live, see
-    _board_profiles_and_votes), this post's own vote tally, whether that
+def _enrich_board_row(row, votes, hash6_index, own_addr=None, pending_vote_refs=frozenset()):
+    """Attach everything board.html actually renders for one row: this post's own vote tally, whether that
     tally still has an unconfirmed vote in it (so the count can read as
     still-settling instead of implying a final, mined number, the same
     "pending..." honesty a freshly posted message already gets), the
@@ -253,9 +207,6 @@ def _enrich_board_row(row, profiles, votes, hash6_index, own_addr=None, pending_
     The row already carries its resolved text (edits applied, deleted
     posts emptied, see resolve_board), so nothing here reads a memo.
     """
-    prof = profiles.get(row["from"])
-    row["icon"] = _icon_emoji(prof["icon"]) if prof else ICON_GHOST
-    row["nick"] = prof.get("nick") if prof else None
     row["ref6"] = row["hash"][:REPLY_REF_LEN]
     tally = votes.get(row["ref6"], {"up": 0, "down": 0, "by": {}})
     row["up"], row["down"] = tally["up"], tally["down"]
@@ -403,16 +354,15 @@ def worth_showing(entries):
     return [e for e in entries if id(e) in kept]
 
 
-def build_board_snapshot(chain, nicknames, mempool):
+def build_board_snapshot(chain, mempool):
     """The whole board, resolved: everything board_page_data slices from.
 
-    Returns (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
+    Returns (flat, starts, votes, pending_vote_refs, hash6_index,
     post_count). Reads the whole chain once; callers cache it per chain
     and mempool state, see LocalReader."""
     events = _board_events(chain, mempool)
     entries = resolve_board(events)
-    profiles, votes, pending_vote_refs = _board_profiles_and_votes(
-        chain, nicknames, mempool)
+    votes, pending_vote_refs = _board_votes(chain, mempool)
     hash6_index = {e["ref6"]: e for e in entries}
     post_count = sum(1 for ev in events if not ev["pending"]
                      and (ev["tx"].get("memo") or "").startswith(BOARD_MEMO_TAG))
@@ -422,14 +372,12 @@ def build_board_snapshot(chain, nicknames, mempool):
         return (tally["up"] - tally["down"]) if tally else 0
 
     flat, starts = _flatten_threads(worth_showing(entries), score_of)
-    return (flat, starts, profiles, votes, pending_vote_refs, hash6_index,
-            post_count)
+    return (flat, starts, votes, pending_vote_refs, hash6_index, post_count)
 
 
 def board_page_data(snapshot, chunks):
     """The first `chunks` chunks of the board, as plain JSON-able data and
-    nothing beyond what those rows need: the posters' profiles, the vote
-    tallies of the rows shown, and the posts those rows reply to. A row is
+    nothing beyond what those rows need: the vote tallies of the rows shown, and the posts those rows reply to. A row is
     its resolved text and who wrote it, never the transaction behind it:
     that carries a public key and a signature, over two kilobytes of hex
     that nothing on the page shows.
@@ -438,7 +386,7 @@ def board_page_data(snapshot, chunks):
     from its own snapshot, and serves it as /api/board/page, and a light
     client reads that same dict from a remote node, so both feed the same
     rendering code."""
-    flat, starts, profiles, votes, pending_vote_refs, hash6_index, post_count = snapshot
+    flat, starts, votes, pending_vote_refs, hash6_index, post_count = snapshot
     limit = max(chunks, 1) * BOARD_THREADS_PER_CHUNK
     cut = starts[limit] if limit < len(starts) else len(flat)
     rows, refs, posters, targets = [], set(), set(), {}
@@ -457,7 +405,6 @@ def board_page_data(snapshot, chunks):
                                                "text": target["text"][:60],
                                                "deleted": target["deleted"]}
     return {"rows": rows,
-            "profiles": {a: profiles[a] for a in posters if a in profiles},
             "votes": {r: votes[r] for r in refs if r in votes},
             "pending_vote_refs": sorted(refs & set(pending_vote_refs)),
             "targets": targets,
@@ -490,7 +437,7 @@ def board_ctx(reader, page_arg, own_addr, extra=None):
     # Copies: enrichment (own_addr-dependent "mine", etc.) is per request.
     page_rows = [dict(r) for r in data["rows"]]
     for row in page_rows:
-        _enrich_board_row(row, data["profiles"], data["votes"], data["targets"],
+        _enrich_board_row(row, data["votes"], data["targets"],
                           own_addr, pending_vote_refs)
     ctx = dict(title="Board", rows=page_rows,
                post_count=data["post_count"], own_addr=own_addr,

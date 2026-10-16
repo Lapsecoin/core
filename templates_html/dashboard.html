@@ -122,8 +122,8 @@
   </div>
 {% if info.address %}
   <div class="panel">
-    <div class="panel-head"><b>Address{{ " (" ~ info.nick ~ ")" if info.nick }}</b></div>
-    <dl class="kv"><div><dt>This node</dt><dd class="addr" title="{{ (info.nick ~ ' - ') if info.nick }}{{ info.address }}">{{ info.address }}</dd></div></dl>
+    <div class="panel-head"><b>Address</b></div>
+    <dl class="kv"><div><dt>This node</dt><dd class="addr" title="{{ info.address }}">{{ info.address }}</dd></div></dl>
   </div>
 {% endif %}
 </div>

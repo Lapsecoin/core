@@ -230,7 +230,7 @@ def _tx(author_index, memo, nonce, burn=True):
 class TestSnapshot:
     def _board(self, cs, mempool=None):
         mem = mempool or mempool_mod.Mempool()
-        snap = bv.build_board_snapshot(cs.chain, cs.state.nicknames, mem)
+        snap = bv.build_board_snapshot(cs.chain, mem)
         return bv.board_page_data(snap, 1)
 
     def test_the_page_shows_the_edited_text_and_the_edit_is_not_a_row(self):
