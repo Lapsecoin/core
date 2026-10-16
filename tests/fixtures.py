@@ -62,7 +62,9 @@ def make_tx(
     nonce_override: int | None = None,
     memo: str = "",
 ):
-    """Build and sign a minimal valid plaintext transaction."""
+    """Build and sign a minimal valid plaintext transaction. fee="floor" pays
+    the least a node will take into its pool (tx.relay_fee_floor); the default
+    of 0 is for tests that never go through a node's pool."""
     sk, _ = keypair(sender_index)
     from_addr = address(sender_index)
     to_addr   = address(recipient_index)
@@ -73,6 +75,11 @@ def make_tx(
 
     outputs = outputs_override or [{"to": to_addr, "amount": amount}]
 
+    if fee == "floor":
+        draft = {"from": from_addr, "pubkey": pk_hex, "outputs": outputs, "nonce": nonce, "fee": 0}
+        if memo:
+            draft["memo"] = memo
+        fee = tx_mod.relay_fee_floor(draft)
     return tx_mod.create(from_addr, pk_hex, outputs, nonce, fee, sk, memo=memo)
 
 

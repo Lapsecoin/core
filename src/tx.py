@@ -8,12 +8,14 @@ blocks are built by picking whichever valid, pending transactions pay
 the most per byte.
 """
 
+import math
 import re
 import threading
 
 from cachetools import LRUCache
 
 import crypto
+import params
 from crypto import canonical_json
 
 # Signature verifications already performed, so a transaction verified on
@@ -77,6 +79,33 @@ def tx_size(tx_dict):
     The signature is not under the sender's control so is not priced."""
     fields = {k: v for k, v in tx_dict.items() if k != "signature"}
     return len(canonical_json(fields))
+
+
+def relay_fee_floor(tx_dict):
+    """The least fee a node will take this tx into its pool for: params.
+    MIN_RELAY_FEE_RATE per fee-basis byte. The fee field is counted as zero
+    when measuring, because a wallet has to size the tx before it knows the
+    fee (a draft with "fee": 0) and the real fee then adds a few digits; a tx
+    that pays exactly what its draft called for must not fall short of the
+    floor by the length of its own fee."""
+    return math.ceil(params.MIN_RELAY_FEE_RATE * tx_size(dict(tx_dict, fee=0)))
+
+
+def check_relay_fee(tx_dict):
+    """(True, None), or (False, why) when the fee is below the relay floor.
+
+    Local relay policy, like Bitcoin's minrelaytxfee, and deliberately not part
+    of validate(): a block that carries a cheaper tx is still a valid block, so
+    this can be raised or lowered by software update without splitting the
+    chain. A node applies it to what it admits to its pool, restores from disk
+    and puts back after a reorg, so anything it builds from the pool pays it."""
+    fee = tx_dict.get("fee")
+    if not isinstance(fee, int):
+        return False, "fee must be a non-negative integer"
+    need = relay_fee_floor(tx_dict)
+    if fee < need:
+        return False, f"fee below the relay minimum: have {fee}, need {need}"
+    return True, None
 
 
 def fee_rate(tx_dict):

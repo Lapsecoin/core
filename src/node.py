@@ -903,6 +903,11 @@ class Node:
         """Validate tx_dict against confirmed state plus this sender's
         already-pending mempool txs. Shared by submit_tx and
         _handle_inbound_tx so both acceptance paths agree."""
+        # The cheap check first: it turns away a free flood before any
+        # signature is verified.
+        ok, err = tx_mod.check_relay_fee(tx_dict)
+        if not ok:
+            return False, err
         probe = self.mempool.probe_state_for(tx_dict.get("from"), self.cs.state)
         return tx_mod.validate(tx_dict, probe)
 
@@ -2198,6 +2203,10 @@ class Node:
         # sender's second and third pending tx look like nonce gaps and
         # only the first would ever come back. Blocks list a sender's txs
         # in nonce order, so each one sees its predecessors.
+        # A free tx that a lost block carried is not worth putting back, or
+        # worse, putting ahead of the ones that paid.
+        if not tx_mod.check_relay_fee(t)[0]:
+            return False
         probe = self.mempool.probe_state_for(t.get("from"), state)
         ok, _ = tx_mod.validate(t, probe)
         if not ok:

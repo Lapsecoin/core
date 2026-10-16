@@ -26,7 +26,7 @@ from tests.test_node import node_env  # noqa: F401  (pytest fixture)
 def tx_from(sender):
     s = state_mod.State()
     seed_balance(s, sender, 100.0)
-    return make_tx(sender, 9, TICKS_PER_LAPSE, s)
+    return make_tx(sender, 9, TICKS_PER_LAPSE, s, fee="floor")
 
 
 def fund(node, *senders):
@@ -171,10 +171,10 @@ class TestNodePersistence:
         node, keyfile, *_ = node_env
         fund(node, 3)
         s = node.cs.state
-        first = make_tx(3, 9, TICKS_PER_LAPSE, s)
+        first = make_tx(3, 9, TICKS_PER_LAPSE, s, fee="floor")
         node.mempool.add(first)
         probe = node.mempool.probe_state_for(address(3), s)
-        second = make_tx(3, 9, TICKS_PER_LAPSE, probe)
+        second = make_tx(3, 9, TICKS_PER_LAPSE, probe, fee="floor")
         node.mempool.add(second)
         assert second["nonce"] == first["nonce"] + 1
         node._save_mempool()

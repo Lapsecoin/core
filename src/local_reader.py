@@ -126,9 +126,10 @@ def fee_estimate(node):
 
     Returns {"pending": int, "min": float, "median": float, "max": float,
     "next_block": float}. next_block never reads below params.MIN_RELAY_FEE_RATE:
-    that floor is enforced by the mempool regardless of congestion (see
-    mempool.Mempool.add), so an uncongested network never actually suggests 0,
-    the same reason no real network's fees are literally 0 when idle.
+    that floor is enforced when a node admits a transaction (see
+    tx.check_relay_fee), regardless of congestion, so an uncongested network
+    never actually suggests 0, the same reason no real network's fees are
+    literally 0 when idle.
     """
     pending = node.mempool.all_txs()
     if not pending:
