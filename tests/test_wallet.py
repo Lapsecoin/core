@@ -233,7 +233,7 @@ def test_export_of_an_old_key_file_prints_it_as_before(home):
     assert wallet.find_source(out.stdout).kind == "text"
 
 
-#
+# --account takes a number or a name
 
 def test_account_by_number_or_by_name(home):
     w, kek, _ = wallet.create_wallet(PASS, phrase=PHRASE)
@@ -272,7 +272,7 @@ def test_export_accepts_the_name(home):
     assert wallet.unlock(wallet.find_source(text), BOX)[0].addr == ADDR1
 
 
-#
+# --export NAME makes the address when there is none
 
 def test_export_by_a_new_name_creates_that_address_and_keeps_stdout_clean(home):
     wallet.create_wallet(PASS, phrase=PHRASE)
