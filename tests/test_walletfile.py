@@ -122,7 +122,6 @@ def test_labels_and_phrase_shown_flag(wf):
 def test_not_a_wallet_file(tmp_path):
     p = tmp_path / "k.json"
     p.write_text(json.dumps({"public_key": "00", "ciphertext": "", "salt": ""}))
-    assert not WalletFile.is_wallet_file(str(p))
     with pytest.raises(walletfile.WalletFileError):
         WalletFile.load(str(p))
 

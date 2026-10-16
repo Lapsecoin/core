@@ -54,10 +54,9 @@ DISC_SIZE_BITS = 1024
 FORM_SIZE      = 100
 N_WESOLOWSKI   = 0
 
-# Identity element in BQFC compressed form (first byte 0x04).
-# NOT used as starting element; the identity is a fixed point:
-# identity^(2^T) = identity, making every block's VDF output identical.
-_IDENTITY = bytes([0x04]) + bytes(FORM_SIZE - 1)
+# The identity element (BQFC form, first byte 0x04) must never be the starting
+# element: it is a fixed point, identity^(2^T) = identity, so every block's
+# VDF output would be identical.
 
 # Generator element: first byte 0x08, remaining bytes 0x00.
 # This is a valid non-identity BQFC form that produces unique VDF output

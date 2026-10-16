@@ -14,6 +14,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import api
+import local_reader
+import board_view
 import block as block_mod
 import mempool as mempool_mod
 import peerpool as peerpool_mod
@@ -61,7 +63,7 @@ def fresh():
 class TestFeeEstimate:
     def test_empty_mempool_still_suggests_the_relay_floor(self):
         node, _ = fresh()
-        fees = api.fee_estimate(node)
+        fees = local_reader.fee_estimate(node)
         assert fees == {"pending": 0, "min": 0, "median": 0, "max": 0,
                         "next_block": params.MIN_RELAY_FEE_RATE}
 
@@ -69,7 +71,7 @@ class TestFeeEstimate:
         node, cs = fresh()
         t1 = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, fee=10)
         node.mempool.add(t1)
-        fees = api.fee_estimate(node)
+        fees = local_reader.fee_estimate(node)
         assert fees["pending"] == 1
         # min/median/max should all equal the single tx's own fee-per-byte
         assert fees["min"] == fees["max"] == fees["median"]
@@ -81,7 +83,7 @@ class TestFeeEstimate:
         node, cs = fresh()
         t1 = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, fee=0)
         node.mempool.add(t1)
-        fees = api.fee_estimate(node)
+        fees = local_reader.fee_estimate(node)
         assert fees["next_block"] == params.MIN_RELAY_FEE_RATE
 
     def test_next_block_reflects_the_real_cutoff_when_block_is_full(self):
@@ -110,7 +112,7 @@ class TestFeeEstimate:
         tiny_limit = skeleton_size + one_tx_size * 3  # room for only a few
 
         with mock.patch("block.BLOCK_SIZE_LIMIT", tiny_limit):
-            fees = api.fee_estimate(node)
+            fees = local_reader.fee_estimate(node)
             iterations = block_mod.get_vdf_iterations(node.view.chain)
             candidate = block_mod.assemble(node.view.tip, node.mempool.all_txs(),
                                             address(0), iterations)
@@ -804,7 +806,7 @@ class TestAddressLookupNicknameRedirect:
             seed_balance(cs.state, i, 1000.0)
         t = {"from": address(owner_index), "nonce": 1, "fee": 1,
              "outputs": [{"to": "1" * 40, "amount": 1}],
-             "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("hi", icon=0, nick=nick)}
+             "memo": tx_mod.BOARD_MEMO_TAG + board_view.build_board_body("hi", icon=0, nick=nick)}
         cs.chain.append({"height": len(cs.chain), "timestamp": 1000,
                          "transactions": [t], "hash": "h0"})
         cs.state.apply_tx(t)  # so state.nicknames actually reflects the claim
@@ -869,7 +871,7 @@ class TestBoardPage:
         cs = ChainState.from_genesis()
         for i in range(3):
             seed_balance(cs.state, i, 1000.0)
-        n = api.BOARD_THREADS_PER_CHUNK + 1
+        n = board_view.BOARD_THREADS_PER_CHUNK + 1
         for i in range(n):
             t = {"from": address(i % 3), "nonce": i + 1, "fee": 100,
                  "outputs": [{"to": "1" * 40, "amount": 1}], "memo": TAG + f"post {i}"}
@@ -901,24 +903,24 @@ class TestBoardMemoParsing:
     transaction of their own)."""
 
     def test_round_trips_plain_text_with_no_header(self):
-        body = api.build_board_body("hello board")
+        body = board_view.build_board_body("hello board")
         assert body == "hello board"
-        icon, nick, reply_ref, text = api.parse_board_body(body)
+        icon, nick, reply_ref, text = board_view.parse_board_body(body)
         assert (icon, nick, reply_ref, text) == (None, None, None, "hello board")
 
     def test_round_trips_profile_header_only(self):
-        body = api.build_board_body("hi", icon=3, nick="Bob")
-        icon, nick, reply_ref, text = api.parse_board_body(body)
+        body = board_view.build_board_body("hi", icon=3, nick="Bob")
+        icon, nick, reply_ref, text = board_view.parse_board_body(body)
         assert (icon, nick, reply_ref, text) == (3, "Bob", None, "hi")
 
     def test_round_trips_reply_header_only(self):
-        body = api.build_board_body("+1", reply_ref="abc123")
-        icon, nick, reply_ref, text = api.parse_board_body(body)
+        body = board_view.build_board_body("+1", reply_ref="abc123")
+        icon, nick, reply_ref, text = board_view.parse_board_body(body)
         assert (icon, nick, reply_ref, text) == (None, None, "abc123", "+1")
 
     def test_round_trips_both_headers_together(self):
-        body = api.build_board_body("agreed", icon=1, nick="Al", reply_ref="deadbe")
-        icon, nick, reply_ref, text = api.parse_board_body(body)
+        body = board_view.build_board_body("agreed", icon=1, nick="Al", reply_ref="deadbe")
+        icon, nick, reply_ref, text = board_view.parse_board_body(body)
         assert (icon, nick, reply_ref, text) == (1, "Al", "deadbe", "agreed")
 
     def test_nickname_cannot_smuggle_a_closing_bracket(self):
@@ -926,15 +928,15 @@ class TestBoardMemoParsing:
         profile header early, corrupting whatever the parser reads as
         free text next -- stripped rather than rejected (see
         build_board_body's own comment)."""
-        body = api.build_board_body("hi", icon=0, nick="Bo]b")
-        icon, nick, reply_ref, text = api.parse_board_body(body)
+        body = board_view.build_board_body("hi", icon=0, nick="Bo]b")
+        icon, nick, reply_ref, text = board_view.parse_board_body(body)
         assert nick == "Bob"
         assert text == "hi"
 
     def test_out_of_range_icon_index_parses_as_a_raw_int(self):
         # parse_board_body does not bounds-check the icon; nothing shows icons
         # any more, so an old post's header just has to parse to its text.
-        icon, nick, reply_ref, text = api.parse_board_body("[p:29:X]hi")
+        icon, nick, reply_ref, text = board_view.parse_board_body("[p:29:X]hi")
         assert icon == 29
         assert text == "hi"
 
@@ -971,39 +973,39 @@ class TestBoardProfilesAndVotes:
 
     def test_vote_is_replaced_not_summed_when_same_address_votes_twice(self):
         cs = self._chain_with(
-            (0, api.VOTE_UP_TAG + "abcdef"),
-            (0, api.VOTE_DOWN_TAG + "abcdef"),
+            (0, board_view.VOTE_UP_TAG + "abcdef"),
+            (0, board_view.VOTE_DOWN_TAG + "abcdef"),
         )
-        votes, _pending = api._board_votes(cs.chain)
+        votes, _pending = board_view._board_votes(cs.chain)
         assert votes["abcdef"]["up"] == 0
         assert votes["abcdef"]["down"] == 1
 
     def test_votes_from_different_addresses_both_count(self):
         cs = self._chain_with(
-            (0, api.VOTE_UP_TAG + "abcdef"),
-            (1, api.VOTE_UP_TAG + "abcdef"),
+            (0, board_view.VOTE_UP_TAG + "abcdef"),
+            (1, board_view.VOTE_UP_TAG + "abcdef"),
         )
-        votes, _pending = api._board_votes(cs.chain)
+        votes, _pending = board_view._board_votes(cs.chain)
         assert votes["abcdef"]["up"] == 2
 
     def test_vote_tag_is_not_a_board_post(self):
         """Confirms voting never shares the board's fee-floor staircase:
         is_board_post only matches BOARD_MEMO_TAG, a different tag family
         entirely (see tx.py/api.py's own comments on this)."""
-        assert not self.tx_mod.is_board_post({"memo": api.VOTE_UP_TAG + "abcdef"})
+        assert not self.tx_mod.is_board_post({"memo": board_view.VOTE_UP_TAG + "abcdef"})
 
     def test_pending_mempool_vote_counts_immediately(self):
         cs = self._chain_with()
         node = _FakeNode(cs)
-        t = make_tx(0, 1, 1, cs.state, fee=100, memo=api.VOTE_UP_TAG + "abcdef")
+        t = make_tx(0, 1, 1, cs.state, fee=100, memo=board_view.VOTE_UP_TAG + "abcdef")
         node.mempool.add(t)
-        votes, pending_refs = api._board_votes(cs.chain, node.mempool)
+        votes, pending_refs = board_view._board_votes(cs.chain, node.mempool)
         assert votes["abcdef"]["up"] == 1
         assert "abcdef" in pending_refs
 
     def test_confirmed_vote_is_not_marked_pending(self):
-        cs = self._chain_with((0, api.VOTE_UP_TAG + "abcdef"))
-        _votes, pending_refs = api._board_votes(cs.chain)
+        cs = self._chain_with((0, board_view.VOTE_UP_TAG + "abcdef"))
+        _votes, pending_refs = board_view._board_votes(cs.chain)
         assert pending_refs == set()
 
 
@@ -1014,26 +1016,26 @@ class TestRenderBoardText:
     so a post's own content can never inject a real tag of its own."""
 
     def test_quote_line_becomes_a_blockquote(self):
-        html = str(api.render_board_text("intro\n> quoted\nafter"))
+        html = str(ui_common.render_board_text("intro\n> quoted\nafter"))
         assert "<blockquote>quoted</blockquote>" in html
 
     def test_non_quote_lines_are_not_touched(self):
-        html = str(api.render_board_text("a > b"))
+        html = str(ui_common.render_board_text("a > b"))
         assert "<blockquote>" not in html
 
     def test_bracket_link_renders_as_anchor_with_given_text(self):
-        html = str(api.render_board_text("see [our site](https://example.com) now"))
+        html = str(ui_common.render_board_text("see [our site](https://example.com) now"))
         assert '<a href="https://example.com" rel="nofollow noopener noreferrer" target="_blank">our site</a>' in html
 
     def test_bracket_link_does_not_get_double_wrapped_by_autolink(self):
         """The autolink pass runs after link syntax is stashed behind a
         placeholder specifically so it never sees the raw URL sitting in
         the href it's about to render -- this pins that ordering."""
-        html = str(api.render_board_text("[x](https://example.com)"))
+        html = str(ui_common.render_board_text("[x](https://example.com)"))
         assert html.count("<a ") == 1
 
     def test_bare_url_still_autolinks_without_bracket_syntax(self):
-        html = str(api.render_board_text("see https://example.com now"))
+        html = str(ui_common.render_board_text("see https://example.com now"))
         assert '<a href="https://example.com"' in html
         assert html.count("<a ") == 1
 
@@ -1056,7 +1058,7 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
         base = [
             {"from": address(0), "nonce": 1, "fee": 100,
              "outputs": [{"to": "1" * 40, "amount": 1}],
-             "memo": TAG + api.build_board_body("hi there", icon=2, nick="Al")},
+             "memo": TAG + board_view.build_board_body("hi there", icon=2, nick="Al")},
         ]
         for i, t in enumerate(base + list(extra_txs)):
             cs.chain.append({"height": len(cs.chain), "timestamp": 1000 + i,
@@ -1072,10 +1074,10 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
         # Compute the real parent ref the same way api.py does, via tx_hash.
         import tx as tx_mod
         parent_tx = node.view.chain[1]["transactions"][0]
-        parent_ref = tx_mod.tx_hash(parent_tx)[:api.REPLY_REF_LEN]
+        parent_ref = tx_mod.tx_hash(parent_tx)[:board_view.REPLY_REF_LEN]
         reply_tx = {"from": address(1), "nonce": 1, "fee": 100,
                     "outputs": [{"to": "1" * 40, "amount": 1}],
-                    "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("agreed", reply_ref=parent_ref)}
+                    "memo": tx_mod.BOARD_MEMO_TAG + board_view.build_board_body("agreed", reply_ref=parent_ref)}
         client, node = self._client(extra_txs=[reply_tx])
         html = client.get("/board").get_data(as_text=True)
         assert "replying to" in html
@@ -1084,10 +1086,10 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
     def test_vote_score_rendered_on_the_post(self):
         import tx as tx_mod
         parent_tx = self._client()[1].view.chain[1]["transactions"][0]
-        parent_ref = tx_mod.tx_hash(parent_tx)[:api.REPLY_REF_LEN]
+        parent_ref = tx_mod.tx_hash(parent_tx)[:board_view.REPLY_REF_LEN]
         vote_tx = {"from": address(1), "nonce": 1, "fee": 100,
                    "outputs": [{"to": "1" * 40, "amount": 1}],
-                   "memo": api.VOTE_UP_TAG + parent_ref}
+                   "memo": board_view.VOTE_UP_TAG + parent_ref}
         client, _node = self._client(extra_txs=[vote_tx])
         html = client.get("/board").get_data(as_text=True)
         assert 'class="rc-votes rc-votesPositive ' in html
@@ -1095,10 +1097,10 @@ class TestBoardPageRendersProfilesRepliesAndVotes:
     def test_pending_vote_score_stays_numeric_and_describes_pending_on_hover(self):
         import tx as tx_mod
         parent_tx = self._client()[1].view.chain[1]["transactions"][0]
-        parent_ref = tx_mod.tx_hash(parent_tx)[:api.REPLY_REF_LEN]
+        parent_ref = tx_mod.tx_hash(parent_tx)[:board_view.REPLY_REF_LEN]
         vote_tx = {"from": address(1), "nonce": 1, "fee": 100,
                    "outputs": [{"to": "1" * 40, "amount": 1}],
-                   "memo": api.VOTE_UP_TAG + parent_ref}
+                   "memo": board_view.VOTE_UP_TAG + parent_ref}
         client, node = self._client()
         node.mempool.add(vote_tx)
         html = client.get("/board").get_data(as_text=True)
@@ -1317,13 +1319,13 @@ class TestBoardCachingAndQuotes:
     def test_quote_only_when_parent_is_not_in_the_feed(self):
         import tx as tx_mod
         cs, node, client = self._setup()
-        parent_ref = tx_mod.tx_hash(cs.chain[1]["transactions"][0])[:api.REPLY_REF_LEN]
+        parent_ref = tx_mod.tx_hash(cs.chain[1]["transactions"][0])[:board_view.REPLY_REF_LEN]
         nested = {"from": address(1), "nonce": 1, "fee": 100,
                   "outputs": [{"to": "1" * 40, "amount": 1}],
-                  "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("nested one", reply_ref=parent_ref)}
+                  "memo": tx_mod.BOARD_MEMO_TAG + board_view.build_board_body("nested one", reply_ref=parent_ref)}
         orphan = {"from": address(2), "nonce": 1, "fee": 100,
                   "outputs": [{"to": "1" * 40, "amount": 1}],
-                  "memo": tx_mod.BOARD_MEMO_TAG + api.build_board_body("orphan one", reply_ref="abcdef")}
+                  "memo": tx_mod.BOARD_MEMO_TAG + board_view.build_board_body("orphan one", reply_ref="abcdef")}
         for i, t in enumerate((nested, orphan)):
             cs.chain.append({"height": 2 + i, "timestamp": 1001 + i, "transactions": [t], "hash": f"h{2+i}"})
         html = client.get("/api/board/fragment?page=1").get_data(as_text=True)
@@ -1550,7 +1552,7 @@ class TestBoardNicknamesNoLongerExist:
 
     def _memo(self, text="hi", nick="Al"):
         import tx as tx_mod
-        return tx_mod.BOARD_MEMO_TAG + api.build_board_body(text, icon=3, nick=nick)
+        return tx_mod.BOARD_MEMO_TAG + board_view.build_board_body(text, icon=3, nick=nick)
 
     def _chain(self, *posts):
         cs = ChainState.from_genesis()
@@ -1598,8 +1600,8 @@ class TestBoardNicknamesNoLongerExist:
         cs = self._chain()
         node = _FakeNode(cs)
         client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
-        r = submit(client, "/board", message="x", passphrase="p", nick="Mallory",
-                   icon="2", profile_changed="1", follow=False)
+        submit(client, "/board", message="x", passphrase="p", nick="Mallory",
+               icon="2", profile_changed="1", follow=False)
         assert not _re.search(r"\[p:", str(node.mempool.all_txs()))
 
 

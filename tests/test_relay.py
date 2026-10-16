@@ -5,7 +5,6 @@ node to another are routed to its app.
 """
 
 import base64
-import gzip
 import json
 import os
 import random
@@ -30,6 +29,7 @@ from params import TICKS_PER_LAPSE
 from tests.fixtures import address
 from tests.test_api import _InfoNode, _MemoryMeta
 from wallet import Wallet
+from tests.legacy_key import save_key
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ class Net:
     def __init__(self, tmp_path, monkeypatch):
         sk, pk = crypto.generate_keypair()
         keyfile = str(tmp_path / "wallet.key")
-        crypto.save_key(keyfile, sk, pk, PASS)
+        save_key(keyfile, sk, pk, PASS)
         self.wallet = Wallet(keyfile, pk)
         self.cs = ChainState.from_genesis()
         self.cs.state.credit(self.wallet.addr, 1000 * TICKS_PER_LAPSE)

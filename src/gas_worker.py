@@ -31,7 +31,7 @@ import gas
 import gaslock
 import relay
 from gas_io import ChainIO
-from gas_track import Request, Tracker, claimers_in_order  # noqa: F401  (re-exported)
+from gas_track import Tracker, claimers_in_order
 
 log = logging.getLogger("ec.gas_worker")
 

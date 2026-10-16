@@ -889,10 +889,6 @@ class _Reassembler:
             rec = self._pending.get((addr, msg_id))
             return list(rec.chunks) if rec is not None else []
 
-    def held_bytes(self):
-        with self._lock:
-            return self._held
-
 
 class _PendingSync:
     """Collects SYNC chunks for a specific GETSYNC request."""

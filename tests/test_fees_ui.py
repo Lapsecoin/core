@@ -2,7 +2,6 @@
 
 import os
 import sys
-import time
 
 import pytest
 
@@ -23,9 +22,9 @@ from node import NodeView
 from params import TICKS_PER_LAPSE
 from tests.browser import submit, tokens
 from tests.fixtures import address, make_block, make_tx
-from tests.test_gas_worker import (ASKER, DEST, ESC, FakeIO, ME, NET, PRICE, TARGET,
-                                   World)
+from tests.test_gas_worker import ASKER, DEST, ESC, FakeIO, NET, TARGET, World
 from tests.wallet_app import PASS, _FullNode
+from tests.legacy_key import save_key
 
 GAS_PRICE = 10 ** 10      # 10 gwei: a send needs 9.75e14 wei, over a node's ceiling
 
@@ -54,7 +53,7 @@ class AskerNode(_FullNode):
 def app(tmp_path, monkeypatch):
     sk, pk = crypto.generate_keypair()
     keyfile = str(tmp_path / "node.key")
-    crypto.save_key(keyfile, sk, pk, PASS)
+    save_key(keyfile, sk, pk, PASS)
     cs = ChainState.from_genesis()
     node = AskerNode(cs, keyfile, sk, pk)
     cs.state.credit(node.addr, 1000 * TICKS_PER_LAPSE)

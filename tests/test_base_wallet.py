@@ -20,11 +20,10 @@ import crypto
 import evm
 import peerpool as peerpool_mod
 import relay
-import settings as settings_mod
 from chainstate import ChainState
-from params import TICKS_PER_LAPSE
 from tests.browser import submit
 from tests.wallet_app import PASS, _FullNode
+from tests.legacy_key import save_key
 
 DEST = "0x000000000000000000000000000000000000dEaD"
 RPC = "http://rpc.test"
@@ -35,7 +34,7 @@ ZERO = "0x" + "0" * 40
 def kek(tmp_path):
     keyfile = str(tmp_path / "node.key")
     sk, pk = crypto.generate_keypair()
-    crypto.save_key(keyfile, sk, pk, PASS)
+    save_key(keyfile, sk, pk, PASS)
     return keyfile, crypto.derive_kek(keyfile, PASS)
 
 

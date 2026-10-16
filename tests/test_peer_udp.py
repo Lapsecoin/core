@@ -708,7 +708,7 @@ class TestChunkIndexBounds:
             out = r.feed(("1.2.3.4", 9), 777, idx, 3, b"x")
         assert out is None
         # and nothing is left pinned in the buffer
-        assert r.held_bytes() == 0
+        assert r._held == 0
 
     def test_pending_sync_refuses_an_out_of_range_index(self):
         p = peer_udp._PendingSync()
@@ -727,7 +727,7 @@ class TestChunkIndexBounds:
         for idx, c in enumerate(chunks):
             out = r.feed(("1.2.3.4", 9), 778, idx, len(chunks), c)
         assert out == b"".join(chunks)
-        assert r.held_bytes() == 0
+        assert r._held == 0
 
 
 class TestTransportCarriesAFullBlock:
@@ -812,7 +812,7 @@ class TestReassemblyMemoryCap:
         r = peer_udp._Reassembler(max_bytes=4096)
         for msg_id in range(50):
             r.feed(("1.2.3.4", 9), msg_id, 0, 8, b"z" * 1024)
-        assert r.held_bytes() <= 4096
+        assert r._held <= 4096
 
 
 class TestSyncRequestsNeedAReachableSource:

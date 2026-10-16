@@ -15,6 +15,7 @@ import tx as tx_mod
 import wallet
 from params import TICKS_PER_LAPSE
 from walletfile import WalletFile
+from tests.legacy_key import save_key
 
 pytestmark = pytest.mark.skipif(
     not falcon_seeded.available(), reason="native/falcon_seeded is not built")
@@ -52,7 +53,7 @@ def home(tmp_path, monkeypatch):
 def old_node(home):
     """An old single-key file, funded on a fake chain."""
     sk, pk = crypto.generate_keypair()
-    crypto.save_key(wallet.LEGACY_KEY_FILE, sk, pk, PASS)
+    save_key(wallet.LEGACY_KEY_FILE, sk, pk, PASS)
     st = state_mod.State()
     old_addr = crypto.public_key_to_address(pk)
     st.credit(old_addr, BALANCE)
@@ -129,7 +130,7 @@ def test_a_restart_after_the_sweep_is_stored_just_rebroadcasts_it(home, old_node
 
 def test_a_balance_too_small_to_move_just_retires_the_key(home, monkeypatch):
     sk, pk = crypto.generate_keypair()
-    crypto.save_key(wallet.LEGACY_KEY_FILE, sk, pk, PASS)
+    save_key(wallet.LEGACY_KEY_FILE, sk, pk, PASS)
     st = state_mod.State()
     st.credit(crypto.public_key_to_address(pk), 3)
     w = start(monkeypatch)
@@ -225,7 +226,7 @@ def test_a_cut_short_start_after_the_sweep_was_stored_also_moves_what_arrived_si
     # put the old key file back, as if the process died before deleting it
     sk, pk = crypto.generate_keypair()
     old2 = wallet.Wallet(wallet.LEGACY_KEY_FILE, pk)
-    crypto.save_key(wallet.LEGACY_KEY_FILE, sk, pk, PASS)
+    save_key(wallet.LEGACY_KEY_FILE, sk, pk, PASS)
     m = migration.Migration(WalletFile.load(wallet.WALLET_FILE), old2,
                             old2.derive_kek(PASS), wallet.LEGACY_KEY_FILE)
     st = types.SimpleNamespace(get_nonce=lambda a: sweep["nonce"], get_balance=lambda a: 0)

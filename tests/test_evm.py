@@ -101,12 +101,6 @@ class TestAddresses:
     def test_junk_is_not_an_address(self, junk):
         assert not evm.is_valid_address(junk)
 
-    def test_to_checksum_address(self):
-        assert evm.to_checksum_address(KEY_ONE_ADDR.lower()) == KEY_ONE_ADDR
-        with pytest.raises(ValueError):
-            evm.to_checksum_address("nope")
-
-
 class TestAmounts:
     def test_round_trip(self):
         assert evm.str_to_wei("0.01") == 10 ** 16

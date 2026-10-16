@@ -19,8 +19,8 @@ import gaslock
 import relay
 import settings as settings_mod
 import tx as tx_mod
-from params import TICKS_PER_LAPSE
 from tests.fixtures import address, make_block, make_tx
+from tests.legacy_key import save_key
 
 ESC = crypto.escrow_address()
 NET = gas.NETWORKS["optimism"]
@@ -95,7 +95,7 @@ class World:
         self.settings = settings_mod.Settings(Meta())
         keyfile = str(tmp_path / "node.key")
         sk, pk = crypto.generate_keypair()
-        crypto.save_key(keyfile, sk, pk, "pw")
+        save_key(keyfile, sk, pk, "pw")
         self.kek = crypto.derive_kek(keyfile, "pw")
         self.wallet_path = str(tmp_path / "base_gas.key")
         base_wallet.create(self.wallet_path, self.kek)

@@ -266,17 +266,9 @@ def unlock(source, passphrase, account=0):
         parts = shortkey.decode(value)
         kek = shortkey.derive_kek(parts, passphrase)
         return SeedKeyWallet(parts, kek), kek
-    if kind == "text":
-        w = TextWallet(value)
-        kek = w.derive_kek(passphrase)
-        crypto.decrypt_secret_key_data(value, kek)
-        return w, kek
-    if kind == "wallet":
-        wf = WalletFile.load(value)
-        kek = wf.derive_kek(passphrase)
-        wf.verify(kek)
-        w = PhraseWallet(wf, account)
-        _attach_jobs(w, kek, passphrase)
+    if kind in ("text", "wallet"):
+        w = _open(source, account)
+        kek, _jobs = unlock_open(w, passphrase)    # the jobs are attached to w
         return w, kek
     if kind == "legacy":
         w = Wallet(value, crypto.load_pubkey(value))
@@ -286,24 +278,30 @@ def unlock(source, passphrase, account=0):
     raise ValueError("nothing to unlock")
 
 
-def open_locked(source, account=0):
-    """The wallet for a start that does not need the passphrase yet, or None
-    when it does. A recovery-phrase wallet and a pasted old key both carry
-    their public key in the open, so the node can run as that address and take
-    the passphrase later. Everything else needs it now: an lc1- text hides its
-    own address in the sealed seed, an old key file starts by making a new
-    wallet (a new address and a phrase to show), and a wallet whose phrase was
-    never acknowledged has to show it first."""
+def _open(source, account=0):
+    """The wallet for a source whose public side can be read without the
+    passphrase (an address, a pasted old key, a wallet file), or None for the
+    ones that cannot: an lc1- key hides its address in the sealed seed, an old
+    key file starts by making a new wallet, and nothing exists yet for a new
+    one. Opening is not unlocking: nothing here can sign."""
     kind, value = source
     if kind == "address":
         return WatchWallet(value)
     if kind == "text":
         return TextWallet(value)
     if kind == "wallet":
-        wf = WalletFile.load(value)
-        if wf.phrase_shown:
-            return PhraseWallet(wf, account)
+        return PhraseWallet(WalletFile.load(value), account)
     return None
+
+
+def open_locked(source, account=0):
+    """The wallet for a start that does not need the passphrase yet, or None
+    when it does. That is _open, minus a wallet whose phrase was never
+    confirmed: it has to show the phrase first. See startup.plan."""
+    w = _open(source, account)
+    if isinstance(w, PhraseWallet) and not w.walletfile.phrase_shown:
+        return None
+    return w
 
 
 def unlock_open(w, passphrase):

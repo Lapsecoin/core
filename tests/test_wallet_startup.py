@@ -1,6 +1,5 @@
 """Creating and unlocking the node's key at startup: the passphrase rules, and
 that a wrong passphrase stops the start instead of running on a broken key."""
-import json
 import os
 import sys
 
