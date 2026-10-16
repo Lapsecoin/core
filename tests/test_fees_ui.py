@@ -1,7 +1,6 @@
 """The Fees page and the status of a request, end to end through the app."""
 
 import os
-import re
 import sys
 import time
 
