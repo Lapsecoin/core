@@ -229,11 +229,15 @@ function Install-LapseCoin {
     # the app was installed with. Runs after the app is installed, because the
     # sources come with it.
     function Finish-FalconSeeded {
-        $check = "import os, sys, lapsecoin_data; sys.path.insert(0, os.path.join(list(lapsecoin_data.__path__)[0], 'src')); import falcon_seeded; sys.exit(0 if falcon_seeded.available() else 1)"
+        $check = "import os, sys, lapsecoin_data; sys.path.insert(0, os.path.join(list(lapsecoin_data.__path__)[0], 'src'))`ntry:`n    import falcon_seeded`nexcept ModuleNotFoundError:`n    sys.exit(2)`nsys.exit(0 if falcon_seeded.available() else 1)"
         $env:OQS_INSTALL_PATH = $oqsDir
         python -c $check
         if ($LASTEXITCODE -eq 0) {
             Write-Host "FALCON seeded key generation is ready."
+            return
+        }
+        if ($LASTEXITCODE -eq 2) {
+            Write-Host "This lapsecoin release predates the recovery-phrase wallet; nothing to build."
             return
         }
         if ($requirePrebuilt) {

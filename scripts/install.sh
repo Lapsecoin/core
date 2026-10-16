@@ -187,14 +187,18 @@ finish_falcon_seeded() {
 import os, sys
 import lapsecoin_data
 sys.path.insert(0, os.path.join(list(lapsecoin_data.__path__)[0], "src"))
-import falcon_seeded
+try:
+    import falcon_seeded
+except ModuleNotFoundError:
+    sys.exit(2)     # the installed release predates the recovery-phrase wallet
 sys.exit(0 if falcon_seeded.available() else 1)
 PY
   }
-  if check; then
-    echo "FALCON seeded key generation is ready."
-    return 0
-  fi
+  check
+  case $? in
+    0) echo "FALCON seeded key generation is ready."; return 0 ;;
+    2) echo "This lapsecoin release predates the recovery-phrase wallet; nothing to build."; return 0 ;;
+  esac
   if [ "$REQUIRE_PREBUILT" = "1" ]; then
     echo "The seeded FALCON library is not in the prebuilt download." >&2
     exit 1
