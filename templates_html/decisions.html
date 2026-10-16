@@ -2,14 +2,15 @@
 {% block head %}<link rel="stylesheet" href="/css/pages/decisions.css?v={{ local_version }}">{% endblock %}
 {% block content %}
 <div class="decisions">
-<div class="page-head"><h2>Decisions</h2></div>
-<p class="decisions-lede">What this node decided when it started, and why. It was started this way and does not change while it runs; restart it with different options to change any of this.</p>
+<div class="page-head">
+  <h2>Decisions</h2>
+  <span class="decisions-note">Decided at start, from what it was given. Restart with other options to change any of it.</span>
+</div>
 {% if groups %}
 <div class="decision-cols">
 {% for group in groups %}
   <section class="decision-group">
     <h3 class="group-title">{{ group.title }}</h3>
-    <p class="group-blurb">{{ group.blurb }}</p>
     {% for entry in group.entries %}
     <div class="decision-row">
       <p class="decision-what">{{ entry.what }}</p>
@@ -20,7 +21,7 @@
 {% endfor %}
 </div>
 {% else %}
-<p class="decisions-lede">Nothing was recorded for this start.</p>
+<p class="decisions-note">Nothing was recorded for this start.</p>
 {% endif %}
 </div>
 {% endblock %}

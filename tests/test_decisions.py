@@ -1,6 +1,6 @@
 """The Decisions page tells the truth about a start: what each statement says
 has to match the rule that made the decision (wallet.find_source,
-startup.plan), and the page must show it, safely, under Configuration."""
+startup.plan), and the page must show it, safely, under Config."""
 
 import pytest
 
@@ -152,7 +152,7 @@ def test_a_node_that_recorded_nothing_still_shows_a_page():
 
 def test_the_menu_has_a_configuration_group_with_settings_and_decisions():
     html = client_for(DecidedNode()).get("/decisions").get_data(as_text=True)
-    menu = html.split("Configuration<svg", 1)[1].split('role="menu">', 1)[1].split("</div>", 1)[0]
+    menu = html.split("Config<svg", 1)[1].split('role="menu">', 1)[1].split("</div>", 1)[0]
     assert 'href="/settings"' in menu and 'href="/decisions"' in menu
     assert 'class="nav-group active"' in html          # the page we are on lights its group
 

@@ -17,10 +17,9 @@ from collections import namedtuple
 import startup
 
 Entry = namedtuple("Entry", "what why")
-Group = namedtuple("Group", "title blurb entries")
+Group = namedtuple("Group", "title entries")
 
-PASSED_OVER_WHY = ("The command line beats the environment, and the environment beats "
-                   "what is in the folder.")
+PRECEDENCE = "The command line beats the environment, and the environment beats the folder."
 
 
 def who(source, address, account=0, account_name="", account_given=False):
@@ -78,8 +77,16 @@ def passphrase(source, how, env_passphrase=False, window=False, phrase_unconfirm
 
 
 def passed_over(notes):
-    """What was given but not used, from wallet.find_source and the startup notes."""
-    return [Entry(note, PASSED_OVER_WHY) for note in notes]
+    """What was given but not used, from wallet.find_source and the startup
+    notes, each "X is ignored: reason". Where the reason is that something was
+    given on the command line, the precedence rule is the whole explanation."""
+    out = []
+    for note in notes:
+        what, _, why = note.partition(": ")
+        if why.endswith("was given"):
+            why += ". " + PRECEDENCE
+        out.append(Entry(what, why))
+    return out
 
 
 def about_local_wallet(notes):
@@ -137,15 +144,6 @@ class Decisions:
 
     ORDER = ("Who this node is", "Passphrase and signing", "Passed over",
              "About the wallet here", "Network", "Window and updates", "Data and logs")
-    BLURBS = {
-        "Who this node is": "The address it mines and builds as, and what chose it.",
-        "Passphrase and signing": "Whether and when it asks for a passphrase.",
-        "Passed over": "What was given but not used, because something else won.",
-        "About the wallet here": "What matched the wallet file in this folder.",
-        "Network": "Ports, peers and what it passes on.",
-        "Window and updates": "How it runs and whether it checks for releases.",
-        "Data and logs": "Where it keeps the chain and how much it says.",
-    }
 
     def __init__(self):
         self._groups = {}
@@ -154,5 +152,4 @@ class Decisions:
         self._groups.setdefault(title, []).extend(entries)
 
     def groups(self):
-        return [Group(t, self.BLURBS.get(t, ""), self._groups[t])
-                for t in self.ORDER if self._groups.get(t)]
+        return [Group(t, self._groups[t]) for t in self.ORDER if self._groups.get(t)]
