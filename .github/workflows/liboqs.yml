@@ -189,17 +189,33 @@ jobs:
           cat out/SHA256SUMS
 
       # A push that only touches a script re-checks the existing release; it
-      # does not replace files that users may be downloading.
-      - name: Is this release already published?
+      # does not replace files that users may be downloading. It is replaced
+      # when the files inside the published archives differ from the new
+      # build (a library added to the download, say), because the checks that
+      # follow would otherwise fail against the old release until someone ran
+      # the workflow by hand. The lists are compared, not the checksums, which
+      # change with every build.
+      - name: Is this release already published and current?
         id: exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "liboqs-$LIBOQS_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          gh release view "liboqs-$LIBOQS_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || exit 0
+          mkdir old
+          gh release download "liboqs-$LIBOQS_VERSION" --repo "$GITHUB_REPOSITORY" --dir old \
+            --pattern "*.tar.gz" --pattern "*.zip" || { echo "Published assets are missing; republishing."; exit 0; }
+          for f in out/*.tar.gz; do
+            [ -f "old/$(basename "$f")" ] || { echo "$(basename "$f") is not published; republishing."; exit 0; }
+            diff <(tar tzf "$f" | sort) <(tar tzf "old/$(basename "$f")" | sort) >/dev/null \
+              || { echo "$(basename "$f") differs from the published one; republishing."; exit 0; }
+          done
+          for f in out/*.zip; do
+            [ -f "old/$(basename "$f")" ] || { echo "$(basename "$f") is not published; republishing."; exit 0; }
+            diff <(unzip -Z1 "$f" | sort) <(unzip -Z1 "old/$(basename "$f")" | sort) >/dev/null \
+              || { echo "$(basename "$f") differs from the published one; republishing."; exit 0; }
+          done
+          echo "published=true" >> "$GITHUB_OUTPUT"
 
       - name: Publish
         if: steps.exists.outputs.published != 'true' || github.event_name == 'workflow_dispatch'
