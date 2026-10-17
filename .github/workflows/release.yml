@@ -637,6 +637,18 @@ jobs:
       id-token: write
     uses: ./.github/workflows/pages.yml
 
+  # Submits the new installer to the Microsoft Store (see store.yml). Skips
+  # itself without the Partner Center secrets, and like publish-pages it is
+  # not part of revert-on-failure: a failed submission is re-run on its own.
+  publish-store:
+    needs: [version, publish-pages]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/store.yml
+    with:
+      version: ${{ needs.version.outputs.tag }}
+    secrets: inherit
+
   revert-on-failure:
     # publish-pypi deliberately isn't in this list: it runs after the
     # release job, so the GitHub release with real binaries is public whether
