@@ -98,6 +98,25 @@ def retarget_progress(chain):
             "threshold": VDF_ADJUST_MIN_SECONDS}
 
 
+def retarget_count(chain):
+    """How many difficulty windows have closed on this chain, and how many of
+    those raised the difficulty. Display only, it decides nothing.
+
+    A window closes at each block whose height is a multiple of
+    VDF_ADJUST_INTERVAL, and that block carries the iteration count for the
+    next window, so a raise shows as a boundary block whose count is above
+    the previous boundary's."""
+    windows = max(len(chain) - 1, 0) // VDF_ADJUST_INTERVAL
+    raised = 0
+    prev = chain[0].get("vdf_iterations", VDF_ITERATIONS) if chain else VDF_ITERATIONS
+    for k in range(1, windows + 1):
+        cur = chain[k * VDF_ADJUST_INTERVAL].get("vdf_iterations", VDF_ITERATIONS)
+        if cur > prev:
+            raised += 1
+        prev = cur
+    return windows, raised
+
+
 # Blocks looked at on either side of a given block when computing its
 # "vs median" block time for display, distinct from (and much smaller
 # than) the consensus retarget window in get_vdf_iterations.

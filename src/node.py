@@ -716,6 +716,7 @@ class Node:
             age_seconds = max(0.0, time.time() - v.chain[0]["timestamp"])
             max_height = int(age_seconds / 120)
         sync_pct = calculate_sync_percent(v.height, max_height)
+        retargets, retarget_raises = block_mod.retarget_count(v.chain)
         return {
             "height":       v.height,
             "sync_percent": sync_pct,
@@ -743,6 +744,10 @@ class Node:
             # rather than params.GENESIS_TIMESTAMP so it describes the
             # chain this node is actually on.
             "network_age_seconds": max(0.0, time.time() - v.chain[0]["timestamp"]),
+            # Difficulty windows closed since genesis, and how many of them
+            # raised the difficulty (block.retarget_count).
+            "retargets":       retargets,
+            "retarget_raises": retarget_raises,
             "status":       self.status_line,
         }
 
