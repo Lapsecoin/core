@@ -44,9 +44,15 @@ def test_the_pinned_liboqs_is_the_one_liboqs_python_wants():
 
 
 def test_the_install_scripts_look_for_the_release_the_workflow_publishes():
-    assert "releases/download/liboqs-$LIBOQS_VERSION" in _read("scripts", "install.sh")
-    assert "releases/download/liboqs-$LiboqsVersion" in _read("scripts", "install.ps1")
-    assert "tag_name: liboqs-${{ env.LIBOQS_VERSION }}" in _read(".github", "workflows", "liboqs.yml")
+    assert "releases/download/liboqs-$LIBOQS_VERSION-r$LIBOQS_REV" in _read("scripts", "install.sh")
+    assert "releases/download/liboqs-$LiboqsVersion-r$LiboqsRev" in _read("scripts", "install.ps1")
+    assert "tag_name: liboqs-${{ env.LIBOQS_VERSION }}-r${{ env.LIBOQS_REV }}" in _read(".github", "workflows", "liboqs.yml")
+    revs = {
+        re.search(r'LIBOQS_REV:\s*"(\d+)"', _read(".github", "workflows", "liboqs.yml")).group(1),
+        re.search(r'^LIBOQS_REV="(\d+)"', _read("scripts", "install.sh"), re.M).group(1),
+        re.search(r'\$LiboqsRev\s*=\s*"(\d+)"', _read("scripts", "install.ps1")).group(1),
+    }
+    assert len(revs) == 1, revs
     assert "liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" in _read("scripts", "install.sh")
     assert "liboqs-$LiboqsVersion-windows-x64.zip" in _read("scripts", "install.ps1")
 

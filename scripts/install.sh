@@ -20,7 +20,8 @@ REPO_RAW="${LAPSECOIN_REPO_RAW:-https://raw.githubusercontent.com/Lapsecoin/core
 # The liboqs release the prebuilt copy comes from. Keep it equal to LIBOQS_REF
 # in release.yml and LIBOQS_VERSION in liboqs.yml (a test checks all four).
 LIBOQS_VERSION="0.16.0"
-LIBOQS_BASE="${LAPSECOIN_LIBOQS_BASE:-https://github.com/Lapsecoin/core/releases/download/liboqs-$LIBOQS_VERSION}"
+LIBOQS_REV="2"   # which publication of it (the release tag); see liboqs.yml
+LIBOQS_BASE="${LAPSECOIN_LIBOQS_BASE:-https://github.com/Lapsecoin/core/releases/download/liboqs-$LIBOQS_VERSION-r$LIBOQS_REV}"
 # 1 makes the script stop instead of building liboqs from source when the
 # prebuilt cannot be used. CI sets it so a prebuilt that is quietly ignored
 # fails the run instead of being rebuilt and looking fine.

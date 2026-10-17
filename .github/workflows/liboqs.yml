@@ -24,6 +24,10 @@ env:
   # Keep equal to LIBOQS_REF in release.yml and the version in the install
   # scripts. tests/test_liboqs_pin.py fails if they differ.
   LIBOQS_VERSION: "0.16.0"
+  # Which publication of that build: part of the release tag only. Bump it
+  # when what is in the archives changes, since a published release cannot be
+  # replaced.
+  LIBOQS_REV: "2"
 
 concurrency:
   group: liboqs-prebuilt
@@ -189,39 +193,26 @@ jobs:
           cat out/SHA256SUMS
 
       # A push that only touches a script re-checks the existing release; it
-      # does not replace files that users may be downloading. It is replaced
-      # when the files inside the published archives differ from the new
-      # build (a library added to the download, say), because the checks that
-      # follow would otherwise fail against the old release until someone ran
-      # the workflow by hand. The lists are compared, not the checksums, which
-      # change with every build.
-      - name: Is this release already published and current?
+      # does not replace files that users may be downloading (a release is
+      # immutable anyway). When the contents of the download change, bump
+      # LIBOQS_REV here, in install.sh and in install.ps1: that is a new
+      # release, published by the next run.
+      - name: Is this release already published?
         id: exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "published=false" >> "$GITHUB_OUTPUT"
-          gh release view "liboqs-$LIBOQS_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || exit 0
-          mkdir old
-          gh release download "liboqs-$LIBOQS_VERSION" --repo "$GITHUB_REPOSITORY" --dir old \
-            --pattern "*.tar.gz" --pattern "*.zip" || { echo "Published assets are missing; republishing."; exit 0; }
-          for f in out/*.tar.gz; do
-            [ -f "old/$(basename "$f")" ] || { echo "$(basename "$f") is not published; republishing."; exit 0; }
-            diff <(tar tzf "$f" | sort) <(tar tzf "old/$(basename "$f")" | sort) >/dev/null \
-              || { echo "$(basename "$f") differs from the published one; republishing."; exit 0; }
-          done
-          for f in out/*.zip; do
-            [ -f "old/$(basename "$f")" ] || { echo "$(basename "$f") is not published; republishing."; exit 0; }
-            diff <(unzip -Z1 "$f" | sort) <(unzip -Z1 "old/$(basename "$f")" | sort) >/dev/null \
-              || { echo "$(basename "$f") differs from the published one; republishing."; exit 0; }
-          done
-          echo "published=true" >> "$GITHUB_OUTPUT"
+          if gh release view "liboqs-$LIBOQS_VERSION-r$LIBOQS_REV" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish
         if: steps.exists.outputs.published != 'true' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: liboqs-${{ env.LIBOQS_VERSION }}
+          tag_name: liboqs-${{ env.LIBOQS_VERSION }}-r${{ env.LIBOQS_REV }}
           name: liboqs ${{ env.LIBOQS_VERSION }} prebuilt
           body: |
             liboqs ${{ env.LIBOQS_VERSION }} for the LapseCoin install scripts (scripts/install.sh and
@@ -245,7 +236,7 @@ jobs:
       - name: Fetch the published files
         run: |
           mkdir dist
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/liboqs-${LIBOQS_VERSION}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/liboqs-${LIBOQS_VERSION}-r${LIBOQS_REV}"
           curl -fsSL "$base/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz" -o "dist/liboqs-$LIBOQS_VERSION-linux-x86_64.tar.gz"
           curl -fsSL "$base/SHA256SUMS" -o dist/SHA256SUMS
       - name: Run the install script against the real URL

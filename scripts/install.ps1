@@ -39,7 +39,8 @@ function Install-LapseCoin {
     # LIBOQS_REF in release.yml and LIBOQS_VERSION in liboqs.yml (a test checks
     # all four).
     $LiboqsVersion = "0.16.0"
-    $liboqsBase = if ($env:LAPSECOIN_LIBOQS_BASE) { $env:LAPSECOIN_LIBOQS_BASE } else { "https://github.com/Lapsecoin/core/releases/download/liboqs-$LiboqsVersion" }
+    $LiboqsRev = "2"   # which publication of it (the release tag); see liboqs.yml
+    $liboqsBase = if ($env:LAPSECOIN_LIBOQS_BASE) { $env:LAPSECOIN_LIBOQS_BASE } else { "https://github.com/Lapsecoin/core/releases/download/liboqs-$LiboqsVersion-r$LiboqsRev" }
     # 1 makes the script stop instead of building liboqs from source when the
     # prebuilt cannot be used. CI sets it so a prebuilt that is quietly ignored
     # fails the run instead of being rebuilt and looking fine.
