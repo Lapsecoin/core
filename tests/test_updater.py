@@ -21,6 +21,24 @@ class TestWindowsMsiUpdate:
         assert updater.detect_install_type() == "windows-msi"
         assert "windows-msi" in updater.SELF_UPDATABLE
 
+    def test_a_store_install_is_its_own_type_and_goes_to_the_store(self, monkeypatch, tmp_path):
+        (tmp_path / "installed-by-msi").write_bytes(b"")
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "lapsecoin.exe"))
+        monkeypatch.delenv("LAPSECOIN_DOCKER", raising=False)
+        monkeypatch.delenv("APPIMAGE", raising=False)
+        import datadir
+        monkeypatch.setattr(datadir, "is_store_install", lambda: True)
+        assert updater.detect_install_type() == "windows-store"
+        up = updater.Updater(install_type="windows-store")
+        assert not up.can_self_update()
+        assert up.update_url("https://example.test/releases") == updater.STORE_URL
+
+    def test_other_installs_keep_the_releases_page(self):
+        up = updater.Updater(install_type="windows-msi")
+        assert up.update_url("https://example.test/releases") == "https://example.test/releases"
+
     def test_an_unmarked_windows_build_cannot_update_itself(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys, "frozen", True, raising=False)
         monkeypatch.setattr(sys, "platform", "win32")

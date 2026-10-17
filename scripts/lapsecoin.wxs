@@ -42,6 +42,18 @@
       </Component>
     </DirectoryRef>
 
+    <!-- The Microsoft Store installs with INSTALLSOURCE=store (its installer
+         arguments in Partner Center). The app reads this value to send
+         updates to the Store instead of updating itself (src/updater.py).
+         An install from anywhere else leaves it out. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="StoreSource" Guid="*">
+        <Condition>INSTALLSOURCE = "store"</Condition>
+        <RegistryValue Root="HKCU" Key="Software\LapseCoin" Name="source" Type="string"
+                       Value="store" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
     <DirectoryRef Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="*">
         <Shortcut Id="AppShortcut" Name="LapseCoin" Description="LapseCoin node and wallet"
@@ -65,6 +77,7 @@
     <Feature Id="Main" Title="LapseCoin" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="InstalledMarker" />
+      <ComponentRef Id="StoreSource" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
