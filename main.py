@@ -4,6 +4,13 @@
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "src"))
 
+# The uninstaller runs this before it removes the program. It only shows a
+# notice, so it must not start the node or ask to migrate old data.
+if "--uninstall-notice" in _sys.argv[1:]:
+    import uninstall_notice as _uninstall_notice
+    _uninstall_notice.run()
+    _sys.exit(0)
+
 # An installed Windows build keeps its data under %LOCALAPPDATA%, not beside
 # the program. This has to run before anything opens a relative path.
 import datadir as _datadir
