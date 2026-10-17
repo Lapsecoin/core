@@ -212,11 +212,32 @@ PY
   fi
 }
 
-# pip cannot replace a package the system installed without a RECORD file
-# (Debian's python3-blinker on Colab and many cloud images), and that one
-# error aborts the whole install, leaving every other dependency uninstalled
-# too. When the log shows it, install a fresh copy over the system one, then
-# retry. The output is appended to INSTALL_LOG for the checks below.
+# The packages pip refused to replace because the system installed them
+# without the record pip needs to uninstall them (Debian's python3-blinker on
+# Colab and many cloud images), one name per word, or nothing if that is not
+# what went wrong. pip words it differently by version, so every wording is
+# matched:
+#   current: error: uninstall-no-record-file
+#            × Cannot uninstall blinker 1.7.0
+#            The package's contents are unknown: no RECORD file was found for blinker.
+#   older:   ERROR: Cannot uninstall 'blinker'. ... RECORD file not found.
+#            ERROR: Cannot uninstall 'blinker'. It is a distutils installed project
+unremovable_packages() {
+  grep -qiE "uninstall-no-record-file|no RECORD file|RECORD file (was )?not found|distutils installed project" "$1" || return 0
+  sed -nE "s/.*Cannot uninstall ['\"]?([A-Za-z0-9_.-]+)['\"]?.*/\1/p" "$1" | sort -u | tr '\n' ' '
+}
+
+# True when pip's errors name libtorrent, not merely when it lists libtorrent
+# among the packages it is collecting and downloading, which it does on every
+# run. Only then is dropping libtorrent the fix.
+libtorrent_failed() {
+  grep -iE '^[[:space:]]*(ERROR|error|×|Failed)' "$INSTALL_LOG.last" 2>/dev/null | grep -qi libtorrent
+}
+
+# One pip error aborts the whole install and leaves every other dependency
+# uninstalled too, so a package pip cannot replace is installed fresh over the
+# system one and the install retried. The output is appended to INSTALL_LOG
+# for the checks below.
 pip_install() {
   local log pkgs rc
   log="$(mktemp)"
@@ -225,8 +246,8 @@ pip_install() {
   cat "$log" >> "$INSTALL_LOG"
   cp "$log" "$INSTALL_LOG.last"
   if [ "$rc" -ne 0 ]; then
-    pkgs="$(grep -oE 'Cannot uninstall [A-Za-z0-9_.-]+' "$log" | awk '{print $3}' | sort -u | tr '\n' ' ')"
-    if [ -n "$pkgs" ] && grep -q "RECORD file not found" "$log"; then
+    pkgs="$(unremovable_packages "$log")"
+    if [ -n "$pkgs" ]; then
       echo
       echo "pip cannot replace ${pkgs}(installed by the system). Installing a fresh copy over it, then retrying."
       pip install --ignore-installed $pkgs 2>&1 | tee -a "$INSTALL_LOG"
@@ -259,6 +280,24 @@ pip_install_with_tools() {
   return 1
 }
 
+# Without libtorrent: its wheel is missing on some platforms. Everything else
+# is installed from the dependency list with libtorrent taken out, then the
+# app on top of it. Returns 1, and says so, if either install fails: the app
+# without its dependencies is not an install.
+install_without_libtorrent() {
+  local reqs rc=0
+  reqs="$(mktemp)"
+  if ! curl -fsSL "$REPO_RAW/requirements.txt" -o "$reqs"; then
+    echo "Could not fetch the dependency list; install lapsecoin's other dependencies yourself, then: pip install lapsecoin --no-deps" >&2
+    rm -f "$reqs"
+    return 1
+  fi
+  grep -v '^libtorrent' "$reqs" > "$reqs.nolt"
+  pip_install_with_tools -r "$reqs.nolt" && pip_install_with_tools lapsecoin --no-deps || rc=1
+  rm -f "$reqs" "$reqs.nolt"
+  return $rc
+}
+
 # --- 2. install the app. Try the full install first; only fall back to
 #        skipping libtorrent if THAT is specifically what failed -- any
 #        other failure surfaces as-is rather than getting masked. ---
@@ -270,7 +309,7 @@ if pip_install_with_tools lapsecoin; then
   exit 0
 fi
 
-if ! grep -qi libtorrent "$INSTALL_LOG"; then
+if ! libtorrent_failed; then
   echo
   echo "Install failed for a reason unrelated to libtorrent -- see the output above." >&2
   exit 1
@@ -281,15 +320,11 @@ echo "libtorrent failed to install (real wheel gaps on some platforms); continui
 echo "This only disables automatic DHT peer discovery -- peers are then found on the local network, through other peers, or with --peer."
 echo
 
-REQS_TMP="$(mktemp)"
-if ! curl -fsSL "$REPO_RAW/requirements.txt" -o "$REQS_TMP"; then
-  echo "Could not fetch the dependency list; install lapsecoin's other dependencies yourself, then: pip install lapsecoin --no-deps" >&2
+if ! install_without_libtorrent; then
+  echo
+  echo "Install failed -- see the output above." >&2
   exit 1
 fi
-grep -v '^libtorrent' "$REQS_TMP" > "$REQS_TMP.nolt"
-pip_install_with_tools -r "$REQS_TMP.nolt"
-pip_install_with_tools lapsecoin --no-deps
-rm -f "$REQS_TMP" "$REQS_TMP.nolt"
 
 finish_liboqs
 finish_falcon_seeded
