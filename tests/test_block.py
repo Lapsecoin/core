@@ -1597,3 +1597,39 @@ class TestMachineBenchFloorAndRetarget:
         assert inc.table() == fresh.table()
         inc.update(chain[:len(chain) - 3])           # a shallow reorg
         assert inc.table() == block_mod.MachineBench().update(chain[:len(chain) - 3]).table()
+
+
+class TestRetargetCount:
+    """How many difficulty windows have closed, and how many raised it."""
+
+    @pytest.fixture(autouse=True)
+    def _small_window(self, monkeypatch):
+        monkeypatch.setattr("block.VDF_ADJUST_INTERVAL", 5)
+
+    @staticmethod
+    def _chain(length, raises_at=()):
+        base = block_mod.VDF_ITERATIONS
+        chain, iters = [], base
+        for h in range(length):
+            if h in raises_at:
+                iters = iters * 51 // 50
+            chain.append({"height": h, "vdf_iterations": iters})
+        return chain
+
+    def test_none_before_the_first_boundary(self):
+        assert block_mod.retarget_count(self._chain(5)) == (0, 0)
+
+    def test_the_boundary_block_closes_a_window(self):
+        assert block_mod.retarget_count(self._chain(6)) == (1, 0)
+
+    def test_windows_that_raised_are_counted_separately(self):
+        # Heights 5 and 15 raise it, 10 leaves it alone, 20 is a boundary
+        # that the chain has not reached yet.
+        assert block_mod.retarget_count(self._chain(18, raises_at={5, 15})) == (3, 2)
+
+    def test_blocks_without_the_field_read_as_the_base_difficulty(self):
+        chain = [{"height": h} for h in range(11)]
+        assert block_mod.retarget_count(chain) == (2, 0)
+
+    def test_an_empty_chain_has_none(self):
+        assert block_mod.retarget_count([]) == (0, 0)
