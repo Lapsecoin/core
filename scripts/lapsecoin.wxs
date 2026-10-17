@@ -7,7 +7,8 @@
   Installs to %LOCALAPPDATA%\Programs\LapseCoin, which src/datadir.py
   installed_exe() and lapsecoin_bridge.py rely on. Needs no administrator
   rights. The node's data lives in %LOCALAPPDATA%\LapseCoin and is never
-  touched by installing, upgrading or uninstalling.
+  touched by installing, upgrading or uninstalling. Uninstalling with a
+  window shows a notice saying so (src/uninstall_notice.py).
 
   LAUNCH=0 stops the installer from starting the app afterwards: the
   updater and the bridge start it themselves.
@@ -71,7 +72,13 @@
     <CustomAction Id="LaunchApp" Directory="INSTALLFOLDER"
                   ExeCommand="&quot;[INSTALLFOLDER]lapsecoin.exe&quot;"
                   Return="asyncNoWait" />
+    <!-- Shows where the wallet stays before the program is removed. Skipped
+         for silent uninstalls and for upgrades, and it never fails them. -->
+    <CustomAction Id="UninstallNotice" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]lapsecoin.exe&quot; --uninstall-notice"
+                  Execute="immediate" Return="ignore" />
     <InstallExecuteSequence>
+      <Custom Action="UninstallNotice" After="InstallInitialize">REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE AND UILevel &gt;= 3</Custom>
       <Custom Action="LaunchApp" After="InstallFinalize">LAUNCH = "1" AND NOT REMOVE</Custom>
     </InstallExecuteSequence>
   </Product>
