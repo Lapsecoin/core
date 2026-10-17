@@ -18,7 +18,7 @@ Join the [Discord](https://discord.gg/FP2d8JmK6r) for discussions, news, and tra
 
 ## Quick start
 
-Grab a binary from the [downloads page](https://lapsecoin.github.io/downloads.html), self-contained with no dependencies.
+Grab a binary from the [downloads page](https://lapsecoin.github.io/downloads.html), self-contained with no dependencies. On Windows you can also [get LapseCoin from the Microsoft Store](https://apps.microsoft.com/detail/xpdcf9572b3766).
 
 ```
 # Linux                    # Windows
