@@ -1,0 +1,175 @@
+name: Update the Microsoft Store listing
+
+# Points the Store listing at the installer of a release and submits it for
+# certification. The Store downloads the MSI itself from the versioned URL that
+# pages.yml serves, so nothing is uploaded here, only the package URL changes
+# (installer arguments, languages and architecture stay as set in Partner
+# Center). Docs: https://learn.microsoft.com/windows/apps/publish/store-submission-api
+#
+# Runs after every release (called from release.yml, after the Pages deploy)
+# and by hand from the Actions tab, which resubmits the version you name, or
+# the one in VERSION.
+#
+# One-time setup, in Partner Center and the repo (Settings > Secrets and
+# variables > Actions):
+#   1. Register an application in Microsoft Entra ID and add it under Account
+#      settings > Microsoft Entra applications in Partner Center, role Manager.
+#   2. Secrets: AZURE_AD_TENANT_ID, AZURE_AD_APPLICATION_CLIENT_ID,
+#      AZURE_AD_APPLICATION_SECRET, SELLER_ID.
+#   3. Optional variable STORE_PRODUCT_ID, if it is not the one below.
+# Without the secrets this does nothing and says so. The app must already be
+# published, and the Store only takes free apps through this route.
+#
+# Microsoft requires the file behind a submitted URL never to change, so a
+# version that was submitted is never rebuilt under the same number.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+    secrets:
+      AZURE_AD_TENANT_ID:
+        required: false
+      AZURE_AD_APPLICATION_CLIENT_ID:
+        required: false
+      AZURE_AD_APPLICATION_SECRET:
+        required: false
+      SELLER_ID:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to submit, like 1.1.3 (default: the one in VERSION)"
+        type: string
+        required: false
+
+concurrency:
+  group: store
+  cancel-in-progress: false
+
+env:
+  PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID || 'XPDCF9572B3766' }}
+  SITE: https://lapsecoin.github.io/core
+
+jobs:
+  submit:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+      AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+      AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+      SELLER_ID: ${{ secrets.SELLER_ID }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Check the Store credentials are set
+        id: gate
+        run: |
+          $missing = 'AZURE_AD_TENANT_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET', 'SELLER_ID' |
+            Where-Object { -not (Get-Item "env:$_" -ErrorAction SilentlyContinue).Value }
+          if ($missing) {
+            Write-Host "Skipping the Store update, these secrets are not set: $($missing -join ', ')"
+            "enabled=false" | Out-File $env:GITHUB_OUTPUT -Append
+          } else {
+            "enabled=true" | Out-File $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Work out the version and its URL
+        if: steps.gate.outputs.enabled == 'true'
+        id: ver
+        run: |
+          $v = ("${{ inputs.version }}".Trim()) -replace '^v', ''
+          if (-not $v) { $v = (Get-Content VERSION -Raw).Trim() }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Not a version: '$v'" }
+          "version=$v" | Out-File $env:GITHUB_OUTPUT -Append
+          "url=$env:SITE/downloads/$v/lapsecoin.msi" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # The Store fetches this URL during certification, so it must be live,
+      # must not redirect (the Store rejects that) and must be the very file
+      # the release published.
+      - name: Check the installer at that URL is the release's
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          $url = "${{ steps.ver.outputs.url }}"
+          $v = "${{ steps.ver.outputs.version }}"
+          $head = curl.exe -s -I -o NUL -w "%{http_code} %{redirect_url}" $url
+          if ($head.Trim() -ne "200") { throw "Expected a plain 200 from $url, got: $head" }
+          curl.exe -fsSL -o lapsecoin.msi $url
+          gh release download "v$v" --repo $env:GITHUB_REPOSITORY --pattern SHA256SUMS --output SHA256SUMS
+          $line = Get-Content SHA256SUMS | Where-Object { $_ -match '\slapsecoin\.msi$' } | Select-Object -First 1
+          if (-not $line) { throw "No lapsecoin.msi in the release's SHA256SUMS" }
+          $want = ($line -split '\s+')[0].ToLower()
+          $got = (Get-FileHash lapsecoin.msi -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "The file at $url ($got) is not the release's ($want)" }
+          Write-Host "OK, $url matches the release ($got)"
+
+      - uses: microsoft/microsoft-store-apppublisher@v1.1
+        if: steps.gate.outputs.enabled == 'true'
+
+      - name: Sign in to Partner Center
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          msstore reconfigure --tenantId $env:AZURE_AD_TENANT_ID --sellerId $env:SELLER_ID `
+            --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID --clientSecret $env:AZURE_AD_APPLICATION_SECRET
+          if ($LASTEXITCODE) { throw "msstore reconfigure failed" }
+
+      # Only the package URL changes. Everything else is carried over from the
+      # package as the Store holds it now, so the installer arguments set in
+      # Partner Center (INSTALLSOURCE=store) are never overwritten here.
+      - name: Point the package at this version
+        if: steps.gate.outputs.enabled == 'true'
+        id: patch
+        run: |
+          $PSNativeCommandArgumentPassing = 'Standard'
+          Write-Host "Submission status:"
+          msstore submission status $env:PRODUCT_ID
+          $raw = (msstore submission get $env:PRODUCT_ID) -join "`n"
+          $start = $raw.IndexOf('{'); $end = $raw.LastIndexOf('}')
+          if ($start -lt 0 -or $end -lt $start) { throw "No JSON in the output of 'submission get':`n$raw" }
+          $doc = $raw.Substring($start, $end - $start + 1) | ConvertFrom-Json -Depth 32
+
+          # The package objects are the ones with a packageUrl, wherever the
+          # CLI nests them.
+          function Find-Packages($node) {
+            if ($node -is [System.Management.Automation.PSCustomObject]) {
+              if ($node.PSObject.Properties.Name -contains 'packageUrl') { $node; return }
+              foreach ($p in $node.PSObject.Properties) { Find-Packages $p.Value }
+            } elseif ($node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
+              foreach ($i in $node) { Find-Packages $i }
+            }
+          }
+          $packages = @(Find-Packages $doc)
+          if ($packages.Count -ne 1) {
+            throw "Expected one package with a packageUrl, found $($packages.Count). Output was:`n$raw"
+          }
+          $url = "${{ steps.ver.outputs.url }}"
+          if ($packages[0].packageUrl -eq $url) {
+            Write-Host "The Store already points at $url, nothing to submit."
+            "changed=false" | Out-File $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+          Write-Host "packageUrl: $($packages[0].packageUrl) -> $url"
+          $packages[0].packageUrl = $url
+          $doc | ConvertTo-Json -Depth 32 | Set-Content -Path package.json -Encoding utf8
+          "changed=true" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Submit for certification
+        if: steps.gate.outputs.enabled == 'true' && steps.patch.outputs.changed == 'true'
+        run: |
+          $PSNativeCommandArgumentPassing = 'Standard'
+          $package = Get-Content -Raw package.json
+          msstore submission update $env:PRODUCT_ID $package
+          if ($LASTEXITCODE) { throw "msstore submission update failed" }
+          msstore submission publish $env:PRODUCT_ID
+          if ($LASTEXITCODE) { throw "msstore submission publish failed" }
+          Write-Host "Submitted. The new version reaches Store users once certification finishes."
