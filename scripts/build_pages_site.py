@@ -95,6 +95,22 @@ def entry(release, msi_sha):
     }
 
 
+def live_store_url(store_id):
+    """The Store page of the app when it answers 200, else None. A product that
+    is not published yet answers 410, so the website only shows the button
+    once the listing exists."""
+    if not store_id:
+        return None
+    import urllib.error
+    import urllib.request
+    url = "https://apps.microsoft.com/detail/" + store_id.strip().lower()
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            return url if r.status == 200 else None
+    except (urllib.error.URLError, OSError):
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default="Lapsecoin/core")
@@ -102,6 +118,8 @@ def main():
     ap.add_argument("--out", default="site")
     ap.add_argument("--releases-json")
     ap.add_argument("--no-download", action="store_true")
+    ap.add_argument("--store-id", default=os.environ.get("MSIX_STORE_ID", ""),
+                    help="Microsoft Store ID; the page is listed in releases.json once it is live")
     args = ap.parse_args()
 
     if args.releases_json:
@@ -139,7 +157,12 @@ def main():
         shutil.copyfile(os.path.join(args.out, "downloads", newest, MSI),
                         os.path.join(args.out, "latest", MSI))
     with open(os.path.join(args.out, "releases.json"), "w", encoding="utf-8") as f:
-        json.dump({"latest_msi": f"{SITE}/latest/{MSI}", "releases": entries}, f, indent=1)
+        doc = {"latest_msi": f"{SITE}/latest/{MSI}", "releases": entries}
+        store = live_store_url(args.store_id)
+        if store:
+            doc["store_url"] = store
+        print("Store page:", store or "not live")
+        json.dump(doc, f, indent=1)
         f.write("\n")
     # The unstyled project root is not a page anyone should land on.
     with open(os.path.join(args.out, "index.html"), "w", encoding="utf-8") as f:

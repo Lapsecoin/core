@@ -33,7 +33,10 @@ class TestWindowsMsiUpdate:
         assert updater.detect_install_type() == "windows-store"
         up = updater.Updater(install_type="windows-store")
         assert not up.can_self_update()
-        assert up.update_url("https://example.test/releases") == updater.STORE_URL
+        monkeypatch.setattr(updater, "STORE_URL", "https://apps.microsoft.com/detail/9abc")
+        assert up.update_url("https://example.test/releases") == "https://apps.microsoft.com/detail/9abc"
+        monkeypatch.setattr(updater, "STORE_URL", "")
+        assert up.update_url("https://example.test/releases") == "https://example.test/releases"
 
     def test_a_packaged_build_is_the_msix_type_and_goes_to_the_store(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -46,7 +49,10 @@ class TestWindowsMsiUpdate:
         assert updater.detect_install_type() == "windows-msix"
         up = updater.Updater(install_type="windows-msix")
         assert not up.can_self_update()
-        assert up.update_url("https://example.test/releases") == updater.STORE_URL
+        monkeypatch.setattr(updater, "STORE_URL", "https://apps.microsoft.com/detail/9abc")
+        assert up.update_url("https://example.test/releases") == "https://apps.microsoft.com/detail/9abc"
+        monkeypatch.setattr(updater, "STORE_URL", "")
+        assert up.update_url("https://example.test/releases") == "https://example.test/releases"
 
     def test_other_installs_keep_the_releases_page(self):
         up = updater.Updater(install_type="windows-msi")

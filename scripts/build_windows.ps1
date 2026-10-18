@@ -48,6 +48,12 @@ if (-not (Test-Path $fsDll)) { throw "no falcon_seeded.dll in $oqs" }
 
 $env:PYTHONPATH = "src"
 
+# The Store page of this app, for the update banner of a Store-installed copy.
+# Empty without the MSIX_STORE_ID repo variable (passed in as an environment
+# variable by release.yml).
+$storeUrl = if ($env:MSIX_STORE_ID) { "https://apps.microsoft.com/detail/" + $env:MSIX_STORE_ID.Trim().ToLower() } else { "" }
+Set-Content -Path STORE_URL -Value $storeUrl -NoNewline -Encoding ascii
+
 Remove-Item build-nuitka, dist\lapsecoin-win -Recurse -Force -ErrorAction SilentlyContinue
 python -m nuitka --mode=standalone @common @identity `
     "--file-description=LapseCoin node and wallet" `
@@ -55,6 +61,7 @@ python -m nuitka --mode=standalone @common @identity `
     --enable-plugin=tk-inter `
     --output-dir=build-nuitka --output-filename=lapsecoin `
     --include-data-files=VERSION=VERSION `
+    --include-data-files=STORE_URL=STORE_URL `
     --include-data-files=src/bip39_english.txt=bip39_english.txt `
     --include-data-files=docs/whitepaper.md=docs/whitepaper.md `
     --include-data-files=lapsecoin.svg=lapsecoin.svg `

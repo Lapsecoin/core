@@ -60,6 +60,7 @@ jobs:
       - name: Mirror the installers of the newest releases
         env:
           GH_TOKEN: ${{ github.token }}
+          MSIX_STORE_ID: ${{ vars.MSIX_STORE_ID }}
         run: python3 scripts/build_pages_site.py --repo "$GITHUB_REPOSITORY" --keep "$KEEP" --out site && find site -type f | sort
 
       # The whitepaper page, rendered with the node's own code and styles.
