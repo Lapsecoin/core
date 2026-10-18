@@ -7,9 +7,9 @@ name: Build the Microsoft Store package by hand
 # repackaged, so the result can be uploaded to Partner Center as the first
 # submission. Nothing is published, signed or sent to the Store here.
 #
-# Run it from the Actions tab. It needs the MSIX_IDENTITY_NAME, MSIX_PUBLISHER
-# MSIX_PUBLISHER_DISPLAY_NAME and MSIX_DISPLAY_NAME repo variables (see store.yml). The package
-# is the "lapsecoin-msix" artifact of the run.
+# Run it from the Actions tab. It needs the MSIX_IDENTITY_NAME, MSIX_PUBLISHER,
+# MSIX_PUBLISHER_DISPLAY_NAME and MSIX_DISPLAY_NAME repo variables (see
+# store.yml). The package is the "lapsecoin-msix" artifact of the run.
 
 on:
   workflow_dispatch:
