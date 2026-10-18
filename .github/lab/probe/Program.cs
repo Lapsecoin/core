@@ -31,6 +31,7 @@ class Probe
         return new string[][] {
             new [] { "local_existing", Path.Combine(local, "LapseLab", "existing.txt") },
             new [] { "local_new", Path.Combine(local, "LapseLab", "new_by_pkg.txt") },
+            new [] { "local_fresh", Path.Combine(local, "LapseLabFresh", "fresh.txt") },
             new [] { "roaming", Path.Combine(roaming, "LapseLabRoaming", "roaming.txt") },
             new [] { "profile", Path.Combine(prof, "LapseLabProfile", "profile.txt") },
             new [] { "documents", Path.Combine(docs, "LapseLabDocs", "doc.txt") },

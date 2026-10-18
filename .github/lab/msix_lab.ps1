@@ -1,12 +1,12 @@
 # Throwaway lab: how a full-trust MSIX behaves with data, uninstall, upgrade and listening sockets.
 $ErrorActionPreference = 'Continue'
-function H($t) { Write-Host "`n##### $t" }
+function Section($t) { Write-Host "`n##### $t" }
 
-H "Machine"
+Section "Machine"
 cmd /c ver | Out-Host
 dotnet --list-sdks | Out-Host
 
-H "Allow sideloading on this runner"
+Section "Allow sideloading on this runner"
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowAllTrustedApps /t REG_DWORD /d 1 /f | Out-Host
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f | Out-Host
 
@@ -14,11 +14,11 @@ $work = "C:\lab"
 New-Item -ItemType Directory $work -Force | Out-Null
 New-Item -ItemType Directory C:\labout -Force | Out-Null
 
-H "Build the probe program"
+Section "Build the probe program"
 dotnet publish "$PSScriptRoot\probe\probe.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$work\probe" | Out-Host
 if (-not (Test-Path "$work\probe\probe.exe")) { throw "probe.exe was not built" }
 
-H "Certificate and tools"
+Section "Certificate and tools"
 $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=LapseLab" -KeyUsage DigitalSignature -FriendlyName "LapseLab" -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
 $pw = ConvertTo-SecureString -String "lab" -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath "$work\lab.pfx" -Password $pw | Out-Null
@@ -54,6 +54,10 @@ function New-Package($name, $version, $variant) {
         $props = '<virtualization:FileSystemWriteVirtualization><virtualization:ExcludedDirectories><virtualization:ExcludedDirectory>$(KnownFolder:LocalAppData)\LapseLabExcl</virtualization:ExcludedDirectory></virtualization:ExcludedDirectories></virtualization:FileSystemWriteVirtualization>'
         $caps += '<rescap:Capability Name="unvirtualizedResources" />'
     }
+    if ($variant -eq 'D') {
+        $props = '<virtualization:FileSystemWriteVirtualization><virtualization:ExcludedDirectories><virtualization:ExcludedDirectory>$(KnownFolder:LocalAppData)\LapseLabExcl</virtualization:ExcludedDirectory></virtualization:ExcludedDirectories></virtualization:FileSystemWriteVirtualization>'
+        $caps = '<rescap:Capability Name="runFullTrust" />'
+    }
     $manifest = @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -83,14 +87,15 @@ function New-Package($name, $version, $variant) {
 "@
     Set-Content -Path "$dir\AppxManifest.xml" -Value $manifest -Encoding UTF8
     $msix = "$work\$name-$version.msix"
-    & $makeappx pack /d $dir /p $msix /o 2>&1 | Out-Host
-    & $signtool sign /fd SHA256 /f "$work\lab.pfx" /p lab $msix 2>&1 | Out-Host
+    & $makeappx pack /d $dir /p $msix /o 2>&1 | Out-Null
+    & $signtool sign /fd SHA256 /f "$work\lab.pfx" /p lab $msix 2>&1 | Out-Null
     return $msix
 }
 
 $targets = [ordered]@{
     'local_existing' = "$env:LOCALAPPDATA\LapseLab\existing.txt"
     'local_new'      = "$env:LOCALAPPDATA\LapseLab\new_by_pkg.txt"
+    'local_fresh'    = "$env:LOCALAPPDATA\LapseLabFresh\fresh.txt"
     'roaming'        = "$env:APPDATA\LapseLabRoaming\roaming.txt"
     'profile'        = "$env:USERPROFILE\LapseLabProfile\profile.txt"
     'documents'      = "$([Environment]::GetFolderPath('MyDocuments'))\LapseLabDocs\doc.txt"
@@ -107,7 +112,7 @@ function Reset-Real {
 }
 
 function Show-Real($label) {
-    H "REAL FILE SYSTEM, seen from OUTSIDE the package ($label)"
+    Section "REAL FILE SYSTEM, seen from OUTSIDE the package ($label)"
     foreach ($k in $targets.Keys) {
         $p = $targets[$k]
         if (Test-Path $p) {
@@ -121,7 +126,7 @@ function Show-Real($label) {
 
 function Show-Private($label, $pfn) {
     $priv = Join-Path $env:LOCALAPPDATA "Packages\$pfn"
-    H "PACKAGE PRIVATE STORE ($label): $priv"
+    Section "PACKAGE PRIVATE STORE ($label): $priv"
     if (Test-Path $priv) {
         Get-ChildItem $priv -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("  " + $_.FullName.Substring($priv.Length)) }
     } else { Write-Host "  (folder does not exist)" }
@@ -147,9 +152,10 @@ function Run-In-Package($name, $argline, $tag, $wait = $true) {
     }
 }
 
+$summary = [ordered]@{}
 function Experiment($variant, $title) {
     $name = "Probe$variant"
-    H "EXPERIMENT $variant : $title"
+    Section "EXPERIMENT $variant : $title"
     Reset-Real
     New-Item "$env:LOCALAPPDATA\LapseLab" -ItemType Directory -Force | Out-Null
     Set-Content "$env:LOCALAPPDATA\LapseLab\existing.txt" "created-before-install-by-outside-process"
@@ -173,14 +179,18 @@ function Experiment($variant, $title) {
     Get-AppxPackage -Name "LapseLab.$name" | Remove-AppxPackage
     Start-Sleep 3
     Show-Real "AFTER UNINSTALL"
+    $row = @()
+    foreach ($k in $targets.Keys) { $row += ("{0}={1}" -f $k, $(if (Test-Path $targets[$k]) { 'KEPT' } else { 'DELETED' })) }
+    $summary[$variant] = $row -join "  "
     Show-Private "AFTER UNINSTALL" $pfn
 }
 
 Experiment 'A' 'default virtualization'
 Experiment 'B' 'FileSystemWriteVirtualization=disabled + unvirtualizedResources'
 Experiment 'C' 'Windows 11 ExcludedDirectories for LapseLabExcl + unvirtualizedResources'
+Experiment 'D' 'ExcludedDirectories WITHOUT the unvirtualizedResources capability'
 
-H "EXPERIMENT N : can a full-trust package accept a connection from outside?"
+Section "EXPERIMENT N : can a full-trust package accept a connection from outside?"
 Reset-Real
 $mN = New-Package "ProbeN" "1.0.0.0" 'A'
 if (Install-Pkg $mN) {
@@ -197,4 +207,6 @@ if (Install-Pkg $mN) {
     } else { Write-Host "listener never reported ready" }
     Get-AppxPackage -Name "LapseLab.ProbeN" | Remove-AppxPackage
 }
-H "DONE"
+Section "SUMMARY: what survived uninstall (A default, B virtualization off, C excluded dir + capability, D excluded dir only)"
+foreach ($k in $summary.Keys) { Write-Host ("{0}: {1}" -f $k, $summary[$k]) }
+Section "DONE"
