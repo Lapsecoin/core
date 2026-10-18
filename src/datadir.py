@@ -71,20 +71,6 @@ def is_packaged():
     return rc != _APPMODEL_NOT_PACKAGED
 
 
-def is_store_install():
-    """True for a build the Microsoft Store installed. The Store passes
-    INSTALLSOURCE=store to the MSI, which records it under HKCU. Reinstalling
-    from anywhere else removes the value, so this follows the latest install."""
-    if not is_msi_install():
-        return False
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\LapseCoin") as key:
-            return winreg.QueryValueEx(key, "source")[0] == "store"
-    except (ImportError, OSError):
-        return False
-
-
 def user_data_dir(environ=None, packaged=None):
     environ = os.environ if environ is None else environ
     packaged = is_packaged() if packaged is None else packaged
