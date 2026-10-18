@@ -17,7 +17,7 @@ param(
     [Parameter(Mandatory)] [string] $Publisher,
     [Parameter(Mandatory)] [string] $PublisherDisplayName,
     [string] $Out = "lapsecoin.msix",
-    [string] $Logo = "lapsecoin.png"
+    [string] $Logo = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,8 +45,11 @@ $manifest = $manifest.Replace("{{NAME}}", (Esc $Name)).Replace("{{PUBLISHER}}", 
     Replace("{{PUBLISHER_DISPLAY_NAME}}", (Esc $PublisherDisplayName)).Replace("{{VERSION}}", $msixVersion)
 [System.IO.File]::WriteAllText((Join-Path $work "AppxManifest.xml"), $manifest, (New-Object System.Text.UTF8Encoding($false)))
 
-# Tile and store logos, scaled from the app's own logo, so no image files
-# are kept in the repository for them.
+# Tile and store logos, scaled from the app's own logo (the copy bundled in
+# the program folder unless -Logo says otherwise), so no image files are kept
+# in the repository for them.
+if (-not $Logo) { $Logo = Join-Path $Source "lapsecoin.png" }
+if (-not (Test-Path $Logo)) { throw "Logo not found: $Logo" }
 $assets = Join-Path $work "Assets"
 New-Item $assets -ItemType Directory | Out-Null
 $src = [System.Drawing.Image]::FromFile((Resolve-Path $Logo))
