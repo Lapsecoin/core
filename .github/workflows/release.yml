@@ -426,15 +426,33 @@ jobs:
       # and remove it again, before anything is published.
       - name: Install the installer on the runner and check it
         shell: pwsh
+        timeout-minutes: 15
         run: |
           # Every check runs, and every failure is reported together, because
           # each run of this job is a 30 minute round trip.
           $failures = @()
           $dir = Join-Path $env:LOCALAPPDATA 'Programs\LapseCoin'
-          $data = Join-Path $env:LOCALAPPDATA 'LapseCoin'
+          $data = Join-Path $env:USERPROFILE 'LapseCoin'
 
-          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0', '/l*v', "$PWD\install.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) {
+          # A program that does not finish must not hold the job until it is
+          # cancelled (a cancelled step loses its log): after $seconds, say
+          # what is running, stop it and record a failure.
+          function Run($file, $arguments, $seconds, $what) {
+            $proc = Start-Process $file -ArgumentList $arguments -PassThru
+            $null = $proc.Handle
+            if (-not $proc.WaitForExit($seconds * 1000)) {
+              Write-Host "TIMED OUT after $seconds s: $what"
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'lapsecoin|msiexec' } |
+                Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List | Out-Host
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              $script:failures += "$what did not finish in $seconds seconds"
+              return $null
+            }
+            return $proc
+          }
+
+          $p = Run msiexec @('/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0', '/l*v', "$PWD\install.log") 180 'the install'
+          if ($p -and $p.ExitCode -ne 0) {
             $failures += "install exited $($p.ExitCode)"
             Get-Content install.log -Tail 80
           }
@@ -451,23 +469,24 @@ jobs:
 
           # The program is windowed, so wait on the process for its exit code.
           if (Test-Path "$dir\lapsecoin.exe") {
-            $run = Start-Process "$dir\lapsecoin.exe" -ArgumentList '-h' -Wait -PassThru
-            if ($run.ExitCode -ne 0) { $failures += "installed app exited $($run.ExitCode) on -h" }
+            $run = Run "$dir\lapsecoin.exe" @('-h') 60 'the installed app with -h'
+            if ($run -and $run.ExitCode -ne 0) { $failures += "installed app exited $($run.ExitCode) on -h" }
 
             # An update restarts the app through the helper script, so the
             # program it names must be the one that is running. A Nuitka
             # build reports a python.exe in sys.executable that does not
             # exist, which is what broke the Windows update before.
             $chk = Join-Path $env:RUNNER_TEMP 'restart-check.txt'
-            $rc = Start-Process "$dir\lapsecoin.exe" -ArgumentList '--check-restart-exe', $chk -Wait -PassThru
+            $rc = Run "$dir\lapsecoin.exe" @('--check-restart-exe', $chk) 60 'the restart check'
             if (Test-Path $chk) { Get-Content $chk }
-            if ($rc.ExitCode -ne 0) { $failures += "an update would restart the wrong program (exit $($rc.ExitCode))" }
+            if ($rc -and $rc.ExitCode -ne 0) { $failures += "an update would restart the wrong program (exit $($rc.ExitCode))" }
           }
           if (-not (Test-Path $data)) { $failures += "the app did not make its data folder" }
           Get-ChildItem $dir -ErrorAction SilentlyContinue | Select-Object -First 40 | Format-Table Name, Length
 
-          $u = Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait -PassThru
-          if ($u.ExitCode -ne 0) { $failures += "uninstall exited $($u.ExitCode)" }
+          $u = Run msiexec @('/x', "$PWD\lapsecoin.msi", '/qn', '/l*v', "$PWD\uninstall.log") 180 'the uninstall'
+          if (-not $u -and (Test-Path uninstall.log)) { Get-Content uninstall.log -Tail 60 }
+          if ($u -and $u.ExitCode -ne 0) { $failures += "uninstall exited $($u.ExitCode)" }
           if (Test-Path (Join-Path $dir 'lapsecoin.exe')) { $failures += "uninstall left the program behind" }
           foreach ($lnk in $shortcuts) {
             if (Test-Path $lnk) { $failures += "uninstall left $lnk behind" }
