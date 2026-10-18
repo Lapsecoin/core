@@ -17,8 +17,9 @@ name: Update the Microsoft Store listing
 #      AZURE_AD_APPLICATION_SECRET, SELLER_ID.
 #   3. Variables (not secrets), from the product identity page of the MSIX
 #      product: MSIX_IDENTITY_NAME, MSIX_PUBLISHER, MSIX_PUBLISHER_DISPLAY_NAME
-#      (used by release.yml to build the package) and MSIX_STORE_ID (the
-#      12 character Store ID, used here).
+#      and MSIX_DISPLAY_NAME (the reserved app name), used by release.yml to
+#      build the package, and MSIX_STORE_ID (the 12 character Store ID), used
+#      here.
 #   4. The first version of the product must be submitted by hand in Partner
 #      Center, including the justification for the runFullTrust capability.
 #      The Store only takes free apps through this route.

@@ -8,7 +8,7 @@ name: Build the Microsoft Store package by hand
 # submission. Nothing is published, signed or sent to the Store here.
 #
 # Run it from the Actions tab. It needs the MSIX_IDENTITY_NAME, MSIX_PUBLISHER
-# and MSIX_PUBLISHER_DISPLAY_NAME repo variables (see store.yml). The package
+# MSIX_PUBLISHER_DISPLAY_NAME and MSIX_DISPLAY_NAME repo variables (see store.yml). The package
 # is the "lapsecoin-msix" artifact of the run.
 
 on:
@@ -29,6 +29,7 @@ jobs:
       MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
       MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
       MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+      MSIX_DISPLAY_NAME: ${{ vars.MSIX_DISPLAY_NAME }}
     defaults:
       run:
         shell: pwsh
@@ -37,7 +38,7 @@ jobs:
 
       - name: Check the identity variables are set
         run: |
-          $missing = 'MSIX_IDENTITY_NAME', 'MSIX_PUBLISHER', 'MSIX_PUBLISHER_DISPLAY_NAME' |
+          $missing = 'MSIX_IDENTITY_NAME', 'MSIX_PUBLISHER', 'MSIX_PUBLISHER_DISPLAY_NAME', 'MSIX_DISPLAY_NAME' |
             Where-Object { -not (Get-Item "env:$_").Value }
           if ($missing) { throw "These repo variables are not set: $($missing -join ', ')" }
 
@@ -66,7 +67,8 @@ jobs:
         run: |
           .\scripts\build_msix.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" `
             -Name $env:MSIX_IDENTITY_NAME -Publisher $env:MSIX_PUBLISHER `
-            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -Out lapsecoin.msix
+            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -DisplayName $env:MSIX_DISPLAY_NAME `
+            -Out lapsecoin.msix
           (Get-FileHash lapsecoin.msix -Algorithm SHA256).Hash | Write-Host
 
       - uses: actions/upload-artifact@v6
