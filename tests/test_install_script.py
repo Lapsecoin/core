@@ -146,6 +146,9 @@ def test_libtorrent_is_blamed_only_when_pips_errors_name_it(log, failed):
 def _fallback(pip_outputs, curl_ok=True):
     stubs = "\n".join(
         f'  {i}) printf %s {text!r}; echo; return {code} ;;' for i, (text, code) in enumerate(pip_outputs))
+    # Built here because an f-string expression cannot hold a backslash before Python 3.12.
+    curl_body = (r'printf "flask>=3.0\nlibtorrent>=2.0.0\npeewee>=3.17\n" > "$4"'
+                 if curl_ok else 'return 22')
     harness = textwrap.dedent(f"""
         set -uo pipefail
         INSTALL_LOG="$(mktemp)"; TOOLS_READY=1; REPO_RAW=x
@@ -157,7 +160,7 @@ def _fallback(pip_outputs, curl_ok=True):
         eval "$(sed -n '/^install_without_libtorrent()/,/^}}/p' "{SCRIPT}")"
         STATE="$(mktemp -d)"
         curl() {{
-          {'printf "flask>=3.0\\nlibtorrent>=2.0.0\\npeewee>=3.17\\n" > "$4"' if curl_ok else 'return 22'}
+          {curl_body}
         }}
         pip() {{
           echo "pip ${{*:2}}" | sed 's/ -r .*/ -r LIST/' >> "$STATE/calls"
