@@ -186,7 +186,14 @@ jobs:
           $PSNativeCommandArgumentPassing = 'Standard'
           $package = Get-Content -Raw package.json
           msstore submission update $env:PRODUCT_ID $package --verbose
-          if ($LASTEXITCODE) { throw "msstore submission update failed" }
+          if ($LASTEXITCODE) {
+            # The CLI first waits two minutes for the Store to call the app ready. If
+            # the draft's own package URL is dead it never is, and that wait blocks the
+            # very update that would repair the URL. So try again without that wait.
+            Write-Host "::warning::The Store did not report the app as ready. Retrying without the initial wait, so the package URL can still be corrected."
+            msstore submission update $env:PRODUCT_ID $package --skipInitialPolling --verbose
+            if ($LASTEXITCODE) { throw "msstore submission update failed, also without the initial wait" }
+          }
           msstore submission publish $env:PRODUCT_ID --verbose
           if ($LASTEXITCODE) { throw "msstore submission publish failed" }
           Write-Host "Submitted. The new version reaches Store users once certification finishes."
