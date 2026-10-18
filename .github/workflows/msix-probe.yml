@@ -7,9 +7,10 @@ name: Check the packaged data folder logic on Windows
 # Windows itself, that:
 #   - GetCurrentPackageFullName reports the process as packaged
 #   - the data folder is %USERPROFILE%\LapseCoin
-#   - a wallet in the MSI build's %LOCALAPPDATA%\LapseCoin is copied across and
-#     the original is left in place
-#   - the copied wallet survives an uninstall of the package
+#   - the data of an earlier MSI install in %LOCALAPPDATA%\LapseCoin is moved
+#     across (a move, so the old folder is gone afterwards), which Windows could
+#     in principle forbid a packaged app from doing to files outside the package
+#   - the moved wallet survives an uninstall of the package
 # This does not replace scripts/test_msix.ps1, which tests the real program
 # and runs on every release. It exists so a mistake in the data folder logic
 # shows up here in a minute instead of blocking a release.
@@ -105,13 +106,13 @@ jobs:
 
           if ($log -notmatch 'packaged: True') { $failures += "datadir.is_packaged() did not report a package" }
           if ($log -notmatch [regex]::Escape("prepare: $data")) { $failures += "datadir.prepare() did not choose $data" }
-          if (-not (Test-Path (Join-Path $data $wallet))) { $failures += "the wallet was not copied to $data" }
-          elseif ((Get-Content (Join-Path $data $wallet) -Raw) -ne "legacy wallet") { $failures += "the copied wallet differs from the original" }
-          if (-not (Test-Path (Join-Path $legacy $wallet))) { $failures += "the original wallet in $legacy is gone" }
+          if (-not (Test-Path (Join-Path $data $wallet))) { $failures += "the wallet was not moved to $data" }
+          elseif ((Get-Content (Join-Path $data $wallet) -Raw) -ne "legacy wallet") { $failures += "the moved wallet differs from the original" }
+          if (Test-Path (Join-Path $legacy $wallet)) { $failures += "the wallet is still in $legacy, so it was copied or the move was undone" }
 
           Remove-AppxPackage -Package $pkg.PackageFullName
           Start-Sleep 5
           if (-not (Test-Path (Join-Path $data $wallet))) { $failures += "the uninstall deleted the wallet in $data" }
 
           if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
-          Write-Host "packaged: the data folder is $data, the MSI wallet was copied across and it survived the uninstall"
+          Write-Host "packaged: the data folder is $data, the MSI wallet was moved across and it survived the uninstall"

@@ -11,7 +11,7 @@ if "--uninstall-notice" in _sys.argv[1:]:
     _uninstall_notice.run()
     _sys.exit(0)
 
-# An installed Windows build keeps its data under %LOCALAPPDATA%, not beside
+# An installed Windows build keeps its data under %USERPROFILE%\LapseCoin, not beside
 # the program. This has to run before anything opens a relative path.
 import datadir as _datadir
 _datadir.prepare()

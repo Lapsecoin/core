@@ -4,19 +4,25 @@ Every file the node writes (chain database, key, peer list, log) is named
 relative to the working directory. That is right for a program run from a
 folder the user owns, and wrong for one installed under a path the program
 should not write into. An installed build therefore moves its working
-directory to %LOCALAPPDATA%\\LapseCoin before anything else starts, which
+directory to %USERPROFILE%\\LapseCoin before anything else starts, which
 keeps the program files replaceable by an upgrade and the data out of
 their way.
 
-Only a build installed by the MSI does this. It is recognised by a marker
-file the installer places next to the executable, so a source checkout, a
-pip install, the AppImage and a portable copy behave exactly as before.
+Two kinds of build do this: the one installed by the MSI, recognised by a
+marker file the installer places next to the executable, and the Microsoft
+Store build, recognised by asking Windows whether the process has a package
+identity. A source checkout, a pip install, the AppImage and a portable copy
+behave exactly as before.
 
-A build running inside an MSIX package (the Microsoft Store build) keeps its
-data in %USERPROFILE%\\LapseCoin instead. Windows deletes a new folder under
-AppData when a package is uninstalled, and that would take the key with it;
-a folder under the profile root is left alone. It is recognised by asking
-Windows whether the process has a package identity, not by a marker file.
+The profile folder is used because Windows deletes a new folder under AppData
+when an MSIX package is uninstalled, and that would take the key with it. A
+folder under the profile root is left alone, by the MSI and the package alike.
+
+Earlier versions of the MSI build kept their data in %LOCALAPPDATA%\\LapseCoin.
+On the first run with nothing in the new folder, the user is asked whether to
+move it across. It is a move, not a copy: the data ends up in one place, and
+if anything goes wrong part way the files already moved are put back and the
+node keeps running from the old folder, so a failed move never makes a new key.
 
 Moving from the old single .exe is a copy, never a move: the originals stay
 where they were, and nothing is ever overwritten in the new location. On the
@@ -71,22 +77,30 @@ def is_packaged():
     return rc != _APPMODEL_NOT_PACKAGED
 
 
-def user_data_dir(environ=None, packaged=None):
+def is_installed_build():
+    """A build that keeps its data in a folder of its own (see above)."""
+    return is_packaged() or is_msi_install()
+
+
+def profile_data_dir(environ=None):
     environ = os.environ if environ is None else environ
-    packaged = is_packaged() if packaged is None else packaged
-    if packaged:
-        home = environ.get("USERPROFILE") or os.path.expanduser("~")
-        return os.path.join(home, APP_DIR_NAME)
-    return legacy_appdata_dir(environ)
+    home = environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.join(home, APP_DIR_NAME)
 
 
 def legacy_appdata_dir(environ=None):
-    """Where the MSI build keeps its data, and where a packaged build looks
-    for data to copy across."""
+    """Where earlier versions of the MSI build kept their data."""
     environ = os.environ if environ is None else environ
     base = environ.get("LOCALAPPDATA") or os.path.join(
         os.path.expanduser("~"), "AppData", "Local")
     return os.path.join(base, APP_DIR_NAME)
+
+
+def user_data_dir(environ=None):
+    """The folder the data is in: the profile folder, or the old AppData one
+    while an earlier install's data has not been moved out of it."""
+    new, old = profile_data_dir(environ), legacy_appdata_dir(environ)
+    return old if (not _has_data(new) and _has_data(old)) else new
 
 
 def _has_data(directory):
@@ -165,6 +179,36 @@ def migrate(src, dst):
     return copied
 
 
+def move_data(src, dst):
+    """Moves everything in src into dst, all or nothing. Nothing in dst is
+    overwritten. If any entry cannot be moved (a file held open by a node that
+    is still running, another drive), the entries already moved are put back
+    and False is returned, so the data is never left split between the two.
+    The emptied src is removed. Returns True when everything moved."""
+    os.makedirs(dst, exist_ok=True)
+    done = []
+    try:
+        for name in os.listdir(src):
+            s, d = os.path.join(src, name), os.path.join(dst, name)
+            if os.path.lexists(d):
+                continue
+            os.replace(s, d)
+            done.append((s, d))
+    except OSError:
+        log.warning("[datadir] could not move the data from %s to %s", src, dst, exc_info=True)
+        for s, d in reversed(done):
+            try:
+                os.replace(d, s)
+            except OSError:
+                log.error("[datadir] could not put %s back, it is now at %s", s, d)
+        return False
+    try:
+        os.rmdir(src)
+    except OSError:
+        pass
+    return True
+
+
 # Folders to look in for an earlier install, with how deep to go. Desktop and
 # Downloads are where a downloaded single-file program usually ends up; a
 # synced Desktop lives under OneDrive.
@@ -208,30 +252,40 @@ def find_legacy_folders(home=None, max_dirs=4000, seconds=3.0):
     return [folder for _, folder in found]
 
 
-def prepare(environ=None, home=None, ask=None):
+def prepare(environ=None, home=None, ask=None, ask_move=None):
     """Called before anything else starts. For an installed build, makes the
     data folder and makes it the working directory. On the very first run,
-    when there is no key or chain yet, asks whether an earlier install exists
-    and brings its data across. Returns the folder, or None when this is not
+    when the new folder has no key or chain yet, offers to move the data of an
+    earlier MSI install across, and failing that asks whether an old program
+    exists and copies its data. Returns the folder, or None when this is not
     an installed build and nothing changed."""
-    packaged = is_packaged()
-    if not packaged and not is_msi_install():
+    if not is_installed_build():
         return None
-    dst = user_data_dir(environ, packaged=packaged)
-    os.makedirs(dst, exist_ok=True)
-    if packaged and not _has_data(dst):
-        # Copy, never move: the MSI build's folder stays where it is.
-        copied = migrate(legacy_appdata_dir(environ), dst)
-        if copied:
-            log.info("[datadir] brought %s across from the MSI install", ", ".join(copied))
-    # Asking for help is not starting the node: no question, nothing copied.
+    dst = profile_data_dir(environ)
+    old = legacy_appdata_dir(environ)
+    # Asking for help is not starting the node: no question, nothing moved.
     asking_for_help = any(a in ("-h", "--help", "--check-restart-exe") for a in sys.argv[1:])
+    if not _has_data(dst) and _has_data(old):
+        if asking_for_help:
+            os.chdir(old)
+            return old
+        import migrate_ui
+        kind = (ask_move or migrate_ui.ask_move)(old, dst)
+        if kind == migrate_ui.CANCEL:
+            # Closing the question must not quietly make a new key.
+            sys.exit(0)
+        if kind == migrate_ui.MOVE and move_data(old, dst):
+            log.info("[datadir] moved the data from %s to %s", old, dst)
+        else:
+            # Not now, or the move did not work: run from where the data is.
+            os.chdir(old)
+            return old
+    os.makedirs(dst, exist_ok=True)
     if not _has_data(dst) and not asking_for_help:
         import migrate_ui
         suggestions = find_legacy_folders(home)
         kind, folder = (ask or migrate_ui.ask)(suggestions)
         if kind == migrate_ui.CANCEL:
-            # Closing the question must not quietly make a new key.
             sys.exit(0)
         if kind == migrate_ui.USE and folder:
             copied = migrate(folder, dst)

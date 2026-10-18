@@ -1,7 +1,7 @@
 """The window the uninstaller shows before it removes the program.
 
 Uninstalling removes the program files only. The wallet and the chain stay in
-%LOCALAPPDATA%\\LapseCoin, and installing again picks them up. This tells the
+%USERPROFILE%\\LapseCoin, and installing again picks them up. This tells the
 user so, shows where the wallet is, and reminds them that the recovery phrase
 is what restores it on another computer.
 
