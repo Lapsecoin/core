@@ -1,0 +1,75 @@
+name: Build the Microsoft Store package by hand
+
+# Makes lapsecoin.msix from an existing release without releasing anything:
+# it downloads that release's MSI, installs it on the runner, takes the
+# program files, drops the MSI marker and packs the rest with
+# scripts/build_msix.ps1. The program inside is the release's own, only
+# repackaged, so the result can be uploaded to Partner Center as the first
+# submission. Nothing is published, signed or sent to the Store here.
+#
+# Run it from the Actions tab. It needs the MSIX_IDENTITY_NAME, MSIX_PUBLISHER
+# and MSIX_PUBLISHER_DISPLAY_NAME repo variables (see store.yml). The package
+# is the "lapsecoin-msix" artifact of the run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to repackage, like 1.1.4 (default: the latest release)"
+        type: string
+        required: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+      MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+      MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the identity variables are set
+        run: |
+          $missing = 'MSIX_IDENTITY_NAME', 'MSIX_PUBLISHER', 'MSIX_PUBLISHER_DISPLAY_NAME' |
+            Where-Object { -not (Get-Item "env:$_").Value }
+          if ($missing) { throw "These repo variables are not set: $($missing -join ', ')" }
+
+      - name: Download the release's installer
+        id: rel
+        run: |
+          $v = ("${{ inputs.version }}".Trim()) -replace '^v', ''
+          if ($v) { $tag = "v$v" } else { $tag = (gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName) }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Not a release tag: '$tag'" }
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern lapsecoin.msi
+          if ($LASTEXITCODE) { throw "$tag has no lapsecoin.msi" }
+          "version=$($Matches[1])" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # A normal per-user install, then the files are copied out of it.
+      - name: Install it and copy the program files
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "install exited $($p.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\LapseCoin'
+          Copy-Item $dir app -Recurse
+          Remove-Item app\installed-by-msi
+          $u = Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait -PassThru
+          Get-ChildItem app | Select-Object -First 20 | Format-Table Name, Length
+
+      - name: Build the package
+        run: |
+          .\scripts\build_msix.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" `
+            -Name $env:MSIX_IDENTITY_NAME -Publisher $env:MSIX_PUBLISHER `
+            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -Out lapsecoin.msix
+          (Get-FileHash lapsecoin.msix -Algorithm SHA256).Hash | Write-Host
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lapsecoin-msix
+          path: lapsecoin.msix
