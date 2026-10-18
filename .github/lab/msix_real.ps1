@@ -40,7 +40,7 @@ function Wait-Ports($label, $seconds) {
         if ($l) { Write-Host ("{0}: listening after {1:N0}s on ports {2}" -f $label, ((Get-Date) - $t0).TotalSeconds, (($l.LocalPort | Sort-Object -Unique) -join ',')); return }
         Start-Sleep 5
     }
-    Write-Host "$label: nothing listening on 8333/8335 after $seconds s"
+    Write-Host "${label}: nothing listening on 8333/8335 after $seconds s"
 }
 function Show-Log($path) {
     Write-Host "--- $path (lines with log markers; recovery phrase lines removed) ---"
