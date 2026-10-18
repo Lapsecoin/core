@@ -161,6 +161,13 @@ jobs:
             throw "Expected one package with a packageUrl, found $($packages.Count). Output was:`n$raw"
           }
           $url = "${{ steps.ver.outputs.url }}"
+          # A dead URL in the Store's draft is the likely reason the Store reports
+          # the app as not ready, so say so instead of leaving a bare timeout.
+          $current = $packages[0].packageUrl
+          $code = curl.exe -s -I -o NUL -m 30 -w "%{http_code}" $current
+          if ($code -ne "200") {
+            Write-Host "::warning::The Store's draft points at $current, which returns HTTP $code. Fix the package URL in Partner Center by hand if the update below reports the app as not ready."
+          }
           if ($packages[0].packageUrl -eq $url) {
             Write-Host "The Store already points at $url, nothing to submit."
             "changed=false" | Out-File $env:GITHUB_OUTPUT -Append
