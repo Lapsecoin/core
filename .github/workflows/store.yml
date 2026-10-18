@@ -175,10 +175,14 @@ jobs:
           }
           if ($packages[0].packageUrl -eq $url) {
             # The draft already has this version, for instance because it was set by
-            # hand in Partner Center. That says nothing about whether it was submitted,
-            # and no submission is in progress (checked above), so submit it as it is.
-            Write-Host "The draft already points at $url. Leaving the package alone and submitting the draft."
-            "changed=false" | Out-File $env:GITHUB_OUTPUT -Append
+            # hand in Partner Center. That says nothing about whether it was submitted
+            # or finalised, and no submission is in progress (checked above). A change
+            # made on the web page leaves the Packages section unfinished until it is
+            # committed, so send the same package back through update and commit.
+            Write-Host "The draft already points at $url. Sending the package again so it is committed, then submitting."
+            $doc | ConvertTo-Json -Depth 32 | Set-Content -Path package.json -Encoding utf8
+            Get-Content -Raw package.json | Write-Host
+            "changed=true" | Out-File $env:GITHUB_OUTPUT -Append
             "submit=true" | Out-File $env:GITHUB_OUTPUT -Append
             exit 0
           }
