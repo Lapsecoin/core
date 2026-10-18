@@ -139,6 +139,11 @@ jobs:
           if ($LASTEXITCODE -or $status -match 'Could not find|Error!') {
             throw "Partner Center did not accept the product ID '$env:PRODUCT_ID' (variable STORE_PRODUCT_ID). It must be the app's Partner Center ID, not the XP... Store ID."
           }
+          # A submission already in certification locks the app. Stop loudly, so a
+          # green run never hides that nothing was sent.
+          if ($status -match '"OngoingSubmissionId":\s*"([^"]+)"') {
+            throw "Submission $($Matches[1]) is already in progress for this app. Wait for it to finish, then run this again."
+          }
           $raw = (msstore submission get $env:PRODUCT_ID --verbose) -join "`n"
           Write-Host "Package as the Store holds it:"
           Write-Host $raw
@@ -169,8 +174,12 @@ jobs:
             Write-Host "::warning::The Store's draft points at $current, which returns HTTP $code. Fix the package URL in Partner Center by hand if the update below reports the app as not ready."
           }
           if ($packages[0].packageUrl -eq $url) {
-            Write-Host "The Store already points at $url, nothing to submit."
+            # The draft already has this version, for instance because it was set by
+            # hand in Partner Center. That says nothing about whether it was submitted,
+            # and no submission is in progress (checked above), so submit it as it is.
+            Write-Host "The draft already points at $url. Leaving the package alone and submitting the draft."
             "changed=false" | Out-File $env:GITHUB_OUTPUT -Append
+            "submit=true" | Out-File $env:GITHUB_OUTPUT -Append
             exit 0
           }
           Write-Host "packageUrl: $($packages[0].packageUrl) -> $url"
@@ -179,20 +188,23 @@ jobs:
           Write-Host "Package being submitted:"
           Get-Content -Raw package.json | Write-Host
           "changed=true" | Out-File $env:GITHUB_OUTPUT -Append
+          "submit=true" | Out-File $env:GITHUB_OUTPUT -Append
 
       - name: Submit for certification
-        if: steps.gate.outputs.enabled == 'true' && steps.patch.outputs.changed == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.patch.outputs.submit == 'true'
         run: |
           $PSNativeCommandArgumentPassing = 'Standard'
-          $package = Get-Content -Raw package.json
-          msstore submission update $env:PRODUCT_ID $package --verbose
-          if ($LASTEXITCODE) {
-            # The CLI first waits two minutes for the Store to call the app ready. If
-            # the draft's own package URL is dead it never is, and that wait blocks the
-            # very update that would repair the URL. So try again without that wait.
-            Write-Host "::warning::The Store did not report the app as ready. Retrying without the initial wait, so the package URL can still be corrected."
-            msstore submission update $env:PRODUCT_ID $package --skipInitialPolling --verbose
-            if ($LASTEXITCODE) { throw "msstore submission update failed, also without the initial wait" }
+          if ("${{ steps.patch.outputs.changed }}" -eq "true") {
+            $package = Get-Content -Raw package.json
+            msstore submission update $env:PRODUCT_ID $package --verbose
+            if ($LASTEXITCODE) {
+              # The CLI first waits two minutes for the Store to call the app ready. If
+              # the draft's own package URL is dead it never is, and that wait blocks the
+              # very update that would repair the URL. So try again without that wait.
+              Write-Host "::warning::The Store did not report the app as ready. Retrying without the initial wait, so the package URL can still be corrected."
+              msstore submission update $env:PRODUCT_ID $package --skipInitialPolling --verbose
+              if ($LASTEXITCODE) { throw "msstore submission update failed, also without the initial wait" }
+            }
           }
           msstore submission publish $env:PRODUCT_ID --verbose
           if ($LASTEXITCODE) { throw "msstore submission publish failed" }
