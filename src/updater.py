@@ -5,7 +5,7 @@ this module existed: nothing, the UI just links out to the releases page.
 
 Install types this recognizes:
   "windows-msi"    the MSI installer build on Windows: a folder of files
-                   installed per user, with its data under %LOCALAPPDATA%.
+                   installed per user, with its data under %USERPROFILE%\\LapseCoin.
   "windows-msix"   the Microsoft Store build, an MSIX package. It does not
                    update itself: the Store does, so the UI sends the user
                    there (STORE_URL, baked in at build time). Its data is in %USERPROFILE%\\LapseCoin.

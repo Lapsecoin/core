@@ -6,8 +6,9 @@
 
   Installs to %LOCALAPPDATA%\Programs\LapseCoin, which src/datadir.py
   installed_exe() and lapsecoin_bridge.py rely on. Needs no administrator
-  rights. The node's data lives in %LOCALAPPDATA%\LapseCoin and is never
-  touched by installing, upgrading or uninstalling. Uninstalling with a
+  rights. The node's data lives in %USERPROFILE%\LapseCoin and is never
+  touched by installing, upgrading or uninstalling (older versions kept it in
+  %LOCALAPPDATA%\LapseCoin, and the first run moves it, see src/datadir.py). Uninstalling with a
   window shows a notice saying so (src/uninstall_notice.py).
 
   LAUNCH=0 stops the installer from starting the app afterwards: the

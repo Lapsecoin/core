@@ -101,7 +101,7 @@ class TestPrepare:
         monkeypatch.setattr(sys, "frozen", True, raising=False)
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setattr(sys, "executable", str(exe_dir / "lapsecoin.exe"))
-        return {"LOCALAPPDATA": str(tmp_path / "Local")}
+        return {"LOCALAPPDATA": str(tmp_path / "Local"), "USERPROFILE": str(tmp_path / "Profile")}
 
     def _run(self, env, home, answer, monkeypatch=None):
         asked = []
@@ -116,7 +116,7 @@ class TestPrepare:
 
     def test_not_an_installed_build_changes_nothing(self, tmp_path):
         before = os.getcwd()
-        assert datadir.prepare({"LOCALAPPDATA": str(tmp_path)}) is None
+        assert datadir.prepare({"LOCALAPPDATA": str(tmp_path), "USERPROFILE": str(tmp_path)}) is None
         assert os.getcwd() == before
 
     def test_the_first_run_offers_what_it_found_and_copies_the_choice(self, monkeypatch, tmp_path):
@@ -163,7 +163,7 @@ class TestPrepare:
 
     def test_a_data_folder_with_a_key_is_never_asked_about(self, monkeypatch, tmp_path):
         env = self._installed(monkeypatch, tmp_path)
-        _write(str(tmp_path / "Local" / "LapseCoin"), "lapsecoin_key.json", "mine")
+        _write(str(tmp_path / "Profile" / "LapseCoin"), "lapsecoin_key.json", "mine")
         dst, asked = self._run(env, str(tmp_path / "home"), ("fresh", None))
         assert asked == []
         assert open(os.path.join(dst, "lapsecoin_key.json")).read() == "mine"
@@ -220,24 +220,116 @@ class TestOldInstallMovesToARecoveryPhrase:
         assert (old / "lapsecoin_key.json").exists()      # a copy, never a move
 
 
-class TestPackaged:
-    def test_a_packaged_build_keeps_its_data_under_the_profile_root(self, tmp_path):
-        env = {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}
-        assert datadir.user_data_dir(env, packaged=True) == str(tmp_path / "profile" / "LapseCoin")
-        assert datadir.user_data_dir(env, packaged=False) == str(tmp_path / "local" / "LapseCoin")
+class TestWhereTheDataLives:
+    def _env(self, tmp_path):
+        return {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}
+
+    def test_the_profile_folder_is_used(self, tmp_path):
+        env = self._env(tmp_path)
+        assert datadir.user_data_dir(env) == str(tmp_path / "profile" / "LapseCoin")
+
+    def test_the_old_folder_is_used_while_it_still_holds_the_data(self, tmp_path):
+        env = self._env(tmp_path)
+        _write(str(tmp_path / "local" / "LapseCoin"), "lapsecoin_wallet.json", "key")
+        assert datadir.user_data_dir(env) == str(tmp_path / "local" / "LapseCoin")
+        _write(str(tmp_path / "profile" / "LapseCoin"), "lapsecoin_wallet.json", "moved")
+        assert datadir.user_data_dir(env) == str(tmp_path / "profile" / "LapseCoin")
 
     def test_not_packaged_off_windows(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "linux")
         assert datadir.is_packaged() is False
 
-    def test_first_run_copies_the_msi_data_and_leaves_it_in_place(self, monkeypatch, tmp_path):
+
+class TestMovingTheOldAppDataFolder:
+    def _setup(self, monkeypatch, tmp_path):
         env = {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}
         old = tmp_path / "local" / "LapseCoin"
         _write(str(old), "lapsecoin_wallet.json", "key")
+        _write(str(old), "lapsecoin_chain.db", "chain")
+        _write(str(old), "settings.json", "{}")
         monkeypatch.setattr(datadir, "is_packaged", lambda: True)
-        monkeypatch.chdir(tmp_path)
-        got = datadir.prepare(env)
-        assert got == str(tmp_path / "profile" / "LapseCoin")
-        assert open(os.path.join(got, "lapsecoin_wallet.json")).read() == "key"
+        return env, old, tmp_path / "profile" / "LapseCoin"
+
+    def _run(self, env, answer, tmp_path):
+        asked = []
+        before = os.getcwd()
+        try:
+            def ask_move(old, new):
+                asked.append((old, new))
+                return answer
+            got = datadir.prepare(env, home=str(tmp_path / "home"), ask_move=ask_move,
+                                  ask=lambda s: pytest.fail("the old-program question must not be asked"))
+            return got, asked, os.getcwd()
+        finally:
+            os.chdir(before)
+
+    def test_moving_puts_everything_in_the_profile_folder_and_removes_the_old_one(self, monkeypatch, tmp_path):
+        env, old, new = self._setup(monkeypatch, tmp_path)
+        got, asked, cwd = self._run(env, "move", tmp_path)
+        assert asked == [(str(old), str(new))]
+        assert got == cwd == str(new)
+        assert {p.name for p in new.iterdir()} == {"lapsecoin_wallet.json", "lapsecoin_chain.db", "settings.json"}
+        assert (new / "lapsecoin_wallet.json").read_text() == "key"
+        assert not old.exists()
+
+    def test_not_now_runs_from_the_old_folder_and_moves_nothing(self, monkeypatch, tmp_path):
+        env, old, new = self._setup(monkeypatch, tmp_path)
+        got, _, cwd = self._run(env, "later", tmp_path)
+        assert got == cwd == str(old)
         assert (old / "lapsecoin_wallet.json").exists()
-        assert os.getcwd() == got
+        assert not (new / "lapsecoin_wallet.json").exists()
+
+    def test_closing_the_question_exits_without_making_a_key(self, monkeypatch, tmp_path):
+        env, old, new = self._setup(monkeypatch, tmp_path)
+        with pytest.raises(SystemExit):
+            self._run(env, "cancel", tmp_path)
+        assert (old / "lapsecoin_wallet.json").exists()
+
+    def test_a_move_that_fails_part_way_is_undone_and_the_old_folder_is_used(self, monkeypatch, tmp_path):
+        env, old, new = self._setup(monkeypatch, tmp_path)
+        real = os.replace
+        calls = []
+
+        def flaky(s, d):
+            calls.append(s)
+            if len(calls) == 2 and str(s).startswith(str(old)):
+                raise PermissionError("held open by a running node")
+            return real(s, d)
+        monkeypatch.setattr(os, "replace", flaky)
+        got, _, cwd = self._run(env, "move", tmp_path)
+        monkeypatch.setattr(os, "replace", real)
+        assert got == cwd == str(old)
+        assert {p.name for p in old.iterdir()} == {"lapsecoin_wallet.json", "lapsecoin_chain.db", "settings.json"}
+        assert not any(new.iterdir()) if new.exists() else True
+
+    def test_nothing_is_asked_once_the_new_folder_has_the_data(self, monkeypatch, tmp_path):
+        env, old, new = self._setup(monkeypatch, tmp_path)
+        _write(str(new), "lapsecoin_wallet.json", "mine")
+        got, asked, _ = self._run(env, "move", tmp_path)
+        assert asked == [] and got == str(new)
+        assert (old / "lapsecoin_wallet.json").exists()      # left alone
+
+    def test_asking_for_help_neither_asks_nor_moves(self, monkeypatch, tmp_path):
+        env, old, new = self._setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(sys, "argv", ["lapsecoin", "-h"])
+        got, asked, _ = self._run(env, "move", tmp_path)
+        assert asked == [] and got == str(old)
+        assert (old / "lapsecoin_wallet.json").exists()
+
+    def test_nothing_in_either_folder_goes_on_to_the_old_program_question(self, monkeypatch, tmp_path):
+        env = {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}
+        monkeypatch.setattr(datadir, "is_packaged", lambda: True)
+        asked = []
+        before = os.getcwd()
+        try:
+            got = datadir.prepare(env, home=str(tmp_path / "home"),
+                                  ask_move=lambda o, n: pytest.fail("nothing to move"),
+                                  ask=lambda s: asked.append(s) or ("fresh", None))
+        finally:
+            os.chdir(before)
+        assert asked == [[]] and got == str(tmp_path / "profile" / "LapseCoin")
+
+    def test_without_a_window_the_data_is_moved(self, monkeypatch):
+        import migrate_ui
+        monkeypatch.setattr(sys, "argv", ["lapsecoin", "--no-gui"])
+        assert migrate_ui.ask_move("/old", "/new") == "move"

@@ -86,7 +86,7 @@ class TestWindowsMsiUpdate:
         # real program, so the helper must not start sys.executable.
         monkeypatch.setattr(sys, "executable", str(exe_path.parent / "python.exe"))
         monkeypatch.setattr(sys, "argv", [str(exe_path), "--no-gui"])
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "Profile"))
         monkeypatch.setattr(updater, "_download", lambda url, dest, on_progress=None:
                              open(dest, "wb").write(self.OLE + b"\0" * 2_000_000))
         monkeypatch.setattr("requests.get", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
@@ -103,13 +103,13 @@ class TestWindowsMsiUpdate:
         assert "taskkill /PID" in helper
         assert "msiexec /i" in helper and "/qn" in helper
         assert 'start "" "' + str(exe_path) + '" --no-gui' in helper
-        assert str(tmp_path / "Local" / "LapseCoin" / "update") in seen["cwd"]
+        assert str(tmp_path / "Profile" / "LapseCoin" / "update") in seen["cwd"]
 
 
     def test_update_stops_before_closing_the_app_when_the_program_is_missing(self, monkeypatch, tmp_path):
         (tmp_path / "app").mkdir()
         monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "python.exe"))
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "Profile"))
         monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("must not hand off"))
         monkeypatch.setattr(os, "_exit", lambda code: pytest.fail("must not exit"))
         with pytest.raises(RuntimeError, match="cannot find the installed program"):

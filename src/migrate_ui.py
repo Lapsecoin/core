@@ -11,6 +11,7 @@ import sys
 import time
 
 USE, FRESH, CANCEL = "use", "fresh", "cancel"
+MOVE, LATER = "move", "later"
 
 
 def _fallback(suggestions):
@@ -34,6 +35,22 @@ def ask(suggestions, key_name="lapsecoin_key.json"):
     except Exception:
         # No display, or Tk failed to start.
         return _fallback(suggestions)
+
+
+def ask_move(old, new):
+    """Whether to move the data of an earlier MSI install from old to new:
+    MOVE, LATER (run from the old folder this time) or CANCEL. Without a
+    window it moves, as there is no one to ask."""
+    if any(a in sys.argv for a in ("--no-gui", "--export", "--update")):
+        return MOVE
+    try:
+        import tkinter  # noqa: F401
+    except Exception:
+        return MOVE
+    try:
+        return _show_move(old, new)
+    except Exception:
+        return MOVE
 
 
 def _label(folder):
@@ -104,6 +121,48 @@ def _show(suggestions, key_name):
                ).pack(side="left", padx=(8, 0))
     ttk.Button(row, text="Start new", style="Secondary.TButton", command=lambda: finish(FRESH)
                ).pack(side="right")
+
+    root.protocol("WM_DELETE_WINDOW", lambda: finish(CANCEL))
+    theme.center(root)
+    theme.bring_to_front(root)
+    root.mainloop()
+    return result["v"]
+
+
+def _show_move(old, new):
+    import tkinter as tk
+    from tkinter import ttk
+
+    import gui_theme as theme
+
+    result = {"v": CANCEL}
+    theme.make_dpi_aware()
+    root = tk.Tk()
+    root.resizable(False, False)
+    theme.install(root, "LapseCoin")
+
+    frame = ttk.Frame(root, padding=theme.px(root, 28))
+    frame.pack(fill="both", expand=True)
+    theme.header(frame, "LapseCoin").pack(anchor="w")
+    ttk.Label(frame, text="Move your wallet", style="H2.TLabel").pack(
+        anchor="w", pady=(theme.px(root, 22), 2))
+    ttk.Label(frame, style="Muted.TLabel", wraplength=theme.px(root, 460), text=(
+        "LapseCoin now keeps your wallet and chain in your user folder, where "
+        "uninstalling or reinstalling the program never touches them.\n\n"
+        f"Your data is in:\n{old}\n\nMove it to:\n{new}\n\n"
+        "The files are moved, not copied, so they end up in one place. "
+        "Close any other copy of LapseCoin first.")).pack(anchor="w")
+
+    def finish(kind):
+        result["v"] = kind
+        root.destroy()
+
+    row = ttk.Frame(frame)
+    row.pack(fill="x", pady=(theme.px(root, 22), 0))
+    ttk.Button(row, text="Move", style="Primary.TButton", command=lambda: finish(MOVE)
+               ).pack(side="left")
+    ttk.Button(row, text="Not now", style="Secondary.TButton", command=lambda: finish(LATER)
+               ).pack(side="left", padx=(8, 0))
 
     root.protocol("WM_DELETE_WINDOW", lambda: finish(CANCEL))
     theme.center(root)
