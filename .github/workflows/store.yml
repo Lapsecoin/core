@@ -139,7 +139,9 @@ jobs:
           if ($LASTEXITCODE -or $status -match 'Could not find|Error!') {
             throw "Partner Center did not accept the product ID '$env:PRODUCT_ID' (variable STORE_PRODUCT_ID). It must be the app's Partner Center ID, not the XP... Store ID."
           }
-          $raw = (msstore submission get $env:PRODUCT_ID) -join "`n"
+          $raw = (msstore submission get $env:PRODUCT_ID --verbose) -join "`n"
+          Write-Host "Package as the Store holds it:"
+          Write-Host $raw
           $start = $raw.IndexOf('{'); $end = $raw.LastIndexOf('}')
           if ($start -lt 0 -or $end -lt $start) { throw "No JSON in the output of 'submission get':`n$raw" }
           $doc = $raw.Substring($start, $end - $start + 1) | ConvertFrom-Json -Depth 32
@@ -167,6 +169,8 @@ jobs:
           Write-Host "packageUrl: $($packages[0].packageUrl) -> $url"
           $packages[0].packageUrl = $url
           $doc | ConvertTo-Json -Depth 32 | Set-Content -Path package.json -Encoding utf8
+          Write-Host "Package being submitted:"
+          Get-Content -Raw package.json | Write-Host
           "changed=true" | Out-File $env:GITHUB_OUTPUT -Append
 
       - name: Submit for certification
@@ -174,8 +178,8 @@ jobs:
         run: |
           $PSNativeCommandArgumentPassing = 'Standard'
           $package = Get-Content -Raw package.json
-          msstore submission update $env:PRODUCT_ID $package
+          msstore submission update $env:PRODUCT_ID $package --verbose
           if ($LASTEXITCODE) { throw "msstore submission update failed" }
-          msstore submission publish $env:PRODUCT_ID
+          msstore submission publish $env:PRODUCT_ID --verbose
           if ($LASTEXITCODE) { throw "msstore submission publish failed" }
           Write-Host "Submitted. The new version reaches Store users once certification finishes."
