@@ -3,12 +3,14 @@
 # .github/workflows/release.yml. The package is not signed: the Store signs it.
 #
 #   scripts/build_msix.ps1 -Source dist\lapsecoin-win -Version 1.1.4 `
-#       -Name <identity name> -Publisher <CN=...> -PublisherDisplayName <name> -Out lapsecoin.msix
+#       -Name <identity name> -Publisher <CN=...> -PublisherDisplayName <name> `
+#       -DisplayName <reserved app name> -Out lapsecoin.msix
 #
-# The three identity values come from the product identity page in Partner
-# Center and must match it exactly. The folder holds no installed-by-msi
-# marker, so the program finds out it is packaged from Windows itself and
-# keeps its data in %USERPROFILE%\LapseCoin (see src/datadir.py).
+# The identity values and the display name (the app name reserved for the
+# product) come from Partner Center and must match it exactly. The folder
+# holds no installed-by-msi marker, so the program finds out it is packaged
+# from Windows itself and keeps its data in %USERPROFILE%\LapseCoin (see
+# src/datadir.py).
 
 param(
     [Parameter(Mandatory)] [string] $Source,
@@ -16,6 +18,7 @@ param(
     [Parameter(Mandatory)] [string] $Name,
     [Parameter(Mandatory)] [string] $Publisher,
     [Parameter(Mandatory)] [string] $PublisherDisplayName,
+    [Parameter(Mandatory)] [string] $DisplayName,
     [string] $Out = "lapsecoin.msix",
     [string] $Logo = ""
 )
@@ -42,7 +45,8 @@ Copy-Item $Source $work -Recurse
 function Esc($s) { [System.Security.SecurityElement]::Escape($s) }
 $manifest = Get-Content (Join-Path $PSScriptRoot "AppxManifest.template.xml") -Raw
 $manifest = $manifest.Replace("{{NAME}}", (Esc $Name)).Replace("{{PUBLISHER}}", (Esc $Publisher)).
-    Replace("{{PUBLISHER_DISPLAY_NAME}}", (Esc $PublisherDisplayName)).Replace("{{VERSION}}", $msixVersion)
+    Replace("{{PUBLISHER_DISPLAY_NAME}}", (Esc $PublisherDisplayName)).Replace("{{VERSION}}", $msixVersion).
+    Replace("{{DISPLAY_NAME}}", (Esc $DisplayName))
 [System.IO.File]::WriteAllText((Join-Path $work "AppxManifest.xml"), $manifest, (New-Object System.Text.UTF8Encoding($false)))
 
 # Tile and store logos, scaled from the app's own logo (the copy bundled in
