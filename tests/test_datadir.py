@@ -220,17 +220,6 @@ class TestOldInstallMovesToARecoveryPhrase:
         assert (old / "lapsecoin_key.json").exists()      # a copy, never a move
 
 
-class TestStoreInstall:
-    def test_a_build_not_installed_by_the_msi_is_never_a_store_install(self, monkeypatch):
-        monkeypatch.setattr(datadir, "is_msi_install", lambda: False)
-        assert datadir.is_store_install() is False
-
-    def test_no_registry_means_not_a_store_install(self, monkeypatch):
-        monkeypatch.setattr(datadir, "is_msi_install", lambda: True)
-        # winreg does not exist off Windows, and a missing key is an OSError on it.
-        assert datadir.is_store_install() is False
-
-
 class TestPackaged:
     def test_a_packaged_build_keeps_its_data_under_the_profile_root(self, tmp_path):
         env = {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}

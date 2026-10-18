@@ -127,7 +127,7 @@
       <button type="button" id="update-btn" class="btn-sm" style="margin-left:.5rem; vertical-align:1px;">Update now</button>
     </div>
     {% else %}
-    {% set from_store = updater and updater.install_type in ('windows-store', 'windows-msix') %}
+    {% set from_store = updater and updater.install_type == 'windows-msix' %}
     <a class="version-alert" href="{{ updater.update_url(update_checker.releases_url) if updater else update_checker.releases_url }}" target="_blank" rel="noopener"
        title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
       {{ sev_text }}{% if from_store %}, update in the Microsoft Store{% endif %}
