@@ -33,6 +33,22 @@ function New-Png($path, $size) {
 }
 
 
+function Wait-Ports($label, $seconds) {
+    $t0 = Get-Date
+    while (((Get-Date) - $t0).TotalSeconds -lt $seconds) {
+        $l = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 8333, 8335 }
+        if ($l) { Write-Host ("{0}: listening after {1:N0}s on ports {2}" -f $label, ((Get-Date) - $t0).TotalSeconds, (($l.LocalPort | Sort-Object -Unique) -join ',')); return }
+        Start-Sleep 5
+    }
+    Write-Host "$label: nothing listening on 8333/8335 after $seconds s"
+}
+function Show-Log($path) {
+    Write-Host "--- $path (lines with log markers; recovery phrase lines removed) ---"
+    if (Test-Path $path) {
+        Get-Content $path | Where-Object { $_ -match '(?i)\[|error|traceback|warn|listen|start|serv|peer|sync|port' -and $_ -notmatch '(?i)phrase' } | Select-Object -First 40 | Out-Host
+    } else { Write-Host "(no such file)" }
+}
+
 Section "Install the real LapseCoin MSI, copy its files, then remove it"
 $ver = "1.1.4"
 curl.exe -fsSL -o "$work\lapsecoin.msi" "https://lapsecoin.github.io/core/downloads/$ver/lapsecoin.msi"
@@ -46,6 +62,14 @@ $layout = "$work\layout_real"
 Remove-Item $layout -Recurse -Force -ErrorAction SilentlyContinue
 New-Item "$layout\Assets" -ItemType Directory -Force | Out-Null
 Copy-Item "$installed\*" $layout -Recurse -Force
+
+Section "CONTROL: the same build, NOT packaged"
+Remove-Item C:\labout\* -Force -ErrorAction SilentlyContinue
+$ctl = Start-Process cmd.exe -ArgumentList "/c cd /d `"$installed`" && set LAPSECOIN_PASSPHRASE=lab-passphrase-123&& lapsecoin.exe --no-gui > C:\labout\control.log 2>&1" -PassThru
+Wait-Ports "control" 120
+Show-Log C:\labout\control.log
+Get-Process lapsecoin -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep 3
 Start-Process msiexec -ArgumentList "/x `"$work\lapsecoin.msi`" /qn" -Wait
 Remove-Item "$env:LOCALAPPDATA\LapseCoin" -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ("layout size MB: {0:N0}" -f ((Get-ChildItem $layout -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
@@ -89,7 +113,7 @@ Section "Run the real node inside the package (headless, throwaway wallet)"
 Remove-Item C:\labout\* -Force -ErrorAction SilentlyContinue
 $args_ = "/c cd /d `"$($pkg.InstallLocation)`" && set LAPSECOIN_PASSPHRASE=lab-passphrase-123&& lapsecoin.exe --no-gui > C:\labout\node.log 2>&1"
 Invoke-CommandInDesktopPackage -PackageFamilyName $pfn -AppId App -Command "cmd.exe" -Args $args_
-Start-Sleep 60
+Wait-Ports "packaged" 120
 $procs = Get-Process lapsecoin -ErrorAction SilentlyContinue
 Write-Host ("lapsecoin processes: " + @($procs).Count)
 if ($procs) {
@@ -100,10 +124,7 @@ foreach ($port in 8333, 8335) {
     try { $r = Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 15; Write-Host "HTTP $port -> $($r.StatusCode)" }
     catch { Write-Host "HTTP $port -> FAILED $($_.Exception.Message)" }
 }
-Write-Host "--- node.log (filtered, recovery phrase lines removed) ---"
-if (Test-Path C:\labout\node.log) {
-    Get-Content C:\labout\node.log | Where-Object { $_ -notmatch '(?i)phrase|^\s*\d+[\.\)]\s|^\s*[a-z]+\s+[a-z]+\s+[a-z]+\s+[a-z]+\s*$' } | Select-Object -First 45 | Out-Host
-} else { Write-Host "no node.log" }
+Show-Log C:\labout\node.log
 
 Section "Where did the wallet end up? (seen from OUTSIDE the package)"
 $realData = "$env:LOCALAPPDATA\LapseCoin"
