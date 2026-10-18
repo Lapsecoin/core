@@ -1,0 +1,117 @@
+name: Check the packaged data folder logic on Windows
+
+# Runs the real src/datadir.py inside an MSIX package on a Windows runner,
+# without building the program (which takes half an hour). The package holds a
+# copy of the runner's Python, started under the name lapsecoin.exe, and runs a
+# few lines that call datadir.prepare() the way main.py does. It checks, with
+# Windows itself, that:
+#   - GetCurrentPackageFullName reports the process as packaged
+#   - the data folder is %USERPROFILE%\LapseCoin
+#   - a wallet in the MSI build's %LOCALAPPDATA%\LapseCoin is copied across and
+#     the original is left in place
+#   - the copied wallet survives an uninstall of the package
+# This does not replace scripts/test_msix.ps1, which tests the real program
+# and runs on every release. It exists so a mistake in the data folder logic
+# shows up here in a minute instead of blocking a release.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - src/datadir.py
+      - scripts/build_msix.ps1
+      - scripts/AppxManifest.template.xml
+      - .github/workflows/msix-probe.yml
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Build a package that runs datadir.prepare()
+        run: |
+          $probe = "$PWD\probe"
+          New-Item $probe -ItemType Directory | Out-Null
+          robocopy $env:pythonLocation $probe /E /XD site-packages Doc include libs Scripts tcl __pycache__ /NFL /NDL /NJH /NJS | Out-Null
+          Copy-Item "$probe\python.exe" "$probe\lapsecoin.exe"
+          New-Item "$probe\src" -ItemType Directory | Out-Null
+          Copy-Item src\*.py "$probe\src"
+          Copy-Item scripts\*.py "$probe\src" -ErrorAction SilentlyContinue
+          Add-Type -AssemblyName System.Drawing
+          $bmp = New-Object System.Drawing.Bitmap 64, 64
+          $bmp.Save("$probe\lapsecoin.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          @'
+          import os, sys
+          sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+          sys.argv = ["probe", "--no-gui"]
+          import datadir
+          print("packaged:", datadir.is_packaged(), flush=True)
+          print("prepare:", datadir.prepare(), flush=True)
+          print("cwd:", os.getcwd(), flush=True)
+          print("done", flush=True)
+          '@ -replace '(?m)^ {10}', '' | Set-Content "$probe\probe.py" -Encoding ascii
+          Remove-Item "$probe\*.pyc" -ErrorAction SilentlyContinue
+
+          # The certificate must carry the manifest's publisher, and Windows
+          # must be told to trust it.
+          $pub = "CN=LapseCoinProbe"
+          $cert = New-SelfSignedCertificate -Type Custom -Subject $pub -KeyUsage DigitalSignature `
+            -FriendlyName "LapseCoin probe" -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+          Export-PfxCertificate -Cert $cert -FilePath probe.pfx -Password (ConvertTo-SecureString "probe" -AsPlainText -Force) | Out-Null
+          Export-Certificate -Cert $cert -FilePath probe.cer | Out-Null
+          Import-Certificate -FilePath probe.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowAllTrustedApps /t REG_DWORD /d 1 /f | Out-Null
+
+          .\scripts\build_msix.ps1 -Source $probe -Version 1.0.0 -Name LapseCoin.Probe -Publisher $pub `
+            -PublisherDisplayName "LapseCoin probe" -DisplayName "LapseCoin probe" -Out probe.msix
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+          & $signtool.FullName sign /fd SHA256 /f probe.pfx /p probe probe.msix | Out-Null
+          if ($LASTEXITCODE) { throw "signtool failed" }
+
+      - name: Run it as the MSI build's user would find it
+        run: |
+          $failures = @()
+          $wallet = "lapsecoin_wallet.json"
+          $legacy = Join-Path $env:LOCALAPPDATA "LapseCoin"
+          $data = Join-Path $env:USERPROFILE "LapseCoin"
+          Remove-Item $legacy, $data -Recurse -Force -ErrorAction SilentlyContinue
+          # An existing MSI install, made before the package is installed.
+          New-Item $legacy -ItemType Directory | Out-Null
+          Set-Content (Join-Path $legacy $wallet) "legacy wallet" -NoNewline
+
+          Add-AppxPackage -Path probe.msix
+          $pkg = Get-AppxPackage -Name LapseCoin.Probe
+          New-Item C:\probe-out -ItemType Directory -Force | Out-Null
+          Remove-Item C:\probe-out\probe.log -ErrorAction SilentlyContinue
+          $cmd = "/c cd /d `"$($pkg.InstallLocation)`" && lapsecoin.exe probe.py > C:\probe-out\probe.log 2>&1"
+          Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $cmd
+          for ($i = 0; $i -lt 60 -and -not ((Test-Path C:\probe-out\probe.log) -and (Get-Content C:\probe-out\probe.log -Raw) -match 'done'); $i++) { Start-Sleep 2 }
+          $log = if (Test-Path C:\probe-out\probe.log) { Get-Content C:\probe-out\probe.log -Raw } else { "" }
+          Write-Host $log
+
+          if ($log -notmatch 'packaged: True') { $failures += "datadir.is_packaged() did not report a package" }
+          if ($log -notmatch [regex]::Escape("prepare: $data")) { $failures += "datadir.prepare() did not choose $data" }
+          if (-not (Test-Path (Join-Path $data $wallet))) { $failures += "the wallet was not copied to $data" }
+          elseif ((Get-Content (Join-Path $data $wallet) -Raw) -ne "legacy wallet") { $failures += "the copied wallet differs from the original" }
+          if (-not (Test-Path (Join-Path $legacy $wallet))) { $failures += "the original wallet in $legacy is gone" }
+
+          Remove-AppxPackage -Package $pkg.PackageFullName
+          Start-Sleep 5
+          if (-not (Test-Path (Join-Path $data $wallet))) { $failures += "the uninstall deleted the wallet in $data" }
+
+          if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
+          Write-Host "packaged: the data folder is $data, the MSI wallet was copied across and it survived the uninstall"
