@@ -12,13 +12,13 @@
   [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/FP2d8JmK6r)
 </div>
 
-**Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [downloads page](https://lapsecoin.github.io/downloads.html) are self-contained and require no dependencies.
+**Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries are self-contained and require no dependencies.
 
 Join the [Discord](https://discord.gg/FP2d8JmK6r) for discussions, news, and trades with other coins.
 
 ## Quick start
 
-Grab a binary from the [downloads page](https://lapsecoin.github.io/downloads.html), self-contained with no dependencies. On Windows you can also [get LapseCoin from the Microsoft Store](https://apps.microsoft.com/detail/xpdcf9572b3766).
+Grab a binary from the [downloads page](https://lapsecoin.github.io/downloads.html).
 
 ```
 # Linux                    # Windows

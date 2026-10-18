@@ -5,7 +5,9 @@ name: Build the Microsoft Store package by hand
 # program files, drops the MSI marker and packs the rest with
 # scripts/build_msix.ps1. The program inside is the release's own, only
 # repackaged, so the result can be uploaded to Partner Center as the first
-# submission. Nothing is published, signed or sent to the Store here.
+# submission. It then installs the package on the runner and checks the wallet
+# survives an upgrade and an uninstall. Nothing is published or sent to the
+# Store here.
 #
 # Run it from the Actions tab. It needs the MSIX_IDENTITY_NAME, MSIX_PUBLISHER,
 # MSIX_PUBLISHER_DISPLAY_NAME and MSIX_DISPLAY_NAME repo variables (see
@@ -70,6 +72,12 @@ jobs:
             -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -DisplayName $env:MSIX_DISPLAY_NAME `
             -Out lapsecoin.msix
           (Get-FileHash lapsecoin.msix -Algorithm SHA256).Hash | Write-Host
+
+      # The same check the release runs: install, first run, upgrade and
+      # uninstall must all leave the wallet in %USERPROFILE%\LapseCoin.
+      - name: Test the package
+        run: |
+          .\scripts\test_msix.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" -Msix lapsecoin.msix
 
       - uses: actions/upload-artifact@v6
         with:
