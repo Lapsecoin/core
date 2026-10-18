@@ -16,7 +16,9 @@ name: Update the Microsoft Store listing
 #      settings > Microsoft Entra applications in Partner Center, role Manager.
 #   2. Secrets: AZURE_AD_TENANT_ID, AZURE_AD_APPLICATION_CLIENT_ID,
 #      AZURE_AD_APPLICATION_SECRET, SELLER_ID.
-#   3. Optional variable STORE_PRODUCT_ID, if it is not the one below.
+#   3. Variable (not a secret) STORE_PRODUCT_ID: the app's Partner Center ID.
+#      It is not the 12 character Store ID (XP...) that the Store listing
+#      shows. Microsoft's example for it is a GUID.
 # Without the secrets this does nothing and says so. The app must already be
 # published, and the Store only takes free apps through this route.
 #
@@ -50,7 +52,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID || 'XPDCF9572B3766' }}
+  PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
   SITE: https://lapsecoin.github.io/core
 
 jobs:
@@ -75,10 +77,10 @@ jobs:
       - name: Check the Store credentials are set
         id: gate
         run: |
-          $missing = 'AZURE_AD_TENANT_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET', 'SELLER_ID' |
+          $missing = 'AZURE_AD_TENANT_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET', 'SELLER_ID', 'PRODUCT_ID' |
             Where-Object { -not (Get-Item "env:$_" -ErrorAction SilentlyContinue).Value }
           if ($missing) {
-            Write-Host "Skipping the Store update, these secrets are not set: $($missing -join ', ')"
+            Write-Host "Skipping the Store update, these secrets or variables (PRODUCT_ID is the STORE_PRODUCT_ID variable) are not set: $($missing -join ', ')"
             "enabled=false" | Out-File $env:GITHUB_OUTPUT -Append
           } else {
             "enabled=true" | Out-File $env:GITHUB_OUTPUT -Append
@@ -132,7 +134,11 @@ jobs:
         run: |
           $PSNativeCommandArgumentPassing = 'Standard'
           Write-Host "Submission status:"
-          msstore submission status $env:PRODUCT_ID
+          $status = msstore submission status $env:PRODUCT_ID 2>&1 | Out-String
+          Write-Host $status
+          if ($LASTEXITCODE -or $status -match 'Could not find|Error!') {
+            throw "Partner Center did not accept the product ID '$env:PRODUCT_ID' (variable STORE_PRODUCT_ID). It must be the app's Partner Center ID, not the XP... Store ID."
+          }
           $raw = (msstore submission get $env:PRODUCT_ID) -join "`n"
           $start = $raw.IndexOf('{'); $end = $raw.LastIndexOf('}')
           if ($start -lt 0 -or $end -lt $start) { throw "No JSON in the output of 'submission get':`n$raw" }
