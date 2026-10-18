@@ -23,7 +23,9 @@ name: Update the Microsoft Store listing
 #   4. The first version of the product must be submitted by hand in Partner
 #      Center, including the justification for the runFullTrust capability.
 #      The Store only takes free apps through this route.
-# Without the secrets and MSIX_STORE_ID this does nothing and says so.
+# Without the secrets and MSIX_STORE_ID this does nothing and says so, and it
+# also skips while the Store page of that ID is not live (see the gate step),
+# so releases made during the first certification are not submitted.
 #
 # A version that was submitted is never rebuilt under the same number.
 
@@ -82,6 +84,16 @@ jobs:
             Where-Object { -not (Get-Item "env:$_" -ErrorAction SilentlyContinue).Value }
           if ($missing) {
             Write-Host "Skipping the Store update, these secrets or variables (STORE_ID is the MSIX_STORE_ID variable) are not set: $($missing -join ', ')"
+            "enabled=false" | Out-File $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+          # The Store page of an app that is not published yet answers 410
+          # (ProductNotFound) and a published one 200, so this skips until the
+          # first version, submitted by hand, has cleared certification.
+          $url = "https://apps.microsoft.com/detail/$($env:STORE_ID.Trim().ToLower())"
+          $code = curl.exe -s -L -o NUL -m 30 -w "%{http_code}" $url
+          if ($code -ne "200") {
+            Write-Host "Skipping the Store update: $url answers HTTP $code, so the listing is not published yet. Submit the first version by hand in Partner Center."
             "enabled=false" | Out-File $env:GITHUB_OUTPUT -Append
           } else {
             "enabled=true" | Out-File $env:GITHUB_OUTPUT -Append

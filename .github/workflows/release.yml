@@ -387,6 +387,8 @@ jobs:
 
       - name: Build the program
         shell: pwsh
+        env:
+          MSIX_STORE_ID: ${{ vars.MSIX_STORE_ID }}
         run: |
           $env:NUITKA_CACHE_DIR = "$PWD\nuitka-cache"
           $v = (Get-Content VERSION).Trim()

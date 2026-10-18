@@ -8,7 +8,7 @@ Install types this recognizes:
                    installed per user, with its data under %LOCALAPPDATA%.
   "windows-store"  the same MSI, installed by the Microsoft Store. It does not
                    update itself: the Store does, so the UI sends the user
-                   there (STORE_URL).
+                   there (STORE_URL, baked in at build time).
   "windows-msix"   the Microsoft Store build, an MSIX package. It does not
                    update itself: the Store does, so the UI sends the user
                    there (STORE_URL). Its data is in %USERPROFILE%\\LapseCoin.
@@ -51,7 +51,20 @@ RELEASE_ASSET_MSI     = "lapsecoin.msi"
 RELEASE_ASSET_SUMS    = "SHA256SUMS"
 DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
 
-STORE_URL = "https://apps.microsoft.com/detail/xpdcf9572b3766"
+def _load_store_url():
+    """The Store page of this app, written into the program folder at build
+    time from the MSIX_STORE_ID repo variable (scripts/build_windows.ps1). It
+    is empty when the variable was not set. A Store-installed copy only exists
+    once the listing is live, so no check is needed here."""
+    import resources
+    try:
+        with open(os.path.join(resources.bundle_dir(), "STORE_URL")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+STORE_URL = _load_store_url()
 
 STORE_TYPES = {"windows-store", "windows-msix"}
 
@@ -378,7 +391,7 @@ class Updater:
 
     def update_url(self, releases_url):
         """Where a user who cannot be updated in place gets the new version."""
-        return STORE_URL if self.install_type in STORE_TYPES else releases_url
+        return (STORE_URL or releases_url) if self.install_type in STORE_TYPES else releases_url
 
     def status(self):
         with self._lock:
