@@ -9,6 +9,9 @@ Install types this recognizes:
   "windows-store"  the same MSI, installed by the Microsoft Store. It does not
                    update itself: the Store does, so the UI sends the user
                    there (STORE_URL).
+  "windows-msix"   the Microsoft Store build, an MSIX package. It does not
+                   update itself: the Store does, so the UI sends the user
+                   there (STORE_URL). Its data is in %USERPROFILE%\\LapseCoin.
   "linux-appimage" frozen PyInstaller build running inside an AppImage
                    (identified by the $APPIMAGE env var the AppImage
                    runtime itself sets, not guessed at).
@@ -50,6 +53,8 @@ DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
 
 STORE_URL = "https://apps.microsoft.com/detail/xpdcf9572b3766"
 
+STORE_TYPES = {"windows-store", "windows-msix"}
+
 SELF_UPDATABLE = {"windows-msi", "linux-appimage", "pip"}
 
 # Stages, in the order a successful attempt moves through them. "restarting"
@@ -68,6 +73,8 @@ def detect_install_type():
             return "linux-appimage"
         if sys.platform.startswith("win"):
             import datadir
+            if datadir.is_packaged():
+                return "windows-msix"
             if datadir.is_store_install():
                 return "windows-store"
             return "windows-msi" if datadir.is_msi_install() else "source"
@@ -371,7 +378,7 @@ class Updater:
 
     def update_url(self, releases_url):
         """Where a user who cannot be updated in place gets the new version."""
-        return STORE_URL if self.install_type == "windows-store" else releases_url
+        return STORE_URL if self.install_type in STORE_TYPES else releases_url
 
     def status(self):
         with self._lock:

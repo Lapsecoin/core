@@ -229,3 +229,26 @@ class TestStoreInstall:
         monkeypatch.setattr(datadir, "is_msi_install", lambda: True)
         # winreg does not exist off Windows, and a missing key is an OSError on it.
         assert datadir.is_store_install() is False
+
+
+class TestPackaged:
+    def test_a_packaged_build_keeps_its_data_under_the_profile_root(self, tmp_path):
+        env = {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}
+        assert datadir.user_data_dir(env, packaged=True) == str(tmp_path / "profile" / "LapseCoin")
+        assert datadir.user_data_dir(env, packaged=False) == str(tmp_path / "local" / "LapseCoin")
+
+    def test_not_packaged_off_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert datadir.is_packaged() is False
+
+    def test_first_run_copies_the_msi_data_and_leaves_it_in_place(self, monkeypatch, tmp_path):
+        env = {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}
+        old = tmp_path / "local" / "LapseCoin"
+        _write(str(old), "lapsecoin_wallet.json", "key")
+        monkeypatch.setattr(datadir, "is_packaged", lambda: True)
+        monkeypatch.chdir(tmp_path)
+        got = datadir.prepare(env)
+        assert got == str(tmp_path / "profile" / "LapseCoin")
+        assert open(os.path.join(got, "lapsecoin_wallet.json")).read() == "key"
+        assert (old / "lapsecoin_wallet.json").exists()
+        assert os.getcwd() == got

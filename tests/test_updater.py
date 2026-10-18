@@ -35,6 +35,19 @@ class TestWindowsMsiUpdate:
         assert not up.can_self_update()
         assert up.update_url("https://example.test/releases") == updater.STORE_URL
 
+    def test_a_packaged_build_is_the_msix_type_and_goes_to_the_store(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "lapsecoin.exe"))
+        monkeypatch.delenv("LAPSECOIN_DOCKER", raising=False)
+        monkeypatch.delenv("APPIMAGE", raising=False)
+        import datadir
+        monkeypatch.setattr(datadir, "is_packaged", lambda: True)
+        assert updater.detect_install_type() == "windows-msix"
+        up = updater.Updater(install_type="windows-msix")
+        assert not up.can_self_update()
+        assert up.update_url("https://example.test/releases") == updater.STORE_URL
+
     def test_other_installs_keep_the_releases_page(self):
         up = updater.Updater(install_type="windows-msi")
         assert up.update_url("https://example.test/releases") == "https://example.test/releases"
