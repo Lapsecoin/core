@@ -12,6 +12,12 @@ Only a build installed by the MSI does this. It is recognised by a marker
 file the installer places next to the executable, so a source checkout, a
 pip install, the AppImage and a portable copy behave exactly as before.
 
+A build running inside an MSIX package (the Microsoft Store build) keeps its
+data in %USERPROFILE%\\LapseCoin instead. Windows deletes a new folder under
+AppData when a package is uninstalled, and that would take the key with it;
+a folder under the profile root is left alone. It is recognised by asking
+Windows whether the process has a package identity, not by a marker file.
+
 Moving from the old single .exe is a copy, never a move: the originals stay
 where they were, and nothing is ever overwritten in the new location. On the
 first run the user is asked where the old program ran from, with the folders
@@ -49,6 +55,22 @@ def is_msi_install():
             and os.path.exists(os.path.join(install_dir(), MSI_MARKER)))
 
 
+_APPMODEL_NOT_PACKAGED = 15700   # APPMODEL_ERROR_NO_PACKAGE
+
+
+def is_packaged():
+    """True when this process runs with an MSIX package identity."""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import ctypes
+        length = ctypes.c_uint32(0)
+        rc = ctypes.windll.kernel32.GetCurrentPackageFullName(ctypes.byref(length), None)
+    except (ImportError, AttributeError, OSError):
+        return False
+    return rc != _APPMODEL_NOT_PACKAGED
+
+
 def is_store_install():
     """True for a build the Microsoft Store installed. The Store passes
     INSTALLSOURCE=store to the MSI, which records it under HKCU. Reinstalling
@@ -63,7 +85,18 @@ def is_store_install():
         return False
 
 
-def user_data_dir(environ=None):
+def user_data_dir(environ=None, packaged=None):
+    environ = os.environ if environ is None else environ
+    packaged = is_packaged() if packaged is None else packaged
+    if packaged:
+        home = environ.get("USERPROFILE") or os.path.expanduser("~")
+        return os.path.join(home, APP_DIR_NAME)
+    return legacy_appdata_dir(environ)
+
+
+def legacy_appdata_dir(environ=None):
+    """Where the MSI build keeps its data, and where a packaged build looks
+    for data to copy across."""
     environ = os.environ if environ is None else environ
     base = environ.get("LOCALAPPDATA") or os.path.join(
         os.path.expanduser("~"), "AppData", "Local")
@@ -195,10 +228,16 @@ def prepare(environ=None, home=None, ask=None):
     when there is no key or chain yet, asks whether an earlier install exists
     and brings its data across. Returns the folder, or None when this is not
     an installed build and nothing changed."""
-    if not is_msi_install():
+    packaged = is_packaged()
+    if not packaged and not is_msi_install():
         return None
-    dst = user_data_dir(environ)
+    dst = user_data_dir(environ, packaged=packaged)
     os.makedirs(dst, exist_ok=True)
+    if packaged and not _has_data(dst):
+        # Copy, never move: the MSI build's folder stays where it is.
+        copied = migrate(legacy_appdata_dir(environ), dst)
+        if copied:
+            log.info("[datadir] brought %s across from the MSI install", ", ".join(copied))
     # Asking for help is not starting the node: no question, nothing copied.
     asking_for_help = any(a in ("-h", "--help", "--check-restart-exe") for a in sys.argv[1:])
     if not _has_data(dst) and not asking_for_help:
