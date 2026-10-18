@@ -1,14 +1,13 @@
 name: Update the Microsoft Store listing
 
-# Points the Store listing at the installer of a release and submits it for
-# certification. The Store downloads the MSI itself from the versioned URL that
-# pages.yml serves, so nothing is uploaded here, only the package URL changes
-# (installer arguments, languages and architecture stay as set in Partner
-# Center). Docs: https://learn.microsoft.com/windows/apps/publish/store-submission-api
+# Submits the MSIX of a release to the Microsoft Store for certification. The
+# package is built by release.yml (scripts/build_msix.ps1) and attached to the
+# GitHub release; this downloads it from there, checks it against SHA256SUMS
+# and hands it to the Store, which signs it itself.
 #
-# Runs after every release (called from release.yml, after the Pages deploy)
-# and by hand from the Actions tab, which resubmits the version you name, or
-# the one in VERSION.
+# Runs after every release (called from release.yml) and by hand from the
+# Actions tab, which resubmits the version you name, or the one in VERSION.
+# Docs: https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/commands
 #
 # One-time setup, in Partner Center and the repo (Settings > Secrets and
 # variables > Actions):
@@ -16,14 +15,16 @@ name: Update the Microsoft Store listing
 #      settings > Microsoft Entra applications in Partner Center, role Manager.
 #   2. Secrets: AZURE_AD_TENANT_ID, AZURE_AD_APPLICATION_CLIENT_ID,
 #      AZURE_AD_APPLICATION_SECRET, SELLER_ID.
-#   3. Variable (not a secret) STORE_PRODUCT_ID: the app's Partner Center ID.
-#      It is not the 12 character Store ID (XP...) that the Store listing
-#      shows. Microsoft's example for it is a GUID.
-# Without the secrets this does nothing and says so. The app must already be
-# published, and the Store only takes free apps through this route.
+#   3. Variables (not secrets), from the product identity page of the MSIX
+#      product: MSIX_IDENTITY_NAME, MSIX_PUBLISHER, MSIX_PUBLISHER_DISPLAY_NAME
+#      (used by release.yml to build the package) and MSIX_STORE_ID (the
+#      12 character Store ID, used here).
+#   4. The first version of the product must be submitted by hand in Partner
+#      Center, including the justification for the runFullTrust capability.
+#      The Store only takes free apps through this route.
+# Without the secrets and MSIX_STORE_ID this does nothing and says so.
 #
-# Microsoft requires the file behind a submitted URL never to change, so a
-# version that was submitted is never rebuilt under the same number.
+# A version that was submitted is never rebuilt under the same number.
 
 on:
   workflow_call:
@@ -52,8 +53,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
-  SITE: https://lapsecoin.github.io/core
+  STORE_ID: ${{ vars.MSIX_STORE_ID }}
 
 jobs:
   submit:
@@ -77,16 +77,16 @@ jobs:
       - name: Check the Store credentials are set
         id: gate
         run: |
-          $missing = 'AZURE_AD_TENANT_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET', 'SELLER_ID', 'PRODUCT_ID' |
+          $missing = 'AZURE_AD_TENANT_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET', 'SELLER_ID', 'STORE_ID' |
             Where-Object { -not (Get-Item "env:$_" -ErrorAction SilentlyContinue).Value }
           if ($missing) {
-            Write-Host "Skipping the Store update, these secrets or variables (PRODUCT_ID is the STORE_PRODUCT_ID variable) are not set: $($missing -join ', ')"
+            Write-Host "Skipping the Store update, these secrets or variables (STORE_ID is the MSIX_STORE_ID variable) are not set: $($missing -join ', ')"
             "enabled=false" | Out-File $env:GITHUB_OUTPUT -Append
           } else {
             "enabled=true" | Out-File $env:GITHUB_OUTPUT -Append
           }
 
-      - name: Work out the version and its URL
+      - name: Work out the version
         if: steps.gate.outputs.enabled == 'true'
         id: ver
         run: |
@@ -94,26 +94,22 @@ jobs:
           if (-not $v) { $v = (Get-Content VERSION -Raw).Trim() }
           if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Not a version: '$v'" }
           "version=$v" | Out-File $env:GITHUB_OUTPUT -Append
-          "url=$env:SITE/downloads/$v/lapsecoin.msi" | Out-File $env:GITHUB_OUTPUT -Append
 
-      # The Store fetches this URL during certification, so it must be live,
-      # must not redirect (the Store rejects that) and must be the very file
-      # the release published.
-      - name: Check the installer at that URL is the release's
+      # The package the Store gets must be the very file the release published.
+      - name: Download the package and check it is the release's
         if: steps.gate.outputs.enabled == 'true'
         run: |
-          $url = "${{ steps.ver.outputs.url }}"
           $v = "${{ steps.ver.outputs.version }}"
-          $head = curl.exe -s -I -o NUL -w "%{http_code} %{redirect_url}" $url
-          if ($head.Trim() -ne "200") { throw "Expected a plain 200 from $url, got: $head" }
-          curl.exe -fsSL -o lapsecoin.msi $url
+          New-Item pkg -ItemType Directory | Out-Null
+          gh release download "v$v" --repo $env:GITHUB_REPOSITORY --pattern lapsecoin.msix --dir pkg
+          if ($LASTEXITCODE) { throw "v$v has no lapsecoin.msix. Are the MSIX_IDENTITY_* variables set?" }
           gh release download "v$v" --repo $env:GITHUB_REPOSITORY --pattern SHA256SUMS --output SHA256SUMS
-          $line = Get-Content SHA256SUMS | Where-Object { $_ -match '\slapsecoin\.msi$' } | Select-Object -First 1
-          if (-not $line) { throw "No lapsecoin.msi in the release's SHA256SUMS" }
+          $line = Get-Content SHA256SUMS | Where-Object { $_ -match '\slapsecoin\.msix$' } | Select-Object -First 1
+          if (-not $line) { throw "No lapsecoin.msix in the release's SHA256SUMS" }
           $want = ($line -split '\s+')[0].ToLower()
-          $got = (Get-FileHash lapsecoin.msi -Algorithm SHA256).Hash.ToLower()
-          if ($got -ne $want) { throw "The file at $url ($got) is not the release's ($want)" }
-          Write-Host "OK, $url matches the release ($got)"
+          $got = (Get-FileHash pkg\lapsecoin.msix -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "The downloaded package ($got) is not the release's ($want)" }
+          Write-Host "OK, lapsecoin.msix matches the release ($got)"
 
       - uses: microsoft/microsoft-store-apppublisher@v1.1
         if: steps.gate.outputs.enabled == 'true'
@@ -125,91 +121,18 @@ jobs:
             --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID --clientSecret $env:AZURE_AD_APPLICATION_SECRET
           if ($LASTEXITCODE) { throw "msstore reconfigure failed" }
 
-      # Only the package URL changes. Everything else is carried over from the
-      # package as the Store holds it now, so the installer arguments set in
-      # Partner Center (INSTALLSOURCE=store) are never overwritten here.
-      - name: Point the package at this version
+      # publish replaces the pending draft with one built from the last
+      # published submission, so listing text and pricing carry over.
+      - name: Submit for certification
         if: steps.gate.outputs.enabled == 'true'
-        id: patch
         run: |
-          $PSNativeCommandArgumentPassing = 'Standard'
-          Write-Host "Submission status:"
-          $status = msstore submission status $env:PRODUCT_ID 2>&1 | Out-String
+          $status = msstore submission status $env:STORE_ID 2>&1 | Out-String
           Write-Host $status
-          if ($LASTEXITCODE -or $status -match 'Could not find|Error!') {
-            throw "Partner Center did not accept the product ID '$env:PRODUCT_ID' (variable STORE_PRODUCT_ID). It must be the app's Partner Center ID, not the XP... Store ID."
-          }
-          # A submission already in certification locks the app. Stop loudly, so a
-          # green run never hides that nothing was sent.
           if ($status -match '"OngoingSubmissionId":\s*"([^"]+)"') {
             throw "Submission $($Matches[1]) is already in progress for this app. Wait for it to finish, then run this again."
           }
-          $raw = (msstore submission get $env:PRODUCT_ID --verbose) -join "`n"
-          Write-Host "Package as the Store holds it:"
-          Write-Host $raw
-          $start = $raw.IndexOf('{'); $end = $raw.LastIndexOf('}')
-          if ($start -lt 0 -or $end -lt $start) { throw "No JSON in the output of 'submission get':`n$raw" }
-          $doc = $raw.Substring($start, $end - $start + 1) | ConvertFrom-Json -Depth 32
-
-          # The package objects are the ones with a packageUrl, wherever the
-          # CLI nests them.
-          function Find-Packages($node) {
-            if ($node -is [System.Management.Automation.PSCustomObject]) {
-              if ($node.PSObject.Properties.Name -contains 'packageUrl') { $node; return }
-              foreach ($p in $node.PSObject.Properties) { Find-Packages $p.Value }
-            } elseif ($node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
-              foreach ($i in $node) { Find-Packages $i }
-            }
+          msstore publish pkg --inputFile pkg\lapsecoin.msix --appId $env:STORE_ID --verbose
+          if ($LASTEXITCODE) {
+            throw "msstore publish failed. The first version must be submitted by hand in Partner Center."
           }
-          $packages = @(Find-Packages $doc)
-          if ($packages.Count -ne 1) {
-            throw "Expected one package with a packageUrl, found $($packages.Count). Output was:`n$raw"
-          }
-          $url = "${{ steps.ver.outputs.url }}"
-          # A dead URL in the Store's draft is the likely reason the Store reports
-          # the app as not ready, so say so instead of leaving a bare timeout.
-          $current = $packages[0].packageUrl
-          $code = curl.exe -s -I -o NUL -m 30 -w "%{http_code}" $current
-          if ($code -ne "200") {
-            Write-Host "::warning::The Store's draft points at $current, which returns HTTP $code. Fix the package URL in Partner Center by hand if the update below reports the app as not ready."
-          }
-          if ($packages[0].packageUrl -eq $url) {
-            # The draft already has this version, for instance because it was set by
-            # hand in Partner Center. That says nothing about whether it was submitted
-            # or finalised, and no submission is in progress (checked above). A change
-            # made on the web page leaves the Packages section unfinished until it is
-            # committed, so send the same package back through update and commit.
-            Write-Host "The draft already points at $url. Sending the package again so it is committed, then submitting."
-            $doc | ConvertTo-Json -Depth 32 | Set-Content -Path package.json -Encoding utf8
-            Get-Content -Raw package.json | Write-Host
-            "changed=true" | Out-File $env:GITHUB_OUTPUT -Append
-            "submit=true" | Out-File $env:GITHUB_OUTPUT -Append
-            exit 0
-          }
-          Write-Host "packageUrl: $($packages[0].packageUrl) -> $url"
-          $packages[0].packageUrl = $url
-          $doc | ConvertTo-Json -Depth 32 | Set-Content -Path package.json -Encoding utf8
-          Write-Host "Package being submitted:"
-          Get-Content -Raw package.json | Write-Host
-          "changed=true" | Out-File $env:GITHUB_OUTPUT -Append
-          "submit=true" | Out-File $env:GITHUB_OUTPUT -Append
-
-      - name: Submit for certification
-        if: steps.gate.outputs.enabled == 'true' && steps.patch.outputs.submit == 'true'
-        run: |
-          $PSNativeCommandArgumentPassing = 'Standard'
-          if ("${{ steps.patch.outputs.changed }}" -eq "true") {
-            $package = Get-Content -Raw package.json
-            msstore submission update $env:PRODUCT_ID $package --verbose
-            if ($LASTEXITCODE) {
-              # The CLI first waits two minutes for the Store to call the app ready. If
-              # the draft's own package URL is dead it never is, and that wait blocks the
-              # very update that would repair the URL. So try again without that wait.
-              Write-Host "::warning::The Store did not report the app as ready. Retrying without the initial wait, so the package URL can still be corrected."
-              msstore submission update $env:PRODUCT_ID $package --skipInitialPolling --verbose
-              if ($LASTEXITCODE) { throw "msstore submission update failed, also without the initial wait" }
-            }
-          }
-          msstore submission publish $env:PRODUCT_ID --verbose
-          if ($LASTEXITCODE) { throw "msstore submission publish failed" }
           Write-Host "Submitted. The new version reaches Store users once certification finishes."

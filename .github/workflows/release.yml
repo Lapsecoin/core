@@ -474,11 +474,28 @@ jobs:
           if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
           Write-Host "install, start and uninstall all worked"
 
+      # The Microsoft Store build (see build_msix.ps1 and store.yml). Built
+      # only when the Partner Center identity is set as repo variables, so a
+      # fork without them still releases the MSI as before.
+      - name: Build the Microsoft Store package
+        if: vars.MSIX_IDENTITY_NAME != ''
+        shell: pwsh
+        env:
+          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          $v = (Get-Content VERSION).Trim()
+          .\scripts\build_msix.ps1 -Source dist\lapsecoin-win -Version $v `
+            -Name $env:MSIX_IDENTITY_NAME -Publisher $env:MSIX_PUBLISHER `
+            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -Out lapsecoin.msix
+
       - name: Stage the release files
         shell: pwsh
         run: |
           New-Item stage -ItemType Directory | Out-Null
           Copy-Item lapsecoin.msi                stage\lapsecoin.msi
+          if (Test-Path lapsecoin.msix) { Copy-Item lapsecoin.msix stage\lapsecoin.msix }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -550,7 +567,7 @@ jobs:
       - name: Checksums
         run: |
           cd artifacts
-          sha256sum linux/lapsecoin windows/lapsecoin.msi \
+          sha256sum linux/lapsecoin windows/lapsecoin.msi* \
             | sed 's# \(linux\|windows\)/# #' > SHA256SUMS
           cat SHA256SUMS
 
@@ -620,7 +637,7 @@ jobs:
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
             artifacts/linux/lapsecoin
-            artifacts/windows/lapsecoin.msi
+            artifacts/windows/lapsecoin.msi*
             artifacts/SHA256SUMS
           fail_on_unmatched_files: true
         env:
@@ -637,11 +654,11 @@ jobs:
       id-token: write
     uses: ./.github/workflows/pages.yml
 
-  # Submits the new installer to the Microsoft Store (see store.yml). Skips
-  # itself without the Partner Center secrets, and like publish-pages it is
-  # not part of revert-on-failure: a failed submission is re-run on its own.
+  # Submits the new Store package to the Microsoft Store (see store.yml).
+  # Skips itself without the Partner Center secrets, and like publish-pages it
+  # is not part of revert-on-failure: a failed submission is re-run on its own.
   publish-store:
-    needs: [version, publish-pages]
+    needs: [version, release]
     permissions:
       contents: read
     uses: ./.github/workflows/store.yml
