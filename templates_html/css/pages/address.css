@@ -42,6 +42,8 @@
 .addr-tabs { display: inline-flex; align-self: flex-start; gap: 2px; padding: 3px; border: 1px solid var(--rule); border-radius: var(--radius-sm); background: var(--paper-2); }
 .addr-tabs a { padding: .3rem .8rem; border-radius: 6px; font-size: .84rem; font-weight: 500; color: var(--ink-dim); text-decoration: none; transition: color .1s, background .1s; }
 .addr-tabs a:hover { color: var(--ink); }
+.addr-tabs span[aria-disabled] { padding: .3rem .8rem; font-size: .84rem; font-weight: 500; color: var(--ink-dim); opacity: .45; cursor: not-allowed; }
+.addr-tabs a, .addr-tabs span { flex: 0 0 auto; }
 .addr-tabs a[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); }
 .addr-tabs a:focus-visible { outline: 2px solid rgb(var(--ink-rgb) / .35); outline-offset: 1px; }
 .addr-chart { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); padding: .6rem .8rem .5rem; }
@@ -115,6 +117,6 @@ table.hist { width: 100%; min-width: 0; border: 1px solid var(--rule); border-ra
   .hist .c-dir { grid-column: 2; grid-row: 2; font-size: .78rem; text-align: right; }
   .hist-empty { display: block; }
   .addr-tabs { align-self: stretch; }
-  .addr-tabs a { flex: 1 1 auto; text-align: center; padding: .4rem .3rem; }
+  .addr-tabs a, .addr-tabs span[aria-disabled] { flex: 1 1 auto; text-align: center; padding: .4rem .3rem; }
   .addr-chart { padding: .5rem .5rem .4rem; }
 }

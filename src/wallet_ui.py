@@ -198,7 +198,7 @@ def register_data_api(app, reader, pfx):
 # Pages
 # ---------------------------------------------------------------------------
 
-ADDRESS_VIEWS = ("balance", "share", "history")
+ADDRESS_VIEWS = ("history", "balance", "share")
 
 
 def address_ctx(reader, addr, page):
@@ -238,12 +238,11 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
             query["addr"] = crypto_mod.burn_address()
             return redirect(f"/balance?{urlencode(query)}")
         page = max(request.args.get("page", 1, type=int) or 1, 1)
-        # Which of the lookup's three views opens: the balance curve, the
-        # curve of its share of the circulating supply, or the history
-        # table. A page number only makes sense for the table.
+        # Which of the lookup's three views opens. History is what people
+        # come for, so it is the default; the curves are one tab away.
         view = request.args.get("view", "")
         if view not in ADDRESS_VIEWS:
-            view = "history" if page > 1 else "balance"
+            view = "history"
         # The distribution histogram is only shown before a lookup runs, so
         # skip computing it once an address has actually been submitted.
         holder_count, rows, histogram_max = 0, [], 0
@@ -259,6 +258,13 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
             ctx["addr"] = ""
         elif addr:
             ctx.update(address_ctx(reader, addr, page))
+            # A curve needs something to draw: none with no activity, and the
+            # balance is only a flat line until it has changed twice.
+            series = ctx["series"]
+            if view == "balance" and len(series["moves"]) < 2:
+                ctx["view"] = "share" if series["points"] else "history"
+            elif view == "share" and not series["points"]:
+                ctx["view"] = "history"
             ctx["og"] = embeds.address(addr, ctx["balance"], ctx["tx_count"])
         if ctx["og"] is None and not addr:
             ctx["og"] = embeds.balance_lookup(holder_count)

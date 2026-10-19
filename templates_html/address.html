@@ -54,14 +54,23 @@
   {% endif %}
 
   {% if history is not none %}
-  <section class="addr-main addr-view" id="addr-view" data-view="{{ view }}" data-addr="{{ addr }}">
+  {% set has_curve = series and series.points %}
+  <section class="addr-main addr-view" id="addr-view" data-view="{{ view if has_curve else 'history' }}" data-addr="{{ addr }}">
     <div class="addr-tabs" role="tablist" aria-label="Address views">
-      <a role="tab" href="/balance?addr={{ addr }}&view=balance" data-tab="balance" aria-selected="{{ 'true' if view == 'balance' else 'false' }}">Balance</a>
-      <a role="tab" href="/balance?addr={{ addr }}&view=share" data-tab="share" aria-selected="{{ 'true' if view == 'share' else 'false' }}">% of circulation</a>
       <a role="tab" href="/balance?addr={{ addr }}&view=history" data-tab="history" aria-selected="{{ 'true' if view == 'history' else 'false' }}">History</a>
+      {% if has_curve and series.moves | length > 1 %}
+      <a role="tab" href="/balance?addr={{ addr }}&view=balance" data-tab="balance" aria-selected="{{ 'true' if view == 'balance' else 'false' }}">Balance</a>
+      {% else %}
+      <span role="tab" aria-disabled="true" title="{{ 'Only one change so far, see History' if has_curve else 'Nothing to plot until this address has activity' }}">Balance</span>
+      {% endif %}
+      {% if has_curve %}
+      <a role="tab" href="/balance?addr={{ addr }}&view=share" data-tab="share" aria-selected="{{ 'true' if view == 'share' else 'false' }}">% of circulation</a>
+      {% else %}
+      <span role="tab" aria-disabled="true" title="Nothing to plot until this address has activity">% of circulation</span>
+      {% endif %}
     </div>
 
-    <div class="addr-chart" id="addr-chart"{% if view == 'history' %} hidden{% endif %}>
+    <div class="addr-chart" id="addr-chart"{% if view == 'history' or not has_curve %} hidden{% endif %}>
       <div class="addr-readout" id="addr-readout" aria-live="polite"></div>
       <div class="addr-plot" id="addr-plot" tabindex="0" role="img" aria-label="Balance over time. Use the left and right arrow keys to move along it."></div>
       <p class="addr-hint" id="addr-note"></p>
@@ -69,7 +78,7 @@
     </div>
     <script type="application/json" id="addr-series">{{ series | tojson }}</script>
 
-    <div class="addr-history"{% if view != 'history' %} hidden{% endif %} id="addr-history">
+    <div class="addr-history"{% if view != 'history' and has_curve %} hidden{% endif %} id="addr-history">
       <div data-live="history">
       <table class="hist">
         <thead><tr><th>Height</th><th>Hash</th><th>Direction</th><th class="num">Amount</th></tr></thead>
