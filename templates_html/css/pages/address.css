@@ -36,6 +36,35 @@
 .addr-kv .addr-kv-addr dd { text-align: left; margin-top: .2rem; }
 .addr-mono { font-family: var(--mono); font-size: .75rem; color: var(--ink-dim); overflow-wrap: anywhere; line-height: 1.45; }
 
+/* the three views of a lookup */
+.addr-view { display: flex; flex-direction: column; gap: .6rem; }
+.addr-view [hidden] { display: none; }
+.addr-tabs { display: inline-flex; align-self: flex-start; gap: 2px; padding: 3px; border: 1px solid var(--rule); border-radius: var(--radius-sm); background: var(--paper-2); }
+.addr-tabs a { padding: .3rem .8rem; border-radius: 6px; font-size: .84rem; font-weight: 500; color: var(--ink-dim); text-decoration: none; transition: color .1s, background .1s; }
+.addr-tabs a:hover { color: var(--ink); }
+.addr-tabs a[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); }
+.addr-tabs a:focus-visible { outline: 2px solid rgb(var(--ink-rgb) / .35); outline-offset: 1px; }
+.addr-chart { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); padding: .6rem .8rem .5rem; }
+.addr-readout { min-height: 1.5rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .9rem; font-size: .88rem; font-variant-numeric: tabular-nums; }
+.addr-readout a { font-weight: 600; }
+.addr-readout .dim { color: var(--ink-dim); }
+.addr-readout .gain { color: var(--gain); }
+.addr-readout .loss { color: var(--loss); }
+.addr-plot { position: relative; min-height: 200px; touch-action: pan-y; cursor: crosshair; }
+.addr-plot:focus-visible { outline: 2px solid rgb(var(--ink-rgb) / .35); outline-offset: 2px; border-radius: 4px; }
+.addr-plot svg { display: block; }
+.addr-plot .grid { stroke: var(--rule); stroke-width: 1; }
+.addr-plot .ax { fill: var(--ink-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.addr-plot .line { fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; }
+.addr-plot .area { fill: var(--accent); fill-opacity: .1; stroke: none; }
+.addr-plot .dot { stroke: var(--surface); stroke-width: 1.5; }
+.addr-plot .dot.up { fill: var(--gain); }
+.addr-plot .dot.down { fill: var(--loss); }
+.addr-plot .cur { stroke: var(--line-strong); stroke-width: 1; }
+.addr-plot .curdot { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
+.addr-empty { display: grid; place-items: center; height: 100%; min-height: 200px; color: var(--ink-dim); }
+.addr-chart .addr-hint { margin-top: .3rem; }
+
 /* history */
 table.hist { width: 100%; min-width: 0; border: 1px solid var(--rule); border-radius: var(--radius); border-collapse: separate; border-spacing: 0; background: var(--surface); overflow: hidden; font-size: .85rem; }
 .hist th { background: none; text-transform: none; letter-spacing: 0; font-size: .78rem; font-weight: 600; padding: .5rem .8rem; border-bottom: 1px solid var(--rule); }
@@ -50,6 +79,7 @@ table.hist { width: 100%; min-width: 0; border: 1px solid var(--rule); border-ra
 .hist .dir-block { color: var(--ink); }
 .hist-empty td { color: var(--ink-dim); text-align: center; font-family: var(--serif); padding: 1.2rem; }
 .addr-history .pager { margin-top: .7rem; }
+.addr-view .addr-history { margin: 0; }
 
 /* wealth distribution */
 .histo { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); padding: .5rem .3rem; }
@@ -63,6 +93,11 @@ table.hist { width: 100%; min-width: 0; border: 1px solid var(--rule); border-ra
 
 @media (max-width: 900px) {
   .addr-grid.has-main { grid-template-columns: minmax(0, 1fr); gap: 1.1rem; }
+  /* stacked: keep the summary short so the curve still fits the screen */
+  .has-main .addr-form .addr-hint { display: none; }
+  .has-main .addr-kv .addr-kv-addr, .has-main .addr-kv > div:nth-last-child(2) { display: none; }
+  .has-main .addr-kv > div:nth-last-child(3) { border-bottom: 0; }
+  .has-main .addr-balance-v { font-size: 1.2rem; }
 }
 @media (max-width: 640px) {
   .histo-row { grid-template-columns: 6.5rem minmax(0, 1fr) 2.2rem; gap: .5rem; padding-left: .3rem; padding-right: .3rem; }
@@ -79,4 +114,7 @@ table.hist { width: 100%; min-width: 0; border: 1px solid var(--rule); border-ra
   .hist .c-height::before { content: "height "; }
   .hist .c-dir { grid-column: 2; grid-row: 2; font-size: .78rem; text-align: right; }
   .hist-empty { display: block; }
+  .addr-tabs { align-self: stretch; }
+  .addr-tabs a { flex: 1 1 auto; text-align: center; padding: .4rem .3rem; }
+  .addr-chart { padding: .5rem .5rem .4rem; }
 }

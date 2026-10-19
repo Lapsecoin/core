@@ -5,11 +5,13 @@ LocalReader is the small interface the wallet pages are written against.
 Anything the pages need from a node goes through these methods.
 """
 
+import bisect
 import hashlib
 import threading
 
 import block as block_mod
 import board_view
+import crypto as crypto_mod
 import state as state_mod
 import tx as tx_mod
 from params import MIN_RELAY_FEE_RATE
@@ -17,6 +19,10 @@ from ui_common import _tx_amount
 
 # Rows per page of an address's history.
 HISTORY_PER_PAGE = 3
+
+# Points a balance curve is sampled at, besides the heights where the
+# balance moved. Enough for the share-of-supply line to read as smooth.
+SERIES_SAMPLES = 160
 
 
 def _get_address_history(addr, node):
@@ -114,6 +120,27 @@ def _get_mined_blocks_for_addr(addr, node):
     return [(height, blk["hash"], rewards[height] + block_mod.block_fees(blk))
             for height, blk in enumerate(chain)
             if blk.get("builder") == addr]
+
+
+def _balance_moves(addr, node):
+    """{height: net change in ticks} for addr, replayed from the indexed
+    transactions and the blocks it built. Fees paid to a builder are part
+    of the block's move, as in _get_mined_blocks_for_addr."""
+    moves = {}
+    for height, _h, _direction, t in _get_address_history(addr, node):
+        delta = sum(o["amount"] for o in t.get("outputs", []) if o.get("to") == addr)
+        if t.get("from") == addr:
+            delta -= _tx_amount(t) + t.get("fee", 0)
+        moves[height] = moves.get(height, 0) + delta
+    for height, _h, amount in _get_mined_blocks_for_addr(addr, node):
+        moves[height] = moves.get(height, 0) + amount
+    return moves
+
+
+def _balance_at(heights, cumulative, height):
+    """Running balance after every move at or below `height`."""
+    i = bisect.bisect_right(heights, height)
+    return cumulative[i - 1] if i else 0
 
 
 def fee_estimate(node):
@@ -222,6 +249,78 @@ class LocalReader:
                 "tx_count": v.state.get_nonce(addr),
                 "page": page, "total_pages": total_pages,
                 "rows": [list(r) for r in newest_first[start:start + HISTORY_PER_PAGE]]}
+
+    def address_series(self, addr):
+        """The balance of addr over the chain, and what share of the
+        circulating supply it was, as points [height, balance, circulating].
+
+        Points sit at every height the balance moved plus an even spread
+        up to the tip, so a share line (which drifts as supply grows) has
+        points between the steps. `moves` lists the steps themselves as
+        [height, change, balance after].
+
+        The balance is replayed from the transaction index and the blocks
+        the address built. Fee-request refunds are paid by the chain
+        itself and appear in neither, so whatever is left over against the
+        true balance is booked as one move at the tip, and `residual` says
+        by how much. Circulating is minted minus the burn address, the
+        node's own definition, with minted taken from the reward series and
+        scaled so the tip matches the state exactly.
+        """
+        node = self.node
+        v = node.view
+        tip = len(v.chain) - 1
+        balance = v.state.get_balance(addr)
+        moves = _balance_moves(addr, node)
+        out = {"tip": tip, "balance": balance, "residual": 0,
+               "points": [], "moves": []}
+        if tip < 0 or (not moves and not balance):
+            return out
+
+        heights = sorted(moves)
+        cumulative, run = [], 0
+        for h in heights:
+            run += moves[h]
+            cumulative.append(run)
+        if run != balance:
+            out["residual"] = balance - run
+            if heights and heights[-1] == tip:
+                moves[tip] += balance - run
+                cumulative[-1] = balance
+            else:
+                heights.append(tip)
+                moves[tip] = balance - run
+                cumulative.append(balance)
+        out["moves"] = [[h, moves[h], c] for h, c in zip(heights, cumulative)]
+
+        burn = crypto_mod.burn_address()
+        burn_moves = _balance_moves(burn, node) if addr != burn else moves
+        burn_heights = sorted(burn_moves)
+        burn_cum, run = [], 0
+        for h in burn_heights:
+            run += burn_moves[h]
+            burn_cum.append(run)
+
+        rewards = _reward_series.prefix(tip + 1)
+        minted, total = [], 0
+        for r in rewards:
+            if r >= 1:
+                total += r
+            minted.append(total)
+        scale = v.state.total_minted / total if total else 1.0
+
+        first = heights[0]
+        span = tip - first
+        sample = {first, tip, *heights}
+        if span > 0:
+            step = max(span / SERIES_SAMPLES, 1)
+            sample.update(int(first + i * step) for i in range(SERIES_SAMPLES + 1))
+        points = []
+        for h in sorted(x for x in sample if first <= x <= tip):
+            circ = max(int(minted[h] * scale) - _balance_at(burn_heights, burn_cum, h), 0)
+            points.append([h, _balance_at(heights, cumulative, h), circ])
+        out["points"] = points
+        return out
 
     # Board
 

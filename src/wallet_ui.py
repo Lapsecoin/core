@@ -9,6 +9,7 @@ The private app registers these handlers, handed:
             account(addr, fees=)              -> balance, nonce, board_floor, ...
             submit(tx)                        -> (ok, tx_hash | error)
             address_page(addr, page)          -> one page of history
+            address_series(addr)              -> balance and share-of-supply curve
             board_etag(chunks), board_page(chunks)
                                               -> the board, see board_view
 
@@ -170,6 +171,12 @@ def register_data_api(app, reader, pfx):
         page = max(request.args.get("page", 1, type=int) or 1, 1)
         return _json(reader.address_page(addr, page))
 
+    @app.route("/api/address/<addr>/series", endpoint=pfx + "api_address_series")
+    def api_address_series(addr):
+        if not crypto_mod.is_valid_address(addr):
+            return jsonify({"error": "invalid address"}), 400
+        return _json(reader.address_series(addr))
+
     @app.route("/api/board/page", endpoint=pfx + "api_board_page")
     def api_board_page():
         """The board as board_view.board_page_data builds it. Unchanged
@@ -191,11 +198,15 @@ def register_data_api(app, reader, pfx):
 # Pages
 # ---------------------------------------------------------------------------
 
+ADDRESS_VIEWS = ("balance", "share", "history")
+
+
 def address_ctx(reader, addr, page):
     """The part of the Balance page that depends on a looked-up address."""
     d = reader.address_page(addr, page)
     page, total_pages = d["page"], d["total_pages"]
     return dict(balance=d["balance"], tx_count=d["tx_count"],
+                series=reader.address_series(addr),
                 page=page, total_pages=total_pages,
                 page_window=_pagination_window(page, total_pages),
                 history=[tuple(r) for r in d["rows"]],
@@ -227,12 +238,19 @@ def register_address_page(app, reader, pfx, histogram=None, default_addr=None):
             query["addr"] = crypto_mod.burn_address()
             return redirect(f"/balance?{urlencode(query)}")
         page = max(request.args.get("page", 1, type=int) or 1, 1)
+        # Which of the lookup's three views opens: the balance curve, the
+        # curve of its share of the circulating supply, or the history
+        # table. A page number only makes sense for the table.
+        view = request.args.get("view", "")
+        if view not in ADDRESS_VIEWS:
+            view = "history" if page > 1 else "balance"
         # The distribution histogram is only shown before a lookup runs, so
         # skip computing it once an address has actually been submitted.
         holder_count, rows, histogram_max = 0, [], 0
         if not addr and histogram is not None:
             holder_count, rows, histogram_max = histogram()
         ctx = dict(title="Balance", addr=addr, alert_err="", page=page, og=None,
+                   view=view, series=None,
                    history=None, balance=0, tx_count=0, has_prev=False, has_next=False,
                    holder_count=holder_count,
                    histogram=rows, histogram_max=histogram_max)

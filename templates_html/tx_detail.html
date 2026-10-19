@@ -5,7 +5,7 @@
 <div class="panel">
   <dl class="kv" data-live="status">
     <div class="wide"><dt>Hash</dt><dd class="hash">{{ tx_hash }}</dd></div>
-    <div class="wide"><dt>From</dt><dd class="mono">{{ tx.from }}</dd></div>
+    <div class="wide"><dt>From</dt><dd class="mono"><a href="/balance?addr={{ tx.from }}" title="Look up this address">{{ tx.from }}</a></dd></div>
     <div><dt>Status</dt><dd>{{ location }}</dd></div>
     {% if seen_at %}<div><dt>{{ "Confirmed" if confirmed else "First seen" }}</dt><dd><span data-age-ts="{{ seen_at }}" title="{{ utc_text(seen_at) }}">{{ fmt_age(server_now() - seen_at) }}</span></dd></div>{% endif %}
     <div><dt>Nonce</dt><dd>{{ tx.nonce }}</dd></div>
@@ -19,7 +19,7 @@
     <thead><tr><th>To</th><th class="num">Amount</th></tr></thead>
     <tbody>
     {% for o in tx.outputs %}
-    <tr><td class="fill" data-label="To">{{ o.to }}</td><td class="num" data-label="Amount">{{ o.amount }}</td></tr>
+    <tr><td class="fill" data-label="To"><a href="/balance?addr={{ o.to }}" title="Look up this address">{{ o.to }}</a></td><td class="num" data-label="Amount">{{ o.amount }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

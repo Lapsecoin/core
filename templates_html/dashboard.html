@@ -55,7 +55,7 @@
         <tr>
           <td class="num" data-label="Height"><a href="/block/{{ height }}">{{ height }}</a></td>
           <td class="fill" data-label="Hash">{% if kind != "payment" %}<span class="tx-kind">{{ "Board" if kind == "board" else "Fee request" }}</span>{% endif %}<a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
-          <td class="hide-sm dim" data-label="From">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</td>
+          <td class="hide-sm dim" data-label="From"><a href="/balance?addr={{ t.from }}" title="{{ t.from }}">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</a></td>
           <td class="num" data-label="Amount">{{ fmt_lapse_dp(amount) }}</td>
           <td class="num dim" data-label="Age">{% if tx_times[height] %}<span data-age-ts="{{ tx_times[height] }}" title="{{ utc_text(tx_times[height]) }}">{{ fmt_age(server_now() - tx_times[height]) }}</span>{% endif %}</td>
         </tr>
@@ -125,7 +125,7 @@
 {% if info.address %}
   <div class="panel">
     <div class="panel-head"><b>Address</b></div>
-    <dl class="kv"><div><dt>This node</dt><dd class="addr" title="{{ info.address }}">{{ info.address }}</dd></div></dl>
+    <dl class="kv"><div><dt>This node</dt><dd class="addr" title="{{ info.address }}"><a href="/balance?addr={{ info.address }}">{{ info.address }}</a></dd></div></dl>
   </div>
 {% endif %}
 </div>
@@ -281,8 +281,8 @@
               (KIND_LABEL[tx.kind] ? "<span class=\"tx-kind\">" + KIND_LABEL[tx.kind] + "</span>" : "") +
               "<a href=\"/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
             "<td data-label=\"From\" class=\"hide-sm dim\">" +
-              (tx.from === SELF_ADDRESS ? "self" : tx.from.slice(0, 24) + "…") +
-              "</td>" +
+              "<a href=\"/balance?addr=" + encodeURIComponent(tx.from) + "\" title=\"" + tx.from + "\">" +
+              (tx.from === SELF_ADDRESS ? "self" : tx.from.slice(0, 24) + "…") + "</a></td>" +
             "<td class=\"num\" data-label=\"Amount\">" + fmtLapse(tx.amount) + "</td>" +
             "<td class=\"num dim\" data-label=\"Age\">" + (tx.timestamp
               ? "<span data-age-ts=\"" + tx.timestamp + "\">" + window.lcAge(tx.timestamp) + "</span>" : "") + "</td>" +

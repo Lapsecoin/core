@@ -19,7 +19,7 @@
         <td class="fill" data-label="Hash"><a href="/block/{{ b.height }}">{{ b.hash }}</a></td>
         <td class="num hide-sm" data-label="Block time">{% if b.height in block_times %}{{ block_times[b.height] }}s{% endif %}</td>
         {% if show_txs %}<td class="num" data-label="Txs">{{ b.transactions | length }}</td>{% endif %}
-        <td class="hide-sm dim" data-label="Builder">{{ b.builder or '' }}</td>
+        <td class="hide-sm dim" data-label="Builder">{% if b.builder %}<a href="/balance?addr={{ b.builder }}" title="Look up this address">{{ b.builder }}</a>{% endif %}</td>
       </tr>
       {% endfor %}
     {% else %}
