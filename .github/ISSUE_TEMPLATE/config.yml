@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and chat
+    url: https://discord.gg/FP2d8JmK6r
+    about: Ask in Discord
+  - name: Security vulnerability
+    url: https://github.com/Lapsecoin/core/security/advisories/new
+    about: Report privately, not as a public issue

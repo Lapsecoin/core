@@ -44,6 +44,10 @@ export LAPSECOIN_PASSPHRASE="your passphrase"
 No LAPSE exchange listings yet.
 
 In the meantime, the [Discord](https://discord.gg/FP2d8JmK6r) is the place to trade directly with other members.
+## Contributing
+
+PRs and issues welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [good first issues](https://github.com/Lapsecoin/core/labels/good%20first%20issue).
+
 ---
 
 <div align="center" id="support">
