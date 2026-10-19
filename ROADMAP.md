@@ -43,7 +43,3 @@ Each one links to its issue, so you can pick one up.
 
 - Wider real use of LAPSE, starting with fee requests.
 - Exchange listing. It follows from the above, so it has no date. Exchanges generally look for active development, a stable network, real use and liquidity, so those are what we track.
-
-## Honest limits
-
-Consensus is longest-chain, so a majority attacker is not beaten (see the [whitepaper](docs/whitepaper.md), section 7). More independent builders is the defense, which is why pools come before listing.
