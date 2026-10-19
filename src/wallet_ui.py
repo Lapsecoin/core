@@ -333,7 +333,8 @@ def register_board_pages(app, reader, pfx, own_addr_fn, csrf_token=None, account
         # rendering anything. Validators are the board state itself plus the
         # window size and viewer, the only inputs the fragment depends on.
         etag = '"' + hashlib.sha1(
-            repr((reader.board_etag(page), page, own, sorted(own_index.items()))).encode()).hexdigest() + '"'
+            repr((reader.board_etag(page), page, own, sorted(own_index.items()))).encode(),
+            usedforsecurity=False).hexdigest() + '"'
         if request.headers.get("If-None-Match") == etag:
             resp = make_response("", 304)
         else:

@@ -301,7 +301,7 @@ class DHTDiscovery:
     # ------------------------------------------------------------------
 
     def _genesis_info_hash(self):
-        raw = hashlib.sha1(bytes.fromhex(self.genesis_hash)).digest()
+        raw = hashlib.sha1(bytes.fromhex(self.genesis_hash), usedforsecurity=False).digest()
         return lt.sha1_hash(raw)
 
     def _slot_keypair(self, slot_index):

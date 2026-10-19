@@ -355,12 +355,12 @@ class LocalReader:
 
     def board_etag(self, chunks):
         key = self._board_state_key()
-        return hashlib.sha1(repr((key, max(chunks, 1))).encode()).hexdigest()
+        return hashlib.sha1(repr((key, max(chunks, 1))).encode(), usedforsecurity=False).hexdigest()
 
     def board_page(self, chunks):
         key, snap = self._board_snapshot()
         data = board_view.board_page_data(snap, chunks)
-        data["etag"] = hashlib.sha1(repr((key, max(chunks, 1))).encode()).hexdigest()
+        data["etag"] = hashlib.sha1(repr((key, max(chunks, 1))).encode(), usedforsecurity=False).hexdigest()
         return data
 
 
