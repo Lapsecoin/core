@@ -62,6 +62,18 @@ def test_curve_ends_on_the_true_balance_and_steps_on_each_move():
     assert all(p[1] <= p[2] for p in s["points"])  # never more than circulates
 
 
+def test_a_first_receipt_is_a_step_up_from_zero():
+    node = _node([(A, []), (A, []), (B, []), (A, [])])
+    s = LocalReader(node).address_series(B)
+    assert s["moves"][0][0] == 3
+    assert s["points"][0][:2] == [2, 0]
+
+
+def test_genesis_mints_nothing():
+    from local_reader import _reward_series
+    assert _reward_series.reward_at(0) == 0 and _reward_series.reward_at(1) > 0
+
+
 def test_sending_to_yourself_only_costs_the_fee():
     t = {"from": A, "nonce": 1, "fee": 100, "outputs": [{"to": A, "amount": UNIT}]}
     node = _node([(A, []), (B, [t]), (B, [])])
@@ -87,17 +99,24 @@ class TestPages:
         node, cs = embeds_node()
         return node, cs, api.create_app(node, peerpool_mod.PeerPool())
 
-    def test_lookup_offers_the_three_views(self):
+    def test_lookup_offers_history_and_share_when_there_is_one_change(self):
         _node_, _cs, app = self._app()
         html = app.test_client().get("/balance?addr=" + A + "&view=share").get_data(as_text=True)
-        assert 'data-tab="balance"' in html and 'data-tab="share"' in html and 'data-tab="history"' in html
-        assert 'id="addr-series"' in html
-        assert 'data-view="share"' in html
+        assert 'data-tab="history"' in html and 'data-tab="share"' in html
+        assert 'data-tab="balance"' not in html  # one change is only a flat line
+        assert 'id="addr-series"' in html and 'data-view="share"' in html
 
-    def test_unknown_view_falls_back_to_the_balance_curve(self):
+    def test_history_is_the_default_view(self):
         _node_, _cs, app = self._app()
-        html = app.test_client().get("/balance?addr=" + A + "&view=nope").get_data(as_text=True)
-        assert 'data-view="balance"' in html
+        for q in ("", "&view=nope"):
+            html = app.test_client().get("/balance?addr=" + A + q).get_data(as_text=True)
+            assert 'data-view="history"' in html
+
+    def test_an_address_with_no_activity_has_no_curve_tabs(self):
+        _node_, _cs, app = self._app()
+        html = app.test_client().get("/balance?addr=" + crypto.burn_address() + "&view=balance").get_data(as_text=True)
+        assert 'data-tab="balance"' not in html and 'aria-disabled="true"' in html
+        assert 'data-view="history"' in html
 
     def test_series_api_rejects_a_bad_address(self):
         _node_, _cs, app = self._app()
@@ -115,3 +134,8 @@ class TestPages:
         assert f'href="/balance?addr={t["outputs"][0]["to"]}"' in page
         pool = app.test_client().get("/mempool").get_data(as_text=True)
         assert f'href="/balance?addr={t["from"]}"' in pool
+
+    def test_a_flat_balance_request_falls_back_to_the_share_curve(self):
+        _node_, _cs, app = self._app()
+        html = app.test_client().get("/balance?addr=" + A + "&view=balance").get_data(as_text=True)
+        assert 'data-view="share"' in html

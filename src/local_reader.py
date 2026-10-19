@@ -76,7 +76,10 @@ class _RewardSeries:
     def _extend_to(self, height):
         with self._lock:
             while len(self._rewards) <= height:
-                reward = state_mod.compute_reward(self._total_minted)
+                # Genesis has no builder, so it mints nothing (see
+                # chainstate._apply_builder_reward). Counting a reward there
+                # left every later one a little short.
+                reward = state_mod.compute_reward(self._total_minted) if self._rewards else 0
                 self._rewards.append(reward)
                 if reward >= 1:
                     self._total_minted += reward
@@ -310,13 +313,16 @@ class LocalReader:
         scale = v.state.total_minted / total if total else 1.0
 
         first = heights[0]
-        span = tip - first
-        sample = {first, tip, *heights}
+        # Start one block before the first move, at zero, so the first
+        # receipt is drawn as a step up instead of sitting on the axis.
+        start = max(first - 1, 0)
+        span = tip - start
+        sample = {start, tip, *heights}
         if span > 0:
             step = max(span / SERIES_SAMPLES, 1)
-            sample.update(int(first + i * step) for i in range(SERIES_SAMPLES + 1))
+            sample.update(int(start + i * step) for i in range(SERIES_SAMPLES + 1))
         points = []
-        for h in sorted(x for x in sample if first <= x <= tip):
+        for h in sorted(x for x in sample if start <= x <= tip):
             circ = max(int(minted[h] * scale) - _balance_at(burn_heights, burn_cum, h), 0)
             points.append([h, _balance_at(heights, cumulative, h), circ])
         out["points"] = points
