@@ -11,7 +11,7 @@ Private port only, like Send."""
 import logging
 import os
 import secrets
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from flask import jsonify, redirect, render_template, request
 
@@ -58,8 +58,11 @@ def pending_work(node, check_balance=False):
 
 def _local_path(text):
     """Where to go after unlocking: a path on this node, never another site."""
-    if text.startswith("/") and not text.startswith("//") and "\\" not in text:
-        return text
+    if (text.startswith("/") and not text.startswith("//") and "\\" not in text
+            and text.isprintable()):
+        parts = urlparse(text)
+        if not parts.scheme and not parts.netloc:
+            return text
     return "/"
 
 
