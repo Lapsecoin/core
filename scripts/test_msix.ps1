@@ -11,6 +11,7 @@
 #     its wallet in %USERPROFILE%\LapseCoin and nowhere in the package store
 #   - an upgrade to the next version leaves that wallet untouched
 #   - an uninstall leaves that wallet in place
+#   - a normal launch (with the window) is still running 30 seconds later
 # Identity comes from the MSIX_* environment variables, as for build_msix.ps1.
 # Ports are not checked: the node does not listen in a headless runner, packaged
 # or not.
@@ -68,6 +69,27 @@ Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 Add-AppxPackage -Path "$work\v1.msix"
 $pkg = Get-AppxPackage -Name $env:MSIX_IDENTITY_NAME
 Write-Host "installed $($pkg.PackageFullName)"
+
+# A normal launch, the way the Store's own testers start the app: no arguments,
+# so the window and the tray icon are set up. The run below uses --no-gui and
+# never loads them, so a crash at launch would not show there. The app is
+# started from the package folder and must still be running 30 seconds later.
+$launchedAt = Get-Date
+$logon = "/c cd /d `"$($pkg.InstallLocation)`" && lapsecoin.exe > `"$work\launch.log`" 2>&1"
+Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $logon
+Start-Sleep 30
+$alive = @(Get-Process lapsecoin -ErrorAction SilentlyContinue)
+if (-not $alive) {
+    $failures += "the app was not running 30 seconds after a normal launch (it crashed or exited)"
+    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $launchedAt } -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting|Python|\.NET' } |
+        Select-Object -First 6 | ForEach-Object { Write-Host "event: $($_.ProviderName): $($_.Message)" }
+    if (Test-Path "$work\launch.log") { Get-Content "$work\launch.log" -Tail 40 }
+} else {
+    Write-Host ("running after 30 seconds: " + (($alive | ForEach-Object { "pid $($_.Id), window handle $($_.MainWindowHandle)" }) -join "; "))
+}
+Stop-Node
+Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 
 # cmd starts the node so the output can be kept; the node inherits the package.
 $node = "/c cd /d `"$($pkg.InstallLocation)`" && set LAPSECOIN_PASSPHRASE=ci-test-passphrase-123&& lapsecoin.exe --no-gui > `"$work\node.log`" 2>&1"
