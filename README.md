@@ -46,7 +46,7 @@ No LAPSE exchange listings yet.
 In the meantime, the [Discord](https://discord.gg/FP2d8JmK6r) is the place to trade directly with other members.
 ## Contributing
 
-PRs and issues welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [good first issues](https://github.com/Lapsecoin/core/labels/good%20first%20issue).
+PRs and issues welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), the [roadmap](ROADMAP.md) and the [good first issues](https://github.com/Lapsecoin/core/labels/good%20first%20issue).
 
 ---
 
