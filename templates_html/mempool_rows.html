@@ -2,7 +2,7 @@
   {% for row in transactions %}
   <tr data-fee="{{ row.tx.fee }}">
     <td data-label="Hash" class="hash-short"><a href="/tx/{{ row.hash }}">{{ row.hash[:20] }}&hellip;</a></td>
-    <td data-label="From" class="hash-short">{{ row.tx.from[:24] }}&hellip;</td>
+    <td data-label="From" class="hash-short"><a href="/balance?addr={{ row.tx.from }}" title="{{ row.tx.from }}">{{ row.tx.from[:24] }}&hellip;</a></td>
     <td data-label="Fee" class="num">{{ row.tx.fee }}</td>
     <td data-label="Outputs" class="num">{{ row.tx.outputs|length }}</td>
     <td data-label="Age" class="num">{% if row.entered %}<span data-age-ts="{{ row.entered }}">{{ fmt_age(server_now() - row.entered) }}</span>{% endif %}</td>

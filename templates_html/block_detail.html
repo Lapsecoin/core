@@ -13,7 +13,7 @@
   <dl class="kv">
     <div class="wide"><dt>Hash</dt><dd class="hash">{{ b.hash }}</dd></div>
     <div class="wide"><dt>Previous</dt><dd class="hash"><a href="/block/{{ b.height - 1 }}">{{ b.previous_hash }}</a></dd></div>
-    <div class="wide"><dt>Builder</dt><dd class="mono">{{ b.builder or "(none)" }}</dd></div>
+    <div class="wide"><dt>Builder</dt><dd class="mono">{% if b.builder %}<a href="/balance?addr={{ b.builder }}" title="Look up this address">{{ b.builder }}</a>{% else %}(none){% endif %}</dd></div>
     <div><dt>Reward</dt><dd class="{{ 'gain' if b.builder }}">{{ fmt_balance(reward) if b.builder else "-" }}</dd></div>
     <div><dt>Transactions</dt><dd>{{ b.transactions | length }}</dd></div>
     {% if time_stats %}
@@ -31,7 +31,7 @@
       {% for h, t, total in tx_rows %}
       <tr>
         <td class="fill" data-label="Hash"><a href="/tx/{{ h }}">{{ h }}</a></td>
-        <td class="hide-sm dim" data-label="From">{{ t.from }}</td>
+        <td class="hide-sm dim" data-label="From"><a href="/balance?addr={{ t.from }}" title="{{ t.from }}">{{ t.from }}</a></td>
         <td class="num" data-label="Total sent">{{ total }}</td>
         <td class="num" data-label="Fee">{{ t.fee }}</td>
       </tr>

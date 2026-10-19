@@ -41,6 +41,11 @@ Public app  (default port 8333, externally reachable):
          caller can page without first fetching everything to find out
          how much there is.
 
+    GET  /api/address/<addr>/series
+         {"tip", "balance", "residual", "points": [[height, balance,
+         circulating], ...], "moves": [[height, change, balance], ...]}
+         The balance curve and its share of the circulating supply.
+
     GET  /api/address/<addr>/valid
          {"address", "valid": true|false}
 

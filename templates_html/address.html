@@ -26,6 +26,9 @@
         <div class="addr-balance-v">{{ fmt_balance(balance) }}</div>
       </div>
       <dl class="addr-kv">
+        {% if series and series.points %}{% set last = series.points[-1] %}
+        <div><dt>Of circulation</dt><dd>{{ '%.4f' % (last[1] / last[2] * 100 if last[2] else 0) }}%</dd></div>
+        {% endif %}
         <div><dt>Txs sent</dt><dd>{{ tx_count }}</dd></div>
         <div><dt>Transactions</dt><dd>{{ history | length }}</dd></div>
         <div class="addr-kv-addr"><dt>Address</dt><dd class="addr-mono">{{ addr }}</dd></div>
@@ -51,42 +54,273 @@
   {% endif %}
 
   {% if history is not none %}
-  <section class="addr-main addr-history"{% if page == 1 %} data-live="history"{% endif %}>
-    <h2>History</h2>
-    <table class="hist">
-      <thead><tr><th>Height</th><th>Hash</th><th>Direction</th><th class="num">Amount</th></tr></thead>
-      <tbody>
-      {% if history %}
-        {% for height, h, direction, payload, kind in history %}
-        <tr>
-          <td class="c-height" data-label="Height">{{ height }}</td>
-          {% if kind == "block" %}
-          <td class="c-hash" data-label="Hash"><a href="/block/{{ height }}">{{ h[:20] }}…</a></td>
-          {% else %}
-          <td class="c-hash" data-label="Hash"><a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
-          {% endif %}
-          <td class="c-dir {{ 'dir-block' if kind == 'block' else ('dir-sent' if direction == 'sent' else 'dir-recv') }}" data-label="Direction">{{ direction }}</td>
-          <td class="c-amt num" data-label="Amount">{{ payload }}</td>
-        </tr>
-        {% endfor %}
-      {% else %}
-        <tr class="hist-empty"><td colspan="4">No transactions</td></tr>
-      {% endif %}
-      </tbody>
-    </table>
-    {% if total_pages > 1 %}
-    <nav class="pager" aria-label="Pagination">
-      {% if has_prev %}<a href="/balance?addr={{ addr }}&page={{ page - 1 }}">Prev</a>{% endif %}
-      {% for p in page_window %}
-        {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
-        {% elif p == page %}<span class="pager-current">{{ p }}</span>
-        {% else %}<a href="/balance?addr={{ addr }}&page={{ p }}">{{ p }}</a>
+  <section class="addr-main addr-view" id="addr-view" data-view="{{ view }}" data-addr="{{ addr }}">
+    <div class="addr-tabs" role="tablist" aria-label="Address views">
+      <a role="tab" href="/balance?addr={{ addr }}&view=balance" data-tab="balance" aria-selected="{{ 'true' if view == 'balance' else 'false' }}">Balance</a>
+      <a role="tab" href="/balance?addr={{ addr }}&view=share" data-tab="share" aria-selected="{{ 'true' if view == 'share' else 'false' }}">% of circulation</a>
+      <a role="tab" href="/balance?addr={{ addr }}&view=history" data-tab="history" aria-selected="{{ 'true' if view == 'history' else 'false' }}">History</a>
+    </div>
+
+    <div class="addr-chart" id="addr-chart"{% if view == 'history' %} hidden{% endif %}>
+      <div class="addr-readout" id="addr-readout" aria-live="polite"></div>
+      <div class="addr-plot" id="addr-plot" tabindex="0" role="img" aria-label="Balance over time. Use the left and right arrow keys to move along it."></div>
+      <p class="addr-hint" id="addr-note"></p>
+      <noscript><p class="addr-hint">The curves need JavaScript. The History tab works without it.</p></noscript>
+    </div>
+    <script type="application/json" id="addr-series">{{ series | tojson }}</script>
+
+    <div class="addr-history"{% if view != 'history' %} hidden{% endif %} id="addr-history">
+      <div data-live="history">
+      <table class="hist">
+        <thead><tr><th>Height</th><th>Hash</th><th>Direction</th><th class="num">Amount</th></tr></thead>
+        <tbody>
+        {% if history %}
+          {% for height, h, direction, payload, kind in history %}
+          <tr>
+            <td class="c-height" data-label="Height">{{ height }}</td>
+            {% if kind == "block" %}
+            <td class="c-hash" data-label="Hash"><a href="/block/{{ height }}">{{ h[:20] }}…</a></td>
+            {% else %}
+            <td class="c-hash" data-label="Hash"><a href="/tx/{{ h }}">{{ h[:20] }}…</a></td>
+            {% endif %}
+            <td class="c-dir {{ 'dir-block' if kind == 'block' else ('dir-sent' if direction == 'sent' else 'dir-recv') }}" data-label="Direction">{{ direction }}</td>
+            <td class="c-amt num" data-label="Amount">{{ payload }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr class="hist-empty"><td colspan="4">No transactions</td></tr>
         {% endif %}
-      {% endfor %}
-      {% if has_next %}<a href="/balance?addr={{ addr }}&page={{ page + 1 }}">Next</a>{% endif %}
-    </nav>
-    {% endif %}
+        </tbody>
+      </table>
+      {% if total_pages > 1 %}
+      <nav class="pager" aria-label="Pagination">
+        {% if has_prev %}<a href="/balance?addr={{ addr }}&view=history&page={{ page - 1 }}">Prev</a>{% endif %}
+        {% for p in page_window %}
+          {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+          {% elif p == page %}<span class="pager-current">{{ p }}</span>
+          {% else %}<a href="/balance?addr={{ addr }}&view=history&page={{ p }}">{{ p }}</a>
+          {% endif %}
+        {% endfor %}
+        {% if has_next %}<a href="/balance?addr={{ addr }}&view=history&page={{ page + 1 }}">Next</a>{% endif %}
+      </nav>
+      {% endif %}
+      </div>
+    </div>
   </section>
   {% endif %}
 </div>
+{% if history is not none %}
+<script>
+// The balance curve, the share-of-circulation curve and the history table
+// are three views of one lookup. The curves are drawn here at the size of
+// their box, so text stays 1:1 and nothing scrolls the page.
+(function () {
+  var root = document.getElementById("addr-view");
+  if (!root) return;
+  var TICKS = 100000000;
+  var plot = document.getElementById("addr-plot");
+  var readout = document.getElementById("addr-readout");
+  var note = document.getElementById("addr-note");
+  var chartBox = document.getElementById("addr-chart");
+  var histBox = document.getElementById("addr-history");
+  var addr = root.dataset.addr;
+  var view = root.dataset.view;
+  var series = JSON.parse(document.getElementById("addr-series").textContent);
+  var pad = {l: 58, r: 14, t: 10, b: 24};
+  var geom = null;     // scales of the last draw, for hover
+  var cursor = null;   // index of the point the readout shows
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, function (c) {
+    return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); }
+  function group(n) { return Math.round(n).toLocaleString("en-US"); }
+  // Same rule as fmt_lapse_dp in ui_common.py.
+  function lapse(ticks) {
+    if (ticks > 0 && ticks * 20000 < TICKS) return group(ticks) + " tick" + (ticks === 1 ? "" : "s");
+    return (ticks / TICKS).toLocaleString("en-US", {minimumFractionDigits: 4, maximumFractionDigits: 4}) + " LAPSE";
+  }
+  function compact(lapseVal) {
+    var a = Math.abs(lapseVal);
+    if (a >= 1e6) return +(lapseVal / 1e6).toFixed(2) + "M";
+    if (a >= 1e3) return +(lapseVal / 1e3).toFixed(2) + "k";
+    if (a >= 1) return +lapseVal.toFixed(2) + "";
+    return +lapseVal.toPrecision(2) + "";
+  }
+  function pct(v) {
+    if (v === 0) return "0%";
+    var d = v >= 10 ? 1 : v >= 1 ? 2 : v >= 0.01 ? 3 : 5;
+    return v.toFixed(d) + "%";
+  }
+  function share(p) { return p[2] > 0 ? p[1] / p[2] * 100 : 0; }
+  function niceStep(span, n) {
+    var raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * mag;
+  }
+
+  function fit() {
+    var top = plot.getBoundingClientRect().top + window.scrollY;
+    var reserve = note.offsetHeight + 34;
+    var h = Math.max(200, Math.min(window.innerHeight - top - reserve, 560));
+    plot.style.height = h + "px";
+    return h;
+  }
+
+  function draw() {
+    if (view === "history") return;
+    var pts = series.points;
+    if (!pts.length) {
+      plot.innerHTML = '<div class="addr-empty">No activity on this address yet.</div>';
+      readout.textContent = "";
+      geom = null;
+      return;
+    }
+    var W = plot.clientWidth, H = fit();
+    var isShare = view === "share";
+    var val = function (p) { return isShare ? share(p) : p[1] / TICKS; };
+    var x0 = pts[0][0], x1 = pts[pts.length - 1][0];
+    if (x1 === x0) { x0 -= 1; x1 += 1; }
+    var ymax = 0;
+    pts.forEach(function (p) { ymax = Math.max(ymax, val(p)); });
+    if (ymax <= 0) ymax = 1;
+    var step = niceStep(ymax * 1.05, 4);
+    var ytop = Math.ceil(ymax * 1.05 / step) * step;
+    var iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+    var X = function (h) { return pad.l + (h - x0) / (x1 - x0) * iw; };
+    var Y = function (v) { return pad.t + ih - v / ytop * ih; };
+
+    var g = "";
+    for (var v = 0; v <= ytop + step / 2; v += step) {
+      var y = Y(v).toFixed(1);
+      g += '<line class="grid" x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + y + '" y2="' + y + '"/>' +
+           '<text class="ax" x="' + (pad.l - 8) + '" y="' + y + '" dy=".32em" text-anchor="end">' +
+           (isShare ? pct(v) : compact(v)) + '</text>';
+    }
+    var xs = Math.max(Math.min(Math.floor(iw / 90), 6), 1), xstep = niceStep(x1 - x0, xs);
+    for (var t = Math.ceil(x0 / xstep) * xstep; t <= x1; t += xstep) {
+      g += '<text class="ax" x="' + X(t).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle">' + group(t) + '</text>';
+    }
+
+    var d = "", base = Y(0).toFixed(1);
+    pts.forEach(function (p, i) {
+      var px = X(p[0]).toFixed(1), py = Y(val(p)).toFixed(1);
+      if (i === 0) d = "M" + px + "," + py;
+      else if (isShare) d += "L" + px + "," + py;
+      else d += "H" + px + "V" + py;
+    });
+    var last = pts[pts.length - 1];
+    var area = d + "L" + X(last[0]).toFixed(1) + "," + base + "L" + X(pts[0][0]).toFixed(1) + "," + base + "Z";
+    g += '<path class="area" d="' + area + '"/><path class="line" d="' + d + '"/>';
+
+    if (!isShare && series.moves.length <= 120) {
+      series.moves.forEach(function (m) {
+        g += '<circle class="dot ' + (m[1] >= 0 ? "up" : "down") + '" r="3" cx="' + X(m[0]).toFixed(1) +
+             '" cy="' + Y(m[2] / TICKS).toFixed(1) + '"/>';
+      });
+    }
+    g += '<g id="addr-cursor" visibility="hidden"><line class="cur" y1="' + pad.t + '" y2="' + (pad.t + ih) +
+         '"/><circle class="curdot" r="4.5"/></g>';
+    plot.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + g + '</svg>';
+    geom = {X: X, Y: Y, val: val, x0: x0, x1: x1, pad: pad, W: W};
+    show(cursor === null || cursor >= pts.length ? pts.length - 1 : cursor);
+  }
+
+  function moveAt(h) {
+    for (var i = 0; i < series.moves.length; i++) if (series.moves[i][0] === h) return series.moves[i];
+    return null;
+  }
+
+  function show(i) {
+    var pts = series.points, p = pts[i];
+    if (!p || !geom) return;
+    cursor = i;
+    var c = document.getElementById("addr-cursor");
+    if (c) {
+      c.setAttribute("visibility", "visible");
+      c.querySelector("line").setAttribute("x1", geom.X(p[0]));
+      c.querySelector("line").setAttribute("x2", geom.X(p[0]));
+      var dot = c.querySelector("circle");
+      dot.setAttribute("cx", geom.X(p[0]));
+      dot.setAttribute("cy", geom.Y(geom.val(p)));
+    }
+    var m = moveAt(p[0]), delta = "";
+    if (m) delta = ' <span class="' + (m[1] >= 0 ? "gain" : "loss") + '">' + (m[1] >= 0 ? "+" : "-") +
+                   lapse(Math.abs(m[1])) + '</span>';
+    var main = view === "share"
+      ? '<b>' + pct(share(p)) + '</b> of circulation <span class="dim">(' + lapse(p[1]) + ')</span>'
+      : '<b>' + lapse(p[1]) + '</b> <span class="dim">(' + pct(share(p)) + ' of circulation)</span>';
+    readout.innerHTML = '<a href="/block/' + p[0] + '">Block ' + group(p[0]) + '</a>' + main + delta;
+  }
+
+  function nearest(clientX) {
+    var rect = plot.getBoundingClientRect(), pts = series.points;
+    var h = geom.x0 + (clientX - rect.left - geom.pad.l) / (geom.W - geom.pad.l - geom.pad.r) * (geom.x1 - geom.x0);
+    var lo = 0, hi = pts.length - 1;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (pts[mid][0] < h) lo = mid + 1; else hi = mid; }
+    if (lo > 0 && h - pts[lo - 1][0] < pts[lo][0] - h) lo -= 1;
+    return lo;
+  }
+  plot.addEventListener("pointermove", function (e) { if (geom) show(nearest(e.clientX)); });
+  plot.addEventListener("pointerdown", function (e) { if (geom) show(nearest(e.clientX)); });
+  plot.addEventListener("keydown", function (e) {
+    if (!geom || (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End")) return;
+    var n = series.points.length, i = cursor === null ? n - 1 : cursor;
+    i = e.key === "ArrowLeft" ? i - 1 : e.key === "ArrowRight" ? i + 1 : e.key === "Home" ? 0 : n - 1;
+    show(Math.max(0, Math.min(n - 1, i)));
+    e.preventDefault();
+  });
+
+  function setNote() {
+    var r = series.residual;
+    note.textContent = view === "share"
+      ? "Share of the circulating supply (minted minus the burn address) at each block."
+      : "Balance after each block that moved it." +
+        (Math.abs(r) >= TICKS ? " Includes " + lapse(Math.abs(r)) + (r > 0 ? " paid to" : " taken from") +
+             " this address by the chain itself, such as fee-request refunds, shown at the latest block." : "");
+  }
+
+  function setView(next, push) {
+    view = next;
+    root.dataset.view = next;
+    root.querySelectorAll("[data-tab]").forEach(function (a) {
+      a.setAttribute("aria-selected", a.dataset.tab === next ? "true" : "false");
+    });
+    chartBox.hidden = next === "history";
+    histBox.hidden = next !== "history";
+    plot.setAttribute("aria-label", (next === "share" ? "Share of circulation" : "Balance") +
+      " over time. Use the left and right arrow keys to move along it.");
+    if (push) {
+      var u = new URL(location.href);
+      u.searchParams.set("view", next);
+      if (next !== "history") u.searchParams.delete("page");
+      history.replaceState(null, "", u);
+    }
+    setNote();
+    draw();
+  }
+  root.querySelectorAll("[data-tab]").forEach(function (a) {
+    a.addEventListener("click", function (e) {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
+      e.preventDefault();
+      setView(a.dataset.tab, true);
+    });
+  });
+
+  var timer;
+  window.addEventListener("resize", function () { clearTimeout(timer); timer = setTimeout(draw, 80); });
+
+  // New blocks move the curve: ask again now and then, and redraw only when
+  // the chain or the balance actually moved.
+  setInterval(async function () {
+    if (document.hidden || view === "history") return;
+    try {
+      var res = await fetch("/api/address/" + encodeURIComponent(addr) + "/series", {cache: "no-store"});
+      if (!res.ok) return;
+      var next = await res.json();
+      if (next.tip !== series.tip || next.balance !== series.balance) { series = next; cursor = null; setNote(); draw(); }
+    } catch (e) { /* keep what is drawn */ }
+  }, 20000);
+
+  setView(view, false);
+})();
+</script>
+{% endif %}
 {% endblock %}
