@@ -33,6 +33,9 @@ concurrency:
   group: liboqs-prebuilt
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest

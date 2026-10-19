@@ -19,6 +19,9 @@ env:
   # when the two disagree). Bumping it rebuilds once, then caches again.
   LIBOQS_REF: "0.16.0"
 
+permissions:
+  contents: read
+
 concurrency:
   group: release
   cancel-in-progress: true
