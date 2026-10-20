@@ -54,6 +54,12 @@ $env:PYTHONPATH = "src"
 $storeUrl = if ($env:MSIX_STORE_ID) { "https://apps.microsoft.com/detail/" + $env:MSIX_STORE_ID.Trim().ToLower() } else { "" }
 Set-Content -Path STORE_URL -Value $storeUrl -NoNewline -Encoding ascii
 
+# Where a critical crash report is sent (src/crashlog.py): the address of the
+# crash relay in tools/crash-relay, from the CRASH_REPORT_URL repo variable.
+# Empty without it, and then nothing is sent.
+$crashUrl = if ($env:CRASH_REPORT_URL) { $env:CRASH_REPORT_URL.Trim() } else { "" }
+Set-Content -Path CRASH_URL -Value $crashUrl -NoNewline -Encoding ascii
+
 Remove-Item build-nuitka, dist\lapsecoin-win -Recurse -Force -ErrorAction SilentlyContinue
 python -m nuitka --mode=standalone @common @identity `
     "--file-description=LapseCoin node and wallet" `
@@ -62,6 +68,7 @@ python -m nuitka --mode=standalone @common @identity `
     --output-dir=build-nuitka --output-filename=lapsecoin `
     --include-data-files=VERSION=VERSION `
     --include-data-files=STORE_URL=STORE_URL `
+    --include-data-files=CRASH_URL=CRASH_URL `
     --include-data-files=src/bip39_english.txt=bip39_english.txt `
     --include-data-files=docs/whitepaper.md=docs/whitepaper.md `
     --include-data-files=lapsecoin.svg=lapsecoin.svg `

@@ -392,6 +392,7 @@ jobs:
         shell: pwsh
         env:
           MSIX_STORE_ID: ${{ vars.MSIX_STORE_ID }}
+          CRASH_REPORT_URL: ${{ vars.CRASH_REPORT_URL }}
         run: |
           $env:NUITKA_CACHE_DIR = "$PWD\nuitka-cache"
           $v = (Get-Content VERSION).Trim()

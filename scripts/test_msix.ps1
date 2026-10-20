@@ -98,7 +98,8 @@ Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 
 # A crash must leave a report and a visible message, even before the program
 # has a log file (src/crashlog.py). --crash-test makes it fail on purpose right
-# at the start, the way a failure while the program is loading would.
+# at the start, the way a failure while the program is loading would. No
+# window is shown for a crash; the report file is what is checked.
 $crashCmd = "/c cd /d `"$($pkg.InstallLocation)`" && lapsecoin.exe --crash-test"
 Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $crashCmd
 Start-Sleep 20
@@ -108,8 +109,7 @@ if (-not (Test-Path $report) -or -not (Select-String -Path $report -Pattern 'cra
     $failures += "a crash left no report in $data"
 }
 if (-not (Test-Path (Join-Path $data "lapsecoin-start.log"))) { $failures += "a crash left no start log in $data" }
-if ($box) { Write-Host ("crash message on screen: '" + ($box | Select-Object -First 1).MainWindowTitle + "'") }
-else { Write-Host "no crash message window was found (the report file is what is checked)" }
+if ($box) { Write-Host "the program is still running after the crash test (it should have ended)" }
 Stop-Node
 Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 

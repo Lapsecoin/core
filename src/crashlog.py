@@ -10,9 +10,15 @@ data folder cannot:
                         silent death shows where it got to
   lapsecoin-crash.log   every fatal exception and native crash, appended
 
-It also shows the error in a message box with an offer to open a GitHub issue
-pre-filled with the report. Nothing is sent anywhere unless the person clicks
-Yes, and the issue form shows the whole text first to read and edit.
+It also sends the report itself, so nobody has to relay it. Only a critical
+crash is sent: an exception that ends the program, at start-up or while it runs,
+and a native crash that killed the process, which the next start sends. The text
+is cut to the exception, the last start-up steps, the version, the Windows build
+and the architecture, with the account name, folder paths and any LapseCoin
+address taken out. It goes to a small relay (tools/crash-relay) that files it as
+a GitHub issue, once per kind of crash. Nothing is sent when no relay address was
+baked into the build, when LAPSECOIN_CRASH_REPORTS=0 is set, or when a file named
+crash-reports-off is in the data folder. No window is shown for a crash.
 
 Only the Windows installer builds use it (the MSI and the Store package). A
 source checkout, pip, the AppImage and a console run keep printing tracebacks.
@@ -25,14 +31,19 @@ import tempfile
 import threading
 import time
 import traceback
-from urllib.parse import quote
 
 CRASH_LOG = "lapsecoin-crash.log"
 START_LOG = "lapsecoin-start.log"
-ISSUE_URL = "https://github.com/Lapsecoin/core/issues/new"
-# A GitHub link carries the whole issue text, and long links are refused.
-MAX_BODY_CHARS = 5000
-DIALOG_TITLE = "LapseCoin stopped unexpectedly"
+
+SENT_MARK = "lapsecoin-crash.sent"      # how much of the crash log was already sent
+OPT_OUT_FILE = "crash-reports-off"
+URL_FILE = "CRASH_URL"                  # written into the build from CRASH_REPORT_URL
+SEND_TIMEOUT = 4
+MAX_TRACE = 3500
+MAX_STEPS = 1200
+# A LapseCoin address is twelve dot-separated words.
+ADDRESS_RE = re.compile(r"\b(?:[a-z]{3,10}\.){11}[a-z]{3,10}\b")
+PENDING_RE = re.compile(r"Fatal Python error|Windows fatal exception|fatal exception during")
 
 _state = {"dir": None, "crash": None, "installed": False}
 
@@ -80,7 +91,7 @@ def sanitize(text, environ=None):
     user = environ.get("USERNAME")
     if user and len(user) > 2:
         text = re.sub(re.escape(user), "<user>", text, flags=re.IGNORECASE)
-    return text
+    return ADDRESS_RE.sub("<address>", text)
 
 
 def environment_lines():
@@ -102,14 +113,6 @@ def _packaged():
         return datadir.is_packaged()
     except Exception:
         return "unknown"
-
-
-def issue_url(title, body):
-    """A GitHub new-issue link carrying the report, cut to fit."""
-    body = sanitize(body)
-    if len(body) > MAX_BODY_CHARS:
-        body = body[:MAX_BODY_CHARS // 2] + "\n[...cut...]\n" + body[-MAX_BODY_CHARS // 2:]
-    return f"{ISSUE_URL}?title={quote(title)}&body={quote(body)}"
 
 
 def _stamp():
@@ -150,37 +153,147 @@ def interactive():
                 or any(a in sys.argv for a in NO_WINDOW_FLAGS))
 
 
-def _message_box(text, title, ask):
-    """Shows a Windows message box. Returns True when Yes was chosen."""
+def _message_box(text, title):
+    """A plain Windows message box, for a notice that has no other way out."""
     if not interactive():
-        return False
+        return
     try:
         import ctypes
-        flags = 0x10 | 0x40000                      # error icon, topmost
-        flags |= 0x4 if ask else 0                  # Yes and No
-        return ctypes.windll.user32.MessageBoxW(0, text, title, flags) == 6
+        ctypes.windll.user32.MessageBoxW(0, text, title, 0x40 | 0x40000)
+    except Exception:
+        pass
+
+
+def endpoint():
+    """The relay's address, baked into the build (empty: nothing is sent)."""
+    url = os.environ.get("LAPSECOIN_CRASH_REPORT_URL", "").strip()
+    if url:
+        return url
+    try:
+        import resources
+        with open(os.path.join(resources.bundle_dir(), URL_FILE)) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def sending_enabled():
+    if not endpoint() or os.environ.get("LAPSECOIN_CRASH_REPORTS") == "0":
+        return False
+    return not any(os.path.exists(os.path.join(d, OPT_OUT_FILE)) for d in candidate_dirs())
+
+
+def signature(exc_type, tb):
+    """Short id of a kind of crash: the exception and where it was raised, so
+    one fault is one issue however many people hit it."""
+    import hashlib
+    where = ""
+    while tb is not None:
+        where = f"{os.path.basename(tb.tb_frame.f_code.co_filename)}:{tb.tb_lineno}"
+        tb = tb.tb_next
+    return hashlib.sha1(f"{exc_type.__name__}@{where}".encode()).hexdigest()[:10]
+
+
+def _start_log_tail(lines=15):
+    try:
+        with open(os.path.join(_state["dir"], START_LOG), encoding="utf-8") as f:
+            return "".join(f.readlines()[-lines:])
+    except (OSError, TypeError):
+        return ""
+
+
+def build_payload(kind, where, trace, sig):
+    """What is sent: nothing beyond this."""
+    import platform
+    try:
+        import resources
+        version = open(os.path.join(resources.bundle_dir(), "VERSION")).read().strip()
+    except Exception:
+        version = "unknown"
+    return {"v": 1, "kind": kind, "where": where, "sig": sig,
+            "app": version, "windows": platform.version(), "arch": platform.machine(),
+            "python": platform.python_version(), "packaged": _packaged(),
+            "trace": sanitize(trace)[-MAX_TRACE:],
+            "steps": sanitize(_start_log_tail())[-MAX_STEPS:]}
+
+
+def send(payload):
+    """POSTs the report to the relay. True when it was accepted. Never raises."""
+    url = endpoint()
+    if not url or not sending_enabled():
+        return False
+    try:
+        import json
+        import urllib.request
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json", "User-Agent": "LapseCoin-crash/1"})
+        with urllib.request.urlopen(req, timeout=SEND_TIMEOUT) as r:
+            return 200 <= r.status < 300
     except Exception:
         return False
 
 
+def _mark_sent():
+    """Everything in the crash log so far has been sent."""
+    if not _state["dir"]:
+        return
+    try:
+        size = os.path.getsize(os.path.join(_state["dir"], CRASH_LOG))
+        with open(os.path.join(_state["dir"], SENT_MARK), "w") as f:
+            f.write(str(size))
+    except OSError:
+        pass
+
+
+def _short_hash(text):
+    import hashlib
+    # the crash text without times and addresses, so a repeat gets the same id
+    stable = re.sub(r"0x[0-9a-fA-F]+|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", "", text)
+    return hashlib.sha1(stable.encode("utf-8", "replace")).hexdigest()[:4]
+
+
+def send_pending():
+    """Sends what an earlier run recorded and could not send: a native crash
+    that ended the process, or a report made while offline."""
+    if not _state["dir"] or not sending_enabled():
+        return False
+    crash = os.path.join(_state["dir"], CRASH_LOG)
+    try:
+        offset = int(open(os.path.join(_state["dir"], SENT_MARK)).read().strip() or 0)
+    except (OSError, ValueError):
+        offset = 0
+    try:
+        with open(crash, encoding="utf-8", errors="replace") as f:
+            f.seek(offset)
+            text = f.read()
+    except OSError:
+        return False
+    if not PENDING_RE.search(text):
+        _mark_sent()
+        return False
+    ok = send(build_payload("earlier-run", "an earlier run", text, "run" + _short_hash(text)))
+    if ok:
+        _mark_sent()
+    return ok
+
+
 def report_fatal(exc_type, exc, tb, where="start-up"):
-    """Logs a fatal exception, shows it, and offers a GitHub issue."""
+    """Records a critical crash and sends it. Shows nothing."""
     text = "".join(traceback.format_exception(exc_type, exc, tb))
-    path = write_report(f"fatal exception during {where}:\n{text}")
+    write_report(f"fatal exception during {where}:\n{text}")
     breadcrumb(f"fatal: {exc_type.__name__}: {exc}")
-    summary = f"{exc_type.__name__}: {exc}"
-    saved = f"\n\nThe details were saved to:\n{path}" if path else ""
-    shown = _message_box(
-        f"LapseCoin could not continue.\n\n{summary}{saved}\n\n"
-        "Open a GitHub issue with this report? You can read and edit it "
-        "before anything is sent.",
-        DIALOG_TITLE, ask=True)
-    if shown:
-        try:
-            body = "\n".join(environment_lines()) + f"\n\n```\n{text}\n```\n"
-            os.startfile(issue_url(f"Crash: {summary}"[:100], body))
-        except Exception:
-            pass
+    sent = send(build_payload("fatal", where, text, signature(exc_type, tb)))
+    if sent:
+        _mark_sent()
+    breadcrumb("report sent" if sent else "report not sent, it is sent by the next start")
+
+
+def report_current(where):
+    """For an except block that catches a critical failure itself."""
+    exc_type, exc, tb = sys.exc_info()
+    if exc_type is not None:
+        report_fatal(exc_type, exc, tb, where)
 
 
 def notify(text):
@@ -188,7 +301,7 @@ def notify(text):
     there (an Error: message from sys.exit, a failed data move)."""
     breadcrumb(f"notice: {text.splitlines()[0] if text else ''}")
     if active():
-        _message_box(text, "LapseCoin", ask=False)
+        _message_box(text, "LapseCoin")
 
 
 def _excepthook(exc_type, exc, tb):
@@ -237,6 +350,9 @@ def install():
     threading.excepthook = _thread_excepthook
     enable_faulthandler()
     breadcrumb("start " + " | ".join(environment_lines()))
+    # What an earlier run left behind goes out in the background, so start-up
+    # does not wait for the network.
+    threading.Thread(target=send_pending, name="crash-pending", daemon=True).start()
     if "--crash-test" in sys.argv:
         # Proves the whole path in a real package: the CI test starts the
         # program with this flag and looks for the report it must leave.
