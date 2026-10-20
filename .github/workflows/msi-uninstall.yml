@@ -53,7 +53,7 @@ jobs:
         run: choco install wixtoolset --no-progress -y
 
       - name: Rebuild the installer from the same files with the current scripts
-        run: .\scripts\build_msi.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" -Out rebuilt.msi
+        run: .\scripts\build_msi.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" -Icon app\favicon.ico -Out rebuilt.msi
 
       - name: The rebuilt installer
         run: .\scripts\test_msi_uninstall.ps1 -Msi rebuilt.msi
