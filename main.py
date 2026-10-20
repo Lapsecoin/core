@@ -874,7 +874,7 @@ def _show_fatal_error(exc):
         logging.getLogger("ec.main").error("[fatal] unhandled exception:\n%s", tb)
     except Exception:
         pass
-    _crashlog.write_report("fatal exception in main():\n" + tb)
+    _crashlog.report_current("main()")
 
     message = f"LapseCoin failed to start.\n\n{exc}\n\nFull details in {LOG_FILE}."
     try:

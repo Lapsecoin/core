@@ -1,0 +1,11 @@
+name = "lapsecoin-crash-relay"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+REPO = "Lapsecoin/core"
+
+# Create with: wrangler kv namespace create LIMITS, then paste the id here.
+[[kv_namespaces]]
+binding = "LIMITS"
+id = "REPLACE_WITH_THE_KV_NAMESPACE_ID"
