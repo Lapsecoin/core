@@ -11,6 +11,13 @@ if "--uninstall-notice" in _sys.argv[1:]:
     _uninstall_notice.run()
     _sys.exit(0)
 
+# The crash watcher: a second, idle process that waits for the program and sends a
+# report if Windows ended it in a fault (see crashlog.watch). It must not start the node.
+if "--crash-watch" in _sys.argv[1:]:
+    import crashlog as _watch_crashlog
+    _watch_crashlog.watch(_sys.argv)
+    _sys.exit(0)
+
 # Leaves a trace for any way the program dies from here on, including before
 # the log file exists (see crashlog.py). It has to come before anything that can fail.
 import crashlog as _crashlog
