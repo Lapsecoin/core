@@ -54,8 +54,8 @@ $env:PYTHONPATH = "src"
 $storeUrl = if ($env:MSIX_STORE_ID) { "https://apps.microsoft.com/detail/" + $env:MSIX_STORE_ID.Trim().ToLower() } else { "" }
 Set-Content -Path STORE_URL -Value $storeUrl -NoNewline -Encoding ascii
 
-# Where a critical crash report is filed (src/crashlog.py): the reports repository
-# and a fine-grained token that can only write issues in that one repository, from
+# Where a critical crash report is filed (src/crashlog.py): the repository (for
+# example Lapsecoin/core) and a fine-grained token that can only write issues in it, from
 # the CRASH_REPORT_REPO variable and the CRASH_REPORT_TOKEN secret. The token ends
 # up readable inside the program, so it must never be able to do more than that.
 # Without both, nothing is sent.
