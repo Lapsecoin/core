@@ -12,13 +12,16 @@ data folder cannot:
 
 It also sends the report itself, so nobody has to relay it. Only a critical
 crash is sent: an exception that ends the program, at start-up or while it runs,
-and a native crash that killed the process, which the next start sends. The text
-is cut to the exception, the last start-up steps, the version, the Windows build
-and the architecture, with the account name, folder paths and any LapseCoin
-address taken out. It goes to a small relay (tools/crash-relay) that files it as
-a GitHub issue, once per kind of crash. Nothing is sent when no relay address was
-baked into the build, when LAPSECOIN_CRASH_REPORTS=0 is set, or when a file named
-crash-reports-off is in the data folder. No window is shown for a crash.
+and a native crash that killed the process. The text is cut to the exception,
+the last start-up steps, the version, the Windows build and the architecture,
+with the account name, folder paths and any LapseCoin address taken out. It is
+filed as an issue, once per kind of crash (a repeat adds a comment), in a
+separate reports repository, with a token baked into the build that can only
+write issues there. A native crash ends the process before it can send anything,
+so a small watcher process started with the program sends it right afterwards.
+Nothing is sent when no token was baked in, when LAPSECOIN_CRASH_REPORTS=0 is
+set, or when a file named crash-reports-off is in the data folder. No window is
+shown for a crash.
 
 Only the Windows installer builds use it (the MSI and the Store package). A
 source checkout, pip, the AppImage and a console run keep printing tracebacks.
@@ -37,8 +40,9 @@ START_LOG = "lapsecoin-start.log"
 
 SENT_MARK = "lapsecoin-crash.sent"      # how much of the crash log was already sent
 OPT_OUT_FILE = "crash-reports-off"
-URL_FILE = "CRASH_URL"                  # written into the build from CRASH_REPORT_URL
-SEND_TIMEOUT = 4
+REPORT_FILE = "CRASH_REPORT"            # {"repo": ..., "token": ...}, written into the build
+API_DEFAULT = "https://api.github.com"
+SEND_TIMEOUT = 5
 MAX_TRACE = 3500
 MAX_STEPS = 1200
 # A LapseCoin address is twelve dot-separated words.
@@ -164,21 +168,25 @@ def _message_box(text, title):
         pass
 
 
-def endpoint():
-    """The relay's address, baked into the build (empty: nothing is sent)."""
-    url = os.environ.get("LAPSECOIN_CRASH_REPORT_URL", "").strip()
-    if url:
-        return url
+def target():
+    """(repo, token, api) for the reports, baked into the build, or None."""
+    repo = os.environ.get("LAPSECOIN_CRASH_REPO", "")
+    token = os.environ.get("LAPSECOIN_CRASH_TOKEN", "")
+    if repo and token:
+        return repo, token, os.environ.get("LAPSECOIN_CRASH_API", API_DEFAULT)
     try:
+        import json
         import resources
-        with open(os.path.join(resources.bundle_dir(), URL_FILE)) as f:
-            return f.read().strip()
-    except OSError:
-        return ""
+        with open(os.path.join(resources.bundle_dir(), REPORT_FILE)) as f:
+            data = json.load(f)
+        repo, token = str(data.get("repo", "")), str(data.get("token", ""))
+    except (OSError, ValueError, AttributeError):
+        return None
+    return (repo, token, API_DEFAULT) if repo and token else None
 
 
 def sending_enabled():
-    if not endpoint() or os.environ.get("LAPSECOIN_CRASH_REPORTS") == "0":
+    if not target() or os.environ.get("LAPSECOIN_CRASH_REPORTS") == "0":
         return False
     return not any(os.path.exists(os.path.join(d, OPT_OUT_FILE)) for d in candidate_dirs())
 
@@ -217,19 +225,66 @@ def build_payload(kind, where, trace, sig):
             "steps": sanitize(_start_log_tail())[-MAX_STEPS:]}
 
 
+FENCE = "`" * 3
+
+
+def _clean(text, limit):
+    """Plain characters only, no folder under C:\\Users, and nothing that can
+    close the code fence an issue shows it in."""
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(text))
+    text = re.sub(r"[A-Za-z]:\\Users\\[^\\\s]+", "%USERPROFILE%", text)
+    return text.replace(FENCE, "'''")[:limit]
+
+
+def _facts(p):
+    return (f"LapseCoin {_clean(p.get('app'), 20)}, {_clean(p.get('kind'), 20)}, {_clean(p.get('where'), 40)}. "
+            f"Windows {_clean(p.get('windows'), 40)} {_clean(p.get('arch'), 12)}, "
+            f"Python {_clean(p.get('python'), 20)}, packaged: {'yes' if p.get('packaged') is True else 'no'}.")
+
+
+def issue_title(p):
+    lines = [x for x in _clean(p.get("trace", ""), MAX_TRACE).strip().split("\n") if x]
+    return re.sub(r"\s+", " ", f"Crash {_clean(p.get('sig'), 10)}: {lines[-1] if lines else 'crash'}")[:120]
+
+
+def issue_body(p):
+    return "\n".join(["Reported automatically by LapseCoin.", "", _facts(p), "", "Traceback:", FENCE,
+                      _clean(p.get("trace", ""), MAX_TRACE), FENCE, "", "Last start-up steps:", FENCE,
+                      _clean(p.get("steps", ""), MAX_STEPS), FENCE])
+
+
 def send(payload):
-    """POSTs the report to the relay. True when it was accepted. Never raises."""
-    url = endpoint()
-    if not url or not sending_enabled():
+    """Files the report as an issue in the reports repository, or adds a comment
+    to the issue of the same crash. True when GitHub accepted it. Never raises."""
+    found = target()
+    if not found or not sending_enabled():
         return False
+    repo, token, api = found
     try:
         import json
+        import urllib.parse
         import urllib.request
-        req = urllib.request.Request(
-            url, data=json.dumps(payload).encode("utf-8"), method="POST",
-            headers={"Content-Type": "application/json", "User-Agent": "LapseCoin-crash/1"})
-        with urllib.request.urlopen(req, timeout=SEND_TIMEOUT) as r:
-            return 200 <= r.status < 300
+
+        def call(method, path, body=None):
+            req = urllib.request.Request(
+                api + path, method=method,
+                data=None if body is None else json.dumps(body).encode("utf-8"),
+                headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                         "Content-Type": "application/json", "User-Agent": "LapseCoin-crash/1"})
+            with urllib.request.urlopen(req, timeout=SEND_TIMEOUT) as r:
+                return r.status, json.loads(r.read() or b"{}")
+
+        sig = _clean(payload.get("sig"), 12)
+        query = f'repo:{repo} is:issue in:title "Crash {sig}"'
+        _, result = call("GET", "/search/issues?q=" + urllib.parse.quote(query) + "&per_page=1")
+        items = result.get("items") or []
+        if items:
+            status, _ = call("POST", f"/repos/{repo}/issues/{items[0]['number']}/comments",
+                             {"body": "Again: " + _facts(payload)})
+        else:
+            status, _ = call("POST", f"/repos/{repo}/issues",
+                             {"title": issue_title(payload), "body": issue_body(payload)})
+        return 200 <= status < 300
     except Exception:
         return False
 
@@ -332,6 +387,71 @@ def enable_faulthandler():
         pass
 
 
+def is_crash_code(code):
+    """True for an exit code that means Windows ended the process for a fault
+    (an access violation, a missing DLL, an illegal instruction and so on),
+    not for one that means it was closed, killed, or exited by itself."""
+    code &= 0xFFFFFFFF
+    return 0xC0000000 <= code <= 0xC0FFFFFF or code in (0x80000003, 0x40000015)
+
+
+def watch(argv):
+    """Runs in the small watcher process: lapsecoin.exe --crash-watch <pid> <dir>.
+    Waits for the program, and when it ended in a fault, sends what the program
+    left behind. A process that crashed cannot send anything itself."""
+    try:
+        at = argv.index("--crash-watch")
+        pid, folder = int(argv[at + 1]), argv[at + 2]
+    except (ValueError, IndexError):
+        return
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.windll.kernel32
+    k32.OpenProcess.restype = wintypes.HANDLE
+    handle = k32.OpenProcess(0x00100000 | 0x1000, False, pid)     # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+    if not handle:
+        return
+    k32.WaitForSingleObject(handle, 0xFFFFFFFF)
+    code = wintypes.DWORD(0)
+    if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or not is_crash_code(code.value):
+        return
+    _state["dir"] = folder
+    _state["installed"] = True
+    hexcode = f"0x{code.value & 0xFFFFFFFF:08X}"
+    try:
+        with open(os.path.join(folder, CRASH_LOG), encoding="utf-8", errors="replace") as f:
+            tail = f.read()[-MAX_TRACE:]
+    except OSError:
+        tail = ""
+    text = f"the program ended with exit code {hexcode}\n{tail}"
+    write_report(text)
+    if send(build_payload("native-crash", f"exit {hexcode}", text, "x" + hexcode[2:].lower() + _short_hash(tail))):
+        _mark_sent()
+
+
+def start_watcher():
+    """Starts the watcher beside the program. Never fails the program."""
+    if not (_state["dir"] and sending_enabled()):
+        return
+    try:
+        import subprocess
+        import resources
+        exe = os.path.join(resources.bundle_dir(), "lapsecoin.exe")
+        if not os.path.isfile(exe):
+            return
+        base = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        for flags in (base | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0), base):
+            try:
+                subprocess.Popen([exe, "--crash-watch", str(os.getpid()), _state["dir"]],
+                                 creationflags=flags, close_fds=True, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+
 def install():
     """Called first thing by main.py. Does nothing outside an installed
     Windows build."""
@@ -353,6 +473,7 @@ def install():
     # What an earlier run left behind goes out in the background, so start-up
     # does not wait for the network.
     threading.Thread(target=send_pending, name="crash-pending", daemon=True).start()
+    start_watcher()
     if "--crash-test" in sys.argv:
         # Proves the whole path in a real package: the CI test starts the
         # program with this flag and looks for the report it must leave.

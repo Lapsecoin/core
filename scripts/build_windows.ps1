@@ -54,11 +54,15 @@ $env:PYTHONPATH = "src"
 $storeUrl = if ($env:MSIX_STORE_ID) { "https://apps.microsoft.com/detail/" + $env:MSIX_STORE_ID.Trim().ToLower() } else { "" }
 Set-Content -Path STORE_URL -Value $storeUrl -NoNewline -Encoding ascii
 
-# Where a critical crash report is sent (src/crashlog.py): the address of the
-# crash relay in tools/crash-relay, from the CRASH_REPORT_URL repo variable.
-# Empty without it, and then nothing is sent.
-$crashUrl = if ($env:CRASH_REPORT_URL) { $env:CRASH_REPORT_URL.Trim() } else { "" }
-Set-Content -Path CRASH_URL -Value $crashUrl -NoNewline -Encoding ascii
+# Where a critical crash report is filed (src/crashlog.py): the reports repository
+# and a fine-grained token that can only write issues in that one repository, from
+# the CRASH_REPORT_REPO variable and the CRASH_REPORT_TOKEN secret. The token ends
+# up readable inside the program, so it must never be able to do more than that.
+# Without both, nothing is sent.
+$crashRepo = if ($env:CRASH_REPORT_REPO) { $env:CRASH_REPORT_REPO.Trim() } else { "" }
+$crashToken = if ($env:CRASH_REPORT_TOKEN) { $env:CRASH_REPORT_TOKEN.Trim() } else { "" }
+$crashReport = if ($crashRepo -and $crashToken) { @{ repo = $crashRepo; token = $crashToken } | ConvertTo-Json -Compress } else { "" }
+Set-Content -Path CRASH_REPORT -Value $crashReport -NoNewline -Encoding ascii
 
 Remove-Item build-nuitka, dist\lapsecoin-win -Recurse -Force -ErrorAction SilentlyContinue
 python -m nuitka --mode=standalone @common @identity `
@@ -68,7 +72,7 @@ python -m nuitka --mode=standalone @common @identity `
     --output-dir=build-nuitka --output-filename=lapsecoin `
     --include-data-files=VERSION=VERSION `
     --include-data-files=STORE_URL=STORE_URL `
-    --include-data-files=CRASH_URL=CRASH_URL `
+    --include-data-files=CRASH_REPORT=CRASH_REPORT `
     --include-data-files=src/bip39_english.txt=bip39_english.txt `
     --include-data-files=docs/whitepaper.md=docs/whitepaper.md `
     --include-data-files=lapsecoin.svg=lapsecoin.svg `
