@@ -196,6 +196,7 @@ class TestSending:
             assert path == "/repos/Lapsecoin/crash-reports/issues" and auth == "Bearer test-token"
             assert body["title"].startswith("Crash ") and "PermissionError: cannot open lapsecoin.log" in body["title"]
             assert "PermissionError" in body["body"] and "packaged:" in body["body"]
+            assert body["labels"] == ["crash-report"]
             assert (reporting / crashlog.SENT_MARK).exists()
 
     def test_the_same_crash_again_adds_a_comment_not_an_issue(self, reporting, monkeypatch):

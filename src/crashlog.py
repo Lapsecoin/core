@@ -15,9 +15,9 @@ crash is sent: an exception that ends the program, at start-up or while it runs,
 and a native crash that killed the process. The text is cut to the exception,
 the last start-up steps, the version, the Windows build and the architecture,
 with the account name, folder paths and any LapseCoin address taken out. It is
-filed as an issue, once per kind of crash (a repeat adds a comment), in a
-separate reports repository, with a token baked into the build that can only
-write issues there. A native crash ends the process before it can send anything,
+filed as an issue labelled crash-report, once per kind of crash (a repeat adds a
+comment), in the repository named at build time (CRASH_REPORT_REPO), with a token
+baked into the build that can only write issues there. A native crash ends the process before it can send anything,
 so a small watcher process started with the program sends it right afterwards.
 Nothing is sent when no token was baked in, when LAPSECOIN_CRASH_REPORTS=0 is
 set, or when a file named crash-reports-off is in the data folder. No window is
@@ -283,7 +283,8 @@ def send(payload):
                              {"body": "Again: " + _facts(payload)})
         else:
             status, _ = call("POST", f"/repos/{repo}/issues",
-                             {"title": issue_title(payload), "body": issue_body(payload)})
+                             {"title": issue_title(payload), "body": issue_body(payload),
+                              "labels": ["crash-report"]})
         return 200 <= status < 300
     except Exception:
         return False
