@@ -120,7 +120,7 @@ jobs:
           if (Test-Path (Join-Path $legacy $wallet)) { $failures += "the wallet is still in $legacy, so it was copied or the move was undone" }
 
           # A failure while the program is loading must leave a report.
-          $cmd2 = "/c cd /d `\"$($pkg.InstallLocation)`\" && set LAPSECOIN_CRASHLOG=1&& set LAPSECOIN_NO_DIALOGS=1&& lapsecoin.exe probe_crash.py --crash-test"
+          $cmd2 = "/c cd /d `"$($pkg.InstallLocation)`" && set LAPSECOIN_CRASHLOG=1&& set LAPSECOIN_NO_DIALOGS=1&& lapsecoin.exe probe_crash.py --crash-test"
           Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $cmd2
           $report = Join-Path $data "lapsecoin-crash.log"
           for ($i = 0; $i -lt 30 -and -not ((Test-Path $report) -and (Select-String -Path $report -Pattern 'crash test requested' -Quiet)); $i++) { Start-Sleep 1 }
