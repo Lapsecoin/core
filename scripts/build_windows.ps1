@@ -56,7 +56,7 @@ Set-Content -Path STORE_URL -Value $storeUrl -NoNewline -Encoding ascii
 
 # Where a critical crash report is filed (src/crashlog.py): the repository (for
 # example Lapsecoin/core) and a fine-grained token that can only write issues in it, from
-# the CRASH_REPORT_REPO variable and the CRASH_REPORT_TOKEN secret. The token ends
+# the repository the build runs in (github.repository) and the CRASH_REPORT_TOKEN secret. The token ends
 # up readable inside the program, so it must never be able to do more than that.
 # Without both, nothing is sent.
 $crashRepo = if ($env:CRASH_REPORT_REPO) { $env:CRASH_REPORT_REPO.Trim() } else { "" }
