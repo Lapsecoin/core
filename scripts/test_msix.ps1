@@ -96,6 +96,23 @@ if (-not $alive) {
 Stop-Node
 Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 
+# A crash must leave a report and a visible message, even before the program
+# has a log file (src/crashlog.py). --crash-test makes it fail on purpose right
+# at the start, the way a failure while the program is loading would.
+$crashCmd = "/c cd /d `"$($pkg.InstallLocation)`" && lapsecoin.exe --crash-test"
+Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $crashCmd
+Start-Sleep 20
+$box = @(Get-Process lapsecoin -ErrorAction SilentlyContinue)
+$report = Join-Path $data "lapsecoin-crash.log"
+if (-not (Test-Path $report) -or -not (Select-String -Path $report -Pattern 'crash test requested' -Quiet)) {
+    $failures += "a crash left no report in $data"
+}
+if (-not (Test-Path (Join-Path $data "lapsecoin-start.log"))) { $failures += "a crash left no start log in $data" }
+if ($box) { Write-Host ("crash message on screen: '" + ($box | Select-Object -First 1).MainWindowTitle + "'") }
+else { Write-Host "no crash message window was found (the report file is what is checked)" }
+Stop-Node
+Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+
 # cmd starts the node so the output can be kept; the node inherits the package.
 $node = "/c cd /d `"$($pkg.InstallLocation)`" && set LAPSECOIN_PASSPHRASE=ci-test-passphrase-123&& lapsecoin.exe --no-gui > `"$work\node.log`" 2>&1"
 Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $node

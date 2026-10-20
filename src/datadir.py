@@ -179,6 +179,15 @@ def migrate(src, dst):
     return copied
 
 
+def _tell(text):
+    """A message for the person, and a line in the start-up trace."""
+    try:
+        import crashlog
+        crashlog.notify(text)
+    except Exception:
+        pass
+
+
 def move_data(src, dst):
     """Moves everything in src into dst, all or nothing. Nothing in dst is
     overwritten. If any entry cannot be moved (a file held open by a node that
@@ -277,6 +286,13 @@ def prepare(environ=None, home=None, ask=None, ask_move=None):
         if kind == migrate_ui.MOVE and move_data(old, dst):
             log.info("[datadir] moved the data from %s to %s", old, dst)
         else:
+            if kind == migrate_ui.MOVE:
+                # The move was undone, so say so: this runs before the log file
+                # exists, and a silent fallback looked like a move that worked.
+                _tell(f"LapseCoin could not move your data to\n{dst}\n\nA file is probably "
+                      "in use, most likely by another copy of LapseCoin that is still "
+                      "running (check the system tray). Close it and start LapseCoin "
+                      "again. Nothing was changed; for now it keeps using\n" + old)
             # Not now, or the move did not work: run from where the data is.
             os.chdir(old)
             return old

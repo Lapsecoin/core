@@ -11,6 +11,8 @@ name: Check the packaged data folder logic on Windows
 #     across (a move, so the old folder is gone afterwards), which Windows could
 #     in principle forbid a packaged app from doing to files outside the package
 #   - the moved wallet survives an uninstall of the package
+#   - a failure leaves lapsecoin-crash.log and lapsecoin-start.log in the profile
+#     folder (src/crashlog.py), from a packaged process
 # This does not replace scripts/test_msix.ps1, which tests the real program
 # and runs on every release. It exists so a mistake in the data folder logic
 # shows up here in a minute instead of blocking a release.
@@ -21,6 +23,7 @@ on:
     branches: [main]
     paths:
       - src/datadir.py
+      - src/crashlog.py
       - scripts/build_msix.ps1
       - scripts/AppxManifest.template.xml
       - .github/workflows/msix-probe.yml
@@ -63,6 +66,12 @@ jobs:
           print("cwd:", os.getcwd(), flush=True)
           print("done", flush=True)
           '@ -replace '(?m)^ {10}', '' | Set-Content "$probe\probe.py" -Encoding ascii
+          @'
+          import os, sys
+          sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+          import crashlog
+          crashlog.install()   # with --crash-test this raises, and the hook must leave a report
+          '@ -replace '(?m)^ {10}', '' | Set-Content "$probe\probe_crash.py" -Encoding ascii
           Remove-Item "$probe\*.pyc" -ErrorAction SilentlyContinue
 
           # The certificate must carry the manifest's publisher, and Windows
@@ -109,6 +118,15 @@ jobs:
           if (-not (Test-Path (Join-Path $data $wallet))) { $failures += "the wallet was not moved to $data" }
           elseif ((Get-Content (Join-Path $data $wallet) -Raw) -ne "legacy wallet") { $failures += "the moved wallet differs from the original" }
           if (Test-Path (Join-Path $legacy $wallet)) { $failures += "the wallet is still in $legacy, so it was copied or the move was undone" }
+
+          # A failure while the program is loading must leave a report.
+          $cmd2 = "/c cd /d `\"$($pkg.InstallLocation)`\" && set LAPSECOIN_CRASHLOG=1&& set LAPSECOIN_NO_DIALOGS=1&& lapsecoin.exe probe_crash.py --crash-test"
+          Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $cmd2
+          $report = Join-Path $data "lapsecoin-crash.log"
+          for ($i = 0; $i -lt 30 -and -not ((Test-Path $report) -and (Select-String -Path $report -Pattern 'crash test requested' -Quiet)); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path $report) -or -not (Select-String -Path $report -Pattern 'crash test requested' -Quiet)) { $failures += "a crash left no report in $data" }
+          if (-not (Test-Path (Join-Path $data "lapsecoin-start.log"))) { $failures += "a crash left no start log in $data" }
+          if (Test-Path $report) { Get-Content $report -Tail 12 | Write-Host }
 
           Remove-AppxPackage -Package $pkg.PackageFullName
           Start-Sleep 5

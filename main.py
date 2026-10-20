@@ -11,10 +11,16 @@ if "--uninstall-notice" in _sys.argv[1:]:
     _uninstall_notice.run()
     _sys.exit(0)
 
+# Leaves a trace for any way the program dies from here on, including before
+# the log file exists (see crashlog.py). It has to come before anything that can fail.
+import crashlog as _crashlog
+_crashlog.install()
+
 # An installed Windows build keeps its data under %USERPROFILE%\LapseCoin, not beside
 # the program. This has to run before anything opens a relative path.
 import datadir as _datadir
 _datadir.prepare()
+_crashlog.breadcrumb(f"data folder ready: {_os.getcwd()}")
 
 import resources as _resources
 if _resources.is_frozen():
@@ -210,6 +216,8 @@ class _WerkzeugFilter(logging.Filter):
 logging.getLogger("werkzeug").addFilter(_WerkzeugFilter())
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 log = logging.getLogger("ec.main")
+_crashlog.enable_faulthandler()      # loading liboqs switched Python's handler off
+_crashlog.breadcrumb("modules loaded, log file open")
 
 
 def _how(flag, env=None):
@@ -866,6 +874,7 @@ def _show_fatal_error(exc):
         logging.getLogger("ec.main").error("[fatal] unhandled exception:\n%s", tb)
     except Exception:
         pass
+    _crashlog.write_report("fatal exception in main():\n" + tb)
 
     message = f"LapseCoin failed to start.\n\n{exc}\n\nFull details in {LOG_FILE}."
     try:
@@ -893,11 +902,16 @@ def _show_fatal_error(exc):
 
 
 if __name__ == "__main__":
+    _crashlog.breadcrumb("starting main()")
     try:
         main()
     except KeyboardInterrupt:
         pass
-    except SystemExit:
+    except SystemExit as e:
+        # A message passed to sys.exit() goes to a console that a windowed
+        # build does not have, so it is shown instead.
+        if isinstance(e.code, str):
+            _crashlog.notify(e.code)
         raise
     except Exception as e:
         _show_fatal_error(e)
