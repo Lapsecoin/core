@@ -392,7 +392,7 @@ jobs:
         shell: pwsh
         env:
           MSIX_STORE_ID: ${{ vars.MSIX_STORE_ID }}
-          CRASH_REPORT_REPO: ${{ vars.CRASH_REPORT_REPO }}
+          CRASH_REPORT_REPO: ${{ github.repository }}
           CRASH_REPORT_TOKEN: ${{ secrets.CRASH_REPORT_TOKEN }}
         run: |
           $env:NUITKA_CACHE_DIR = "$PWD\nuitka-cache"
