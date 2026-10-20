@@ -85,6 +85,44 @@ jobs:
         run: |
           .\scripts\test_msix.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" -Msix lapsecoin.msix
 
+      # The package above is unsigned (the Store signs it), so it cannot be
+      # installed on a normal PC. This keeps the copy the test signed with its
+      # throwaway certificate, plus the public certificate, so the exact package
+      # can be tried on a real Windows 11 machine: import the .cer into Local
+      # Machine > Trusted People (as administrator), then open the .msix.
+      - name: Keep a test-signed copy for a real PC
+        if: always()
+        run: |
+          New-Item testpkg -ItemType Directory -Force | Out-Null
+          Copy-Item msix-test\v1.msix testpkg\lapsecoin-test-signed.msix -ErrorAction SilentlyContinue
+          Copy-Item msix-test\test.cer testpkg\lapsecoin-test.cer -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: lapsecoin-msix-test-signed
+          path: testpkg/*
+          if-no-files-found: warn
+
+      # Microsoft's own certification test tool. It is not the Store's full
+      # certification, and it may not run on every runner image, so it never
+      # fails the job; it prints what it found.
+      - name: Run the Windows App Certification Kit
+        if: always()
+        continue-on-error: true
+        run: |
+          $kit = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\App Certification Kit\appcert.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $kit) { Write-Host "The App Certification Kit is not installed on this runner"; exit 0 }
+          & $kit.FullName reset | Out-Null
+          & $kit.FullName test -appxpackagepath "$PWD\msix-test\v1.msix" -reportoutputpath "$PWD\wack.xml"
+          if (Test-Path wack.xml) {
+            [xml]$r = Get-Content wack.xml
+            Write-Host "overall: $($r.REPORT.OVERALL_RESULT)"
+            foreach ($t in $r.SelectNodes("//TEST")) {
+              Write-Host ("{0,-8} {1}" -f $t.RESULT.InnerText, $t.NAME)
+            }
+          } else { Write-Host "no report was written" }
+
       - uses: actions/upload-artifact@v6
         with:
           name: lapsecoin-msix
