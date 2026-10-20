@@ -34,8 +34,13 @@ if ($Publisher -notmatch '^CN=') { throw "The publisher should look like CN=...,
 # The Store wants a fourth number of 0.
 $msixVersion = "$Version.0"
 
-$makeappx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe" |
-    Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+# The runner's own architecture first, so an x64 runner never gets an ARM64 tool.
+$archs = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64', 'x64' } else { 'x64' }
+$makeappx = foreach ($a in $archs) {
+    Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\$a\makeappx.exe" -ErrorAction SilentlyContinue |
+        Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+}
+$makeappx = $makeappx | Select-Object -First 1
 if (-not $makeappx) { throw "makeappx.exe not found, the Windows SDK is missing" }
 
 $work = Join-Path $PWD "msix-work"

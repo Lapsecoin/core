@@ -41,8 +41,13 @@ Export-Certificate -Cert $cert -FilePath "$work\test.cer" | Out-Null
 Import-Certificate -FilePath "$work\test.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowAllTrustedApps /t REG_DWORD /d 1 /f | Out-Null
 
-$signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
-    Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+# The runner's own architecture first, so an x64 runner never gets an ARM64 tool.
+$archs = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64', 'x64' } else { 'x64' }
+$signtool = foreach ($a in $archs) {
+    Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\$a\signtool.exe" -ErrorAction SilentlyContinue |
+        Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+}
+$signtool = $signtool | Select-Object -First 1
 function Sign($file) {
     & $signtool.FullName sign /fd SHA256 /f "$work\test.pfx" /p $plain $file | Out-Null
     if ($LASTEXITCODE) { throw "signing $file failed" }

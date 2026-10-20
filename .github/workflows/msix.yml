@@ -20,10 +20,15 @@ on:
         description: "Release to repackage, like 1.1.4 (default: the latest release)"
         type: string
         required: false
+      runner:
+        description: "Runner to build and test on. windows-11-arm runs the x64 package under emulation, as on an ARM laptop"
+        type: choice
+        options: [windows-latest, windows-11-arm]
+        default: windows-latest
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ${{ inputs.runner || 'windows-latest' }}
     timeout-minutes: 15
     permissions:
       contents: read
