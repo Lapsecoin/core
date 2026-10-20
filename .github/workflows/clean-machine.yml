@@ -1,0 +1,63 @@
+name: Check the program on a clean Windows
+
+# The Store's testers run the app on a clean Windows 11 machine. A CI runner is
+# not clean: it has Visual Studio, and with it the Visual C++ runtime, so a
+# bundled native library that needs a runtime DLL the program folder does not
+# ship works here and crashes there. This takes the program files of a release
+# and checks them two ways, without releasing anything:
+#   1. scripts/check_pe_imports.py lists the DLLs that every bundled binary
+#      imports and the folder does not carry.
+#   2. the program is started inside a Windows Server Core container, which has
+#      no Visual C++ redistributable, and must run -h and the node without
+#      the window.
+# Run it from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to check, like 1.1.5 (default: the latest release)"
+        type: string
+        required: false
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get the program files of the release
+        run: |
+          $v = ("${{ inputs.version }}".Trim()) -replace '^v', ''
+          if ($v) { $tag = "v$v" } else { $tag = (gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName) }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Not a release tag: '$tag'" }
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern lapsecoin.msi
+          if ($LASTEXITCODE) { throw "$tag has no lapsecoin.msi" }
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "install exited $($p.ExitCode)" }
+          Copy-Item (Join-Path $env:LOCALAPPDATA 'Programs\LapseCoin') app -Recurse
+          Remove-Item app\installed-by-msi
+          Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait
+
+      - name: List the runtime DLLs the folder is missing
+        run: |
+          python -m pip install -q pefile
+          python scripts/check_pe_imports.py app
+
+      - name: Run it in a clean Windows container
+        run: |
+          docker version --format '{{.Server.Os}} {{.Server.Version}}'
+          docker pull mcr.microsoft.com/windows/servercore:ltsc2025
+          if ($LASTEXITCODE) { throw "could not pull the Server Core image" }
+          # System32 of this image has no Visual C++ runtime. Show that, then run.
+          docker run --rm --isolation=process mcr.microsoft.com/windows/servercore:ltsc2025 cmd /c "dir C:\Windows\System32\vcruntime140.dll 2>&1 & echo ---"
+          docker run --rm --isolation=process -v "${PWD}\app:C:\app" mcr.microsoft.com/windows/servercore:ltsc2025 powershell -NoProfile -Command "$p = Start-Process C:\app\lapsecoin.exe -ArgumentList '-h' -Wait -PassThru; 'exit code: ' + $p.ExitCode; if ($p.ExitCode -ne 0) { 'hex: ' + ('{0:X8}' -f $p.ExitCode); exit 1 }"
+          if ($LASTEXITCODE) { throw "the program did not start in a clean Windows (C0000135 means a DLL is missing)" }
