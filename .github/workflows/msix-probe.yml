@@ -145,7 +145,12 @@ jobs:
       - name: Check the launcher
         run: |
           $failures = @()
-          .\scripts\build_launcher.ps1 -OutDir launcher-out
+          # With an icon too, as the release build has one (a lone icon argument once broke it).
+          Add-Type -AssemblyName System.Drawing
+          $bmp = New-Object System.Drawing.Bitmap 32, 32
+          $ico = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+          $fs = [System.IO.File]::Create("probe.ico"); $ico.Save($fs); $fs.Close()
+          .\scripts\build_launcher.ps1 -OutDir launcher-out -Icon probe.ico
           $csc = Join-Path $env:windir "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           New-Item child -ItemType Directory | Out-Null
           $kids = @{

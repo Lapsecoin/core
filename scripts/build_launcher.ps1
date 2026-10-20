@@ -19,8 +19,8 @@ $source = Join-Path $PSScriptRoot "..\launcher\Launch.cs"
 $out = Join-Path $OutDir "lapsecoin-launch.exe"
 New-Item $OutDir -ItemType Directory -Force | Out-Null
 
-$icon = if (Test-Path $Icon) { @("/win32icon:$Icon") } else { @() }
-& $csc /nologo /target:winexe /platform:x64 /optimize+ /warnaserror+ "/out:$out" @icon `
+[string[]]$iconArgs = if (Test-Path $Icon) { "/win32icon:$Icon" } else { @() }
+& $csc /nologo /target:winexe /platform:x64 /optimize+ /warnaserror+ "/out:$out" @iconArgs `
     /reference:System.dll /reference:System.Core.dll $source
 if ($LASTEXITCODE) { throw "csc failed" }
 Write-Host "Built $out ($((Get-Item $out).Length) bytes)"
