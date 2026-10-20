@@ -1711,7 +1711,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
         # segment or otherwise change what that URL points to, but there's
         # no reason to accept anything else here regardless -- the browser
         # only ever sends back the value update_checker itself reported.
-        if len(target_version) > 32 or not re.fullmatch(r"\d+\.\d+\.\d+", target_version):
+        if not re.fullmatch(r"[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}", target_version):
             return jsonify(ok=False, error="invalid target_version"), 400
         if not updater.start(target_version):
             return jsonify(ok=False, error="An update is already running."), 409
