@@ -27,7 +27,7 @@
   </Dependencies>
 
   <Applications>
-    <Application Id="LapseCoin" Executable="lapsecoin.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="LapseCoin" Executable="{{EXECUTABLE}}" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="{{DISPLAY_NAME}}"
         Description="LapseCoin wallet and node"

@@ -80,7 +80,9 @@ Write-Host "installed $($pkg.PackageFullName)"
 # never loads them, so a crash at launch would not show there. The app is
 # started from the package folder and must still be running 30 seconds later.
 $launchedAt = Get-Date
-$logon = "/c cd /d `"$($pkg.InstallLocation)`" && lapsecoin.exe > `"$work\launch.log`" 2>&1"
+$entry = if (Test-Path (Join-Path $pkg.InstallLocation "lapsecoin-launch.exe")) { "lapsecoin-launch.exe" } else { "lapsecoin.exe" }
+Write-Host "starting $entry, the package's entry point"
+$logon = "/c cd /d `"$($pkg.InstallLocation)`" && $entry > `"$work\launch.log`" 2>&1"
 Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $logon
 Start-Sleep 30
 $alive = @(Get-Process lapsecoin -ErrorAction SilentlyContinue)
@@ -100,7 +102,7 @@ Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 # has a log file (src/crashlog.py). --crash-test makes it fail on purpose right
 # at the start, the way a failure while the program is loading would. No
 # window is shown for a crash; the report file is what is checked.
-$crashCmd = "/c cd /d `"$($pkg.InstallLocation)`" && lapsecoin.exe --crash-test"
+$crashCmd = "/c cd /d `"$($pkg.InstallLocation)`" && $entry --crash-test"
 Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $crashCmd
 Start-Sleep 20
 $box = @(Get-Process lapsecoin -ErrorAction SilentlyContinue)

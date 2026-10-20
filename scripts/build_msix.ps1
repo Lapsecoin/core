@@ -47,10 +47,16 @@ $work = Join-Path $PWD "msix-work"
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item $Source $work -Recurse
 
+# The launcher reports a crash that happens before the program's own code runs. An
+# older release's folder has none, and then the program itself is started.
+$executable = if (Test-Path (Join-Path $Source "lapsecoin-launch.exe")) { "lapsecoin-launch.exe" } else { "lapsecoin.exe" }
+Write-Host "The package starts $executable"
+
 function Esc($s) { [System.Security.SecurityElement]::Escape($s) }
 $manifest = Get-Content (Join-Path $PSScriptRoot "AppxManifest.template.xml") -Raw
 $manifest = $manifest.Replace("{{NAME}}", (Esc $Name)).Replace("{{PUBLISHER}}", (Esc $Publisher)).
     Replace("{{PUBLISHER_DISPLAY_NAME}}", (Esc $PublisherDisplayName)).Replace("{{VERSION}}", $msixVersion).
+    Replace("{{EXECUTABLE}}", $executable).
     Replace("{{DISPLAY_NAME}}", (Esc $DisplayName))
 [System.IO.File]::WriteAllText((Join-Path $work "AppxManifest.xml"), $manifest, (New-Object System.Text.UTF8Encoding($false)))
 

@@ -13,6 +13,8 @@ name: Check the packaged data folder logic on Windows
 #   - the moved wallet survives an uninstall of the package
 #   - a failure leaves lapsecoin-crash.log and lapsecoin-start.log in the profile
 #     folder (src/crashlog.py), from a packaged process
+#   - the launcher (launcher/Launch.cs) reports a fault exit code or a refusal to
+#     start, and nothing else, with the person's name, folders and addresses removed
 # This does not replace scripts/test_msix.ps1, which tests the real program
 # and runs on every release. It exists so a mistake in the data folder logic
 # shows up here in a minute instead of blocking a release.
@@ -24,6 +26,8 @@ on:
     paths:
       - src/datadir.py
       - src/crashlog.py
+      - launcher/**
+      - scripts/build_launcher.ps1
       - scripts/build_msix.ps1
       - scripts/AppxManifest.template.xml
       - .github/workflows/msix-probe.yml
@@ -134,3 +138,64 @@ jobs:
 
           if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
           Write-Host "packaged: the data folder is $data, the MSI wallet was moved across and it survived the uninstall"
+
+      # The launcher starts the program and reports a crash that happens before the
+      # program's own code can. Each case below runs it against a tiny test program
+      # and reads what it would have sent (LAPSECOIN_CRASH_DRYRUN writes it to a file).
+      - name: Check the launcher
+        run: |
+          $failures = @()
+          .\scripts\build_launcher.ps1 -OutDir launcher-out
+          $csc = Join-Path $env:windir "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          New-Item child -ItemType Directory | Out-Null
+          $kids = @{
+            fault = 'class P { static int Main() { return unchecked((int)0xC0000135); } }'
+            ok    = 'class P { static int Main() { return 0; } }'
+            one   = 'class P { static int Main() { return 1; } }'
+            args  = 'class P { static int Main(string[] a) { return a.Length * 10 + (a.Length > 0 && a[0] == "two words" ? 1 : 0); } }'
+          }
+          foreach ($k in $kids.Keys) {
+            Set-Content "child\$k.cs" $kids[$k]
+            & $csc /nologo "/out:child\$k.exe" "child\$k.cs"
+            if ($LASTEXITCODE) { throw "could not compile the $k test program" }
+          }
+          # the program's own start log, with a folder of this account and an address in it
+          $logs = Join-Path $env:USERPROFILE "LapseCoin"
+          New-Item $logs -ItemType Directory -Force | Out-Null
+          Set-Content (Join-Path $logs "lapsecoin-start.log") ("start data folder ready: $env:USERPROFILE\LapseCoin`n" + "bid.catch.flower.smart.eyebrow.polar.staff.view.diesel.pioneer.horn.couple")
+
+          function Launch($child, $arguments = @(), $optOut = $false) {
+            $report = Join-Path $PWD "report.txt"
+            Remove-Item $report -ErrorAction SilentlyContinue
+            $env:LAPSECOIN_LAUNCHER_CHILD = $child
+            $env:LAPSECOIN_CRASH_DRYRUN = $report
+            if ($optOut) { $env:LAPSECOIN_CRASH_REPORTS = "0" } else { Remove-Item env:LAPSECOIN_CRASH_REPORTS -ErrorAction SilentlyContinue }
+            $p = Start-Process "launcher-out\lapsecoin-launch.exe" -ArgumentList $arguments -Wait -PassThru
+            [pscustomobject]@{ Code = $p.ExitCode; Report = $(if (Test-Path $report) { Get-Content $report -Raw } else { $null }) }
+          }
+
+          $r = Launch (Join-Path $PWD "child\fault.exe")
+          if ($r.Code -ne -1073741515) { $failures += "the launcher did not pass on the exit code (got $($r.Code))" }
+          if (-not $r.Report) { $failures += "a fault exit code was not reported" }
+          else {
+            Write-Host $r.Report
+            if ($r.Report -notmatch "0xC0000135") { $failures += "the report does not name the exit code" }
+            if ($r.Report -notmatch "Crash Lc0000135") { $failures += "the report has no signature in its title" }
+            foreach ($secret in $env:USERNAME, $env:USERPROFILE, "bid.catch") {
+              if ($r.Report -match [regex]::Escape($secret)) { $failures += "the report still holds '$secret'" }
+            }
+          }
+          foreach ($quiet in "ok", "one") {
+            $r = Launch (Join-Path $PWD "child\$quiet.exe")
+            if ($r.Report) { $failures += "a normal exit ($quiet) was reported" }
+          }
+          $r = Launch (Join-Path $PWD "child\nowhere.exe")
+          if (-not $r.Report -or $r.Report -notmatch "would not start" -or $r.Report -notmatch "Lstart2") { $failures += "a program Windows would not start was not reported" }
+          $r = Launch (Join-Path $PWD "child\fault.exe") @() $true
+          if ($r.Report) { $failures += "a report was made although reporting was switched off" }
+          $r = Launch (Join-Path $PWD "child\args.exe") @('"two words"', 'x')
+          if ($r.Code -ne 21) { $failures += "the launcher mangled the arguments (exit code $($r.Code), wanted 21)" }
+          Remove-Item $logs -Recurse -Force -ErrorAction SilentlyContinue
+
+          if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
+          Write-Host "the launcher reports a fault and a refusal to start, and nothing else, without names, folders or addresses"

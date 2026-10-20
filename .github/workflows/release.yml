@@ -399,6 +399,14 @@ jobs:
           $v = (Get-Content VERSION).Trim()
           .\scripts\build_windows.ps1 -Version $v
 
+      # What the shortcuts and the Store package start: it runs the program and
+      # reports a crash that happens before the program's own code can (see
+      # launcher/Launch.cs). It goes into the folder before the installer and the
+      # package are made from it.
+      - name: Build the launcher
+        shell: pwsh
+        run: .\scripts\build_launcher.ps1 -OutDir dist\lapsecoin-win
+
       # Saved even when a later step fails: a build that gets as far as the
       # compiler has already paid for the object files, and a failed run should
       # not throw that away.
