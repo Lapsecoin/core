@@ -103,7 +103,8 @@ class TestWindowsMsiUpdate:
         assert "taskkill /PID" in helper
         assert "msiexec /i" in helper and "/qn" in helper
         assert 'start "" "' + str(exe_path) + '" --no-gui' in helper
-        assert str(tmp_path / "Profile" / "LapseCoin" / "update") in seen["cwd"]
+        import tempfile
+        assert seen["cwd"] == tempfile.gettempdir()      # not the data folder
 
 
     def test_update_stops_before_closing_the_app_when_the_program_is_missing(self, monkeypatch, tmp_path):

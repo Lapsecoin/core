@@ -363,9 +363,12 @@ class UpdateSession:
                         getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
         clean_env = {k: v for k, v in os.environ.items()
                      if not k.upper().startswith(("_MEI", "_PYI", "PYINSTALLER", "TCL", "TK"))}
+        # Every path in the helper is absolute. It must not run from the data
+        # folder: a folder that is some process's working directory cannot be
+        # renamed, and the new version may move the data folder when it starts.
         subprocess.Popen(["cmd.exe", "/D", "/C", helper_path],
                          creationflags=creationflags, close_fds=True,
-                         env=clean_env, cwd=work)
+                         env=clean_env, cwd=tempfile.gettempdir())
         self._set("restarting", "exiting so the installer can finish")
         os._exit(0)
 
