@@ -14,13 +14,23 @@
   LAUNCH=0 stops the installer from starting the app afterwards: the
   updater and the bridge start it themselves.
 -->
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product Id="*" Name="LapseCoin" Language="1033" Version="$(var.Version)"
            Manufacturer="LapseCoin" UpgradeCode="48002B81-4A5D-4026-8DFA-603FE0817AAC">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser"
              Description="LapseCoin node and wallet" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of LapseCoin is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Stops a running LapseCoin before it is upgraded or removed. Without
+         this, removing the program left the node running from memory, holding
+         the lock and the chain database, so the next copy could not start or
+         move the data. A node has no window to close, so after asking
+         politely the process is ended; its database and wallet are written
+         so that this is safe. -->
+    <util:CloseApplication Id="CloseLapseCoin" Target="lapsecoin.exe"
+                           CloseMessage="yes" RebootPrompt="no" TerminateProcess="1" />
 
     <Icon Id="lapsecoin.ico" SourceFile="$(var.Icon)" />
     <Property Id="ARPPRODUCTICON" Value="lapsecoin.ico" />

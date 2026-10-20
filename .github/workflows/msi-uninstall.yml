@@ -1,0 +1,59 @@
+name: Check that uninstalling stops the running app
+
+# Installs the MSI of a release, starts the node from it, uninstalls the MSI
+# silently while it runs, and checks the node was stopped. It runs the check
+# twice on the same program files without releasing anything:
+#   1. on the release's own MSI, as published (the control),
+#   2. on an MSI rebuilt from those files with the current scripts/lapsecoin.wxs
+#      and scripts/build_msi.ps1, which is where a fix would show.
+# Run it from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to check, like 1.1.5 (default: the latest release)"
+        type: string
+        required: false
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download the release's installer and take its program files
+        id: rel
+        run: |
+          $v = ("${{ inputs.version }}".Trim()) -replace '^v', ''
+          if ($v) { $tag = "v$v" } else { $tag = (gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName) }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Not a release tag: '$tag'" }
+          "version=$($Matches[1])" | Out-File $env:GITHUB_OUTPUT -Append
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern lapsecoin.msi
+          if ($LASTEXITCODE) { throw "$tag has no lapsecoin.msi" }
+          $p = Start-Process msiexec -ArgumentList '/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "install exited $($p.ExitCode)" }
+          Copy-Item (Join-Path $env:LOCALAPPDATA 'Programs\LapseCoin') app -Recurse
+          Remove-Item app\installed-by-msi
+          Start-Process msiexec -ArgumentList '/x', "$PWD\lapsecoin.msi", '/qn' -Wait
+
+      - name: The release's own installer (the control)
+        continue-on-error: true
+        run: .\scripts\test_msi_uninstall.ps1 -Msi lapsecoin.msi
+
+      - name: Install the WiX Toolset
+        run: choco install wixtoolset --no-progress -y
+
+      - name: Rebuild the installer from the same files with the current scripts
+        run: .\scripts\build_msi.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" -Out rebuilt.msi
+
+      - name: The rebuilt installer
+        run: .\scripts\test_msi_uninstall.ps1 -Msi rebuilt.msi

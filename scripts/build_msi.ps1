@@ -29,14 +29,14 @@ Set-Content -Path $marker -Value "msi" -NoNewline -Encoding ascii
     -var var.SourceDir -out "$work\AppFiles.wxs"
 if ($LASTEXITCODE) { throw "heat failed" }
 
-& "$bin\candle.exe" -nologo -arch x64 `
+& "$bin\candle.exe" -nologo -arch x64 -ext WixUtilExtension `
     "-dVersion=$msiVersion" "-dSourceDir=$Source" "-dIcon=$Icon" "-dMarker=$marker" `
     -out "$work\" scripts\lapsecoin.wxs "$work\AppFiles.wxs"
 if ($LASTEXITCODE) { throw "candle failed" }
 
 # ICE38/64/91 complain that per-user components lack registry key paths, which
 # is how every harvested file set looks; none of them affects an install.
-& "$bin\light.exe" -nologo -sval -sice:ICE38 -sice:ICE64 -sice:ICE91 `
+& "$bin\light.exe" -nologo -ext WixUtilExtension -sval -sice:ICE38 -sice:ICE64 -sice:ICE91 `
     -out $Out "$work\lapsecoin.wixobj" "$work\AppFiles.wixobj"
 if ($LASTEXITCODE) { throw "light failed" }
 
