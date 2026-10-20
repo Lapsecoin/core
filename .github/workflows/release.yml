@@ -498,6 +498,14 @@ jobs:
           if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
           Write-Host "install, start and uninstall all worked"
 
+      # Removing the program must also stop a node that is running. One left
+      # running holds the data folder's lock and database, which blocks the next
+      # copy from starting and from moving the data (scripts/test_msi_uninstall.ps1).
+      - name: Check that uninstalling stops a running app
+        shell: pwsh
+        timeout-minutes: 10
+        run: .\scripts\test_msi_uninstall.ps1 -Msi lapsecoin.msi
+
       # The Microsoft Store build (see build_msix.ps1 and store.yml). Built
       # only when the Partner Center identity is set as repo variables, so a
       # fork without them still releases the MSI as before.
