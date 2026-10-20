@@ -111,9 +111,8 @@ def reporting(monkeypatch, tmp_path):
     monkeypatch.setattr(crashlog, "_message_box", lambda *a, **k: pytest.fail("a crash must show no window"))
     before = (sys.excepthook, crashlog.threading.excepthook)
     with monkeypatch.context() as m:
-        # the background send of earlier crashes and the watcher are exercised on their own
+        # the background send of earlier crashes is exercised on its own
         m.setattr(crashlog.threading, "Thread", lambda **k: type("T", (), {"start": lambda self: None})())
-        m.setattr(crashlog, "start_watcher", lambda: None)
         crashlog.install()
     yield out
     sys.excepthook, crashlog.threading.excepthook = before
@@ -145,7 +144,6 @@ class TestTheReportFiles:
         monkeypatch.setattr(sys, "argv", ["lapsecoin", "--crash-test"])
         monkeypatch.setenv("LAPSECOIN_CRASHLOG", "1")
         monkeypatch.setattr(crashlog, "candidate_dirs", lambda environ=None: [str(tmp_path / "out")])
-        monkeypatch.setattr(crashlog, "start_watcher", lambda: None)
         before = (sys.excepthook, crashlog.threading.excepthook)
         try:
             with pytest.raises(RuntimeError, match="crash test"):
@@ -254,24 +252,6 @@ class TestSending:
             _use(monkeypatch, gh)
             assert crashlog.send_pending() is False
             assert gh.requests == []
-
-
-class TestTheWatcher:
-    @pytest.mark.parametrize("code", [0xC0000005, 0xC0000135, 0xC000001D, 0xC0000409, -1073741819, 0x80000003])
-    def test_a_fault_exit_code_is_a_crash(self, code):
-        assert crashlog.is_crash_code(code) is True
-
-    @pytest.mark.parametrize("code", [0, 1, 2, 3, 255, 0x40010005, 0xC1000000, 259])
-    def test_a_normal_or_killed_exit_is_not(self, code):
-        assert crashlog.is_crash_code(code) is False
-
-    def test_the_watcher_does_nothing_when_nothing_would_be_sent(self, monkeypatch, tmp_path):
-        monkeypatch.setitem(crashlog._state, "dir", str(tmp_path))
-        started = []
-        import subprocess
-        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: started.append(a))
-        crashlog.start_watcher()                     # no token baked in
-        assert started == []
 
 
 class TestWhatIsSent:

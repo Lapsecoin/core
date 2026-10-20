@@ -17,8 +17,8 @@ the last start-up steps, the version, the Windows build and the architecture,
 with the account name, folder paths and any LapseCoin address taken out. It is
 filed as an issue labelled crash-report, once per kind of crash (a repeat adds a
 comment), in the repository named at build time (CRASH_REPORT_REPO), with a token
-baked into the build that can only write issues there. A native crash ends the process before it can send anything,
-so a small watcher process started with the program sends it right afterwards.
+baked into the build that can only write issues there. A native crash ends the process before it can send anything, so the small
+launcher that starts the program (launcher/Launch.cs) sends it right afterwards.
 Nothing is sent when no token was baked in, when LAPSECOIN_CRASH_REPORTS=0 is
 set, or when a file named crash-reports-off is in the data folder. No window is
 shown for a crash.
@@ -388,71 +388,6 @@ def enable_faulthandler():
         pass
 
 
-def is_crash_code(code):
-    """True for an exit code that means Windows ended the process for a fault
-    (an access violation, a missing DLL, an illegal instruction and so on),
-    not for one that means it was closed, killed, or exited by itself."""
-    code &= 0xFFFFFFFF
-    return 0xC0000000 <= code <= 0xC0FFFFFF or code in (0x80000003, 0x40000015)
-
-
-def watch(argv):
-    """Runs in the small watcher process: lapsecoin.exe --crash-watch <pid> <dir>.
-    Waits for the program, and when it ended in a fault, sends what the program
-    left behind. A process that crashed cannot send anything itself."""
-    try:
-        at = argv.index("--crash-watch")
-        pid, folder = int(argv[at + 1]), argv[at + 2]
-    except (ValueError, IndexError):
-        return
-    import ctypes
-    from ctypes import wintypes
-    k32 = ctypes.windll.kernel32
-    k32.OpenProcess.restype = wintypes.HANDLE
-    handle = k32.OpenProcess(0x00100000 | 0x1000, False, pid)     # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
-    if not handle:
-        return
-    k32.WaitForSingleObject(handle, 0xFFFFFFFF)
-    code = wintypes.DWORD(0)
-    if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or not is_crash_code(code.value):
-        return
-    _state["dir"] = folder
-    _state["installed"] = True
-    hexcode = f"0x{code.value & 0xFFFFFFFF:08X}"
-    try:
-        with open(os.path.join(folder, CRASH_LOG), encoding="utf-8", errors="replace") as f:
-            tail = f.read()[-MAX_TRACE:]
-    except OSError:
-        tail = ""
-    text = f"the program ended with exit code {hexcode}\n{tail}"
-    write_report(text)
-    if send(build_payload("native-crash", f"exit {hexcode}", text, "x" + hexcode[2:].lower() + _short_hash(tail))):
-        _mark_sent()
-
-
-def start_watcher():
-    """Starts the watcher beside the program. Never fails the program."""
-    if not (_state["dir"] and sending_enabled()):
-        return
-    try:
-        import subprocess
-        import resources
-        exe = os.path.join(resources.bundle_dir(), "lapsecoin.exe")
-        if not os.path.isfile(exe):
-            return
-        base = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        for flags in (base | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0), base):
-            try:
-                subprocess.Popen([exe, "--crash-watch", str(os.getpid()), _state["dir"]],
-                                 creationflags=flags, close_fds=True, stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return
-            except OSError:
-                continue
-    except Exception:
-        pass
-
-
 def install():
     """Called first thing by main.py. Does nothing outside an installed
     Windows build."""
@@ -474,7 +409,6 @@ def install():
     # What an earlier run left behind goes out in the background, so start-up
     # does not wait for the network.
     threading.Thread(target=send_pending, name="crash-pending", daemon=True).start()
-    start_watcher()
     if "--crash-test" in sys.argv:
         # Proves the whole path in a real package: the CI test starts the
         # program with this flag and looks for the report it must leave.

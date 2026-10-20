@@ -346,13 +346,15 @@ class UpdateSession:
         helper_path = os.path.join(tempfile.gettempdir(), f"lapsecoin-update-{pid}.bat")
         msi_log = os.path.join(work, "installer.log")
         launch_args = subprocess.list2cmdline(sys.argv[1:])
+        launcher_path = os.path.join(os.path.dirname(exe_path), "lapsecoin-launch.exe")
         helper_script = (
             "@echo off\r\n"
             f'taskkill /PID {pid} /F >nul 2>&1\r\n'
             "timeout /T 2 /NOBREAK >nul\r\n"
             f'msiexec /i "{msi_path}" /qn /norestart LAUNCH=0 /l*v "{msi_log}"\r\n'
             f'del "{msi_path}" >nul 2>&1\r\n'
-            f'start "" "{exe_path}"{(" " + launch_args) if launch_args else ""}\r\n'
+            f'if exist "{launcher_path}" (start "" "{launcher_path}"{(" " + launch_args) if launch_args else ""}) '
+            f'else (start "" "{exe_path}"{(" " + launch_args) if launch_args else ""})\r\n'
             '(goto) 2>nul & del "%~f0"\r\n'
         )
         with open(helper_path, "w", encoding="ascii") as f:
