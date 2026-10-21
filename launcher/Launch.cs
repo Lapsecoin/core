@@ -30,12 +30,31 @@ namespace LapseCoin
         const int MaxSteps = 1200;
         const int MaxEvents = 1800;
         const int TimeoutMs = 5000;
-        static readonly Regex Address = new Regex(@"\b(?:[a-z]{3,10}\.){11}[a-z]{3,10}\b");
+        const string Octet = @"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)";
+        // The rules below are src/crashlog.py's, and tests/scrub_cases.json is run through both.
+        static readonly Regex Address = new Regex(@"\b(?:[a-z]{3,10}\.){3,}[a-z]{3,10}\b");
+        static readonly Regex KeyText = new Regex(@"\blc1-[A-Za-z0-9_-]{20,}");
+        static readonly Regex SecretValue = new Regex(
+            @"\b(pass(?:word|phrase)?|secret|token|api[_-]?key|private[_-]?key|priv|seed|mnemonic|kek|key)\b" +
+            @"(['""]?\s*[=:]\s*)(?:'[^']*'|""[^""]*""|\S+)", RegexOptions.IgnoreCase);
+        static readonly Regex Bytes = new Regex(@"\bb(['""])(?:\\x[0-9a-fA-F]{2}|[^'""\\]){8,}\1");
+        static readonly Regex Hex = new Regex(@"\b[0-9a-fA-F]{20,}\b");
+        static readonly Regex Token = new Regex(@"\b[A-Za-z0-9+/_=-]{32,}\b");
+        static readonly Regex Words = new Regex(@"\b(?:[a-z]{3,8} ){5,}[a-z]{3,8}\b");
+        static readonly Regex IPv4 = new Regex(@"(?<![\w.])" + Octet + @"(?:\." + Octet + @"){3}(?!\w|\.\d)");
+        static readonly Regex IPv6 = new Regex(
+            @"(?<![\w:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![\w:])" +
+            @"|(?<![\w:])(?:(?:[0-9a-fA-F]{1,4}:){1,7}|:):(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![\w:])");
+        static readonly Regex Email = new Regex(@"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}");
+        static readonly Regex Stamp = new Regex(@"\b(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\b");
+        static readonly Regex Frame = new Regex(@"File ""([^""]+)"", line (\d+|\?\?\?),? in ([\w<>.]+)");
         static readonly string Fence = new string('`', 3);
 
         static int Main(string[] args)
         {
             string dir = AppDomain.CurrentDomain.BaseDirectory;
+            string scrubDir = Environment.GetEnvironmentVariable("LAPSECOIN_SCRUB_TEST");
+            if (!string.IsNullOrEmpty(scrubDir)) return ScrubTest(scrubDir);
             string child = Environment.GetEnvironmentVariable("LAPSECOIN_LAUNCHER_CHILD");
             if (string.IsNullOrEmpty(child)) child = Path.Combine(dir, "lapsecoin.exe");
 
@@ -116,7 +135,8 @@ namespace LapseCoin
             if (events.Length > 0) { trace.AppendLine(); trace.AppendLine("Windows events in the last 3 minutes:"); trace.AppendLine(events); }
 
             string title = Clean("Crash " + sig + ": launcher: " + what, 120).Replace("\r", " ").Replace("\n", " ");
-            string body = BuildBody(sig, what, Clean(trace.ToString(), MaxTrace + MaxEvents), Clean(steps, MaxSteps));
+            string[] timed = RelativeTimes(Clean(trace.ToString(), MaxTrace + MaxEvents + 400), Clean(steps, MaxSteps));
+            string body = BuildBody(sig, what, timed[0], timed[1], repo);
 
             if (!string.IsNullOrEmpty(dryRun))
             {
@@ -126,7 +146,7 @@ namespace LapseCoin
             if (Send(repo, token, api, sig, title, body)) MarkSent(logDir, crashLog);
         }
 
-        static string BuildBody(string sig, string what, string trace, string steps)
+        static string BuildBody(string sig, string what, string trace, string steps, string repo)
         {
             StringBuilder b = new StringBuilder();
             b.AppendLine("Reported automatically by the LapseCoin launcher.");
@@ -142,13 +162,97 @@ namespace LapseCoin
             b.AppendLine(Fence);
             b.AppendLine(steps);
             b.AppendLine(Fence);
+            string links = CodeLinks(trace, repo, Version());
+            if (links.Length > 0)
+            {
+                b.AppendLine();
+                b.AppendLine("Code in the trace, at this release:");
+                b.Append(links);
+            }
             return b.ToString();
+        }
+
+        // The program's own files in the trace, linked at the release's tag. The list of them
+        // is the OWN_MODULES file the build puts beside the program.
+        static string CodeLinks(string trace, string repo, string version)
+        {
+            Dictionary<string, string> modules = new Dictionary<string, string>();
+            try
+            {
+                foreach (string line in File.ReadAllLines(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "OWN_MODULES")))
+                {
+                    string path = line.Trim();
+                    if (path.EndsWith(".py")) modules[path.Substring(path.LastIndexOf('/') + 1)] = path;
+                }
+            }
+            catch (Exception) { return ""; }
+            if (modules.Count == 0 || string.IsNullOrEmpty(repo) || !Regex.IsMatch(repo, @"^[\w.-]+/[\w.-]+$")
+                || !Regex.IsMatch(version, @"^[\w.]+$")) return "";
+            StringBuilder b = new StringBuilder();
+            Dictionary<string, bool> seen = new Dictionary<string, bool>();
+            int count = 0;
+            foreach (Match m in Frame.Matches(trace))
+            {
+                string name = m.Groups[1].Value;
+                name = name.Substring(Math.Max(name.LastIndexOf('\\'), name.LastIndexOf('/')) + 1);
+                string number = m.Groups[2].Value, func = m.Groups[3].Value, repoPath;
+                string key = name + "|" + number + "|" + func;
+                if (!modules.TryGetValue(name, out repoPath) || seen.ContainsKey(key)) continue;
+                seen[key] = true;
+                bool numeric = Regex.IsMatch(number, @"^\d+$");
+                b.AppendLine("- [" + Clean(numeric ? name + ":" + number : name, 60) + " in " + Clean(func, 60) + "](https://github.com/" +
+                             repo + "/blob/v" + version + "/" + repoPath + (numeric ? "#L" + number : "") + ")");
+                if (++count == 15) break;
+            }
+            return b.ToString();
+        }
+
+        // Each local date and time becomes the seconds since the earliest one, so a report
+        // shows the order and spacing but not the person's time zone.
+        static DateTime? Moment(Match m)
+        {
+            try
+            {
+                return new DateTime(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value),
+                                    int.Parse(m.Groups[4].Value), int.Parse(m.Groups[5].Value), int.Parse(m.Groups[6].Value));
+            }
+            catch (Exception) { return null; }
+        }
+
+        static string[] RelativeTimes(params string[] texts)
+        {
+            DateTime? first = null;
+            foreach (string text in texts)
+                foreach (Match m in Stamp.Matches(text))
+                {
+                    DateTime? t = Moment(m);
+                    if (t.HasValue && (!first.HasValue || t.Value < first.Value)) first = t;
+                }
+            if (!first.HasValue) return texts;
+            string[] result = new string[texts.Length];
+            for (int i = 0; i < texts.Length; i++)
+            {
+                DateTime start = first.Value;
+                result[i] = Stamp.Replace(texts[i], delegate(Match m)
+                {
+                    DateTime? t = Moment(m);
+                    return t.HasValue ? "+" + (long)(t.Value - start).TotalSeconds + "s" : "<time>";
+                });
+            }
+            return result;
         }
 
         static string Version()
         {
-            try { return Clean(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "VERSION")).Trim(), 20); }
-            catch (Exception) { return "unknown"; }
+            string v = RawVersion();
+            return v.Length == 0 ? "unknown" : Clean(v, 20);
+        }
+
+        // Without Clean, which needs the version itself (the app's own 1.1.6.0 is not an IP address).
+        static string RawVersion()
+        {
+            try { return File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "VERSION")).Trim(); }
+            catch (Exception) { return ""; }
         }
 
         static string WindowsBuild()
@@ -356,18 +460,45 @@ namespace LapseCoin
         public static string Clean(string text, int limit)
         {
             if (text == null) return "";
+            // the longer folders first, or the profile folder would swallow them
+            List<KeyValuePair<string, string>> folders = new List<KeyValuePair<string, string>>();
             foreach (string key in new string[] { "LOCALAPPDATA", "APPDATA", "TEMP", "USERPROFILE" })
             {
                 string value = Environment.GetEnvironmentVariable(key);
-                if (!string.IsNullOrEmpty(value)) text = Replace(text, value, "%" + key + "%");
+                if (!string.IsNullOrEmpty(value)) folders.Add(new KeyValuePair<string, string>(key, value));
             }
-            string user = Environment.GetEnvironmentVariable("USERNAME");
-            if (!string.IsNullOrEmpty(user) && user.Length > 2) text = Replace(text, user, "<user>");
+            folders.Sort(delegate(KeyValuePair<string, string> a, KeyValuePair<string, string> b) { return b.Value.Length.CompareTo(a.Value.Length); });
+            foreach (KeyValuePair<string, string> f in folders) text = Replace(text, f.Value, "%" + f.Key + "%");
+            string[][] names = new string[][] { new string[] { "USERNAME", "<user>" }, new string[] { "COMPUTERNAME", "<computer>" }, new string[] { "USERDOMAIN", "<domain>" } };
+            foreach (string[] n in names)
+            {
+                string value = Environment.GetEnvironmentVariable(n[0]);
+                if (!string.IsNullOrEmpty(value) && value.Length > 2) text = Replace(text, value, n[1]);
+            }
+            text = Regex.Replace(text, "[A-Za-z]:\\\\Users\\\\[^\\\\\\s]+", "%USERPROFILE%");
+            text = KeyText.Replace(text, "<key>");
+            text = Bytes.Replace(text, "b'<bytes>'");
+            text = SecretValue.Replace(text, delegate(Match m) { return m.Groups[1].Value + m.Groups[2].Value + "<removed>"; });
+            text = Hex.Replace(text, "<hex>");
+            text = Token.Replace(text, "<token>");
+            text = Words.Replace(text, "<words>");
+            string version = RawVersion();
+            string own = version.Length > 0 ? version + ".0" : null;
+            text = IPv4.Replace(text, delegate(Match m) { return m.Value == own ? m.Value : "<ip>"; });
+            text = IPv6.Replace(text, "<ip>");
+            text = Email.Replace(text, "<email>");
             text = Address.Replace(text, "<address>");
             text = Regex.Replace(text, "[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", "");
-            text = Regex.Replace(text, "[A-Za-z]:\\\\Users\\\\[^\\\\\\s]+", "%USERPROFILE%");
             text = text.Replace(Fence, "'''");
             return text.Length > limit ? text.Substring(0, limit) : text;
+        }
+
+        // Test hook: LAPSECOIN_SCRUB_TEST names a folder of *.in files; each gets its *.out.
+        static int ScrubTest(string folder)
+        {
+            foreach (string file in Directory.GetFiles(folder, "*.in"))
+                File.WriteAllText(Path.ChangeExtension(file, ".out"), Clean(File.ReadAllText(file, Encoding.UTF8), int.MaxValue), new UTF8Encoding(false));
+            return 0;
         }
 
         static string Replace(string text, string find, string with)

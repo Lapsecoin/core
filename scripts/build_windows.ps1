@@ -64,6 +64,12 @@ $crashToken = if ($env:CRASH_REPORT_TOKEN) { $env:CRASH_REPORT_TOKEN.Trim() } el
 $crashReport = if ($crashRepo -and $crashToken) { @{ repo = $crashRepo; token = $crashToken } | ConvertTo-Json -Compress } else { "" }
 Set-Content -Path CRASH_REPORT -Value $crashReport -NoNewline -Encoding ascii
 
+# The program's own source files, as paths in the repository. A crash report links the files
+# in its trace to the release's tag (src/crashlog.py, launcher/Launch.cs), and the program's
+# compiled modules look the same as Python's own ones in a trace, so this says which are ours.
+$own = @("main.py") + (Get-ChildItem src -Filter *.py | Sort-Object Name | ForEach-Object { "src/" + $_.Name })
+Set-Content -Path OWN_MODULES -Value ($own -join "`n") -Encoding ascii
+
 Remove-Item build-nuitka, dist\lapsecoin-win -Recurse -Force -ErrorAction SilentlyContinue
 python -m nuitka --mode=standalone @common @identity `
     "--file-description=LapseCoin node and wallet" `
@@ -73,6 +79,7 @@ python -m nuitka --mode=standalone @common @identity `
     --include-data-files=VERSION=VERSION `
     --include-data-files=STORE_URL=STORE_URL `
     --include-data-files=CRASH_REPORT=CRASH_REPORT `
+    --include-data-files=OWN_MODULES=OWN_MODULES `
     --include-data-files=src/bip39_english.txt=bip39_english.txt `
     --include-data-files=docs/whitepaper.md=docs/whitepaper.md `
     --include-data-files=lapsecoin.svg=lapsecoin.svg `
