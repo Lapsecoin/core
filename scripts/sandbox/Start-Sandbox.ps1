@@ -1,8 +1,10 @@
 # Tries the test-signed Store package in Windows Sandbox: a clean, throwaway copy of
 # Windows with no profile, Store login or tools, the nearest thing to a tester's fresh
-# machine. Run it on your own PC (Windows 11 Pro or better). It downloads what it needs
-# (the package, its certificate and sandbox-run.ps1, from the "sandbox-test" prerelease
-# that the "Build the Microsoft Store package by hand" workflow keeps up to date):
+# machine. Run it on your own PC (Windows 11 Pro or better) from the folder that holds
+# these three files, which come from the CI artifact "lapsecoin-msix-test-signed" and
+# scripts/sandbox:
+#
+#   lapsecoin-test-signed.msix   lapsecoin-test.cer   sandbox-run.ps1
 #
 #   .\Start-Sandbox.ps1            (15 minutes; -Minutes 30 for longer)
 #
@@ -15,11 +17,8 @@ param([int] $Minutes = 15)
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
-$base = "https://github.com/Lapsecoin/core/releases/download/sandbox-test"
 foreach ($f in "lapsecoin-test-signed.msix", "lapsecoin-test.cer", "sandbox-run.ps1") {
-    # fresh every time: the package is replaced whenever the workflow runs
-    Write-Host "Downloading $f"
-    Invoke-WebRequest "$base/$f" -OutFile (Join-Path $here $f) -UseBasicParsing
+    if (-not (Test-Path (Join-Path $here $f))) { throw "$f is not in $here" }
 }
 if (-not (Test-Path "$env:windir\System32\WindowsSandbox.exe")) {
     throw ("Windows Sandbox is not installed. As administrator run " +
