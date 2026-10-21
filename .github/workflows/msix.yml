@@ -100,6 +100,8 @@ jobs:
           New-Item testpkg -ItemType Directory -Force | Out-Null
           Copy-Item msix-test\v1.msix testpkg\lapsecoin-test-signed.msix -ErrorAction SilentlyContinue
           Copy-Item msix-test\test.cer testpkg\lapsecoin-test.cer -ErrorAction SilentlyContinue
+          # and the scripts that try it in Windows Sandbox on a PC (scripts/sandbox/Start-Sandbox.ps1)
+          Copy-Item scripts\sandbox\* testpkg\
 
       - uses: actions/upload-artifact@v6
         if: always()
