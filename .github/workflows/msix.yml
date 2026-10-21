@@ -7,9 +7,7 @@ name: Build the Microsoft Store package by hand
 # repackaged, so the result can be uploaded to Partner Center as the first
 # submission. It then installs the package on the runner and checks the wallet
 # survives an upgrade and an uninstall. Nothing is published or sent to the
-# Store here. The test-signed copy and the Sandbox scripts go to the "sandbox-test"
-# prerelease (not a real release: the Pages site and the updater ignore it), where
-# scripts/sandbox/Start-Sandbox.ps1 fetches them.
+# Store here.
 #
 # Run it from the Actions tab. It needs the MSIX_IDENTITY_NAME, MSIX_PUBLISHER,
 # MSIX_PUBLISHER_DISPLAY_NAME and MSIX_DISPLAY_NAME repo variables (see
@@ -37,7 +35,7 @@ jobs:
     runs-on: ${{ inputs.runner || 'windows-latest' }}
     timeout-minutes: 40
     permissions:
-      contents: write     # for the sandbox-test prerelease below
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
       MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
@@ -104,22 +102,6 @@ jobs:
           Copy-Item msix-test\test.cer testpkg\lapsecoin-test.cer -ErrorAction SilentlyContinue
           # and the scripts that try it in Windows Sandbox on a PC (scripts/sandbox/Start-Sandbox.ps1)
           Copy-Item scripts\sandbox\* testpkg\
-
-      # A public place the Sandbox script can download from (an artifact needs a login). One
-      # rolling prerelease, replaced on every run. It carries no lapsecoin.msi and is a
-      # prerelease, so build_pages_site.py skips it, and the updater reads VERSION, not releases.
-      - name: Publish the test copy for the Sandbox script
-        if: success()
-        run: |
-          gh release view sandbox-test --json tagName 2>$null | Out-Null
-          if ($LASTEXITCODE) {
-            gh release create sandbox-test --prerelease --target main `
-              --title "Sandbox test package (not a release)" `
-              --notes "The released app repackaged and signed with a throwaway certificate, to try in Windows Sandbox with scripts/sandbox/Start-Sandbox.ps1. Replaced on every run of the 'Build the Microsoft Store package by hand' workflow. Not for general use."
-            if ($LASTEXITCODE) { throw "could not create the sandbox-test prerelease" }
-          }
-          gh release upload sandbox-test (Get-ChildItem testpkg).FullName --clobber
-          if ($LASTEXITCODE) { throw "could not upload the test package" }
 
       - uses: actions/upload-artifact@v6
         if: always()
