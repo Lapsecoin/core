@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -244,6 +245,27 @@ class TestSending:
             assert crashlog.send_pending() is True
             assert "Segmentation fault" in gh.posts[0][2]["body"]
             assert crashlog.send_pending() is False
+
+    def test_the_start_up_resend_does_not_file_a_crash_that_is_being_sent(self, reporting, monkeypatch):
+        # The resend thread starts with the program, so a crash right at start-up raced it
+        # and was filed twice (once live, once as an earlier run).
+        import threading
+        real_send = crashlog.send
+        resend = []
+
+        def send_while_resending(payload):
+            t = threading.Thread(target=crashlog.send_pending)
+            t.start()
+            resend.append(t)
+            time.sleep(0.3)                  # the resend gets its chance to read the log
+            return real_send(payload)
+
+        with _FakeGitHub() as gh:
+            _use(monkeypatch, gh)
+            monkeypatch.setattr(crashlog, "send", send_while_resending)
+            crashlog.report_fatal(*_raise())
+            resend[0].join(10)
+            assert len(gh.posts) == 1
 
     def test_a_log_with_nothing_critical_sends_nothing(self, reporting, monkeypatch):
         with open(reporting / crashlog.CRASH_LOG, "a") as f:
