@@ -19,7 +19,10 @@
 param(
     [Parameter(Mandatory)] [string] $Source,
     [Parameter(Mandatory)] [string] $Version,
-    [Parameter(Mandatory)] [string] $Msix
+    [Parameter(Mandatory)] [string] $Msix,
+    # Minutes to keep the normal launch running and watch it (0 for the release check).
+    # The Store's testers crashed it after 4 and 10 minutes, so a long run looks for that.
+    [int] $SoakMinutes = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -82,7 +85,10 @@ Write-Host "installed $($pkg.PackageFullName)"
 $launchedAt = Get-Date
 $entry = if (Test-Path (Join-Path $pkg.InstallLocation "lapsecoin-launch.exe")) { "lapsecoin-launch.exe" } else { "lapsecoin.exe" }
 Write-Host "starting $entry, the package's entry point"
-$logon = "/c cd /d `"$($pkg.InstallLocation)`" && $entry > `"$work\launch.log`" 2>&1"
+# A long run sends nothing: the package carries the real token, and a crash found here is
+# read from the crash log below instead of being filed as an issue.
+$noSend = if ($SoakMinutes) { "set LAPSECOIN_CRASH_REPORTS=0&& " } else { "" }
+$logon = "/c ${noSend}cd /d `"$($pkg.InstallLocation)`" && $entry > `"$work\launch.log`" 2>&1"
 Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $logon
 Start-Sleep 30
 $alive = @(Get-Process lapsecoin -ErrorAction SilentlyContinue)
@@ -95,6 +101,21 @@ if (-not $alive) {
 } else {
     Write-Host ("running after 30 seconds: " + (($alive | ForEach-Object { "pid $($_.Id), window handle $($_.MainWindowHandle)" }) -join "; "))
 }
+$endAt = (Get-Date).AddMinutes($SoakMinutes)
+while ($alive -and (Get-Date) -lt $endAt) {
+    Start-Sleep 20
+    $alive = @(Get-Process lapsecoin -ErrorAction SilentlyContinue)
+    if (-not $alive) {
+        $failures += "the app died $([int]((Get-Date) - $launchedAt).TotalSeconds) seconds after it was started"
+        Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $launchedAt } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting|Python|\.NET' } |
+            Select-Object -First 6 | ForEach-Object { Write-Host "event: $($_.ProviderName): $($_.Message)" }
+        foreach ($f in "lapsecoin-crash.log", "lapsecoin-start.log") {
+            if (Test-Path (Join-Path $data $f)) { Write-Host "== $f"; Get-Content (Join-Path $data $f) -Tail 80 }
+        }
+    }
+}
+if ($SoakMinutes -and $alive) { Write-Host "still running after $SoakMinutes minutes" }
 Stop-Node
 Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 

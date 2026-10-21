@@ -25,11 +25,15 @@ on:
         type: choice
         options: [windows-latest, windows-11-arm]
         default: windows-latest
+      soak_minutes:
+        description: "Keep the app running this many minutes and report if it dies (0 to skip)"
+        type: string
+        default: "0"
 
 jobs:
   build:
     runs-on: ${{ inputs.runner || 'windows-latest' }}
-    timeout-minutes: 15
+    timeout-minutes: 40
     permissions:
       contents: read
     env:
@@ -83,7 +87,7 @@ jobs:
       # uninstall must all leave the wallet in %USERPROFILE%\LapseCoin.
       - name: Test the package
         run: |
-          .\scripts\test_msix.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" -Msix lapsecoin.msix
+          .\scripts\test_msix.ps1 -Source app -Version "${{ steps.rel.outputs.version }}" -Msix lapsecoin.msix -SoakMinutes ${{ inputs.soak_minutes || 0 }}
 
       # The package above is unsigned (the Store signs it), so it cannot be
       # installed on a normal PC. This keeps the copy the test signed with its
