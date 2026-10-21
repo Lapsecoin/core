@@ -27,6 +27,7 @@ on:
       - src/datadir.py
       - src/crashlog.py
       - launcher/**
+      - tests/scrub_cases.json
       - scripts/build_launcher.ps1
       - scripts/build_msix.ps1
       - scripts/AppxManifest.template.xml
