@@ -210,6 +210,16 @@ def _start_log_tail(lines=15):
         return ""
 
 
+def _head_and_tail(text, limit):
+    """A native crash dump starts with the thread that crashed and a Python
+    traceback ends with the error, so a long text keeps both ends."""
+    if len(text) <= limit:
+        return text
+    gap = "\n[...]\n"
+    head = limit // 2
+    return text[:head] + gap + text[-(limit - head - len(gap)):]
+
+
 def build_payload(kind, where, trace, sig):
     """What is sent: nothing beyond this."""
     import platform
@@ -221,7 +231,7 @@ def build_payload(kind, where, trace, sig):
     return {"v": 1, "kind": kind, "where": where, "sig": sig,
             "app": version, "windows": platform.version(), "arch": platform.machine(),
             "python": platform.python_version(), "packaged": _packaged(),
-            "trace": sanitize(trace)[-MAX_TRACE:],
+            "trace": _head_and_tail(sanitize(trace), MAX_TRACE),
             "steps": sanitize(_start_log_tail())[-MAX_STEPS:]}
 
 

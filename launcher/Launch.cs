@@ -297,7 +297,11 @@ namespace LapseCoin
                 try { offset = long.Parse(File.ReadAllText(Path.Combine(dir, "lapsecoin-crash.sent")).Trim()); } catch (Exception) { }
                 if (offset < 0 || offset > text.Length) offset = 0;
                 string tail = text.Substring((int)offset);
-                return tail.Length > MaxTrace ? tail.Substring(tail.Length - MaxTrace) : tail;
+                if (tail.Length <= MaxTrace) return tail;
+                // A native crash dump starts with the thread that crashed, so keep the start too.
+                const string gap = "\n[...]\n";
+                int head = MaxTrace / 2;
+                return tail.Substring(0, head) + gap + tail.Substring(tail.Length - (MaxTrace - head - gap.Length));
             }
             catch (Exception) { return ""; }
         }
