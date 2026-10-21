@@ -102,7 +102,10 @@ Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 # has a log file (src/crashlog.py). --crash-test makes it fail on purpose right
 # at the start, the way a failure while the program is loading would. No
 # window is shown for a crash; the report file is what is checked.
-$crashCmd = "/c cd /d `"$($pkg.InstallLocation)`" && $entry --crash-test"
+# Sending is switched off here: the package carries the real token, and a test must not
+# file issues in the real repository (the sending itself is tested in msix-probe.yml
+# against a local server).
+$crashCmd = "/c set LAPSECOIN_CRASH_REPORTS=0&& cd /d `"$($pkg.InstallLocation)`" && $entry --crash-test"
 Invoke-CommandInDesktopPackage -PackageFamilyName $pkg.PackageFamilyName -AppId LapseCoin -Command "cmd.exe" -Args $crashCmd
 Start-Sleep 20
 $box = @(Get-Process lapsecoin -ErrorAction SilentlyContinue)

@@ -309,11 +309,21 @@ def _short_hash(text):
     return hashlib.sha1(stable.encode("utf-8", "replace")).hexdigest()[:4]
 
 
+# One report at a time: the start-up thread that sends what an earlier run left behind
+# must not read the log while a crash is being written and sent, or it files it twice.
+_report_lock = threading.RLock()
+
+
 def send_pending():
     """Sends what an earlier run recorded and could not send: a native crash
     that ended the process, or a report made while offline."""
     if not _state["dir"] or not sending_enabled():
         return False
+    with _report_lock:
+        return _send_pending()
+
+
+def _send_pending():
     crash = os.path.join(_state["dir"], CRASH_LOG)
     try:
         offset = int(open(os.path.join(_state["dir"], SENT_MARK)).read().strip() or 0)
@@ -337,12 +347,13 @@ def send_pending():
 def report_fatal(exc_type, exc, tb, where="start-up"):
     """Records a critical crash and sends it. Shows nothing."""
     text = "".join(traceback.format_exception(exc_type, exc, tb))
-    write_report(f"fatal exception during {where}:\n{text}")
-    breadcrumb(f"fatal: {exc_type.__name__}: {exc}")
-    sent = send(build_payload("fatal", where, text, signature(exc_type, tb)))
-    if sent:
-        _mark_sent()
-    breadcrumb("report sent" if sent else "report not sent, it is sent by the next start")
+    with _report_lock:
+        write_report(f"fatal exception during {where}:\n{text}")
+        breadcrumb(f"fatal: {exc_type.__name__}: {exc}")
+        sent = send(build_payload("fatal", where, text, signature(exc_type, tb)))
+        if sent:
+            _mark_sent()
+        breadcrumb("report sent" if sent else "report not sent, it is sent by the next start")
 
 
 def report_current(where):
