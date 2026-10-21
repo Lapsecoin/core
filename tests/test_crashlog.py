@@ -276,6 +276,14 @@ class TestSending:
             assert gh.requests == []
 
 
+class TestLongDumps:
+    def test_a_long_dump_keeps_the_crashing_thread_and_the_end(self):
+        dump = "Windows fatal exception: access violation\n" + "x" * 9000 + "\nTHE END"
+        kept = crashlog._head_and_tail(dump, crashlog.MAX_TRACE)
+        assert kept.startswith("Windows fatal exception") and kept.endswith("THE END")
+        assert len(kept) == crashlog.MAX_TRACE
+
+
 class TestWhatIsSent:
     def test_the_account_name_paths_and_addresses_are_taken_out(self, reporting, monkeypatch):
         monkeypatch.setenv("USERNAME", "Vic")
