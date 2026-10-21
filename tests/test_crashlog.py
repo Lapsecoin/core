@@ -295,7 +295,7 @@ class TestWhatIsSent:
         assert "<address>" in payload["trace"]
 
     def test_the_text_is_cut_to_size(self, reporting):
-        payload = crashlog.build_payload("fatal", "start-up", "x" * 50000, "abc1234567")
+        payload = crashlog.build_payload("fatal", "start-up", "x " * 25000, "abc1234567")
         assert len(payload["trace"]) == crashlog.MAX_TRACE
 
     def test_text_cannot_close_the_code_fence_or_carry_a_folder_name(self):
@@ -314,3 +314,83 @@ class TestWhatIsSent:
         env = {"USERPROFILE": "C:\\Users\\Vic", "USERNAME": "Vic", "LOCALAPPDATA": "C:\\Users\\Vic\\AppData\\Local"}
         out = crashlog.sanitize("open C:\\Users\\Vic\\AppData\\Local\\x failed for Vic", env)
         assert "Vic" not in out and "%LOCALAPPDATA%" in out
+
+
+SCRUB = json.loads((os.path.join(os.path.dirname(__file__), "scrub_cases.json") and
+                    open(os.path.join(os.path.dirname(__file__), "scrub_cases.json"), encoding="utf-8").read()))
+
+
+class TestNothingPrivateIsSent:
+    """tests/scrub_cases.json is also run through the launcher on Windows (msix-probe.yml)."""
+
+    @pytest.mark.parametrize("case", SCRUB["cases"], ids=[c["name"] for c in SCRUB["cases"]])
+    def test_the_shared_cases(self, case):
+        assert crashlog.sanitize(case["in"], SCRUB["environment"]) == case["out"]
+
+    def test_the_apps_own_version_is_not_an_ip_address(self, monkeypatch):
+        monkeypatch.setattr(crashlog, "_app_version", lambda: "1.1.6")
+        out = crashlog.sanitize("package vicnas.x_1.1.6.0_x64 version: 1.1.6.0 and 1.1.6.1", {})
+        assert "version: 1.1.6.0" in out and "1.1.6.1" not in out
+
+    def test_options_are_listed_without_their_values(self):
+        assert crashlog.argument_names(["--key", "lc1-SECRET", "--peer=203.0.113.7:8333", "--no-gui", "C:\\a\\b.json"]) \
+            == "--key --peer --no-gui"
+
+    def test_the_start_log_line_has_no_values(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["lapsecoin", "--address", "abandon.ability.able", "--peer", "203.0.113.7:8333"])
+        text = "\n".join(crashlog.environment_lines())
+        assert "options=--address --peer" in text
+        assert "abandon" not in text and "203.0.113.7" not in text
+
+    def test_the_crash_log_on_disk_is_sanitized_too(self, reporting, monkeypatch):
+        monkeypatch.setenv("USERNAME", "victor")
+        crashlog.write_report("peer 203.0.113.7 refused for victor, passphrase=hunter2")
+        text = (reporting / crashlog.CRASH_LOG).read_text()
+        assert "203.0.113.7" not in text and "victor" not in text and "hunter2" not in text
+
+    def test_dates_and_times_become_seconds_since_the_first(self):
+        a, b = crashlog.relative_times("2026-10-21 07:10:51 start\n2026-10-21 07:11:01 later",
+                                       "===== 2026-10-21 07:10:55 =====")
+        assert a == "+0s start\n+10s later" and b == "===== +4s ====="
+
+    def test_a_whole_report_holds_nothing_private(self, reporting, monkeypatch):
+        for k, v in SCRUB["environment"].items():
+            monkeypatch.setenv(k, v)
+        secret_trace = ("Traceback (most recent call last):\n"
+                        '  File "C:\\Users\\victor\\LapseCoin\\gui.py", line 9, in unlock\n'
+                        "ValueError: bad key lc1-" + "A" * 114 + " for abandon.ability.able.about.above.absent.absorb."
+                        "abstract.absurd.abuse.access.accident at 203.0.113.7:8333 passphrase=hunter2 victor@example.com "
+                        "phrase abandon ability able about above absent absorb abstract absurd abuse access accident\n")
+        crashlog.breadcrumb("opened 203.0.113.7 for victor")
+        payload = crashlog.build_payload("fatal", "start-up", secret_trace, "sig")
+        body = crashlog.issue_body(payload, "Lapsecoin/core") + crashlog.issue_title(payload)
+        for leaked in ("victor", "VICPC", "203.0.113.7", "hunter2", "lc1-A", "abandon", "example.com"):
+            assert leaked not in body, leaked
+        assert "ValueError" in body and "gui.py" in body and "line 9" in body        # what was wrong is still there
+
+
+class TestTheCodeInTheTrace:
+    MODULES = {"gui.py": "src/gui.py", "main.py": "main.py"}
+
+    def test_own_code_frames_link_to_the_release_tag(self):
+        trace = ('Traceback (most recent call last):\n'
+                 '  File "C:\\Program Files\\WindowsApps\\p\\main.py", line 17, in <module>\n'
+                 '  File "C:\\Program Files\\WindowsApps\\p\\threading.py", line 982, in run\n'
+                 '  File "C:\\Program Files\\WindowsApps\\p\\gui.py", line ??? in run_status_window\n'
+                 'Thread 0x1 (most recent call first):\n  File "p\\gui.py", line 1504 in mainloop\n')
+        links = crashlog.code_links(trace, "Lapsecoin/core", "1.1.6", self.MODULES)
+        assert links == [
+            "- [main.py:17 in <module>](https://github.com/Lapsecoin/core/blob/v1.1.6/main.py#L17)",
+            "- [gui.py in run_status_window](https://github.com/Lapsecoin/core/blob/v1.1.6/src/gui.py)",
+            "- [gui.py:1504 in mainloop](https://github.com/Lapsecoin/core/blob/v1.1.6/src/gui.py#L1504)"]
+
+    def test_no_links_without_the_module_list_or_a_clean_version_and_repo(self):
+        trace = 'File "p\\gui.py", line 3, in f'
+        assert crashlog.code_links(trace, "Lapsecoin/core", "1.1.6", {}) == []
+        assert crashlog.code_links(trace, "bad repo", "1.1.6", self.MODULES) == []
+        assert crashlog.code_links(trace, "Lapsecoin/core", "1.1.6)(http://evil", self.MODULES) == []
+
+    def test_the_issue_shows_them(self, monkeypatch):
+        monkeypatch.setattr(crashlog, "own_modules", lambda: self.MODULES)
+        body = crashlog.issue_body({"app": "1.1.6", "trace": 'File "p\\gui.py", line 3, in f'}, "Lapsecoin/core")
+        assert "Code in the trace, at this release:" in body and "blob/v1.1.6/src/gui.py#L3" in body

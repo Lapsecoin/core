@@ -167,7 +167,14 @@ jobs:
           # the program's own start log, with a folder of this account and an address in it
           $logs = Join-Path $env:USERPROFILE "LapseCoin"
           New-Item $logs -ItemType Directory -Force | Out-Null
-          Set-Content (Join-Path $logs "lapsecoin-start.log") ("start data folder ready: $env:USERPROFILE\LapseCoin`n" + "bid.catch.flower.smart.eyebrow.polar.staff.view.diesel.pioneer.horn.couple")
+          Set-Content (Join-Path $logs "lapsecoin-start.log") ("2026-10-21 07:10:51 start data folder ready: $env:USERPROFILE\LapseCoin`n" + "bid.catch.flower.smart.eyebrow.polar.staff.view.diesel.pioneer.horn.couple`n" + "2026-10-21 07:10:52 peer 203.0.113.7:8333 passphrase=hunter2 for $env:USERNAME")
+          # and a native crash dump like the one Python's faulthandler leaves, with the program's own
+          # files in it and Python's (threading.py) among them
+          Set-Content (Join-Path $logs "lapsecoin-crash.log") ("===== 2026-10-21 07:10:55 =====`nWindows fatal exception: access violation`n`nThread 0x00002bcc (most recent call first):`n" +
+            "  File `"$env:USERPROFILE\p\gui.py`", line ??? in run_status_window`n  File `"$env:USERPROFILE\p\threading.py`", line 982 in run`n  File `"$env:USERPROFILE\p\main.py`", line 17 in main`n")
+          # the list of the program's own files and the version, which the build puts beside the program
+          Set-Content launcher-out\OWN_MODULES "main.py`nsrc/gui.py" -Encoding ascii
+          Set-Content launcher-out\VERSION "9.9.9" -NoNewline -Encoding ascii
 
           function Launch($child, $arguments = @(), $optOut = $false) {
             $report = Join-Path $PWD "report.txt"
@@ -186,9 +193,14 @@ jobs:
             Write-Host $r.Report
             if ($r.Report -notmatch "0xC0000135") { $failures += "the report does not name the exit code" }
             if ($r.Report -notmatch "Crash Lc0000135") { $failures += "the report has no signature in its title" }
-            foreach ($secret in $env:USERNAME, $env:USERPROFILE, "bid.catch") {
+            foreach ($secret in $env:USERNAME, $env:USERPROFILE, "bid.catch", "203.0.113.7", "hunter2", "2026-10-21") {
               if ($r.Report -match [regex]::Escape($secret)) { $failures += "the report still holds '$secret'" }
             }
+            if ($r.Report -notmatch "Windows fatal exception: access violation") { $failures += "the report lacks the crash dump's first line" }
+            if ($r.Report -notmatch "\+0s" -or $r.Report -notmatch "\+4s") { $failures += "dates and times were not turned into seconds" }
+            if ($r.Report -notmatch [regex]::Escape("blob/v9.9.9/src/gui.py)")) { $failures += "no link to gui.py at the release tag" }
+            if ($r.Report -notmatch [regex]::Escape("blob/v9.9.9/main.py#L17")) { $failures += "no link to main.py with its line" }
+            if ($r.Report -match "threading\.py\]") { $failures += "a Python library file was linked as the program's code" }
           }
           foreach ($quiet in "ok", "one") {
             $r = Launch (Join-Path $PWD "child\$quiet.exe")
@@ -204,3 +216,27 @@ jobs:
 
           if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
           Write-Host "the launcher reports a fault and a refusal to start, and nothing else, without names, folders or addresses"
+
+      # The Python tests run tests/scrub_cases.json through src/crashlog.py; this runs the same
+      # cases through the launcher's own copy of the rules, so the two cannot drift apart.
+      - name: Check the launcher removes what the program does
+        run: |
+          $spec = Get-Content tests\scrub_cases.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          foreach ($p in $spec.environment.PSObject.Properties) { Set-Item "env:$($p.Name)" $p.Value }
+          $dir = Join-Path $PWD "scrub"
+          New-Item $dir -ItemType Directory | Out-Null
+          $utf8 = New-Object System.Text.UTF8Encoding $false
+          $i = 0
+          foreach ($c in $spec.cases) { [System.IO.File]::WriteAllText("$dir\$i.in", $c.in, $utf8); $i++ }
+          $env:LAPSECOIN_SCRUB_TEST = $dir
+          $p = Start-Process "launcher-out\lapsecoin-launch.exe" -Wait -PassThru
+          if ($p.ExitCode) { throw "the scrub test hook failed ($($p.ExitCode))" }
+          $failures = @()
+          $i = 0
+          foreach ($c in $spec.cases) {
+            $got = [System.IO.File]::ReadAllText("$dir\$i.out", $utf8)
+            if ($got -ne $c.out) { $failures += "'$($c.name)': wanted [$($c.out)], got [$got]" }
+            $i++
+          }
+          if ($failures) { $failures | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
+          Write-Host "the launcher removes the same things as the program ($i cases)"

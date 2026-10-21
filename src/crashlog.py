@@ -14,7 +14,11 @@ It also sends the report itself, so nobody has to relay it. Only a critical
 crash is sent: an exception that ends the program, at start-up or while it runs,
 and a native crash that killed the process. The text is cut to the exception,
 the last start-up steps, the version, the Windows build and the architecture,
-with the account name, folder paths and any LapseCoin address taken out. It is
+with everything private taken out (see sanitize: account and computer names,
+folder paths, addresses, keys, recovery phrases, passphrase-like values, long hex
+and base64 text, IP and e-mail addresses, and the command line's values), dates
+turned into seconds, and a link to each of the program's own files in the trace
+at the release's tag. It is
 filed as an issue labelled crash-report, once per kind of crash (a repeat adds a
 comment), in the repository named at build time (CRASH_REPORT_REPO), with a token
 baked into the build that can only write issues there. A native crash ends the process before it can send anything, so the small
@@ -45,8 +49,10 @@ API_DEFAULT = "https://api.github.com"
 SEND_TIMEOUT = 5
 MAX_TRACE = 3500
 MAX_STEPS = 1200
-# A LapseCoin address is twelve dot-separated words.
-ADDRESS_RE = re.compile(r"\b(?:[a-z]{3,10}\.){11}[a-z]{3,10}\b")
+# A LapseCoin address is twelve dot-separated words; four or more in a row are taken
+# out too, so a cut-off address does not get through.
+ADDRESS_RE = re.compile(r"\b(?:[a-z]{3,10}\.){3,}[a-z]{3,10}\b")
+OWN_MODULES_FILE = "OWN_MODULES"         # the repository path of each of the program's own .py files
 PENDING_RE = re.compile(r"Fatal Python error|Windows fatal exception|fatal exception during")
 
 _state = {"dir": None, "crash": None, "installed": False}
@@ -84,18 +90,89 @@ def pick_dir(candidates=None):
     return None
 
 
+# What else must never reach a public issue. launcher/Launch.cs has the same rules, and
+# tests/scrub_cases.json is run through both, so they cannot drift apart.
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+KEY_TEXT_RE = re.compile(r"\blc1-[A-Za-z0-9_-]{20,}")                       # a sealed account key (src/shortkey.py)
+SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(pass(?:word|phrase)?|secret|token|api[_-]?key|private[_-]?key|priv|seed|mnemonic|kek|key)\b"
+    r"(['\"]?\s*[=:]\s*)(?:'[^']*'|\"[^\"]*\"|\S+)")
+BYTES_RE = re.compile(r"\bb(['\"])(?:\\x[0-9a-fA-F]{2}|[^'\"\\]){8,}\1")
+HEX_RE = re.compile(r"\b[0-9a-fA-F]{20,}\b")                                # keys, hashes, signatures
+TOKEN_RE = re.compile(r"\b[A-Za-z0-9+/_=-]{32,}\b")                         # base64 and base58 text
+WORDS_RE = re.compile(r"\b(?:[a-z]{3,8} ){5,}[a-z]{3,8}\b")                 # a recovery phrase
+IPV4_RE = re.compile(rf"(?<![\w.]){_OCTET}(?:\.{_OCTET}){{3}}(?!\w|\.\d)")
+IPV6_RE = re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![\w:])"
+                     r"|(?<![\w:])(?:(?:[0-9a-fA-F]{1,4}:){1,7}|:):(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![\w:])")
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _app_version():
+    try:
+        import resources
+        return open(os.path.join(resources.bundle_dir(), "VERSION")).read().strip()
+    except Exception:
+        return ""
+
+
 def sanitize(text, environ=None):
-    """The report with the person's account name taken out of file paths."""
+    """The report with everything that identifies the person or opens the wallet
+    taken out: the account and computer name in paths, addresses, keys, recovery
+    phrases, passphrase-like values, long hex and base64 text, IP addresses and
+    e-mail addresses. It errs on the side of removing too much."""
     environ = os.environ if environ is None else environ
     # the longer paths first, or the profile folder would swallow them
-    for key in ("LOCALAPPDATA", "APPDATA", "TEMP", "USERPROFILE"):
-        value = environ.get(key)
+    folders = sorted(((environ.get(k) or "", k) for k in ("LOCALAPPDATA", "APPDATA", "TEMP", "USERPROFILE")),
+                     key=lambda pair: -len(pair[0]))
+    for value, key in folders:
         if value:
-            text = text.replace(value, "%" + key + "%")
-    user = environ.get("USERNAME")
-    if user and len(user) > 2:
-        text = re.sub(re.escape(user), "<user>", text, flags=re.IGNORECASE)
+            text = re.sub(re.escape(value), lambda m, k=key: "%" + k + "%", text, flags=re.IGNORECASE)
+    for key, name in (("USERNAME", "<user>"), ("COMPUTERNAME", "<computer>"), ("USERDOMAIN", "<domain>")):
+        value = environ.get(key)
+        if value and len(value) > 2:
+            text = re.sub(re.escape(value), name, text, flags=re.IGNORECASE)
+    text = re.sub(r"[A-Za-z]:\\Users\\[^\\\s]+", "%USERPROFILE%", text)
+    text = KEY_TEXT_RE.sub("<key>", text)
+    text = BYTES_RE.sub("b'<bytes>'", text)
+    text = SECRET_VALUE_RE.sub(lambda m: m.group(1) + m.group(2) + "<removed>", text)
+    text = HEX_RE.sub("<hex>", text)
+    text = TOKEN_RE.sub("<token>", text)
+    text = WORDS_RE.sub("<words>", text)
+    version = _app_version()
+    text = IPV4_RE.sub(lambda m: m.group(0) if version and m.group(0) == version + ".0" else "<ip>", text)
+    text = IPV6_RE.sub("<ip>", text)
+    text = EMAIL_RE.sub("<email>", text)
     return ADDRESS_RE.sub("<address>", text)
+
+
+STAMP_RE = re.compile(r"\b(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\b")
+
+
+def relative_times(*texts):
+    """The texts with each local date and time replaced by the seconds since the earliest
+    one, so a report shows the order and the spacing but not the person's time zone."""
+    import datetime
+
+    def moment(m):
+        try:
+            return datetime.datetime(*(int(g) for g in m.groups()))
+        except ValueError:
+            return None
+    found = [t for text in texts for t in (moment(m) for m in STAMP_RE.finditer(text)) if t]
+    if not found:
+        return list(texts)
+    base = min(found)
+
+    def swap(m):
+        t = moment(m)
+        return "+%ds" % (t - base).total_seconds() if t else "<time>"
+    return [STAMP_RE.sub(swap, text) for text in texts]
+
+
+def argument_names(argv):
+    """The options of a command line without their values: a value can be a key, an
+    address, a peer's IP address or a path."""
+    return " ".join(a.split("=")[0] for a in argv if a.startswith("-"))
 
 
 def environment_lines():
@@ -108,7 +185,7 @@ def environment_lines():
     return [f"LapseCoin {version}",
             f"Windows {platform.version()} {platform.machine()}",
             f"Python {platform.python_version()}",
-            f"packaged={_packaged()}  argv={' '.join(sys.argv[1:])}"]
+            f"packaged={_packaged()}  options={argument_names(sys.argv[1:])}"]
 
 
 def _packaged():
@@ -141,7 +218,8 @@ def write_report(text):
     path = os.path.join(_state["dir"], CRASH_LOG)
     try:
         with open(path, "a", encoding="utf-8") as f:
-            f.write(f"\n===== {_stamp()} =====\n" + "\n".join(environment_lines()) + "\n" + text + "\n")
+            # sanitized here too, so the file is safe to attach by hand
+            f.write(f"\n===== {_stamp()} =====\n" + sanitize("\n".join(environment_lines()) + "\n" + text) + "\n")
         return path
     except OSError:
         return None
@@ -228,11 +306,12 @@ def build_payload(kind, where, trace, sig):
         version = open(os.path.join(resources.bundle_dir(), "VERSION")).read().strip()
     except Exception:
         version = "unknown"
+    trace, steps = relative_times(_head_and_tail(sanitize(trace), MAX_TRACE),
+                                  sanitize(_start_log_tail())[-MAX_STEPS:])
     return {"v": 1, "kind": kind, "where": where, "sig": sig,
             "app": version, "windows": platform.version(), "arch": platform.machine(),
             "python": platform.python_version(), "packaged": _packaged(),
-            "trace": _head_and_tail(sanitize(trace), MAX_TRACE),
-            "steps": sanitize(_start_log_tail())[-MAX_STEPS:]}
+            "trace": trace, "steps": steps}
 
 
 FENCE = "`" * 3
@@ -257,10 +336,52 @@ def issue_title(p):
     return re.sub(r"\s+", " ", f"Crash {_clean(p.get('sig'), 10)}: {lines[-1] if lines else 'crash'}")[:120]
 
 
-def issue_body(p):
-    return "\n".join(["Reported automatically by LapseCoin.", "", _facts(p), "", "Traceback:", FENCE,
-                      _clean(p.get("trace", ""), MAX_TRACE), FENCE, "", "Last start-up steps:", FENCE,
-                      _clean(p.get("steps", ""), MAX_STEPS), FENCE])
+FRAME_RE = re.compile(r'File "([^"]+)", line (\d+|\?\?\?),? in ([\w<>.]+)')
+MAX_FRAMES = 15
+
+
+def own_modules():
+    """{file name: path in the repository} for the program's own code, from the
+    OWN_MODULES file the build puts beside the program. Empty without it."""
+    try:
+        import resources
+        with open(os.path.join(resources.bundle_dir(), OWN_MODULES_FILE), encoding="utf-8") as f:
+            paths = [line.strip() for line in f if line.strip().endswith(".py")]
+    except (OSError, ImportError, AttributeError):
+        return {}
+    return {p.rsplit("/", 1)[-1]: p for p in paths}
+
+
+def code_links(trace, repo, version, modules=None):
+    """Markdown lines linking each frame of the program's own code in the trace to that
+    file at the release's tag (and the line, when the trace has one), so the code is one
+    click from the crash. Libraries and Python's own files get no link."""
+    modules = own_modules() if modules is None else modules
+    if not (modules and re.fullmatch(r"[\w.-]+/[\w.-]+", repo or "") and re.fullmatch(r"[\w.]+", version or "")):
+        return []
+    seen, lines = set(), []
+    for path, number, func in FRAME_RE.findall(trace):
+        name = re.split(r"[\\/]", path)[-1]
+        repo_path = modules.get(name)
+        if not repo_path or (name, number, func) in seen:
+            continue
+        seen.add((name, number, func))
+        url = f"https://github.com/{repo}/blob/v{version}/{repo_path}" + (f"#L{number}" if number.isdigit() else "")
+        label = f"{name}:{number}" if number.isdigit() else name
+        lines.append(f"- [{_clean(label, 60)} in {_clean(func, 60)}]({url})")
+        if len(lines) == MAX_FRAMES:
+            break
+    return lines
+
+
+def issue_body(p, repo=None):
+    parts = ["Reported automatically by LapseCoin.", "", _facts(p), "", "Traceback:", FENCE,
+             _clean(p.get("trace", ""), MAX_TRACE), FENCE, "", "Last start-up steps:", FENCE,
+             _clean(p.get("steps", ""), MAX_STEPS), FENCE]
+    links = code_links(p.get("trace", ""), repo, _clean(p.get("app"), 20))
+    if links:
+        parts += ["", "Code in the trace, at this release:"] + links
+    return "\n".join(parts)
 
 
 def send(payload):
@@ -293,7 +414,7 @@ def send(payload):
                              {"body": "Again: " + _facts(payload)})
         else:
             status, _ = call("POST", f"/repos/{repo}/issues",
-                             {"title": issue_title(payload), "body": issue_body(payload),
+                             {"title": issue_title(payload), "body": issue_body(payload, repo),
                               "labels": ["crash-report"]})
         return 200 <= status < 300
     except Exception:
