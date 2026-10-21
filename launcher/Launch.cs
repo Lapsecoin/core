@@ -121,22 +121,24 @@ namespace LapseCoin
 
             string hex = "0x" + unchecked((uint)code).ToString("X8");
             string sig = refused != null ? "Lstart" + code : "L" + hex.Substring(2).ToLowerInvariant();
-            string what = refused != null ? refused : "the program ended with exit code " + hex + " after " + (int)lived.TotalSeconds + " s";
+            // The launcher's own sentence is built from numbers and is not run through Clean (a run of
+            // ordinary words looks like a recovery phrase); what Windows said is.
+            string what = refused != null ? Clean(refused, 160) : "the program ended with exit code " + hex + " after " + (int)lived.TotalSeconds + " s";
 
             string logDir = DataDir();
             string steps = FreshTail(logDir, "lapsecoin-start.log", 15);
             string crashLog = Path.Combine(logDir, "lapsecoin-crash.log");
             string earlier = CrashLogSinceSent(logDir);
 
-            StringBuilder trace = new StringBuilder();
-            trace.AppendLine("launcher: " + what);
-            if (earlier.Length > 0) { trace.AppendLine(); trace.AppendLine("the program's own crash log:"); trace.AppendLine(earlier); }
+            StringBuilder seen = new StringBuilder();
+            if (earlier.Length > 0) { seen.AppendLine(); seen.AppendLine("the program's own crash log:"); seen.AppendLine(earlier); }
             string events = RecentEvents();
-            if (events.Length > 0) { trace.AppendLine(); trace.AppendLine("Windows events in the last 3 minutes:"); trace.AppendLine(events); }
+            if (events.Length > 0) { seen.AppendLine(); seen.AppendLine("Windows events in the last 3 minutes:"); seen.AppendLine(events); }
 
-            string title = Clean("Crash " + sig + ": launcher: " + what, 120).Replace("\r", " ").Replace("\n", " ");
-            string[] timed = RelativeTimes(Clean(trace.ToString(), MaxTrace + MaxEvents + 400), Clean(steps, MaxSteps));
-            string body = BuildBody(sig, what, timed[0], timed[1], repo);
+            string title = ("Crash " + sig + ": launcher: " + what).Replace("\r", " ").Replace("\n", " ");
+            if (title.Length > 120) title = title.Substring(0, 120);
+            string[] timed = RelativeTimes(Clean(seen.ToString(), MaxTrace + MaxEvents + 400), Clean(steps, MaxSteps));
+            string body = BuildBody(sig, what, "launcher: " + what + "\n" + timed[0], timed[1], repo);
 
             if (!string.IsNullOrEmpty(dryRun))
             {
@@ -151,7 +153,7 @@ namespace LapseCoin
             StringBuilder b = new StringBuilder();
             b.AppendLine("Reported automatically by the LapseCoin launcher.");
             b.AppendLine();
-            b.AppendLine("LapseCoin " + Version() + ", launcher, " + Clean(what, 80) + ". Windows " + WindowsBuild() + " " + Arch() + ".");
+            b.AppendLine("LapseCoin " + Version() + ", launcher, " + (what.Length > 80 ? what.Substring(0, 80) : what) + ". Windows " + WindowsBuild() + " " + Arch() + ".");
             b.AppendLine();
             b.AppendLine("What the launcher saw:");
             b.AppendLine(Fence);

@@ -180,6 +180,8 @@ jobs:
             $report = Join-Path $PWD "report.txt"
             Remove-Item $report -ErrorAction SilentlyContinue
             $env:LAPSECOIN_LAUNCHER_CHILD = $child
+            # a target, so the report knows its repository for the code links (a dry run sends nothing)
+            $env:LAPSECOIN_CRASH_REPO = "Lapsecoin/core"; $env:LAPSECOIN_CRASH_TOKEN = "dry-run"
             $env:LAPSECOIN_CRASH_DRYRUN = $report
             if ($optOut) { $env:LAPSECOIN_CRASH_REPORTS = "0" } else { Remove-Item env:LAPSECOIN_CRASH_REPORTS -ErrorAction SilentlyContinue }
             $p = Start-Process "launcher-out\lapsecoin-launch.exe" -ArgumentList $arguments -Wait -PassThru
@@ -191,7 +193,7 @@ jobs:
           if (-not $r.Report) { $failures += "a fault exit code was not reported" }
           else {
             Write-Host $r.Report
-            if ($r.Report -notmatch "0xC0000135") { $failures += "the report does not name the exit code" }
+            if ($r.Report -notmatch "launcher: the program ended with exit code 0xC0000135 after") { $failures += "the report does not say what happened to the program" }
             if ($r.Report -notmatch "Crash Lc0000135") { $failures += "the report has no signature in its title" }
             foreach ($secret in $env:USERNAME, $env:USERPROFILE, "bid.catch", "203.0.113.7", "hunter2", "2026-10-21") {
               if ($r.Report -match [regex]::Escape($secret)) { $failures += "the report still holds '$secret'" }
