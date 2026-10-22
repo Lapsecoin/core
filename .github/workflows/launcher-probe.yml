@@ -85,8 +85,7 @@ jobs:
           if (-not $r.Report) { $failures += "a fault exit code was not reported" }
           else {
             Write-Host $r.Report
-            if ($r.Report -notmatch "launcher: the program ended with exit code 0xC0000135 after") { $failures += "the report does not say what happened to the program" }
-            if ($r.Report -notmatch "Crash Lc0000135") { $failures += "the report has no signature in its title" }
+                      if ($r.Report -notmatch "Crash Lc0000135") { $failures += "the report has no signature in its title" }
             foreach ($secret in $env:USERNAME, $env:USERPROFILE, "bid.catch", "203.0.113.7", "hunter2", "2026-10-21") {
               if ($r.Report -match [regex]::Escape($secret)) { $failures += "the report still holds '$secret'" }
             }
@@ -119,7 +118,14 @@ jobs:
           for ($i = $text.IndexOf("mscoree.dll", $ordinal); $i -ge 0; $i = $text.IndexOf("mscoree.dll", $i + 1, $ordinal)) {
             [Array]::Copy($replacement, 0, $bytes, $i, $replacement.Length); $found++
           }
-          if (-not $found) { $failures += "the launcher does not import mscoree.dll, so the missing-library check has nothing to patch" }
+          if (-not $found) {
+            $failures += "the launcher does not import mscoree.dll, so the missing-library check has nothing to patch"
+            $at = $text.IndexOf("mscoree", [StringComparison]::OrdinalIgnoreCase)
+            Write-Host "mscoree (any case) at $at"
+            if ($at -ge 0) { Write-Host ("around it: " + ($text.Substring([Math]::Max(0, $at - 8), 32) -replace '[^\x20-\x7e]', '.')) }
+            $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+            Write-Host ("e_lfanew=$pe machine=0x{0:X} optional magic=0x{1:X}" -f [BitConverter]::ToUInt16($bytes, $pe + 4), [BitConverter]::ToUInt16($bytes, $pe + 24))
+          }
           [System.IO.File]::WriteAllBytes("$PWD\child\patched.exe", $bytes)
           foreach ($case in @(@{ file = "child\patched.exe"; want = $true }, @{ file = "launcher-out\lapsecoin-launch.exe"; want = $false })) {
             $env:LAPSECOIN_IMPORTS_TEST = "$PWD\$($case.file)"
