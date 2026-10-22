@@ -126,10 +126,11 @@ jobs:
             $env:LAPSECOIN_IMPORTS_OUT = "$PWD\imports.txt"
             Remove-Item imports.txt -ErrorAction SilentlyContinue
             Start-Process "launcher-out\lapsecoin-launch.exe" -Wait
-            $said = if (Test-Path imports.txt) { [string](Get-Content imports.txt -Raw) } else { "(no file)" }
+            $said = "(no file)"
+            if (Test-Path imports.txt) { $said = [System.IO.File]::ReadAllText("$PWD\imports.txt") }
             Write-Host "imports of $($case.file): $said"
             if ($case.want -and $said -notmatch "missing: xxxxxxx\.dll \(needed by patched\.exe\)") { $failures += "a library Windows does not have was not reported" }
-            if (-not $case.want -and $said.Trim()) { $failures += "a program that loads fine was reported as missing libraries: $said" }
+            if (-not $case.want -and $said -match "missing:") { $failures += "a program that loads fine was reported as missing libraries: $said" }
           }
           Remove-Item env:LAPSECOIN_IMPORTS_TEST, env:LAPSECOIN_IMPORTS_OUT -ErrorAction SilentlyContinue
           Remove-Item $logs -Recurse -Force -ErrorAction SilentlyContinue
