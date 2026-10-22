@@ -61,7 +61,7 @@ namespace LapseCoin
             {
                 // what was read from the file, then what is missing (the first line is what a test looks at)
                 File.WriteAllText(Environment.GetEnvironmentVariable("LAPSECOIN_IMPORTS_OUT"),
-                    "imports: " + string.Join(" ", Imports(importsTest).ToArray()) + "\n" +
+                    "imports: " + string.Join(" ", Imports(importsTest).ToArray()) + "\nparse: " + LastParse + "\n" +
                     LoadProblems(importsTest, Path.GetDirectoryName(importsTest)));
                 return 0;
             }
@@ -409,6 +409,8 @@ namespace LapseCoin
         }
 
         // The names in a program's import table (the libraries it needs before it runs).
+        static string LastParse = "";
+
         static List<string> Imports(string path)
         {
             List<string> names = new List<string>();
@@ -416,12 +418,13 @@ namespace LapseCoin
             {
                 byte[] b = File.ReadAllBytes(path);
                 int pe = BitConverter.ToInt32(b, 0x3C);
-                if (BitConverter.ToUInt32(b, pe) != 0x00004550u) return names;
+                if (BitConverter.ToUInt32(b, pe) != 0x00004550u) { LastParse = "no PE signature at " + pe; return names; }
                 int sections = BitConverter.ToUInt16(b, pe + 6);
                 int optSize = BitConverter.ToUInt16(b, pe + 20);
                 int opt = pe + 24;
                 bool pe64 = BitConverter.ToUInt16(b, opt) == 0x20B;
                 uint importRva = BitConverter.ToUInt32(b, opt + (pe64 ? 112 : 96) + 8);
+                LastParse = "pe64=" + pe64 + " sections=" + sections + " optSize=" + optSize + " importRva=0x" + importRva.ToString("X");
                 if (importRva == 0) return names;
                 int table = opt + optSize;
                 Func<uint, int> offset = delegate(uint rva)
