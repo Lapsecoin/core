@@ -109,34 +109,39 @@ jobs:
           # launcher is copied with the one library it imports renamed to one Windows does not have.
           $r = Launch (Join-Path $PWD "child\fault.exe")
           if ($r.Report -notmatch "exit code 0xC0000135 \(a DLL the program needs was not found\) after") { $failures += "the report does not explain the exit code" }
-          $bytes = [System.IO.File]::ReadAllBytes("$PWD\launcher-out\lapsecoin-launch.exe")
-          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-          $replacement = [System.Text.Encoding]::ASCII.GetBytes("xxxxxxx.dll")
-          $found = 0
-          # exact byte-for-byte search: the default one is culture-sensitive and skips the NULs in a binary
-          $ordinal = [StringComparison]::Ordinal
-          for ($i = $text.IndexOf("mscoree.dll", $ordinal); $i -ge 0; $i = $text.IndexOf("mscoree.dll", $i + 1, $ordinal)) {
-            [Array]::Copy($replacement, 0, $bytes, $i, $replacement.Length); $found++
-          }
-          if (-not $found) {
-            $failures += "the launcher does not import mscoree.dll, so the missing-library check has nothing to patch"
-            $at = $text.IndexOf("mscoree", [StringComparison]::OrdinalIgnoreCase)
-            Write-Host "mscoree (any case) at $at"
-            if ($at -ge 0) { Write-Host ("around it: " + ($text.Substring([Math]::Max(0, $at - 8), 32) -replace '[^\x20-\x7e]', '.')) }
-            $pe = [BitConverter]::ToInt32($bytes, 0x3C)
-            Write-Host ("e_lfanew=$pe machine=0x{0:X} optional magic=0x{1:X}" -f [BitConverter]::ToUInt16($bytes, $pe + 4), [BitConverter]::ToUInt16($bytes, $pe + 24))
-          }
-          [System.IO.File]::WriteAllBytes("$PWD\child\patched.exe", $bytes)
-          foreach ($case in @(@{ file = "child\patched.exe"; want = $true }, @{ file = "launcher-out\lapsecoin-launch.exe"; want = $false })) {
-            $env:LAPSECOIN_IMPORTS_TEST = "$PWD\$($case.file)"
+          # The missing-library check, on a copy of a real native Windows program (the launcher itself
+          # is managed code and has no import table). One library it imports is renamed to one that
+          # does not exist, and the check must name it; the untouched copy must report nothing.
+          function Imports($file) {
+            $env:LAPSECOIN_IMPORTS_TEST = $file
             $env:LAPSECOIN_IMPORTS_OUT = "$PWD\imports.txt"
             Remove-Item imports.txt -ErrorAction SilentlyContinue
             Start-Process "launcher-out\lapsecoin-launch.exe" -Wait
             $said = "(no file)"
             if (Test-Path imports.txt) { $said = [System.IO.File]::ReadAllText("$PWD\imports.txt") }
-            Write-Host "imports of $($case.file): $said"
-            if ($case.want -and $said -notmatch "missing: xxxxxxx\.dll \(needed by patched\.exe\)") { $failures += "a library Windows does not have was not reported" }
-            if (-not $case.want -and $said -match "missing:") { $failures += "a program that loads fine was reported as missing libraries: $said" }
+            Write-Host "imports of ${file}:`n$said"
+            return $said
+          }
+          Copy-Item "$env:windir\System32\cmd.exe" "$PWD\child\native.exe"
+          $said = Imports "$PWD\child\native.exe"
+          if ($said -match "missing:") { $failures += "a program that loads fine was reported as missing libraries: $said" }
+          $names = @((($said -split "`n")[0] -replace '^imports: ', '') -split ' ' | Where-Object { $_ })
+          $target = $names | Where-Object { $_ -notmatch '^api-ms-' } | Select-Object -First 1
+          if (-not $target) { $failures += "the launcher read no libraries from cmd.exe: $said" }
+          else {
+            $fake = ("x" * ($target.Length - 4)) + ".dll"
+            $bytes = [System.IO.File]::ReadAllBytes("$PWD\child\native.exe")
+            $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+            $replacement = [System.Text.Encoding]::ASCII.GetBytes($fake)
+            $ordinal = [StringComparison]::Ordinal
+            $found = 0
+            for ($i = $text.IndexOf($target, $ordinal); $i -ge 0; $i = $text.IndexOf($target, $i + 1, $ordinal)) {
+              [Array]::Copy($replacement, 0, $bytes, $i, $replacement.Length); $found++
+            }
+            [System.IO.File]::WriteAllBytes("$PWD\child\patched.exe", $bytes)
+            Write-Host "renamed $target to $fake in $found place(s)"
+            $said = Imports "$PWD\child\patched.exe"
+            if ($said -notmatch [regex]::Escape("missing: $fake (needed by patched.exe)")) { $failures += "a library Windows does not have was not reported ($fake)" }
           }
           Remove-Item env:LAPSECOIN_IMPORTS_TEST, env:LAPSECOIN_IMPORTS_OUT -ErrorAction SilentlyContinue
           Remove-Item $logs -Recurse -Force -ErrorAction SilentlyContinue
