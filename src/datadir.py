@@ -8,15 +8,12 @@ directory to %USERPROFILE%\\LapseCoin before anything else starts, which
 keeps the program files replaceable by an upgrade and the data out of
 their way.
 
-Two kinds of build do this: the one installed by the MSI, recognised by a
-marker file the installer places next to the executable, and the Microsoft
-Store build, recognised by asking Windows whether the process has a package
-identity. A source checkout, a pip install, the AppImage and a portable copy
-behave exactly as before.
+The build installed by the MSI does this, recognised by a marker file the
+installer places next to the executable. A source checkout, a pip install, the
+AppImage and a portable copy behave exactly as before.
 
-The profile folder is used because Windows deletes a new folder under AppData
-when an MSIX package is uninstalled, and that would take the key with it. A
-folder under the profile root is left alone, by the MSI and the package alike.
+The profile folder is used, not AppData: it is where 1.1.6 and later keep the
+data, and nothing that cleans up an application's folders touches it.
 
 Earlier versions of the MSI build kept their data in %LOCALAPPDATA%\\LapseCoin.
 On the first run with nothing in the new folder, the user is asked whether to
@@ -61,25 +58,9 @@ def is_msi_install():
             and os.path.exists(os.path.join(install_dir(), MSI_MARKER)))
 
 
-_APPMODEL_NOT_PACKAGED = 15700   # APPMODEL_ERROR_NO_PACKAGE
-
-
-def is_packaged():
-    """True when this process runs with an MSIX package identity."""
-    if not sys.platform.startswith("win"):
-        return False
-    try:
-        import ctypes
-        length = ctypes.c_uint32(0)
-        rc = ctypes.windll.kernel32.GetCurrentPackageFullName(ctypes.byref(length), None)
-    except (ImportError, AttributeError, OSError):
-        return False
-    return rc != _APPMODEL_NOT_PACKAGED
-
-
 def is_installed_build():
     """A build that keeps its data in a folder of its own (see above)."""
-    return is_packaged() or is_msi_install()
+    return is_msi_install()
 
 
 def profile_data_dir(environ=None):

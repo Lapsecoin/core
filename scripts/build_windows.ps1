@@ -48,12 +48,6 @@ if (-not (Test-Path $fsDll)) { throw "no falcon_seeded.dll in $oqs" }
 
 $env:PYTHONPATH = "src"
 
-# The Store page of this app, for the update banner of a Store-installed copy.
-# Empty without the MSIX_STORE_ID repo variable (passed in as an environment
-# variable by release.yml).
-$storeUrl = if ($env:MSIX_STORE_ID) { "https://apps.microsoft.com/detail/" + $env:MSIX_STORE_ID.Trim().ToLower() } else { "" }
-Set-Content -Path STORE_URL -Value $storeUrl -NoNewline -Encoding ascii
-
 # Where a critical crash report is filed (src/crashlog.py): the repository (for
 # example Lapsecoin/core) and a fine-grained token that can only write issues in it, from
 # the repository the build runs in (github.repository) and the CRASH_REPORT_TOKEN secret. The token ends
@@ -77,7 +71,6 @@ python -m nuitka --mode=standalone @common @identity `
     --enable-plugin=tk-inter `
     --output-dir=build-nuitka --output-filename=lapsecoin `
     --include-data-files=VERSION=VERSION `
-    --include-data-files=STORE_URL=STORE_URL `
     --include-data-files=CRASH_REPORT=CRASH_REPORT `
     --include-data-files=OWN_MODULES=OWN_MODULES `
     --include-data-files=src/bip39_english.txt=bip39_english.txt `

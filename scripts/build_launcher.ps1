@@ -1,5 +1,5 @@
-# Compiles launcher/Launch.cs into lapsecoin-launch.exe, the program the shortcuts and
-# the Store package start (see launcher/Launch.cs). Windows only.
+# Compiles launcher/Launch.cs into lapsecoin-launch.exe, the program the shortcuts
+# start (see launcher/Launch.cs). Windows only.
 #
 #   scripts/build_launcher.ps1 -OutDir dist\lapsecoin-win
 #

@@ -22,7 +22,7 @@ Each one links to its issue, so you can pick one up.
 - [x] Fee requests: get gas on another chain by locking LAPSE
 - [x] Reorg recovery: transactions from lost blocks go back to the pool with priority
 - [x] Run a node on just an address, no key or passphrase needed
-- [x] Windows installer, plus Microsoft Store packaging and submission workflows
+- [x] Windows installer
 - [x] Settings and Decisions pages (what the node decided at start, and why)
 - [x] Releases through v1.1.5
 

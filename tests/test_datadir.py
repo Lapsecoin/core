@@ -235,10 +235,6 @@ class TestWhereTheDataLives:
         _write(str(tmp_path / "profile" / "LapseCoin"), "lapsecoin_wallet.json", "moved")
         assert datadir.user_data_dir(env) == str(tmp_path / "profile" / "LapseCoin")
 
-    def test_not_packaged_off_windows(self, monkeypatch):
-        monkeypatch.setattr(sys, "platform", "linux")
-        assert datadir.is_packaged() is False
-
 
 class TestMovingTheOldAppDataFolder:
     def _setup(self, monkeypatch, tmp_path):
@@ -247,7 +243,7 @@ class TestMovingTheOldAppDataFolder:
         _write(str(old), "lapsecoin_wallet.json", "key")
         _write(str(old), "lapsecoin_chain.db", "chain")
         _write(str(old), "settings.json", "{}")
-        monkeypatch.setattr(datadir, "is_packaged", lambda: True)
+        monkeypatch.setattr(datadir, "is_msi_install", lambda: True)
         return env, old, tmp_path / "profile" / "LapseCoin"
 
     def _run(self, env, answer, tmp_path):
@@ -318,7 +314,7 @@ class TestMovingTheOldAppDataFolder:
 
     def test_nothing_in_either_folder_goes_on_to_the_old_program_question(self, monkeypatch, tmp_path):
         env = {"USERPROFILE": str(tmp_path / "profile"), "LOCALAPPDATA": str(tmp_path / "local")}
-        monkeypatch.setattr(datadir, "is_packaged", lambda: True)
+        monkeypatch.setattr(datadir, "is_msi_install", lambda: True)
         asked = []
         before = os.getcwd()
         try:

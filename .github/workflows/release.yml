@@ -391,7 +391,6 @@ jobs:
       - name: Build the program
         shell: pwsh
         env:
-          MSIX_STORE_ID: ${{ vars.MSIX_STORE_ID }}
           CRASH_REPORT_REPO: ${{ github.repository }}
           CRASH_REPORT_TOKEN: ${{ secrets.CRASH_REPORT_TOKEN }}
         run: |
@@ -399,10 +398,10 @@ jobs:
           $v = (Get-Content VERSION).Trim()
           .\scripts\build_windows.ps1 -Version $v
 
-      # What the shortcuts and the Store package start: it runs the program and
+      # What the shortcuts start: it runs the program and
       # reports a crash that happens before the program's own code can (see
-      # launcher/Launch.cs). It goes into the folder before the installer and the
-      # package are made from it.
+      # launcher/Launch.cs). It goes into the folder before the installer is made
+      # from it.
       - name: Build the launcher
         shell: pwsh
         run: .\scripts\build_launcher.ps1 -OutDir dist\lapsecoin-win
@@ -516,45 +515,11 @@ jobs:
         timeout-minutes: 10
         run: .\scripts\test_msi_uninstall.ps1 -Msi lapsecoin.msi
 
-      # The Microsoft Store build (see build_msix.ps1 and store.yml). Built
-      # only when the Partner Center identity is set as repo variables, so a
-      # fork without them still releases the MSI as before.
-      - name: Build the Microsoft Store package
-        if: vars.MSIX_IDENTITY_NAME != '' && vars.MSIX_DISPLAY_NAME != ''
-        shell: pwsh
-        env:
-          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
-          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
-          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
-          MSIX_DISPLAY_NAME: ${{ vars.MSIX_DISPLAY_NAME }}
-        run: |
-          $v = (Get-Content VERSION).Trim()
-          .\scripts\build_msix.ps1 -Source dist\lapsecoin-win -Version $v `
-            -Name $env:MSIX_IDENTITY_NAME -Publisher $env:MSIX_PUBLISHER `
-            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -DisplayName $env:MSIX_DISPLAY_NAME `
-            -Out lapsecoin.msix
-
-      # Installs the package on the runner and checks the wallet is made in
-      # the profile folder and survives an upgrade and an uninstall. A failure
-      # stops the release, because a package that loses wallets must not ship.
-      - name: Test the Microsoft Store package
-        if: vars.MSIX_IDENTITY_NAME != '' && vars.MSIX_DISPLAY_NAME != ''
-        shell: pwsh
-        env:
-          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
-          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
-          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
-          MSIX_DISPLAY_NAME: ${{ vars.MSIX_DISPLAY_NAME }}
-        run: |
-          $v = (Get-Content VERSION).Trim()
-          .\scripts\test_msix.ps1 -Source dist\lapsecoin-win -Version $v -Msix lapsecoin.msix
-
       - name: Stage the release files
         shell: pwsh
         run: |
           New-Item stage -ItemType Directory | Out-Null
           Copy-Item lapsecoin.msi                stage\lapsecoin.msi
-          if (Test-Path lapsecoin.msix) { Copy-Item lapsecoin.msix stage\lapsecoin.msix }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -702,9 +667,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Puts the installer at a URL that does not redirect, for the Microsoft
-  # Store (see pages.yml). Not part of revert-on-failure: the release is
-  # already public by now, and a failed copy can be re-run on its own.
+  # Puts the installer at a URL that does not redirect (see pages.yml). Not
+  # part of revert-on-failure: the release is already public by now, and a
+  # failed copy can be re-run on its own.
   publish-pages:
     needs: [version, release]
     permissions:
@@ -712,18 +677,6 @@ jobs:
       pages: write
       id-token: write
     uses: ./.github/workflows/pages.yml
-
-  # Submits the new Store package to the Microsoft Store (see store.yml).
-  # Skips itself without the Partner Center secrets, and like publish-pages it
-  # is not part of revert-on-failure: a failed submission is re-run on its own.
-  publish-store:
-    needs: [version, release]
-    permissions:
-      contents: read
-    uses: ./.github/workflows/store.yml
-    with:
-      version: ${{ needs.version.outputs.tag }}
-    secrets: inherit
 
   revert-on-failure:
     # publish-pypi deliberately isn't in this list: it runs after the

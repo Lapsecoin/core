@@ -52,7 +52,5 @@ native/falcon_seeded/*.so
 native/falcon_seeded/*.dylib
 native/falcon_seeded/*.dll
 
-# Written by scripts/build_windows.ps1 from the MSIX_STORE_ID variable.
-STORE_URL
 CRASH_REPORT
 !tests/scrub_cases.json

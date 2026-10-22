@@ -27,7 +27,7 @@ Nothing is sent when no token was baked in, when LAPSECOIN_CRASH_REPORTS=0 is
 set, or when a file named crash-reports-off is in the data folder. No window is
 shown for a crash.
 
-Only the Windows installer builds use it (the MSI and the Store package). A
+Only the Windows installer build uses it (the MSI). A
 source checkout, pip, the AppImage and a console run keep printing tracebacks.
 """
 
@@ -185,15 +185,7 @@ def environment_lines():
     return [f"LapseCoin {version}",
             f"Windows {platform.version()} {platform.machine()}",
             f"Python {platform.python_version()}",
-            f"packaged={_packaged()}  options={argument_names(sys.argv[1:])}"]
-
-
-def _packaged():
-    try:
-        import datadir
-        return datadir.is_packaged()
-    except Exception:
-        return "unknown"
+            f"options={argument_names(sys.argv[1:])}"]
 
 
 def _stamp():
@@ -310,7 +302,7 @@ def build_payload(kind, where, trace, sig):
                                   sanitize(_start_log_tail())[-MAX_STEPS:])
     return {"v": 1, "kind": kind, "where": where, "sig": sig,
             "app": version, "windows": platform.version(), "arch": platform.machine(),
-            "python": platform.python_version(), "packaged": _packaged(),
+            "python": platform.python_version(),
             "trace": trace, "steps": steps}
 
 
@@ -328,7 +320,7 @@ def _clean(text, limit):
 def _facts(p):
     return (f"LapseCoin {_clean(p.get('app'), 20)}, {_clean(p.get('kind'), 20)}, {_clean(p.get('where'), 40)}. "
             f"Windows {_clean(p.get('windows'), 40)} {_clean(p.get('arch'), 12)}, "
-            f"Python {_clean(p.get('python'), 20)}, packaged: {'yes' if p.get('packaged') is True else 'no'}.")
+            f"Python {_clean(p.get('python'), 20)}.")
 
 
 def issue_title(p):

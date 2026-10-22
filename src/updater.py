@@ -6,9 +6,6 @@ this module existed: nothing, the UI just links out to the releases page.
 Install types this recognizes:
   "windows-msi"    the MSI installer build on Windows: a folder of files
                    installed per user, with its data under %USERPROFILE%\\LapseCoin.
-  "windows-msix"   the Microsoft Store build, an MSIX package. It does not
-                   update itself: the Store does, so the UI sends the user
-                   there (STORE_URL, baked in at build time). Its data is in %USERPROFILE%\\LapseCoin.
   "linux-appimage" frozen PyInstaller build running inside an AppImage
                    (identified by the $APPIMAGE env var the AppImage
                    runtime itself sets, not guessed at).
@@ -48,21 +45,6 @@ RELEASE_ASSET_MSI     = "lapsecoin.msi"
 RELEASE_ASSET_SUMS    = "SHA256SUMS"
 DOWNLOAD_BASE = "https://github.com/Lapsecoin/core/releases/download"
 
-def _load_store_url():
-    """The Store page of this app, written into the program folder at build
-    time from the MSIX_STORE_ID repo variable (scripts/build_windows.ps1). It
-    is empty when the variable was not set. A Store-installed copy only exists
-    once the listing is live, so no check is needed here."""
-    import resources
-    try:
-        with open(os.path.join(resources.bundle_dir(), "STORE_URL")) as f:
-            return f.read().strip()
-    except OSError:
-        return ""
-
-
-STORE_URL = _load_store_url()
-
 SELF_UPDATABLE = {"windows-msi", "linux-appimage", "pip"}
 
 # Stages, in the order a successful attempt moves through them. "restarting"
@@ -81,8 +63,6 @@ def detect_install_type():
             return "linux-appimage"
         if sys.platform.startswith("win"):
             import datadir
-            if datadir.is_packaged():
-                return "windows-msix"
             return "windows-msi" if datadir.is_msi_install() else "source"
         return "source"
     try:
@@ -386,10 +366,6 @@ class Updater:
 
     def can_self_update(self):
         return self.install_type in SELF_UPDATABLE
-
-    def update_url(self, releases_url):
-        """Where a user who cannot be updated in place gets the new version."""
-        return (STORE_URL or releases_url) if self.install_type == "windows-msix" else releases_url
 
     def status(self):
         with self._lock:
