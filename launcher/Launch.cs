@@ -18,6 +18,7 @@ using System.Diagnostics;
 using System.Diagnostics.Eventing.Reader;
 using System.IO;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
@@ -55,6 +56,12 @@ namespace LapseCoin
             string dir = AppDomain.CurrentDomain.BaseDirectory;
             string scrubDir = Environment.GetEnvironmentVariable("LAPSECOIN_SCRUB_TEST");
             if (!string.IsNullOrEmpty(scrubDir)) return ScrubTest(scrubDir);
+            string importsTest = Environment.GetEnvironmentVariable("LAPSECOIN_IMPORTS_TEST");
+            if (!string.IsNullOrEmpty(importsTest))
+            {
+                File.WriteAllText(Environment.GetEnvironmentVariable("LAPSECOIN_IMPORTS_OUT"), LoadProblems(importsTest, Path.GetDirectoryName(importsTest)));
+                return 0;
+            }
             string child = Environment.GetEnvironmentVariable("LAPSECOIN_LAUNCHER_CHILD");
             if (string.IsNullOrEmpty(child)) child = Path.Combine(dir, "lapsecoin.exe");
 
@@ -84,7 +91,7 @@ namespace LapseCoin
 
             if (refused != null || IsFault(code))
             {
-                try { Report(dir, code, refused, DateTime.UtcNow - began); } catch (Exception) { }
+                try { Report(dir, child, code, refused, DateTime.UtcNow - began); } catch (Exception) { }
             }
             return code;
         }
@@ -110,7 +117,7 @@ namespace LapseCoin
 
         // ----- what is reported -------------------------------------------------
 
-        static void Report(string dir, int code, string refused, TimeSpan lived)
+        static void Report(string dir, string child, int code, string refused, TimeSpan lived)
         {
             if (Environment.GetEnvironmentVariable("LAPSECOIN_CRASH_REPORTS") == "0") return;
             string dryRun = Environment.GetEnvironmentVariable("LAPSECOIN_CRASH_DRYRUN");
@@ -123,7 +130,9 @@ namespace LapseCoin
             string sig = refused != null ? "Lstart" + code : "L" + hex.Substring(2).ToLowerInvariant();
             // The launcher's own sentence is built from numbers and is not run through Clean (a run of
             // ordinary words looks like a recovery phrase); what Windows said is.
-            string what = refused != null ? Clean(refused, 160) : "the program ended with exit code " + hex + " after " + (int)lived.TotalSeconds + " s";
+            string meaning = Meaning(unchecked((uint)code));
+            string what = refused != null ? Clean(refused, 160)
+                : "the program ended with exit code " + hex + (meaning.Length > 0 ? " (" + meaning + ")" : "") + " after " + (int)lived.TotalSeconds + " s";
 
             string logDir = DataDir();
             string steps = FreshTail(logDir, "lapsecoin-start.log", 15);
@@ -131,12 +140,15 @@ namespace LapseCoin
             string earlier = CrashLogSinceSent(logDir);
 
             StringBuilder seen = new StringBuilder();
+            string why = Diagnosis(dir, child, unchecked((uint)code), refused != null);
+            if (why.Length > 0) { seen.AppendLine(); seen.AppendLine(why); }
             if (earlier.Length > 0) { seen.AppendLine(); seen.AppendLine("the program's own crash log:"); seen.AppendLine(earlier); }
             string events = RecentEvents();
             if (events.Length > 0) { seen.AppendLine(); seen.AppendLine("Windows events in the last 3 minutes:"); seen.AppendLine(events); }
 
             string title = ("Crash " + sig + ": launcher: " + what).Replace("\r", " ").Replace("\n", " ");
             if (title.Length > 120) title = title.Substring(0, 120);
+            if (steps.Length == 0) steps = "(none: the program wrote no start-up step, so none of its own code ran)";
             string[] timed = RelativeTimes(Clean(seen.ToString(), MaxTrace + MaxEvents + 400), Clean(steps, MaxSteps));
             string body = BuildBody(sig, what, "launcher: " + what + "\n" + timed[0], timed[1], repo);
 
@@ -262,10 +274,31 @@ namespace LapseCoin
             try
             {
                 RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-                object build = k.GetValue("CurrentBuildNumber"), ubr = k.GetValue("UBR");
-                return "10.0." + build + (ubr != null ? "." + ubr : "");
+                return WindowsVersion(k);
             }
             catch (Exception) { return "unknown"; }
+        }
+
+        // 10.0.26100.9711 on Windows 10 and 11, 6.1.7601.24519 on Windows 7. .NET's own
+        // Environment.OSVersion reports a made-up number on 8.1 and later, so the registry is read.
+        static string WindowsVersion(RegistryKey k)
+        {
+            object major = k.GetValue("CurrentMajorVersionNumber"), minor = k.GetValue("CurrentMinorVersionNumber");
+            string number = major != null && minor != null ? major + "." + minor : Convert.ToString(k.GetValue("CurrentVersion"));
+            object build = k.GetValue("CurrentBuildNumber"), ubr = k.GetValue("UBR");
+            return number + "." + build + (ubr != null ? "." + ubr : "");
+        }
+
+        static int WindowsMajor()
+        {
+            try
+            {
+                RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                object major = k.GetValue("CurrentMajorVersionNumber");
+                if (major != null) return Convert.ToInt32(major);
+                return int.Parse(Convert.ToString(k.GetValue("CurrentVersion")).Split('.')[0]);
+            }
+            catch (Exception) { return 0; }
         }
 
         static string Arch()
@@ -273,6 +306,146 @@ namespace LapseCoin
             string a = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITEW6432");
             if (string.IsNullOrEmpty(a)) a = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE");
             return string.IsNullOrEmpty(a) ? "unknown" : Clean(a, 12);
+        }
+
+        // ----- explaining a program that would not start -----------------------
+
+        // What a Windows exit code means, in words a reader of the report can use.
+        static string Meaning(uint c)
+        {
+            switch (c)
+            {
+                case 0xC0000135: return "a DLL the program needs was not found";
+                case 0xC0000139: return "a DLL lacks a function the program needs, usually a different Windows version";
+                case 0xC000007B: return "a program or DLL has the wrong bit-ness or is damaged";
+                case 0xC0000142: return "a DLL failed to start";
+                case 0xC0000005: return "access violation: code touched memory it must not";
+                case 0xC00000FD: return "stack overflow";
+                case 0xC0000409: return "the program stopped itself after detecting corrupted memory";
+                case 0xC0000374: return "heap corruption";
+                case 0xC0000017: return "not enough memory";
+                case 0xC0000022: return "access denied, for example by security software";
+                case 0xC0000428: return "the file's signature is invalid or blocked by code integrity";
+                case 0xC000001D: return "illegal instruction: the CPU lacks an instruction the program uses";
+                default: return "";
+            }
+        }
+
+        static string Diagnosis(string dir, string child, uint code, bool refused)
+        {
+            StringBuilder b = new StringBuilder();
+            int major = WindowsMajor();
+            if (major > 0 && major < 10)
+                b.AppendLine("This Windows is older than Windows 10, which the program needs (version " + WindowsBuild() + ").");
+            bool loader = code == 0xC0000135 || code == 0xC0000139 || code == 0xC000007B || code == 0xC0000142;
+            if (loader || refused)
+            {
+                string problems = LoadProblems(child, dir);
+                if (problems.Length > 0) b.AppendLine(problems);
+            }
+            return b.ToString().TrimEnd();
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr LoadLibraryEx(string file, IntPtr zero, uint flags);
+        [DllImport("kernel32.dll")]
+        static extern bool FreeLibrary(IntPtr module);
+        [DllImport("kernel32.dll")]
+        static extern uint SetErrorMode(uint mode);
+
+        // The libraries the program and the DLLs beside it import that neither sit beside it
+        // nor load from Windows, which is what a 0xC0000135 means and the exit code does not say.
+        static string LoadProblems(string exe, string dir)
+        {
+            StringBuilder missing = new StringBuilder();
+            try
+            {
+                SetErrorMode(0x8003);      // no error dialogs for the probe loads
+                Dictionary<string, bool> seen = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                Dictionary<string, bool> known = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                Queue<string> work = new Queue<string>();
+                work.Enqueue(exe);
+                int files = 0, reported = 0;
+                while (work.Count > 0 && files < 300 && reported < 10)
+                {
+                    string file = work.Dequeue();
+                    if (seen.ContainsKey(file)) continue;
+                    seen[file] = true;
+                    files++;
+                    foreach (string name in Imports(file))
+                    {
+                        string local = Path.Combine(dir, name);
+                        if (File.Exists(local)) { work.Enqueue(local); continue; }
+                        bool ok;
+                        if (!known.TryGetValue(name, out ok))
+                        {
+                            ok = LoadsFromWindows(name);
+                            known[name] = ok;
+                        }
+                        if (!ok && reported < 10)
+                        {
+                            missing.AppendLine("missing: " + name + " (needed by " + Path.GetFileName(file) + ")");
+                            reported++;
+                        }
+                    }
+                }
+                if (missing.Length == 0) return "";
+                return "Libraries the program needs that this Windows does not have:\n" + missing.ToString().TrimEnd();
+            }
+            catch (Exception) { return ""; }
+        }
+
+        static bool LoadsFromWindows(string name)
+        {
+            IntPtr h = LoadLibraryEx(name, IntPtr.Zero, 0x800);                 // LOAD_LIBRARY_SEARCH_SYSTEM32
+            if (h == IntPtr.Zero && Marshal.GetLastWin32Error() == 87)          // not supported before a 2011 update
+                h = LoadLibraryEx(name, IntPtr.Zero, 0);
+            if (h == IntPtr.Zero) return false;
+            FreeLibrary(h);
+            return true;
+        }
+
+        // The names in a program's import table (the libraries it needs before it runs).
+        static List<string> Imports(string path)
+        {
+            List<string> names = new List<string>();
+            try
+            {
+                byte[] b = File.ReadAllBytes(path);
+                int pe = BitConverter.ToInt32(b, 0x3C);
+                if (BitConverter.ToUInt32(b, pe) != 0x00004550u) return names;
+                int sections = BitConverter.ToUInt16(b, pe + 6);
+                int optSize = BitConverter.ToUInt16(b, pe + 20);
+                int opt = pe + 24;
+                bool pe64 = BitConverter.ToUInt16(b, opt) == 0x20B;
+                uint importRva = BitConverter.ToUInt32(b, opt + (pe64 ? 112 : 96) + 8);
+                if (importRva == 0) return names;
+                int table = opt + optSize;
+                Func<uint, int> offset = delegate(uint rva)
+                {
+                    for (int i = 0; i < sections; i++)
+                    {
+                        int s = table + i * 40;
+                        uint va = BitConverter.ToUInt32(b, s + 12), raw = BitConverter.ToUInt32(b, s + 16), ptr = BitConverter.ToUInt32(b, s + 20);
+                        if (rva >= va && rva < va + Math.Max(raw, BitConverter.ToUInt32(b, s + 8))) return (int)(rva - va + ptr);
+                    }
+                    return -1;
+                };
+                int d = offset(importRva);
+                while (d > 0 && d + 20 <= b.Length)
+                {
+                    uint nameRva = BitConverter.ToUInt32(b, d + 12);
+                    if (nameRva == 0) break;
+                    int n = offset(nameRva);
+                    if (n < 0) break;
+                    int end = n;
+                    while (end < b.Length && b[end] != 0) end++;
+                    names.Add(Encoding.ASCII.GetString(b, n, end - n));
+                    d += 20;
+                }
+            }
+            catch (Exception) { }
+            return names;
         }
 
         // ----- where it goes ----------------------------------------------------
