@@ -3,8 +3,7 @@ name: Publish installers to Pages
 # Serves the Windows installers of the latest releases at
 #   https://lapsecoin.github.io/core/downloads/<version>/lapsecoin.msi
 # (and releases.json beside them, read by lapsecoin.github.io/downloads.html)
-# with no redirect (GitHub release links always redirect, which the Microsoft
-# Store rejects). The files are copied from the releases into a Pages
+# with no redirect (GitHub release links always redirect). The files are copied from the releases into a Pages
 # artifact on every run and are never committed to git, so the repo history
 # does not grow. Each deploy replaces the site, so the releases stay the
 # source of truth and this is only a mirror of the newest ones.
@@ -60,7 +59,6 @@ jobs:
       - name: Mirror the installers of the newest releases
         env:
           GH_TOKEN: ${{ github.token }}
-          MSIX_STORE_ID: ${{ vars.MSIX_STORE_ID }}
         run: python3 scripts/build_pages_site.py --repo "$GITHUB_REPOSITORY" --keep "$KEEP" --out site && find site -type f | sort
 
       # The whitepaper page, rendered with the node's own code and styles.

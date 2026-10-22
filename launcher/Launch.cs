@@ -1,5 +1,5 @@
-// lapsecoin-launch.exe: what the Start menu, the desktop shortcut and the Store
-// package start. It starts lapsecoin.exe, waits for it, and if Windows ended it
+// lapsecoin-launch.exe: what the Start menu and the desktop shortcut
+// start. It starts lapsecoin.exe, waits for it, and if Windows ended it
 // with a fault (a DLL that would not load, an access violation, a file blocked by
 // Smart App Control) or would not start it at all, files a sanitized report as an
 // issue, which nothing inside lapsecoin.exe could do because none of its code had

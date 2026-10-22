@@ -194,7 +194,7 @@ class TestSending:
             method, path, body, auth = gh.posts[0]
             assert path == "/repos/Lapsecoin/crash-reports/issues" and auth == "Bearer test-token"
             assert body["title"].startswith("Crash ") and "PermissionError: cannot open lapsecoin.log" in body["title"]
-            assert "PermissionError" in body["body"] and "packaged:" in body["body"]
+            assert "PermissionError" in body["body"]
             assert body["labels"] == ["crash-report"]
             assert (reporting / crashlog.SENT_MARK).exists()
 
@@ -321,7 +321,7 @@ SCRUB = json.loads((os.path.join(os.path.dirname(__file__), "scrub_cases.json") 
 
 
 class TestNothingPrivateIsSent:
-    """tests/scrub_cases.json is also run through the launcher on Windows (msix-probe.yml)."""
+    """tests/scrub_cases.json is also run through the launcher on Windows (launcher-probe.yml)."""
 
     @pytest.mark.parametrize("case", SCRUB["cases"], ids=[c["name"] for c in SCRUB["cases"]])
     def test_the_shared_cases(self, case):

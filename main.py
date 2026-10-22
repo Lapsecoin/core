@@ -272,7 +272,7 @@ def _run_console_update(args):
     updater = Updater()
     if not updater.can_self_update():
         print(f"This is a {updater.install_type!r} install; it can't update itself.")
-        print(f"Get the new version from: {updater.update_url(checker.releases_url)}")
+        print(f"Get the new version from: {checker.releases_url}")
         return
 
     answer = input("Update now? [y/N] ").strip().lower()
