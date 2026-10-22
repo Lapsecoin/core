@@ -165,7 +165,7 @@ namespace LapseCoin
             StringBuilder b = new StringBuilder();
             b.AppendLine("Reported automatically by the LapseCoin launcher.");
             b.AppendLine();
-            b.AppendLine("LapseCoin " + Version() + ", launcher, " + (what.Length > 80 ? what.Substring(0, 80) : what) + ". Windows " + WindowsBuild() + " " + Arch() + ".");
+            b.AppendLine("LapseCoin " + Version() + ", launcher, " + (what.Length > 200 ? what.Substring(0, 200) : what) + ". Windows " + WindowsBuild() + " " + Arch() + ".");
             b.AppendLine();
             b.AppendLine("What the launcher saw:");
             b.AppendLine(Fence);
