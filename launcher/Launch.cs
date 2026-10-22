@@ -59,7 +59,10 @@ namespace LapseCoin
             string importsTest = Environment.GetEnvironmentVariable("LAPSECOIN_IMPORTS_TEST");
             if (!string.IsNullOrEmpty(importsTest))
             {
-                File.WriteAllText(Environment.GetEnvironmentVariable("LAPSECOIN_IMPORTS_OUT"), LoadProblems(importsTest, Path.GetDirectoryName(importsTest)));
+                // what was read from the file, then what is missing (the first line is what a test looks at)
+                File.WriteAllText(Environment.GetEnvironmentVariable("LAPSECOIN_IMPORTS_OUT"),
+                    "imports: " + string.Join(" ", Imports(importsTest).ToArray()) + "\n" +
+                    LoadProblems(importsTest, Path.GetDirectoryName(importsTest)));
                 return 0;
             }
             string child = Environment.GetEnvironmentVariable("LAPSECOIN_LAUNCHER_CHILD");
