@@ -21,6 +21,9 @@
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser"
              Description="LapseCoin node and wallet" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of LapseCoin is already installed." />
+    <!-- 1000 is Windows 10 and 11. Older Windows installs it and then the program cannot load
+         (api-ms-win-core-path-l1-1-0.dll and others are missing), which a crash report showed. -->
+    <Condition Message="LapseCoin needs Windows 10 or newer. This computer has an older version of Windows.">Installed OR VersionNT &gt;= 1000</Condition>
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Stops a running LapseCoin before it is upgraded or removed. Without
