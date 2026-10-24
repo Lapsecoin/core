@@ -218,6 +218,7 @@
     var last = pts[pts.length - 1];
     var area = d + "L" + X(last[0]).toFixed(1) + "," + base + "L" + X(pts[0][0]).toFixed(1) + "," + base + "Z";
     g += '<path class="area" d="' + area + '"/><path class="line" d="' + d + '"/>';
+    if (!isShare && series.holders) g += holderLines(series.holders, ytop, Y, W);
 
     if (!isShare && series.moves.length <= 120) {
       series.moves.forEach(function (m) {
@@ -230,6 +231,26 @@
     plot.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + g + '</svg>';
     geom = {X: X, Y: Y, val: val, x0: x0, x1: x1, pad: pad, W: W};
     show(cursor === null || cursor >= pts.length ? pts.length - 1 : cursor);
+  }
+
+  // Mean and median balance of every holder but the burn address. They are
+  // reference lines, not data: they never set the scale, so a mean far above
+  // this address rests on the top edge and says so instead of flattening the
+  // curve.
+  function holderLines(hs, ytop, Y, W) {
+    var out = "", last = null;
+    [["mean", hs.mean], ["median", hs.median]].forEach(function (r) {
+      var v = r[1] / TICKS, off = v > ytop;
+      var y = off ? pad.t : Y(v);
+      var ly = y - 4;
+      if (last !== null && Math.abs(ly - last) < 13) ly = last + 13;
+      last = ly;
+      out += '<line class="ref ' + r[0] + '" x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + y.toFixed(1) +
+             '" y2="' + y.toFixed(1) + '"/>' +
+             '<text class="reflabel ' + r[0] + '" x="' + (W - pad.r - 4) + '" y="' + ly.toFixed(1) +
+             '" text-anchor="end">' + r[0] + ' ' + compact(v) + (off ? ' (off scale)' : '') + '</text>';
+    });
+    return out;
   }
 
   function moveAt(h) {
@@ -282,6 +303,7 @@
     note.textContent = view === "share"
       ? "Share of the circulating supply (minted minus the burn address) at each block."
       : "Balance after each block that moved it." +
+        (series.holders ? " Dashed lines are today's mean and median over all holders except the burn address." : "") +
         (Math.abs(r) >= TICKS ? " Includes " + lapse(Math.abs(r)) + (r > 0 ? " paid to" : " taken from") +
              " this address by the chain itself, such as fee-request refunds, shown at the latest block." : "");
   }

@@ -139,3 +139,34 @@ class TestPages:
         _node_, _cs, app = self._app()
         html = app.test_client().get("/balance?addr=" + A + "&view=balance").get_data(as_text=True)
         assert 'data-view="share"' in html
+
+
+def test_holder_stats_leave_out_the_burn_address():
+    node = _node([(A, []), (A, []), (B, [])])
+    burn = crypto.burn_address()
+    node.view.state.credit(burn, 10_000 * UNIT)
+    bal = node.view.state.all_balances()
+    others = sorted(b for a, b in bal.items() if a != burn)
+    stats = LocalReader(node).holder_stats()
+    assert stats["holders"] == len(others)
+    assert stats["mean"] == sum(others) // len(others)
+    mid = len(others) // 2
+    expect = others[mid] if len(others) % 2 else (others[mid - 1] + others[mid]) // 2
+    assert stats["median"] == expect
+    assert stats["mean"] < 10_000 * UNIT
+
+
+def test_holder_stats_are_reused_until_the_tip_moves():
+    node = _node([(A, []), (B, [])])
+    reader = LocalReader(node)
+    first = reader.holder_stats()
+    node.view.state.credit(A, UNIT)
+    assert reader.holder_stats() is first          # same tip, not recomputed
+    node.view.chain.append({"height": 3, "hash": f"{3:064x}", "builder": None,
+                            "transactions": []})
+    assert reader.holder_stats() is not first
+
+
+def test_series_carries_the_holder_stats():
+    node = _node([(A, []), (B, [])])
+    assert LocalReader(node).address_series(B)["holders"]["holders"] == 2

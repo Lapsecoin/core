@@ -199,6 +199,10 @@ class LocalReader:
         # Stored as a single tuple so a concurrent reader never sees half of
         # an update.
         self._board_cache = {"key": None, "value": None}
+        # The holder stats change only when a block lands, so they are worked
+        # out once per tip and a lookup just reads them. Same single-tuple
+        # rule as above.
+        self._holder_cache = (None, None)
 
     # Fee market
 
@@ -253,6 +257,28 @@ class LocalReader:
                 "page": page, "total_pages": total_pages,
                 "rows": [list(r) for r in newest_first[start:start + HISTORY_PER_PAGE]]}
 
+    def holder_stats(self):
+        """Mean and median balance (ticks) over every holder except the
+        burn address, which holds coins nobody can spend and would push the
+        mean toward, or past, the real supply. None when nobody else holds
+        anything. Recomputed only when the tip changes."""
+        v = self.node.view
+        tip = v.chain[-1]["hash"] if v.chain else None
+        key, cached = self._holder_cache
+        if key == tip and tip is not None:
+            return cached
+        burn = crypto_mod.burn_address()
+        balances = sorted(b for a, b in v.state.all_balances().items()
+                          if a != burn and b > 0)
+        n = len(balances)
+        stats = None
+        if n:
+            mid = n // 2
+            median = balances[mid] if n % 2 else (balances[mid - 1] + balances[mid]) // 2
+            stats = {"holders": n, "mean": sum(balances) // n, "median": median}
+        self._holder_cache = (tip, stats)
+        return stats
+
     def address_series(self, addr):
         """The balance of addr over the chain, and what share of the
         circulating supply it was, as points [height, balance, circulating].
@@ -276,7 +302,7 @@ class LocalReader:
         balance = v.state.get_balance(addr)
         moves = _balance_moves(addr, node)
         out = {"tip": tip, "balance": balance, "residual": 0,
-               "points": [], "moves": []}
+               "points": [], "moves": [], "holders": self.holder_stats()}
         if tip < 0 or (not moves and not balance):
             return out
 
