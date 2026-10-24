@@ -466,7 +466,10 @@ jobs:
           $p = Run msiexec @('/i', "$PWD\lapsecoin.msi", '/qn', 'LAUNCH=0', '/l*v', "$PWD\install.log") 180 'the install'
           if ($p -and $p.ExitCode -ne 0) {
             $failures += "install exited $($p.ExitCode)"
-            Get-Content install.log -Tail 80
+            # The end of the log is only properties; the reason is earlier.
+            Select-String -Path install.log -Pattern 'Product: LapseCoin --|return value 3|Error \d{4}\.|VersionNT =|WindowsBuild =' |
+              ForEach-Object { $_.Line.Trim() } | Select-Object -First 40
+            Get-Content install.log -Tail 20
           }
           foreach ($f in 'lapsecoin.exe', 'installed-by-msi') {
             if (-not (Test-Path (Join-Path $dir $f))) { $failures += "missing $f after install" }
