@@ -42,7 +42,7 @@ tr.bench-median td span {
 }
 tbody tr.bench-median:hover td { background: none; }
 
-tr.bench-you td { background: rgb(194 87 12 / .06); }
+tr.bench-self td { background: rgb(194 87 12 / .06); }
 .bench-tag {
   display: inline-block; margin-left: .3rem; padding: 0 .4rem; border-radius: 999px;
   font-size: .68rem; font-weight: 600; color: var(--link); background: rgb(194 87 12 / .12);
