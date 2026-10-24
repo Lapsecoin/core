@@ -233,22 +233,24 @@
     show(cursor === null || cursor >= pts.length ? pts.length - 1 : cursor);
   }
 
-  // Mean and median balance of every holder but the burn address. They are
-  // reference lines, not data: they never set the scale, so a mean far above
-  // this address rests on the top edge and says so instead of flattening the
-  // curve.
+  // Average and median balance of every holder but the burn address. They
+  // are reference lines, not data: they never set the scale, so an average
+  // far above this address rests on the top edge and says so instead of
+  // flattening the curve. The median is usually tiny next to it, so it sits
+  // on the baseline: its label goes above its line, and the average's label
+  // moves up (or below its line, at the top edge) to stay clear.
   function holderLines(hs, ytop, Y, W) {
-    var out = "", last = null;
-    [["mean", hs.mean], ["median", hs.median]].forEach(function (r) {
-      var v = r[1] / TICKS, off = v > ytop;
-      var y = off ? pad.t : Y(v);
-      var ly = y - 4;
-      if (last !== null && Math.abs(ly - last) < 13) ly = last + 13;
-      last = ly;
-      out += '<line class="ref ' + r[0] + '" x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + y.toFixed(1) +
-             '" y2="' + y.toFixed(1) + '"/>' +
-             '<text class="reflabel ' + r[0] + '" x="' + (W - pad.r - 4) + '" y="' + ly.toFixed(1) +
-             '" text-anchor="end">' + r[0] + ' ' + compact(v) + (off ? ' (off scale)' : '') + '</text>';
+    var out = "", rows = [["average", hs.average], ["median", hs.median]].map(function (r) {
+      var v = r[1] / TICKS, off = v > ytop, y = off ? pad.t : Y(v);
+      return {name: r[0], v: v, off: off, y: y, ly: off ? y + 13 : y - 4};
+    });
+    var med = rows[1], avg = rows[0];
+    if (!avg.off && Math.abs(avg.ly - med.ly) < 13) avg.ly = med.ly - 13;
+    rows.forEach(function (r) {
+      out += '<line class="ref ' + r.name + '" x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + r.y.toFixed(1) +
+             '" y2="' + r.y.toFixed(1) + '"/>' +
+             '<text class="reflabel ' + r.name + '" x="' + (W - pad.r - 4) + '" y="' + r.ly.toFixed(1) +
+             '" text-anchor="end">' + r.name + ' ' + compact(r.v) + (r.off ? ' (off scale)' : '') + '</text>';
     });
     return out;
   }
@@ -303,7 +305,7 @@
     note.textContent = view === "share"
       ? "Share of the circulating supply (minted minus the burn address) at each block."
       : "Balance after each block that moved it." +
-        (series.holders ? " Dashed lines are today's mean and median over all holders except the burn address." : "") +
+        (series.holders ? " Dashed lines are today's average and median over all holders except the burn address." : "") +
         (Math.abs(r) >= TICKS ? " Includes " + lapse(Math.abs(r)) + (r > 0 ? " paid to" : " taken from") +
              " this address by the chain itself, such as fee-request refunds, shown at the latest block." : "");
   }

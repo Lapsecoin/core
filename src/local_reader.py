@@ -258,9 +258,9 @@ class LocalReader:
                 "rows": [list(r) for r in newest_first[start:start + HISTORY_PER_PAGE]]}
 
     def holder_stats(self):
-        """Mean and median balance (ticks) over every holder except the
+        """Average and median balance (ticks) over every holder except the
         burn address, which holds coins nobody can spend and would push the
-        mean toward, or past, the real supply. None when nobody else holds
+        average toward, or past, the real supply. None when nobody else holds
         anything. Recomputed only when the tip changes."""
         v = self.node.view
         tip = v.chain[-1]["hash"] if v.chain else None
@@ -275,7 +275,7 @@ class LocalReader:
         if n:
             mid = n // 2
             median = balances[mid] if n % 2 else (balances[mid - 1] + balances[mid]) // 2
-            stats = {"holders": n, "mean": sum(balances) // n, "median": median}
+            stats = {"holders": n, "average": sum(balances) // n, "median": median}
         self._holder_cache = (tip, stats)
         return stats
 
