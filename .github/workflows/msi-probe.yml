@@ -1,0 +1,59 @@
+name: Check the installer's launch condition
+
+# Builds the real installer definition (scripts/lapsecoin.wxs) around a tiny
+# stand-in program, once as it is and once without its Windows version
+# condition, installs each on a runner and prints what the installer says.
+# It answers one question without a 20 minute build: does the condition turn
+# the installer away on this Windows? Run it by hand.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the WiX Toolset and Pillow
+        run: |
+          choco install wixtoolset --no-progress -y
+          pip install pillow
+
+      - name: Make a stand-in program folder and icon
+        run: |
+          New-Item src-dir -ItemType Directory | Out-Null
+          Copy-Item "$env:WINDIR\System32\whoami.exe" src-dir\lapsecoin.exe
+          Copy-Item "$env:WINDIR\System32\whoami.exe" src-dir\lapsecoin-launch.exe
+          python -c "from PIL import Image; Image.new('RGBA',(32,32),(200,80,10,255)).save('favicon.ico',format='ICO',sizes=[(16,16),(32,32)])"
+          [System.Environment]::OSVersion | Format-List | Out-Host
+
+      - name: Build and install, with the condition and without it
+        run: |
+          $wxs = Get-Content scripts\lapsecoin.wxs -Raw
+          $without = [regex]::Replace($wxs, '<Condition Message=.*?</Condition>', '', 'Singleline')
+          if ($without -eq $wxs) { throw "found no <Condition> to remove" }
+
+          function Probe($name, $source) {
+            Copy-Item $source scripts\lapsecoin.wxs -Force
+            .\scripts\build_msi.ps1 -Source src-dir -Version 9.9.9 -Out "$name.msi"
+            Write-Host "=== $name ==="
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process msiexec -ArgumentList @('/i', "$PWD\$name.msi", '/qn', 'LAUNCH=0', '/l*v', "$PWD\$name.log") -PassThru -Wait
+            Write-Host "$name install exit $($p.ExitCode) after $([int]$sw.Elapsed.TotalSeconds) s"
+            Select-String -Path "$name.log" -Pattern 'VersionNT|WindowsBuild|LaunchCondition|needs Windows|return value 3|Product: LapseCoin|Error \d{4}|Action start|Action ended' |
+              ForEach-Object { $_.Line.Trim() } | Select-Object -First 60
+            Start-Process msiexec -ArgumentList @('/x', "$PWD\$name.msi", '/qn') -Wait
+          }
+
+          Set-Content with.wxs $wxs -NoNewline
+          Set-Content without.wxs $without -NoNewline
+          Probe 'with-condition' 'with.wxs'
+          Probe 'without-condition' 'without.wxs'
+          Copy-Item with.wxs scripts\lapsecoin.wxs -Force
