@@ -520,10 +520,11 @@ def _race_chart(race, width=None, height=None):
     # intervals) rather than a VDF wall clock drawn among them.
     own_seconds = race["own_pace"]
 
-    typical = [s for _, s, _ in rows if median / 2 <= s <= median * 2] or [s for _, s, _ in rows]
-    domain = list(typical)
-    if own_seconds is not None:
-        domain.append(own_seconds)
+    # The axis follows the blocks alone. The self line is not part of it, so
+    # a machine far from the field gets a line pinned to the edge and marked
+    # off scale, like any other outlier, instead of stretching the axis and
+    # flattening every block into a band.
+    domain = [s for _, s, _ in rows if median / 2 <= s <= median * 2] or [s for _, s, _ in rows]
     data_lo, data_hi = min(domain), max(domain)
     margin = max((data_hi - data_lo) * 0.08, 1.0)
     axis_lo = max(0.0, data_lo - margin)

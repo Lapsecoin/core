@@ -852,6 +852,22 @@ class TestRaceChartAxisZoom:
         # far above the typical band; zoomed, it should hug ~150-165s.
         assert chart["axis_hi"] < 300
 
+    def test_self_pace_far_from_the_field_does_not_stretch_axis(self):
+        import api as api_mod
+        chain = self._chain([150, 152, 148, 151, 149, 150])
+        race = block_mod.race_odds(chain, own_seconds=900.0)
+        chart = api_mod._race_chart(race)
+        assert chart["axis_hi"] < 300
+        assert chart["own_clipped"] is True
+        assert chart["ticks"][-1]["suffix"] == "+"
+
+    def test_self_pace_inside_the_field_is_not_clipped(self):
+        import api as api_mod
+        chain = self._chain([150, 152, 148, 151, 149, 150])
+        race = block_mod.race_odds(chain, own_seconds=150.0)
+        chart = api_mod._race_chart(race)
+        assert chart["own_clipped"] is False
+
     def test_outlier_point_flagged_clipped(self):
         import api as api_mod
         chain = self._chain([150, 150, 150, 150, 150, 1500])
