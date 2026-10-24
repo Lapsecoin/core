@@ -1082,6 +1082,12 @@ class UDPTransport:
     # Public send operations
     # ------------------------------------------------------------------
 
+    def forget_external_addr(self):
+        """Back to the state of a fresh start: no external address and no
+        votes for one, so the next PONGs and the fallback lookup relearn it."""
+        self.our_external_addr = None
+        self._ext_addr_votes.clear()
+
     def ping(self, addr: str, timeout: float = PING_TIMEOUT) -> str | None:
         """Send PING, wait for PONG. Returns observed external addr or None."""
         host, port = addr.rsplit(":", 1)

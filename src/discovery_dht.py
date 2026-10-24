@@ -105,6 +105,19 @@ class DHTDiscovery:
         my_offset = self._my_write_offset()
         return ses, my_offset
 
+    def rebuild(self):
+        """A fresh session. The caller drops its reference to the old one
+        first so its port is free. Bootstrap state and the in-flight read
+        round belong to the old session and start over; slot and put
+        bookkeeping describe what the network holds and stay."""
+        self.bootstrapped     = False
+        self._bootstrapped_at = None
+        self._pending_gets    = []
+        self._round_total     = 0
+        self._round_done      = 0
+        self._round_hits      = []
+        return self._make_session()
+
     def save_state(self, ses):
         try:
             state = ses.save_state()

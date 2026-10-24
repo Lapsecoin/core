@@ -72,6 +72,16 @@ TORRENT_ANNOUNCE_INTERVAL = 300
 # re-publishes far more often than the steady-state cadence above.
 LONELY_PUT_INTERVAL      = 600
 LONELY_ANNOUNCE_INTERVAL = 60
+# A restart fixes a node that has lost every peer because it redoes the
+# join from scratch: a new DHT session (its node id follows the external
+# IP, so a long-lived one can go on finding nobody after the address
+# changes), a re-learned external address, the peer cache, a LAN
+# broadcast. The loop only ever repeated the DHT lookups. After this long
+# with no peers at all (longer than a fresh node needs to find some, and
+# than STALE_SECONDS) the loop does the same join again, then backs off
+# so a machine that is simply offline does not churn.
+REJOIN_AFTER      = 300
+REJOIN_AFTER_MAX  = 1800
 
 # How often to log where discovery stands. Without this, a node with zero
 # peers just goes quiet after the startup burst, indistinguishable from
@@ -169,6 +179,30 @@ class Discovery:
     # Main loop
     # ------------------------------------------------------------------
 
+    def _seed_external_addr(self):
+        if not self.udp.our_external_addr:
+            ip = self._fallback_ip()
+            if ip:
+                self.udp.our_external_addr = f"{ip}:{self.port}"
+                log.info("[peers] our address as others see it: %s:%d", ip, self.port)
+
+    def _rejoin(self, ses):
+        """Redo the startup join for a node that has had no peers for a
+        while. Returns the new DHT session (None if there is no DHT).
+        Strikes and cooldowns are left alone: they expire within minutes
+        and exist to keep bad peers out."""
+        if ses is not None:
+            self._dht.save_state(ses)
+            # Drop the old session before the new one binds the same port.
+            ses = None
+            ses = self._dht.rebuild()
+        self.udp.forget_external_addr()
+        self._seed_external_addr()
+        self._load_peer_cache()
+        self._flush_candidates()
+        self.udp.broadcast_discover()
+        return ses
+
     def run(self):
         self._load_peer_cache()
         # Cached peers from a previous run are already known-good, connect
@@ -204,11 +238,7 @@ class Discovery:
         # Seed our external address early so PINGs we send include "from" field.
         # This lets NAT-loopback peers send PONG to our real IP instead of the
         # hairpinned source address.
-        if not self.udp.our_external_addr:
-            ip = self._fallback_ip()
-            if ip:
-                self.udp.our_external_addr = f"{ip}:{self.port}"
-                log.info("[peers] our address as others see it: %s:%d", ip, self.port)
+        self._seed_external_addr()
 
         # Wait for the DHT routing table to settle before issuing the first
         # query, so it isn't sent into an empty table, but don't just
@@ -235,6 +265,8 @@ class Discovery:
         last_lan      = now - LAN_BROADCAST_INTERVAL
         last_status   = now - STATUS_LOG_INTERVAL
         last_regossip = now - PEX_REGOSSIP_INTERVAL
+        lonely_since  = None
+        rejoin_after  = REJOIN_AFTER
 
         if ses is not None:
             self._dht.get_all(ses)
@@ -263,6 +295,19 @@ class Discovery:
 
 
             lonely = self.pool.count() == 0
+            if not lonely:
+                lonely_since, rejoin_after = None, REJOIN_AFTER
+            elif lonely_since is None:
+                lonely_since = now
+            elif now - lonely_since >= rejoin_after:
+                log.warning("[peers] no peers for %ds, redoing the startup join "
+                            "(new DHT session, address, cache, LAN)",
+                            int(now - lonely_since))
+                ses = self._rejoin(ses)
+                if ses is not None:
+                    ses.set_alert_notify(alert_event.set)
+                lonely_since = now
+                rejoin_after = min(rejoin_after * 2, REJOIN_AFTER_MAX)
             if ses is not None:
                 self._dht.pump_gets(ses)
             put_interval = LONELY_PUT_INTERVAL if lonely else PUT_REFRESH_INTERVAL
@@ -485,6 +530,8 @@ class Discovery:
 
     def _save_peer_cache(self):
         peers = self.pool.all_addrs()
+        if not peers:
+            return  # an empty pool says nothing new; keep the last good list
         try:
             with open(PEER_CACHE_FILE, "w") as f:
                 json.dump(peers, f)
