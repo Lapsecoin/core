@@ -961,6 +961,10 @@ class UDPTransport:
 
         self.our_external_addr: str | None = None  # set from PONG responses
         self._ext_addr_votes: dict[str, set] = {}  # observed addr -> {voter ip, ...}
+        # The address each peer last said it saw us at, newest last and
+        # bounded. Enough to tell whether our router uses the same public
+        # port toward different peers.
+        self.observed_by: dict[str, str] = {}
         self._seen_msg: dict[int, float] = {}      # msg_id -> ts for dedup
         self._seen_lock = threading.Lock()
         self._rate_buckets: dict[str, list] = {}   # source ip -> [tokens, last_refill]
@@ -1110,6 +1114,10 @@ class UDPTransport:
             # two throwaway addresses answering our own outbound PINGs could
             # feed a false "observed" address before ever being trusted.
             if result:
+                self.observed_by.pop(addr, None)
+                self.observed_by[addr] = result
+                while len(self.observed_by) > 32:
+                    self.observed_by.pop(next(iter(self.observed_by)))
                 voters = self._ext_addr_votes.setdefault(result, set())
                 if addr in self._pool.all_addrs():
                     voters.add(addr)

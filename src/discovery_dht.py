@@ -42,6 +42,12 @@ GET_SLOTS_PER_TICK   = 6
 PUT_AFTER_BOOTSTRAP  = 30
 PUT_BOOTSTRAP_GIVE_UP = 180
 PUT_VERIFY_ATTEMPTS  = 6
+# The public DHT entry points libtorrent starts from. Also what the
+# connection check pings to see whether UDP gets out at all.
+DHT_BOOTSTRAP_HOSTS = (("router.bittorrent.com", 6881),
+                       ("router.utorrent.com", 6881),
+                       ("dht.transmissionbt.com", 6881),
+                       ("dht.aelitis.com", 6881))
 STALE_ITEM_SECONDS   = 3 * 3600   # an entry older than this is a ghost
 SLOT_CONFLICT_AFTER  = 45
 MAX_SLOT_MOVES       = 6
@@ -383,12 +389,7 @@ class DHTDiscovery:
             | lt.alert.category_t.dht_operation_notification
             | lt.alert.category_t.status_notification
         )
-        settings["dht_bootstrap_nodes"] = (
-            "router.bittorrent.com:6881,"
-            "router.utorrent.com:6881,"
-            "dht.transmissionbt.com:6881,"
-            "dht.aelitis.com:6881"
-        )
+        settings["dht_bootstrap_nodes"] = ",".join(f"{h}:{p}" for h, p in DHT_BOOTSTRAP_HOSTS)
         ses = lt.session(settings)
         try:
             with open(DHT_STATE_FILE, "rb") as f:

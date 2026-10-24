@@ -1785,7 +1785,7 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
     fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node))
     unlock_ui.register(app, node, csrf_token, limiter)
     watch_ui.register(app, node)
-    decisions_ui.register(app, node)
+    decisions_ui.register(app, node, pool)
     addresses_ui.register(app, local_reader_for(node), node, csrf_token)
 
     @app.route("/api/peers/add", methods=["POST"])

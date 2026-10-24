@@ -52,6 +52,11 @@ from peerpool import is_routable_peer_addr
 log = logging.getLogger("ec.discovery")
 
 PEER_CACHE_FILE      = "lapsecoin_peers.json"
+# Web services that answer with the caller's public IP. Also what the
+# connection check asks.
+IP_ECHO_URLS = ("https://api.ipify.org",
+                "https://icanhazip.com",
+                "https://checkip.amazonaws.com")
 SAVE_INTERVAL        = 300
 GET_INTERVAL         = 60
 STAGE_FLUSH_INTERVAL = 15
@@ -496,9 +501,7 @@ class Discovery:
         """Last-resort public IP via HTTP. Only used before first PONG."""
         try:
             import requests
-            for url in ("https://api.ipify.org",
-                        "https://icanhazip.com",
-                        "https://checkip.amazonaws.com"):
+            for url in IP_ECHO_URLS:
                 try:
                     r = requests.get(url, timeout=5)
                     if r.status_code == 200:
