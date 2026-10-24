@@ -149,11 +149,11 @@ def test_holder_stats_leave_out_the_burn_address():
     others = sorted(b for a, b in bal.items() if a != burn)
     stats = LocalReader(node).holder_stats()
     assert stats["holders"] == len(others)
-    assert stats["mean"] == sum(others) // len(others)
+    assert stats["average"] == sum(others) // len(others)
     mid = len(others) // 2
     expect = others[mid] if len(others) % 2 else (others[mid - 1] + others[mid]) // 2
     assert stats["median"] == expect
-    assert stats["mean"] < 10_000 * UNIT
+    assert stats["average"] < 10_000 * UNIT
 
 
 def test_holder_stats_are_reused_until_the_tip_moves():
