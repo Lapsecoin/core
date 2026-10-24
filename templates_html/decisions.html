@@ -4,9 +4,8 @@
 <div class="decisions">
 <div class="page-head">
   <h2>Decisions</h2>
-  <span class="decisions-note">Decided at start, from what it was given. Restart with other options to change any of it.</span>
+  <span class="decisions-note">Decided at start, from what it was given. Restart with other options to change any of it.{% if can_check %} <a href="/decisions?check=1" title="Takes a few seconds. Lists only what it measured, and a fix only where one is simple.">{{ "Run the connection check again" if findings is not none else "Run the connection check" }}</a>{% endif %}</span>
 </div>
-{% if groups %}
 <div class="decision-cols">
 {% for group in groups %}
   <section class="decision-group">
@@ -19,29 +18,21 @@
     {% endfor %}
   </section>
 {% endfor %}
+{% if findings is not none %}
+  <section class="decision-group">
+    <h3 class="group-title">Connection check</h3>
+    {% for f in findings %}
+    <div class="decision-row">
+      <p class="decision-what">{{ f.what }}</p>
+      {% if f.why %}<p class="decision-why">{{ f.why }}</p>{% endif %}
+      {% if f.fix %}<p class="decision-why decision-fix"><b>Try:</b> {{ f.fix }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </section>
+{% endif %}
+{% if not groups and findings is none %}
+  <p class="decisions-note">Nothing was recorded for this start.</p>
+{% endif %}
 </div>
-{% else %}
-<p class="decisions-note">Nothing was recorded for this start.</p>
-{% endif %}
-{% if can_check %}
-<section class="decision-group connection-check">
-  <h3 class="group-title">Connection check</h3>
-  {% if findings is none %}
-  <div class="decision-row">
-    <p class="decision-what"><a class="btn" href="/decisions?check=1">Run the connection check</a></p>
-    <p class="decision-why">Takes a few seconds. It lists only what it measured, and a fix only where one is simple.</p>
-  </div>
-  {% else %}
-  {% for f in findings %}
-  <div class="decision-row">
-    <p class="decision-what">{{ f.what }}</p>
-    {% if f.why %}<p class="decision-why">{{ f.why }}</p>{% endif %}
-    {% if f.fix %}<p class="decision-fix"><b>Try:</b> {{ f.fix }}</p>{% endif %}
-  </div>
-  {% endfor %}
-  <div class="decision-row"><p class="decision-why"><a href="/decisions?check=1">Run it again</a>. This is a snapshot of right now, not a promise about later.</p></div>
-  {% endif %}
-</section>
-{% endif %}
 </div>
 {% endblock %}
