@@ -388,7 +388,7 @@
     const wantNodes = new Set(["self"]);
     const wantLinks = new Set();
 
-    upsertNode("self", { self: true, title: (self.addr || "self") + " (you)" });
+    upsertNode("self", { self: true, title: self.addr ? self.addr + " (self)" : "self" });
 
     peers.forEach(p => {
       upsertNode(p.address, {

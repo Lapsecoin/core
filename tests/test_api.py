@@ -1416,7 +1416,7 @@ class TestBenchmarkPage:
         html = self._get("/benchmark")
         assert "Test CPU 9000" in html
         assert "1,000" in html                      # 100000 iterations / 100 s
-        assert 'class="bench-tag">you<' in html
+        assert 'class="bench-tag">self<' in html
 
     def test_it_says_so_when_no_machine_has_enough_blocks(self):
         html = self._get("/benchmark", machines=False)

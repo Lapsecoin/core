@@ -48,9 +48,9 @@
         {% if median_after is not none and loop.index0 == median_after %}
         <tr class="bench-median"><td colspan="6"><span>median, {{ "{:,.0f}".format(median_ips) }} ips</span></td></tr>
         {% endif %}
-        <tr class="{{ 'bench-you' if r.machine == own_machine }}">
+        <tr class="{{ 'bench-self' if r.machine == own_machine }}">
           <td class="num" data-label="#">{{ r.rank }}</td>
-          <td class="bench-name" data-label="Machine" title="{{ r.name }}">{{ r.name }}{% if r.machine == own_machine %} <span class="bench-tag">you</span>{% endif %}</td>
+          <td class="bench-name" data-label="Machine" title="{{ r.name }}">{{ r.name }}{% if r.machine == own_machine %} <span class="bench-tag">self</span>{% endif %}</td>
           <td class="bench-speed" data-label="Speed">
             <span class="bench-bar" style="width: {{ '%.1f'|format(100 * r.bar) }}%"></span>
             <span class="bench-val" title="{{ 'Most of this machine\'s blocks sit at the timestamp floor, so the chain cannot show how much faster it is. This is a lower bound.' if r.capped else ('Some of this machine\'s blocks are still at the timestamp floor and are left out, so its fastest rounds are missing and the figure reads a little low.' if r.approx) }}">{{ "&ge; "|safe if r.capped }}{{ "&asymp; "|safe if r.approx }}{{ "{:,.0f}".format(r.ips) }}{% if r.blocks > 1 and r.ips_err >= 0.5 and not r.capped %} <small>&plusmn; {{ "{:,.0f}".format(r.ips_err) }}</small>{% endif %}</span>
