@@ -12,5 +12,7 @@
 .decisions .decision-row { padding: .38rem 0; border-bottom: 1px solid var(--rule); }
 .decisions .decision-what { margin: 0; font-size: .85rem; font-weight: 550; line-height: 1.3; overflow-wrap: anywhere; }
 .decisions .decision-why { margin: .08rem 0 0; font-size: .78rem; line-height: 1.35; color: var(--ink-dim); }
+.decisions .connection-check { max-width: 46rem; margin-top: 1rem; }
+.decisions .decision-fix { margin: .15rem 0 0; font-size: .78rem; line-height: 1.35; color: var(--ink); }
 @media (max-width: 1100px) { .decisions .decision-cols { column-count: 2; } }
 @media (max-width: 700px) { .decisions .decision-cols { column-count: 1; } }
