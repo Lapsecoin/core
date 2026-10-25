@@ -123,11 +123,22 @@ jobs:
       - name: Pick the tests this release can affect
         id: pick
         run: |
+          # Release tags cannot be moved (releases are immutable), so after the
+          # history was rewritten some tags sit on commits that are no longer
+          # on main. Find the same commit on main by author time and subject.
+          base_of() {
+            c=$(git rev-parse "refs/tags/$1^{commit}")
+            if git merge-base --is-ancestor "$c" HEAD; then echo "$c"; return; fi
+            at=$(git log -1 --format=%at "$c"); subj=$(git log -1 --format=%s "$c")
+            b=$(git log --format='%H%x09%at%x09%s' HEAD |
+                AT="$at" SUBJ="$subj" awk -F'\t' '$2==ENVIRON["AT"] && $3==ENVIRON["SUBJ"] {print $1}' | sed -n 1p)
+            echo "${b:-$c}"
+          }
           PREV="${{ needs.version.outputs.prev_ver }}"
           SELECTION=ALL
           if [ "${{ inputs.full_tests }}" != "true" ] && [ -n "$PREV" ] \
              && git rev-parse -q --verify "refs/tags/v$PREV" >/dev/null; then
-            SELECTION=$(python scripts/select_tests.py --base "v$PREV")
+            SELECTION=$(python scripts/select_tests.py --base "$(base_of "v$PREV")")
           fi
           echo "Selection: ${SELECTION:-<nothing>}"
           {
@@ -613,9 +624,20 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
+          # Release tags cannot be moved (releases are immutable), so after the
+          # history was rewritten some tags sit on commits that are no longer
+          # on main. Find the same commit on main by author time and subject.
+          base_of() {
+            c=$(git rev-parse "refs/tags/$1^{commit}")
+            if git merge-base --is-ancestor "$c" HEAD; then echo "$c"; return; fi
+            at=$(git log -1 --format=%at "$c"); subj=$(git log -1 --format=%s "$c")
+            b=$(git log --format='%H%x09%at%x09%s' HEAD |
+                AT="$at" SUBJ="$subj" awk -F'\t' '$2==ENVIRON["AT"] && $3==ENVIRON["SUBJ"] {print $1}' | sed -n 1p)
+            echo "${b:-$c}"
+          }
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "${{ needs.version.outputs.tag }}" | head -1)
           if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..HEAD"
+            RANGE="$(base_of "$PREV_TAG")..HEAD"
           else
             RANGE="HEAD"
           fi
