@@ -431,3 +431,12 @@ def test_mark_self_removes_and_refuses_readd():
     assert not pool.is_known("127.0.0.1:8335")
     assert pool.is_self("127.0.0.1:8335")
     assert not pool.add("127.0.0.1:8335", allow_private=True)
+
+
+def test_cgnat_overlay_addresses_rejected():
+    """Tailscale-style 100.64.0.0/10 peers are unreachable from the open
+    network and would form islands."""
+    pool = PeerPool()
+    assert not pool.add("100.64.1.1:8333")
+    assert not pool.add("100.100.100.100:8333")
+    assert pool.add("8.8.8.8:8333")

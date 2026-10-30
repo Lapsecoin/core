@@ -43,15 +43,24 @@ def _subnet_key(addr: str) -> str | None:
     return str(ipaddress.ip_network(f"{ip}/{prefix}", strict=False))
 
 
+# Shared address space (RFC 6598, 100.64.0.0/10). Python reports it as
+# neither private nor global. Overlay VPNs such as Tailscale hand these
+# out, so admitting them would pull in peers that only a tailnet can reach
+# and split the network into islands.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
 def is_routable_peer_addr(addr: str) -> bool:
-    """Reject loopback/private/link-local/multicast hosts. A malicious DHT
-    or peer-exchange entry pointing at e.g. 127.0.0.1 or a 10.x address
+    """Reject loopback/private/link-local/multicast/CGNAT hosts. A malicious
+    DHT or peer-exchange entry pointing at e.g. 127.0.0.1 or a 10.x address
     would otherwise make this node send UDP probes into its own host or
     internal network on the attacker's behalf."""
     try:
         host, _port = addr.rsplit(":", 1)
         ip = ipaddress.ip_address(host)
     except (ValueError, AttributeError):
+        return False
+    if ip.version == 4 and ip in _CGNAT:
         return False
     return not (ip.is_private or ip.is_loopback or ip.is_link_local
                 or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
