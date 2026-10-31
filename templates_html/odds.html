@@ -88,11 +88,12 @@
     </line>
     {% endif %}
     {% endfor %}
-    {# Blocks held at the floor draw as a neutral line with the builder on a dot #}
-    {% for p in chart.points if p.run %}
-    <circle cx="{{ p.x }}" cy="{{ p.y }}" r="3" fill="{{ p.color }}" stroke="var(--paper)" stroke-width="1">
-      <title>Block {{ p.height }}: {{ "%.1f"|format(p.seconds) }}s, at the timestamp floor{{ ", " ~ p.builder if p.builder }}</title>
-    </circle>
+    {# Blocks held at the floor: a band of builder colors along the flat line #}
+    {% for band in chart.bands %}
+    <g class="floor-band"><title>{{ band.title }}</title>
+      {% for c in band.cells %}<rect x="{{ c.x }}" y="{{ c.y }}" width="{{ c.w }}" height="{{ c.h }}" fill="{{ c.color }}"/>{% endfor %}
+      <rect x="{{ band.x }}" y="{{ band.y - band.h / 2 }}" width="{{ band.w }}" height="{{ band.h }}" fill="none" stroke="var(--paper)" stroke-width="1" rx="2"/>
+    </g>
     {% endfor %}
 
     <!-- Reference lines render last (on top of the data) so their labels
@@ -291,6 +292,49 @@
     return s;
   }
 
+  // Runs of floor-held blocks as a band on the flat line (see api._floor_bands,
+  // which draws the same at the default spacing). Recomputed here from the
+  // points so dragging the height axis keeps it matched to the blocks.
+  const FLOOR_CELL_MIN_PX = 4, FLOOR_BAND_H = 9, FLOOR_SHARES_H = 12;
+  function renderBands(chart) {
+    const pts = chart.points;
+    let s = "", i = 0;
+    while (i < pts.length) {
+      if (!pts[i].run) { i++; continue; }
+      let j = i;
+      while (j < pts.length && pts[j].run) j++;
+      const run = pts.slice(i, j), xs = run.map(function (p) { return xOf(chart, p.idx); });
+      const step = run.length > 1 ? (xs[xs.length - 1] - xs[0]) / (run.length - 1) : 0;
+      const x0 = xs[0] - step / 2, x1 = xs[xs.length - 1] + step / 2, y = run[0].y;
+      const counts = {};
+      run.forEach(function (p) { const b = p.builder || "unknown"; counts[b] = (counts[b] || 0) + 1; });
+      const who = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || (a < b ? -1 : 1); })
+        .map(function (b) { return escapeHtml(b) + " " + counts[b]; }).join(", ");
+      let cells = "";
+      const dense = step < FLOOR_CELL_MIN_PX, bh = dense ? FLOOR_SHARES_H : FLOOR_BAND_H;
+      if (!dense) {
+        run.forEach(function (p, k) {
+          const left = k === 0 ? x0 : (xs[k - 1] + xs[k]) / 2;
+          const right = k === run.length - 1 ? x1 : (xs[k] + xs[k + 1]) / 2;
+          cells += `<rect x="${left.toFixed(1)}" y="${y - FLOOR_BAND_H / 2}" width="${(right - left).toFixed(1)}" height="${FLOOR_BAND_H}" fill="${p.color}"/>`;
+        });
+      } else {
+        const by = {};
+        run.forEach(function (p) { by[p.color] = (by[p.color] || 0) + 1; });
+        let at = y - bh / 2;
+        Object.keys(by).sort(function (a, b) { return by[b] - by[a] || (a < b ? -1 : 1); }).forEach(function (c) {
+          const hh = bh * by[c] / run.length;
+          cells += `<rect x="${x0.toFixed(1)}" y="${at.toFixed(1)}" width="${(x1 - x0).toFixed(1)}" height="${hh.toFixed(1)}" fill="${c}"/>`;
+          at += hh;
+        });
+      }
+      s += `<g class="floor-band"><title>Blocks ${run[0].height} to ${run[run.length - 1].height} held at the floor, so they show who built them, not speed: ${who}</title>` +
+           cells + `<rect x="${x0.toFixed(1)}" y="${y - bh / 2}" width="${(x1 - x0).toFixed(1)}" height="${bh}" fill="none" stroke="var(--paper)" stroke-width="1" rx="2"/></g>`;
+      i = j;
+    }
+    return s;
+  }
+
   function renderChart(chart, medianVal) {
     if (!chart.points.length) return "";
     const x0 = chart.pad_l;
@@ -315,13 +359,7 @@
       }
       prevX = x;
     });
-    // Blocks held at the floor: a neutral line with the builder on a dot
-    chart.points.forEach(function (p) {
-      if (!p.run) return;
-      const label = p.builder ? ", " + escapeHtml(p.builder) : "";
-      s += `<circle cx="${xOf(chart, p.idx)}" cy="${p.y}" r="3" fill="${p.color}" stroke="var(--paper)" stroke-width="1">` +
-           `<title>Block ${p.height}: ${fmt1(p.seconds)}s, at the timestamp floor${label}</title></circle>`;
-    });
+    s += renderBands(chart);
     // Reference lines/labels last, on top of the data lines, see the
     // matching comment in the server-rendered SVG above.
     s += `<line x1="${x0}" y1="${chart.median_y}" x2="${chart.width}" y2="${chart.median_y}" stroke="var(--ink-dim)" stroke-width="1.25" stroke-dasharray="4,3"/>`;

@@ -1664,3 +1664,22 @@ class TestRaceChartFloorRuns:
         flags = [p["run"] for p in self._chart(
             [150, 110, self.FLOOR, self.FLOOR, self.FLOOR, self.FLOOR, 130, 160])["points"]]
         assert flags == [False, False, True, True, True, True, False, False]
+
+    def test_a_roomy_run_gets_one_cell_per_block(self):
+        bands = self._chart([self.FLOOR] * 10)["bands"]
+        assert len(bands) == 1 and bands[0]["mode"] == "cells"
+        assert len(bands[0]["cells"]) == 10
+
+    def test_a_dense_run_shows_builder_shares_not_stripes(self):
+        import api as api_mod
+        chart = api_mod._race_chart(
+            {"window": [(h, self.FLOOR, address(h % 2)) for h in range(400)],
+             "median": self.FLOOR, "own_pace": None, "retarget": None})
+        (band,) = chart["bands"]
+        assert band["mode"] == "shares" and len(band["cells"]) == 2
+        assert abs(band["cells"][0]["h"] - band["cells"][1]["h"]) < 0.5, "an even split"
+        assert band["cells"][0]["w"] == band["cells"][1]["w"], "stacked, not in sequence"
+        assert band["title"].count(address(0)) == 1
+
+    def test_no_band_without_a_run(self):
+        assert self._chart([95, 120, 101, 180, 99, 140])["bands"] == []

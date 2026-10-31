@@ -492,6 +492,67 @@ def _chart_dims():
 
 # Blocks in a row at the floor before the chart draws them as a run.
 FLOOR_RUN_MIN = 4
+# Narrowest a block's cell may be drawn in a floor band before the band shows
+# each builder's share instead, so a dense window never turns into noise.
+FLOOR_CELL_MIN_PX = 4.0
+FLOOR_BAND_H = 9
+FLOOR_SHARES_H = 12
+
+
+def _floor_bands(points):
+    """Geometry for the band drawn over each run of floor-held blocks.
+
+    A run says nothing about speed, only who built each block, so it is a
+    thin band along the flat line. With room, one cell per block in that
+    builder's color. Without it (cells under FLOOR_CELL_MIN_PX), one
+    segment per builder sized by its share of the run, so alternating
+    builders read as two even halves and never as sub-pixel stripes. The
+    hover names the exact counts either way."""
+    bands, i, n = [], 0, len(points)
+    while i < n:
+        if not points[i].get("run"):
+            i += 1
+            continue
+        j = i
+        while j < n and points[j].get("run"):
+            j += 1
+        run = points[i:j]
+        step = (run[-1]["x"] - run[0]["x"]) / (len(run) - 1) if len(run) > 1 else 0.0
+        x0, x1 = run[0]["x"] - step / 2, run[-1]["x"] + step / 2
+        by_color = {}
+        for pt in run:
+            by_color.setdefault(pt["color"], []).append(pt.get("builder") or "")
+        counts = {}
+        for pt in run:
+            counts[pt.get("builder") or "unknown"] = counts.get(pt.get("builder") or "unknown", 0) + 1
+        title = ("Blocks %d to %d held at the %ds floor, so they show who built them, not speed: %s"
+                 % (run[0]["height"], run[-1]["height"], params.MIN_BLOCK_SPACING_SECONDS,
+                    ", ".join("%s %d" % (b, c) for b, c in
+                              sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))))
+        cells = []
+        if step >= FLOOR_CELL_MIN_PX:
+            for k, pt in enumerate(run):
+                left = x0 if k == 0 else (run[k - 1]["x"] + pt["x"]) / 2
+                right = x1 if k == len(run) - 1 else (pt["x"] + run[k + 1]["x"]) / 2
+                cells.append({"x": round(left, 1), "w": round(right - left, 1),
+                              "y": round(run[0]["y"] - FLOOR_BAND_H / 2, 1),
+                              "h": FLOOR_BAND_H, "color": pt["color"]})
+            mode = "cells"
+        else:
+            # Stacked, not side by side: side by side reads as one builder
+            # then the other in time, and the point is that they interleave.
+            at = run[0]["y"] - FLOOR_SHARES_H / 2
+            for color, who in sorted(by_color.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+                h = FLOOR_SHARES_H * len(who) / len(run)
+                cells.append({"x": round(x0, 1), "w": round(x1 - x0, 1),
+                              "y": round(at, 1), "h": round(h, 1), "color": color})
+                at += h
+            mode = "shares"
+        bands.append({"x": round(x0, 1), "w": round(x1 - x0, 1), "y": run[0]["y"],
+                      "h": FLOOR_BAND_H if mode == "cells" else FLOOR_SHARES_H, "cells": cells, "mode": mode, "title": title,
+                      "count": len(run)})
+        i = j
+    return bands
 
 
 def _race_chart(race, width=None, height=None):
@@ -661,7 +722,7 @@ def _race_chart(race, width=None, height=None):
     # width the same points are drawn across, it never changes which
     # points are on screen, so the vertical scale and its clipping stay
     # exactly as computed here.
-    return {"points": points, "own_y": own_y, "own_clipped": own_clipped,
+    return {"points": points, "bands": _floor_bands(points), "own_y": own_y, "own_clipped": own_clipped,
             "median_y": median_y, "median_label_y": median_label_y,
             "own_label_y": own_label_y, "retarget": retarget_chart,
             "ticks": ticks,
