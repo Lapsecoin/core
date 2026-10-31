@@ -8,6 +8,7 @@ VDF verification is mocked because vdf.evaluate takes ~120s.
 """
 
 import os
+import statistics
 import sys
 import time
 
@@ -16,6 +17,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
+import params
 import settings as settings_mod
 import state as state_mod
 import tx as tx_mod
@@ -1630,3 +1632,35 @@ class TestRetargetCount:
 
     def test_an_empty_chain_has_none(self):
         assert block_mod.retarget_count([]) == (0, 0)
+
+
+class TestRaceChartFloorRuns:
+    """A stretch of blocks stamped at the floor is flagged so the chart can
+    draw it as a neutral line with the builder on a dot, and nothing else is."""
+
+    FLOOR = params.MIN_BLOCK_SPACING_SECONDS
+
+    def _chart(self, seconds, builders=None):
+        import api as api_mod
+        builders = builders or [address(i % 2) for i in range(len(seconds))]
+        window = [(h, s, builders[h]) for h, s in enumerate(seconds)]
+        race = {"window": window, "median": statistics.median(seconds),
+                "own_pace": None, "retarget": None}
+        return api_mod._race_chart(race)
+
+    def test_alternating_builders_at_the_floor_are_a_run(self):
+        chart = self._chart([self.FLOOR] * 12)
+        assert all(p["run"] for p in chart["points"])
+
+    def test_a_short_stretch_at_the_floor_is_left_alone(self):
+        chart = self._chart([120, self.FLOOR, self.FLOOR, 130, 140, self.FLOOR])
+        assert not any(p["run"] for p in chart["points"])
+
+    def test_varied_blocks_are_never_a_run(self):
+        chart = self._chart([95, 120, 101, 180, 99, 140, 110])
+        assert not any(p["run"] for p in chart["points"])
+
+    def test_only_the_stretch_at_the_floor_is_flagged(self):
+        flags = [p["run"] for p in self._chart(
+            [150, 110, self.FLOOR, self.FLOOR, self.FLOOR, self.FLOOR, 130, 160])["points"]]
+        assert flags == [False, False, True, True, True, True, False, False]

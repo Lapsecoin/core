@@ -490,6 +490,10 @@ def _chart_dims():
     return pick("w", _CHART_W, 480, 1800), pick("h", _CHART_H, 170, 600)
 
 
+# Blocks in a row at the floor before the chart draws them as a run.
+FLOOR_RUN_MIN = 4
+
+
 def _race_chart(race, width=None, height=None):
     """Precompute SVG pixel geometry for the race-odds chart.
 
@@ -562,6 +566,24 @@ def _race_chart(race, width=None, height=None):
                "builder": builder,
                "color": color_by_builder.get(builder, _OTHER_COLOR)}
               for idx, (h, seconds, builder) in enumerate(rows)]
+
+    # A block stamped at the floor says nothing about its builder's speed, so
+    # a stretch of them is a flat line whose only information is who built
+    # each block. Colored per segment that reads as a stripe whenever the
+    # builders alternate, so a stretch of FLOOR_RUN_MIN or more is flagged
+    # and drawn as one neutral line with a dot per block carrying the color.
+    # Shorter stretches and anything off the floor draw as before.
+    at_floor = params.MIN_BLOCK_SPACING_SECONDS + block_mod.CAP_TOLERANCE_SECONDS
+    i = 0
+    while i < n:
+        j = i
+        while j < n and rows[j][1] <= at_floor:
+            j += 1
+        for k in range(i, j):
+            points[k]["run"] = j - i >= FLOOR_RUN_MIN
+        i = max(j, i + 1)
+    for pt in points:
+        pt.setdefault("run", False)
 
     machine_of = race.get("machine_of") or {}
 

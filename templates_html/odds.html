@@ -83,10 +83,16 @@
     {% if not loop.first %}
     {% set prev = chart.points[loop.index0 - 1] %}
     <line x1="{{ prev.x }}" y1="{{ prev.y }}" x2="{{ p.x }}" y2="{{ p.y }}"
-          stroke="{{ p.color }}" stroke-width="1.75">
+          stroke="{{ 'var(--ink-dim)' if p.run and prev.run else p.color }}" stroke-width="{{ 1.25 if p.run and prev.run else 1.75 }}">
       <title>Block {{ p.height }}: {{ "%.1f"|format(p.seconds) }}s{{ ", " ~ p.builder if p.builder }}{{ " (off scale, clipped to the edge)" if p.clipped }}</title>
     </line>
     {% endif %}
+    {% endfor %}
+    {# Blocks held at the floor draw as a neutral line with the builder on a dot #}
+    {% for p in chart.points if p.run %}
+    <circle cx="{{ p.x }}" cy="{{ p.y }}" r="3" fill="{{ p.color }}" stroke="var(--paper)" stroke-width="1">
+      <title>Block {{ p.height }}: {{ "%.1f"|format(p.seconds) }}s, at the timestamp floor{{ ", " ~ p.builder if p.builder }}</title>
+    </circle>
     {% endfor %}
 
     <!-- Reference lines render last (on top of the data) so their labels
@@ -303,10 +309,18 @@
         const prev = chart.points[i - 1];
         const label = p.builder ? ", " + escapeHtml(p.builder) : "";
         const off = p.clipped ? " (off scale, clipped to the edge)" : "";
-        s += `<line x1="${prevX}" y1="${prev.y}" x2="${x}" y2="${p.y}" stroke="${p.color}" stroke-width="1.75">` +
+        const inRun = p.run && prev.run;
+        s += `<line x1="${prevX}" y1="${prev.y}" x2="${x}" y2="${p.y}" stroke="${inRun ? "var(--ink-dim)" : p.color}" stroke-width="${inRun ? 1.25 : 1.75}">` +
              `<title>Block ${p.height}: ${fmt1(p.seconds)}s${label}${off}</title></line>`;
       }
       prevX = x;
+    });
+    // Blocks held at the floor: a neutral line with the builder on a dot
+    chart.points.forEach(function (p) {
+      if (!p.run) return;
+      const label = p.builder ? ", " + escapeHtml(p.builder) : "";
+      s += `<circle cx="${xOf(chart, p.idx)}" cy="${p.y}" r="3" fill="${p.color}" stroke="var(--paper)" stroke-width="1">` +
+           `<title>Block ${p.height}: ${fmt1(p.seconds)}s, at the timestamp floor${label}</title></circle>`;
     });
     // Reference lines/labels last, on top of the data lines, see the
     // matching comment in the server-rendered SVG above.
