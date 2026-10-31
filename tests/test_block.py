@@ -1408,6 +1408,16 @@ class TestMachineBench:
             chain.append(blk)
         return chain
 
+    def test_held_at_the_floor_now_outranks_older_slower_blocks(self):
+        floor = block_mod.params.MIN_BLOCK_SPACING_SECONDS
+        old = [("A", 3 * floor)] * 10
+        now = [("A", floor)] * block_mod.FASTEST_MIN_BLOCKS
+        other = [("B", 1.5 * floor)] * 10
+        bench = block_mod.MachineBench().update(self._chain(old + other + now))
+        rows = bench.table()
+        assert rows[0]["machine"] == "A" and rows[0]["capped"]
+        assert bench.best()["machine"] == "A"
+
     def test_nothing_until_a_machine_has_enough_blocks(self):
         chain = self._chain([("A", 50)] * (block_mod.FASTEST_MIN_BLOCKS - 1))
         assert block_mod.MachineBench().update(chain).best() is None
