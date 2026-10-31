@@ -754,10 +754,9 @@ class MachineBench:
     the block, so it sits a little under the raw VDF speed. A machine is only
     seen on blocks it won, so a slow one is seen on its luckier rounds and
     reads a little better than it is. A block stamped at the timestamp floor
-    only says the machine is at least that fast, so once a machine has enough
-    blocks that were not held there, only those are read (old held blocks
-    would drag it down after a retarget); until then the held ones count and
-    the row is flagged. And the label is self-reported.
+    only says the machine is at least that fast, so it counts at the floor's
+    figure and a row with half or more of its blocks there is flagged as a
+    lower bound. And the label is self-reported.
     The median is used throughout so a few odd intervals or a lying builder
     among honest ones move nothing, and every row carries how many blocks
     and builders stand behind it. Builders are the confidence: one address can
@@ -781,38 +780,17 @@ class MachineBench:
         # (hash, label, seconds per iteration, builder, at the floor, iterations)
         self._log = collections.deque(maxlen=self.UNDO_DEPTH)
         self._samples = {}         # label -> sorted seconds per iteration, every block
-        self._open = {}            # label -> the same, blocks not held at the floor
         self._held = {}            # label -> sorted iterations of blocks held at the floor
         self._builders = {}        # label -> Counter of builder addresses
         self._medians = {}         # label -> median of its basis, once ranked
         self._iterations = None    # the tip's, to scale to
         self._first = None         # height of the first block counted
 
-    def _basis(self, label):
-        """The samples a machine's speed is read from: the blocks that were
-        not held at the floor once there are enough of them, else all."""
-        open_ = self._open.get(label, [])
-        return open_ if len(open_) >= FASTEST_MIN_BLOCKS else self._samples.get(label, [])
-
-    def _floor_bound(self, label):
-        """Seconds per iteration proven by blocks held at the floor in the
-        current regime, or None until there are FASTEST_MIN_BLOCKS of them.
-        A block stamped at the floor shows the machine finished within it, so
-        the machine is at least that fast whatever its older, off-floor
-        blocks say."""
-        held = self._held.get(label, [])
-        now = self._iterations or 0
-        if not now or len(held) - bisect.bisect_left(held, now) < FASTEST_MIN_BLOCKS:
-            return None
-        return (params.MIN_BLOCK_SPACING_SECONDS + CAP_TOLERANCE_SECONDS) / now
-
     def _refresh(self, label):
         if len(self._samples.get(label, [])) >= FASTEST_MIN_BLOCKS:
-            v = self._basis(label)
+            v = self._samples[label]
             mid = len(v) // 2
-            med = v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
-            bound = self._floor_bound(label)
-            self._medians[label] = med if bound is None else min(med, bound)
+            self._medians[label] = v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
         else:
             self._medians.pop(label, None)
 
@@ -831,9 +809,6 @@ class MachineBench:
             if capped:
                 held = self._held[label]
                 del held[bisect.bisect_left(held, iterations)]
-            else:
-                open_ = self._open[label]
-                del open_[bisect.bisect_left(open_, spi)]
             self._refresh(label)
 
     def update(self, chain):
@@ -866,18 +841,14 @@ class MachineBench:
                 self._builders.setdefault(label, collections.Counter())[builder] += 1
                 if capped:
                     bisect.insort(self._held.setdefault(label, []), iterations)
-                else:
-                    bisect.insort(self._open.setdefault(label, []), spi)
                 touched.add(label)
                 self._log.append((blk.get("hash"), label, spi, builder, capped, iterations))
             else:
                 self._log.append((blk.get("hash"), "", None, "", False, None))
+        for label in touched:
+            self._refresh(label)
         self._scanned = max(n, 1)
         self._iterations = chain[-1].get("vdf_iterations") if n else None
-        # A retarget moves which held blocks are current, so every machine
-        # with held blocks is re-read, not just the ones that built.
-        for label in touched | set(self._held):
-            self._refresh(label)
         return self
 
     def best(self):
@@ -902,30 +873,23 @@ class MachineBench:
     def table(self):
         """Ranked machines, fastest first: machine, name, ips (iterations per
         second, the median), ips_err (the standard error of that median, so
-        'ips +/- ips_err'), blocks, builders, capped (too few blocks off the
-        timestamp floor and half or more of them on it, so ips is a lower
-        bound), approx (read from the blocks off the floor, but some in the
-        current regime are still on it, so the machine's fastest rounds are
-        missing and the figure reads a little low), rank and percentile (100 is the fastest) and bar (its
+        'ips +/- ips_err'), blocks, builders, capped (half or more of its blocks on the timestamp
+        floor, so ips is a lower bound), rank and percentile (100 is the fastest) and bar (its
         share of the fastest row's length, 0 to 1). Capped machines tie."""
         rows = []
         for label, med in self._medians.items():
-            v = self._basis(label)
+            v = self._samples[label]
             n = len(v)
             iqr = v[int(0.75 * (n - 1))] - v[int(0.25 * (n - 1))]
             rel_err = 0.929 * iqr / math.sqrt(n) / med
             ips = 1.0 / med
             total = len(self._samples[label])
             held = self._held.get(label, [])
-            held_now = len(held) - bisect.bisect_left(held, self._iterations or 0)
-            off_floor = n == len(self._open.get(label, []))
-            bounded = self._floor_bound(label) is not None and med == self._floor_bound(label)
             rows.append({
                 "machine": label, "name": machine_display(label),
-                "ips": ips, "ips_err": 0.0 if bounded else ips * rel_err,
+                "ips": ips, "ips_err": ips * rel_err,
                 "blocks": total, "builders": len(self._builders[label]),
-                "capped": bounded or (not off_floor and len(held) * 2 >= total),
-                "approx": off_floor and held_now > 0 and not bounded})
+                "capped": len(held) * 2 >= total})
         # Machines held at the timestamp floor all read the same figure, the
         # best of them, so they tie instead of being ordered by noise. More
         # blocks behind a row puts it first within a tie.
