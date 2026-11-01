@@ -141,9 +141,22 @@ class TestSelfTestChecksWhichLiboqs:
         assert guard._liboqs_outside(b, self._maps(tmp_path, b + "/liboqs.so.9")) == []
 
     def test_a_copy_the_machine_has_is_not(self, tmp_path):
+        # Made here, as a symlink like a real install has, so what the test
+        # sees does not depend on what the machine running it has installed.
+        system = tmp_path / "system"
+        system.mkdir()
+        (system / "liboqs.so.0.16.0").write_bytes(b"x")
+        (system / "liboqs.so.9").symlink_to("liboqs.so.0.16.0")
         b = str(tmp_path / "bundle")
-        got = guard._liboqs_outside(b, self._maps(tmp_path, "/usr/local/lib/liboqs.so.9"))
-        assert got and "/usr/local/lib/liboqs.so.9" in got[0]
+        got = guard._liboqs_outside(b, self._maps(tmp_path, str(system / "liboqs.so.9")))
+        assert got and str(system / "liboqs.so.0.16.0") in got[0]
+
+    def test_the_bundle_may_reach_its_library_through_a_symlink(self, tmp_path):
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        (bundle / "liboqs.so.0.16.0").write_bytes(b"x")
+        (bundle / "liboqs.so.9").symlink_to("liboqs.so.0.16.0")
+        assert guard._liboqs_outside(str(bundle.resolve()), self._maps(tmp_path, str(bundle / "liboqs.so.9"))) == []
 
     def test_none_loaded_is_a_problem(self, tmp_path):
         assert guard._liboqs_outside(str(tmp_path), self._maps(tmp_path)) == ["oqs: no liboqs is loaded"]
