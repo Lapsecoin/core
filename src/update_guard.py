@@ -143,6 +143,23 @@ def check_at_start(environ=None, execv=None, timer=threading.Timer):
     return "armed"
 
 
+def _liboqs_outside(bundle, maps="/proc/self/maps"):
+    """Problems, if the liboqs this process mapped is not the one in `bundle`.
+    Read from what is mapped, not from the name oqs asked for: that can be a
+    bare soname that resolves to either."""
+    try:
+        with open(maps, encoding="utf-8") as f:
+            mapped = {line.split(None, 5)[5].strip() for line in f
+                      if "liboqs" in line and len(line.split(None, 5)) == 6}
+    except OSError:
+        return []                  # no /proc: nothing to check against
+    paths = {os.path.realpath(p) for p in mapped}
+    if not paths:
+        return ["oqs: no liboqs is loaded"]
+    outside = sorted(p for p in paths if not p.startswith(bundle + os.sep))
+    return [f"oqs: using {', '.join(outside)}, not the one shipped in the build"] if outside else []
+
+
 def run_self_test():
     """What --self-test does inside the program being tested. By the time it
     runs, main.py has already imported everything a start imports, so a
@@ -160,8 +177,19 @@ def run_self_test():
         import resources
         with open(os.path.join(resources.bundle_dir(), "VERSION"), encoding="utf-8") as f:
             version = f.read().strip()
+        frozen = resources.is_frozen()
+        bundle = os.path.realpath(resources.bundle_dir())
     except Exception:
-        version = "unknown"
+        version, frozen, bundle = "unknown", False, ""
+    if frozen:
+        # oqs falls back to a liboqs installed on the machine when the one in
+        # the build will not load, so a build that is broken here still passes
+        # on any machine that happens to have its own. Check which one it is.
+        try:
+            import oqs  # noqa: F401
+            problems += _liboqs_outside(bundle)
+        except Exception as e:
+            problems.append(f"oqs: {e}")
     if problems:
         print("lapsecoin %s self-test FAILED\n%s" % (version, "\n".join(problems)))
         return 1

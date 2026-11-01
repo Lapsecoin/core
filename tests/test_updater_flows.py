@@ -303,3 +303,16 @@ class TestUpdaterObject:
                                         on_progress=lambda *a: 1 / 0)
         session.run()
         assert session.snapshot()["stage"] == "unsupported"
+
+
+class TestTheBundledLiboqsMustLoad:
+    def test_a_recorded_load_failure_stops_the_start_with_the_reason(self, monkeypatch):
+        import resources
+        monkeypatch.setenv("LAPSECOIN_OQS_LOAD_ERROR", "libcrypto.so.3: version `OPENSSL_3.3.0' not found")
+        with pytest.raises(RuntimeError, match="OPENSSL_3.3.0"):
+            resources.require_bundled_oqs()
+
+    def test_nothing_recorded_means_nothing_to_stop(self, monkeypatch):
+        import resources
+        monkeypatch.delenv("LAPSECOIN_OQS_LOAD_ERROR", raising=False)
+        resources.require_bundled_oqs()

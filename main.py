@@ -32,6 +32,7 @@ _crashlog.breadcrumb(f"data folder ready: {_os.getcwd()}")
 import resources as _resources
 if _resources.is_frozen():
     _resources.prepare_oqs()
+    _resources.require_bundled_oqs()
 
 import argparse
 import collections

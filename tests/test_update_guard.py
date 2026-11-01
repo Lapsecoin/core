@@ -127,3 +127,26 @@ class TestRunSelfTest:
         assert guard.run_self_test() == 1
         out = capsys.readouterr().out
         assert "FAILED" in out and "tkinter" in out and guard.SELF_TEST_OK not in out
+
+
+class TestSelfTestChecksWhichLiboqs:
+    def _maps(self, tmp_path, *libs):
+        f = tmp_path / "maps"
+        f.write_text("".join(f"7f00-7f10 r-xp 00000000 08:01 1234 {p}\n" for p in libs)
+                     + "7f20-7f30 r-xp 0 08:01 1 /usr/lib/x86_64-linux-gnu/libc.so.6\n")
+        return str(f)
+
+    def test_the_one_in_the_build_is_fine(self, tmp_path):
+        b = str(tmp_path / "bundle")
+        assert guard._liboqs_outside(b, self._maps(tmp_path, b + "/liboqs.so.9")) == []
+
+    def test_a_copy_the_machine_has_is_not(self, tmp_path):
+        b = str(tmp_path / "bundle")
+        got = guard._liboqs_outside(b, self._maps(tmp_path, "/usr/local/lib/liboqs.so.9"))
+        assert got and "/usr/local/lib/liboqs.so.9" in got[0]
+
+    def test_none_loaded_is_a_problem(self, tmp_path):
+        assert guard._liboqs_outside(str(tmp_path), self._maps(tmp_path)) == ["oqs: no liboqs is loaded"]
+
+    def test_no_proc_means_nothing_to_check(self, tmp_path):
+        assert guard._liboqs_outside(str(tmp_path), str(tmp_path / "absent")) == []

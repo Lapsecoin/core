@@ -232,7 +232,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/liboqs-install
-          key: liboqs-linux-${{ env.LIBOQS_REF }}
+          # Includes the runner image: a liboqs built on another one was linked against
+          # newer libraries (OpenSSL) than the ones PyInstaller bundles from this one.
+          key: liboqs-linux-ubuntu-22.04-${{ env.LIBOQS_REF }}
 
       - name: Build liboqs
         if: steps.liboqs-cache.outputs.cache-hit != 'true'

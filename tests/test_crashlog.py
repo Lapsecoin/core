@@ -426,3 +426,14 @@ class TestTheCodeInTheTrace:
         monkeypatch.setattr(crashlog, "own_modules", lambda: self.MODULES)
         body = crashlog.issue_body({"app": "1.1.6", "trace": 'File "p\\gui.py", line 3, in f'}, "Lapsecoin/core")
         assert "Code in the trace, at this release:" in body and "blob/v1.1.6/src/gui.py#L3" in body
+
+
+class TestTheReportNamesTheRightSystem:
+    def test_a_linux_report_says_linux_not_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        facts = crashlog._facts(crashlog.build_payload("fatal", "start-up", "Traceback\nValueError: x", "sig"))
+        assert "Linux " in facts and "Windows" not in facts
+
+    def test_a_report_from_an_older_build_still_reads_as_windows(self):
+        assert "Windows 10.0.1" in crashlog._facts({"app": "1.0", "kind": "fatal", "where": "x",
+                                                    "windows": "10.0.1", "arch": "AMD64", "python": "3.11"})

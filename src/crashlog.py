@@ -314,8 +314,12 @@ def build_payload(kind, where, trace, sig):
         version = "unknown"
     trace, steps = relative_times(_head_and_tail(sanitize(trace), MAX_TRACE),
                                   sanitize(_start_log_tail())[-MAX_STEPS:])
+    if sys.platform.startswith("linux"):
+        system = "Linux " + " ".join(platform.libc_ver()).strip()
+    else:
+        system = "Windows " + platform.version()
     return {"v": 1, "kind": kind, "where": where, "sig": sig,
-            "app": version, "windows": platform.version(), "arch": platform.machine(),
+            "app": version, "windows": platform.version(), "system": system, "arch": platform.machine(),
             "python": platform.python_version(),
             "trace": trace, "steps": steps}
 
@@ -333,7 +337,7 @@ def _clean(text, limit):
 
 def _facts(p):
     return (f"LapseCoin {_clean(p.get('app'), 20)}, {_clean(p.get('kind'), 20)}, {_clean(p.get('where'), 40)}. "
-            f"Windows {_clean(p.get('windows'), 40)} {_clean(p.get('arch'), 12)}, "
+            f"{_clean(p.get('system') or 'Windows ' + str(p.get('windows')), 50)} {_clean(p.get('arch'), 12)}, "
             f"Python {_clean(p.get('python'), 20)}.")
 
 

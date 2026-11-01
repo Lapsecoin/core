@@ -29,6 +29,16 @@ def bundle_dir():
     return os.path.dirname(here)
 
 
+def require_bundled_oqs():
+    """In a PyInstaller build, stop with the reason if the liboqs shipped in it
+    would not load (scripts/hook_oqs.py records why). Left alone, oqs goes on to
+    download and build liboqs, which fails on any machine without cmake and
+    gives a report that hides the real cause."""
+    err = os.environ.get("LAPSECOIN_OQS_LOAD_ERROR")
+    if err:
+        raise RuntimeError("the liboqs shipped in this build could not be loaded: " + err)
+
+
 def prepare_oqs():
     """Point oqs at the liboqs shipped with a frozen build, before it is
     imported. PyInstaller does this in scripts/hook_oqs.py; a Nuitka build has no such
