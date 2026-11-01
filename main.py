@@ -16,6 +16,13 @@ if "--uninstall-notice" in _sys.argv[1:]:
 import crashlog as _crashlog
 _crashlog.install()
 
+# An AppImage that has just updated itself has not proved it stays up yet. If
+# the last start did not, the build it replaced is put back here, before
+# anything heavy is imported (see update_guard.py).
+import update_guard as _update_guard
+if "--self-test" not in _sys.argv[1:]:
+    _update_guard.check_at_start()
+
 # An installed Windows build keeps its data under %USERPROFILE%\LapseCoin, not beside
 # the program. This has to run before anything opens a relative path.
 import datadir as _datadir
@@ -569,6 +576,7 @@ def main():
                 # the node running without the window.
                 log.error("[startup] the desktop window could not load (%s), "
                           "running without it", exc)
+                _crashlog.report_current("the desktop window could not load")
                 use_gui = False
             else:
                 import shutil as _shutil
@@ -913,6 +921,9 @@ def _show_fatal_error(exc):
 
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv[1:]:
+        # The updater runs a downloaded build this way before it installs it.
+        sys.exit(_update_guard.run_self_test())
     _crashlog.breadcrumb("starting main()")
     try:
         main()

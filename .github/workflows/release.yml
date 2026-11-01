@@ -271,6 +271,26 @@ jobs:
       - name: Build the seeded Falcon library
         run: make -C native/falcon_seeded
 
+      # Where a crash report is filed (src/crashlog.py): this repository and the
+      # same issues-only token the Windows build bakes in. Without the secret
+      # nothing is written and the program sends nothing.
+      - name: Say where crash reports go
+        env:
+          CRASH_REPORT_REPO: ${{ github.repository }}
+          CRASH_REPORT_TOKEN: ${{ secrets.CRASH_REPORT_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, os
+          repo = os.environ.get("CRASH_REPORT_REPO", "").strip()
+          token = os.environ.get("CRASH_REPORT_TOKEN", "").strip()
+          with open("CRASH_REPORT", "w") as f:
+              f.write(json.dumps({"repo": repo, "token": token}, separators=(",", ":")) if repo and token else "")
+          own = ["main.py"] + sorted("src/" + n for n in os.listdir("src") if n.endswith(".py"))
+          with open("OWN_MODULES", "w") as f:
+              f.write("\n".join(own) + "\n")
+          print("crash reports go to", repo if repo and token else "nowhere (no token)")
+          PY
+
       - name: Build AppImage
         run: make linux
 
@@ -292,6 +312,13 @@ jobs:
           done < <(find dist/lapsecoin-onedir -type f)
           echo "the bundle needs up to $worst"
           test -z "$bad"
+
+      # The same check the updater runs on a download before installing it
+      # (src/update_guard.py), so a build that cannot pass it is never released.
+      - name: Self-test the AppImage
+        run: |
+          dist/lapsecoin --appimage-extract-and-run --self-test | tee self-test.out
+          grep -q "self-test ok" self-test.out
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6

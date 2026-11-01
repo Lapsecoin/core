@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import update_guard  # noqa: E402
 import updater  # noqa: E402
 
 ELF = b"\x7fELF" + b"\0" * 1_100_000
@@ -134,6 +135,9 @@ class TestAppImageUpdate:
         monkeypatch.setattr(sys, "argv", [str(app), "--no-gui"])
         execs = []
         monkeypatch.setattr(os, "execv", lambda path, args: execs.append((path, args)))
+        tested = []
+        monkeypatch.setattr(update_guard, "smoke_test",
+                            lambda path, target=None, **k: tested.append((path, target)))
         return app, execs
 
     def test_a_good_download_replaces_the_program_and_restarts_it(self, monkeypatch, setup):
@@ -148,7 +152,34 @@ class TestAppImageUpdate:
         assert app.read_bytes() == ELF
         assert app.stat().st_mode & stat.S_IXUSR, "the new program must be runnable"
         assert execs == [(str(app), [str(app), "--no-gui"])]
-        assert [p.name for p in app.parent.iterdir()] == ["lapsecoin"], "no temp file left behind"
+        assert sorted(p.name for p in app.parent.iterdir()) == [
+            "lapsecoin", "lapsecoin.previous", "lapsecoin.update-pending"], "no temp file left behind"
+        assert (app.parent / "lapsecoin.previous").read_bytes() == b"old build", "the old one is kept"
+
+    def test_a_build_that_fails_its_self_test_is_never_installed(self, monkeypatch, setup):
+        app, execs = setup
+        monkeypatch.setattr(updater, "_download", lambda url, dest, on_progress=None:
+                             open(dest, "wb").write(ELF))
+
+        def fails(path, target=None, **k):
+            raise RuntimeError("the downloaded program failed its self-test (exit 1)")
+        monkeypatch.setattr(update_guard, "smoke_test", fails)
+        session = updater.UpdateSession("linux-appimage", "9.9.9")
+        session.run()
+        snap = session.snapshot()
+        assert snap["stage"] == "failed" and "self-test" in snap["error"]
+        assert app.read_bytes() == b"old build" and execs == []
+        assert [p.name for p in app.parent.iterdir()] == ["lapsecoin"], "no copy, marker or temp file"
+
+    def test_the_download_is_the_file_that_gets_tested(self, monkeypatch, setup):
+        app, execs = setup
+        seen = []
+        monkeypatch.setattr(updater, "_download", lambda url, dest, on_progress=None:
+                             open(dest, "wb").write(ELF))
+        monkeypatch.setattr(update_guard, "smoke_test",
+                            lambda path, target=None, **k: seen.append((open(path, "rb").read()[:4], target)))
+        updater.UpdateSession("linux-appimage", "9.9.9").run()
+        assert seen == [(b"\x7fELF", "9.9.9")]
 
     def test_a_bad_download_changes_nothing_and_leaves_no_trace(self, monkeypatch, setup):
         app, execs = setup

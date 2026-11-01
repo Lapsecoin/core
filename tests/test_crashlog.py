@@ -37,9 +37,16 @@ class TestWhereItWrites:
         blocked.write_text("x")
         assert crashlog.pick_dir([str(blocked / "sub")]) is None
 
-    def test_the_candidates_start_with_the_profile_folder(self, tmp_path):
+    def test_the_candidates_start_with_the_profile_folder(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
         got = crashlog.candidate_dirs({"USERPROFILE": str(tmp_path)})
         assert got[0] == str(tmp_path / "LapseCoin") and got[1] == str(tmp_path)
+
+    def test_on_linux_it_uses_the_state_folder_not_the_home_directory(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        got = crashlog.candidate_dirs({"XDG_STATE_HOME": str(tmp_path)})
+        assert got[0] == str(tmp_path / "lapsecoin")
+        assert str(tmp_path / "LapseCoin") not in got
 
 
 class TestNothingChangesOutsideAnInstalledBuild:
@@ -49,6 +56,31 @@ class TestNothingChangesOutsideAnInstalledBuild:
         before = sys.excepthook
         crashlog.install()
         assert sys.excepthook is before and not crashlog._state["installed"]
+
+
+class TestActiveOnLinux:
+    @pytest.fixture(autouse=True)
+    def _plain(self, monkeypatch):
+        monkeypatch.delenv("LAPSECOIN_CRASHLOG", raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
+
+    def test_a_frozen_appimage_is_active(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setenv("APPIMAGE", "/x/lapsecoin")
+        assert crashlog.active()
+
+    def test_a_frozen_linux_build_outside_an_appimage_is_not(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.delenv("APPIMAGE", raising=False)
+        assert not crashlog.active()
+
+    def test_a_source_run_is_not(self, monkeypatch):
+        monkeypatch.delenv("APPIMAGE", raising=False)
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        assert not crashlog.active()
+
+    def test_the_report_names_the_c_library(self):
+        assert any(l.startswith("Linux ") for l in crashlog.environment_lines())
 
 
 class _FakeGitHub:

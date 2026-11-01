@@ -55,6 +55,12 @@ _all_datas = [
     ("vendor",             "vendor"),
     *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas, *crypto_datas,
 ]
+# Written by the release build (see release.yml): where a crash report is filed
+# and which files are the program's own, so a report can link them. Absent in a
+# local build, which then sends nothing.
+for _name in ("CRASH_REPORT", "OWN_MODULES"):
+    if os.path.exists(_name):
+        _all_datas.append((_name, "."))
 _all_hiddenimports = [
     *nacl_hiddenimports, *cffi_hiddenimports,
     *oqs_hiddenimports, *chiavdf_hiddenimports, *crypto_hiddenimports,

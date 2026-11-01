@@ -27,8 +27,10 @@ Nothing is sent when no token was baked in, when LAPSECOIN_CRASH_REPORTS=0 is
 set, or when a file named crash-reports-off is in the data folder. No window is
 shown for a crash.
 
-Only the Windows installer build uses it (the MSI). A
-source checkout, pip, the AppImage and a console run keep printing tracebacks.
+Only the Windows installer build (the MSI) and the Linux AppImage use it. A
+source checkout, pip and a console run keep printing tracebacks. On Linux the two
+files live in ~/.local/state/lapsecoin (or $XDG_STATE_HOME), and a native crash
+is sent by the next start, since there is no launcher to do it.
 """
 
 import os
@@ -59,18 +61,24 @@ _state = {"dir": None, "crash": None, "installed": False}
 
 
 def active():
-    """True for an installed Windows build. LAPSECOIN_CRASHLOG=1 turns it on
-    elsewhere, for tests."""
+    """True for an installed Windows build and for the Linux AppImage.
+    LAPSECOIN_CRASHLOG=1 turns it on elsewhere, for tests."""
     if os.environ.get("LAPSECOIN_CRASHLOG"):
         return True
-    if not sys.platform.startswith("win"):
-        return False
     import resources
-    return resources.is_frozen()
+    if sys.platform.startswith("win"):
+        return resources.is_frozen()
+    return (sys.platform.startswith("linux") and resources.is_frozen()
+            and bool(os.environ.get("APPIMAGE")))
 
 
 def candidate_dirs(environ=None):
     environ = os.environ if environ is None else environ
+    if sys.platform.startswith("linux"):
+        # Not a folder in the home directory: this is state, and the user did
+        # not ask for a new visible folder.
+        state = environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+        return [os.path.join(state, "lapsecoin"), tempfile.gettempdir()]
     home = environ.get("USERPROFILE") or os.path.expanduser("~")
     return [os.path.join(home, "LapseCoin"), home, tempfile.gettempdir()]
 
@@ -182,8 +190,14 @@ def environment_lines():
     except Exception:
         version = "unknown"
     import platform
+    if sys.platform.startswith("linux"):
+        # The C library is what decides whether a bundled library loads, so a
+        # report from a Linux machine says which one it has.
+        system = f"Linux {' '.join(platform.libc_ver())} {platform.machine()}".replace("  ", " ")
+    else:
+        system = f"Windows {platform.version()} {platform.machine()}"
     return [f"LapseCoin {version}",
-            f"Windows {platform.version()} {platform.machine()}",
+            system,
             f"Python {platform.python_version()}",
             f"options={argument_names(sys.argv[1:])}"]
 
@@ -217,7 +231,7 @@ def write_report(text):
         return None
 
 
-NO_WINDOW_FLAGS = ("--no-gui", "--export", "--update", "-h", "--help", "--check-restart-exe")
+NO_WINDOW_FLAGS = ("--no-gui", "--export", "--update", "-h", "--help", "--check-restart-exe", "--self-test")
 
 
 def interactive():

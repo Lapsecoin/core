@@ -54,3 +54,4 @@ native/falcon_seeded/*.dll
 
 CRASH_REPORT
 !tests/scrub_cases.json
+OWN_MODULES

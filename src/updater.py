@@ -38,6 +38,8 @@ import sys
 import tempfile
 import threading
 
+import update_guard
+
 log = logging.getLogger("ec.updater")
 
 RELEASE_ASSET_LINUX   = "lapsecoin"
@@ -276,8 +278,18 @@ class UpdateSession:
             _verify_appimage(tmp_path)
 
             os.chmod(tmp_path, 0o755)
+            # Start it before trusting it: a build that will not load on this
+            # system is refused here, while the working one is still in place.
+            self._set("verifying", "starting the new version to check it runs on this system")
+            update_guard.smoke_test(tmp_path, self.target_version)
+
             self._set("installing", f"replacing {appimage_path}")
-            os.replace(tmp_path, appimage_path)  # atomic: same filesystem, same dir
+            update_guard.prepare(appimage_path, self.target_version)   # keeps the old one, see update_guard
+            try:
+                os.replace(tmp_path, appimage_path)  # atomic: same filesystem, same dir
+            except Exception:
+                update_guard.clear(appimage_path)
+                raise
         except Exception:
             with contextlib.suppress(OSError):
                 os.remove(tmp_path)
