@@ -202,7 +202,13 @@ jobs:
   # failure of the publish itself.
   build-linux:
     needs: [version, set-genesis]
-    runs-on: ubuntu-latest
+    # Pinned to 22.04, not ubuntu-latest. PyInstaller bundles the build
+    # machine's own libraries (Tcl/Tk, OpenSSL, ...), and a library built
+    # on a newer system asks for a newer glibc than an older install has
+    # (v1.1.8 shipped libtcl needing GLIBC_2.42 and would not start on
+    # anything older). Building on 22.04 keeps the floor at glibc 2.35,
+    # the same reasoning as liboqs.yml.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -267,6 +273,25 @@ jobs:
 
       - name: Build AppImage
         run: make linux
+
+      # Fails the release when anything bundled needs a newer glibc than the
+      # floor, so a runner change cannot ship an app that will not start.
+      - name: Check the glibc the bundle needs
+        run: |
+          floor=GLIBC_2.35
+          worst=GLIBC_2.0
+          while IFS= read -r f; do
+            head -c 4 "$f" | grep -q 'ELF' || continue
+            max=$(objdump -T "$f" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            [ -n "$max" ] || continue
+            if [ "$(printf '%s\n' "$floor" "$max" | sort -V | tail -1)" != "$floor" ]; then
+              echo "::error::$f needs $max, above $floor"
+              bad=1
+            fi
+            worst=$(printf '%s\n' "$worst" "$max" | sort -V | tail -1)
+          done < <(find dist/lapsecoin-onedir -type f)
+          echo "the bundle needs up to $worst"
+          test -z "$bad"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6

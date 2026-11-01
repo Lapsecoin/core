@@ -551,7 +551,7 @@ def main():
     if use_gui:
         try:
             import gui
-        except ImportError:
+        except ImportError as exc:
             # tkinter isn't a pip package, can't be listed in
             # requirements.txt or fixed by `pip install`. It's bundled
             # automatically in the prebuilt binary releases (PyInstaller)
@@ -560,37 +560,48 @@ def main():
             # running from source. Rather than silently continuing without
             # the GUI the person asked for, offer to install it on the
             # spot, or stop and point at --no-gui as the explicit opt-out.
-            import shutil as _shutil
-            import subprocess as _subprocess
-
-            installers = [
-                ("apt-get", ["sudo", "apt-get", "install", "-y", "python3-tk"]),
-                ("dnf",     ["sudo", "dnf", "install", "-y", "python3-tkinter"]),
-                ("pacman",  ["sudo", "pacman", "-S", "--noconfirm", "tk"]),
-            ]
-            cmd = next((c for name, c in installers if _shutil.which(name)), None)
-
-            print(
-                "\ntkinter (needed for the desktop window) isn't installed.\n"
-                + (f"Install command detected: {' '.join(cmd)}\n" if cmd else "")
-                + "Options:\n"
-                "  [y] install it now\n"
-                "  [n] cancel, re-run with --no-gui to run headless instead\n"
-            )
-            answer = input("Install tkinter now? [y/N] ").strip().lower()
-            if answer == "y" and cmd:
-                result = _subprocess.run(cmd)
-                if result.returncode == 0:
-                    import gui  # retry now that it's installed
-                else:
-                    print("Install failed. Re-run with --no-gui, or install tkinter manually.")
-                    sys.exit(1)
-            elif answer == "y":
-                print("No known install command for this system. Install tkinter manually, or re-run with --no-gui.")
-                sys.exit(1)
+            if _resources.is_frozen() or not sys.stdin.isatty():
+                # Nothing to offer an install to: the prebuilt app carries its
+                # own tkinter, so an import failure there is the bundle not
+                # fitting this system (a library newer than the system's C
+                # library, say), and installing a package would not mend it.
+                # With no terminal the prompt below would crash on EOF. Keep
+                # the node running without the window.
+                log.error("[startup] the desktop window could not load (%s), "
+                          "running without it", exc)
+                use_gui = False
             else:
-                print("Not installing. Re-run with --no-gui to start headless.")
-                sys.exit(1)
+                import shutil as _shutil
+                import subprocess as _subprocess
+
+                installers = [
+                    ("apt-get", ["sudo", "apt-get", "install", "-y", "python3-tk"]),
+                    ("dnf",     ["sudo", "dnf", "install", "-y", "python3-tkinter"]),
+                    ("pacman",  ["sudo", "pacman", "-S", "--noconfirm", "tk"]),
+                ]
+                cmd = next((c for name, c in installers if _shutil.which(name)), None)
+
+                print(
+                    "\ntkinter (needed for the desktop window) isn't installed.\n"
+                    + (f"Install command detected: {' '.join(cmd)}\n" if cmd else "")
+                    + "Options:\n"
+                    "  [y] install it now\n"
+                    "  [n] cancel, re-run with --no-gui to run headless instead\n"
+                )
+                answer = input("Install tkinter now? [y/N] ").strip().lower()
+                if answer == "y" and cmd:
+                    result = _subprocess.run(cmd)
+                    if result.returncode == 0:
+                        import gui  # retry now that it's installed
+                    else:
+                        print("Install failed. Re-run with --no-gui, or install tkinter manually.")
+                        sys.exit(1)
+                elif answer == "y":
+                    print("No known install command for this system. Install tkinter manually, or re-run with --no-gui.")
+                    sys.exit(1)
+                else:
+                    print("Not installing. Re-run with --no-gui to start headless.")
+                    sys.exit(1)
     # Who this node runs as, and whether it asks for a passphrase before
     # starting, after (on the private pages, see unlock_ui.py) or never. The
     # rules are in startup.py; every case is a line in tests/test_startup.py.
