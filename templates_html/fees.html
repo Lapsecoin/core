@@ -13,6 +13,7 @@
     <form method="POST" action="/fees" id="fees-form" autocomplete="off" class="panel-body">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="form_token" value="{{ form_token }}">
+      {% if alone %}<p class="alert alert-warn">No peers connected, so no node can serve a request. It will not be sent until you reconnect.</p>{% endif %}
       {% if low %}<p class="alert alert-err low">You need {{ lock_lapse }} LAPSE. Mine some, or get free LAPSE on
          <a href="{{ discord }}" target="_blank" rel="noopener">Discord</a>.</p>{% endif %}
 

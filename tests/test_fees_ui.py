@@ -59,8 +59,10 @@ def app(tmp_path, monkeypatch):
     cs.state.credit(node.addr, 1000 * TICKS_PER_LAPSE)
     node.view = NodeView(cs)                  # the pages read the published view
     node.gas_io.gas_price_value = GAS_PRICE
-    client = api.create_private_app(node, peerpool_mod.PeerPool()).test_client()
-    return type("A", (), dict(node=node, client=client, io=node.gas_io))
+    pool = peerpool_mod.PeerPool()
+    monkeypatch.setattr(pool, "count", lambda: 1)
+    client = api.create_private_app(node, pool).test_client()
+    return type("A", (), dict(node=node, client=client, io=node.gas_io, pool=pool))
 
 
 def post(app, passphrase=PASS, **kw):
@@ -201,6 +203,20 @@ class TestSubmit:
         assert req["dest"] == DEST and req["network"] == "optimism"
         assert req["target"] == int(65_000 * GAS_PRICE * gas.GAS_SAFETY)
         assert gaslock.check_lock(t, 1)[0] and tx_mod.validate(t, app.node.cs.state)[0]
+
+    def test_with_no_peers_nothing_is_sent_and_it_says_why(self, app, monkeypatch):
+        monkeypatch.setattr(app.pool, "count", lambda: 0)
+        r = post(app)
+        assert fees_ui.NO_PEERS in follow(app, r) and app.node.mempool.all_txs() == []
+        assert "No peers connected" in app.client.get("/fees").get_data(as_text=True)
+
+    def test_plain_sends_are_not_gated_on_peers(self, app, monkeypatch):
+        monkeypatch.setattr(app.pool, "count", lambda: 0)
+        other = crypto.public_key_to_address(b"\x07" * 32)
+        r = submit(app.client, "/send", page="/send", follow=False, passphrase=PASS,
+                   outputs=f"{other},1")
+        assert r.status_code == 303
+        assert len(app.node.mempool.all_txs()) == 1
 
     def test_nothing_is_signed_by_anyone_but_the_sender(self, app):
         t = app.node.mempool.get(post(app).headers["Location"].rsplit("/", 1)[1])

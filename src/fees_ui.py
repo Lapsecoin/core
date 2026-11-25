@@ -75,19 +75,25 @@ def _listed(io, net, dest):
 
 
 REFUSED = "Nodes cannot send to that address."
+NO_PEERS = "No peers connected, so no node can serve a request. Reconnect and try again."
 
 
 def _problem(message, status=400):
     return jsonify(ok=False, error=message), status
 
 
-def register(app, reader, signer, csrf_token, io):
+def register(app, reader, signer, csrf_token, io, peer_count=None):
     """The Fees routes. `reader` and `signer` are the node's own; `io` reads
-    the other networks (gas_io.ChainIO or a fake)."""
+    the other networks (gas_io.ChainIO or a fake). `peer_count`, when given,
+    returns how many peers the node has: a request needs other nodes to
+    serve it, so with none it is refused rather than sent into the void."""
     after = "/tx/{}"
 
     def _csrf_ok():
         return secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token)
+
+    def _alone():
+        return peer_count is not None and peer_count() == 0
 
     def _lookup(args):
         net = gas.network(args.get("network", ""))
@@ -110,7 +116,8 @@ def register(app, reader, signer, csrf_token, io):
             low = False
         ctx = dict(title="Fees", csrf_token=csrf_token, form_token=f.tokens.issue(),
                    networks=network_options(), actions=action_options(),
-                   lock=LOCK, lock_lapse=LOCK_LAPSE, low=low, discord=DISCORD, alert_err="", form={})
+                   lock=LOCK, lock_lapse=LOCK_LAPSE, low=low, discord=DISCORD, alert_err="", form={},
+                   alone=_alone())
         ctx.update({k: v for k, v in f.notes.take(request.args.get("note")).items()
                     if k in ("alert_err", "form")})
         return render_template("fees.html", **ctx)
@@ -138,6 +145,8 @@ def register(app, reader, signer, csrf_token, io):
 
         if not _csrf_ok():
             return back("Session expired; reload the page and try again.")
+        if _alone():
+            return back(NO_PEERS)
         if not f.tokens.consume(request.form.get("form_token")):
             return back(forms_mod.ALREADY_SENT)
         net, action, dest, err = _lookup(form)

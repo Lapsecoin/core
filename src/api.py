@@ -1865,7 +1865,8 @@ def create_private_app(node, pool, private_port=8335, public_port=8333,
 
     register_wallet_routes(app, local_reader_for(node), _NodeSigner(node), csrf_token,
                            base=BaseSend(node))
-    fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node))
+    fees_ui.register(app, local_reader_for(node), _NodeSigner(node), csrf_token, _gas_io(node),
+                     peer_count=lambda: pool.count())
     unlock_ui.register(app, node, csrf_token, limiter)
     watch_ui.register(app, node)
     decisions_ui.register(app, node, pool)
