@@ -117,6 +117,17 @@ def retarget_count(chain):
     return windows, raised
 
 
+def difficulty_gain_pct(chain):
+    """How far the difficulty now stands above where the chain started, in
+    percent. The current figure is the one fixed at the latest boundary
+    block, the same value the blocks after it are held to. Display only."""
+    if not chain:
+        return 0.0
+    base = chain[0].get("vdf_iterations", VDF_ITERATIONS)
+    last = (len(chain) - 1) // VDF_ADJUST_INTERVAL * VDF_ADJUST_INTERVAL
+    cur = chain[last].get("vdf_iterations", VDF_ITERATIONS)
+    return (cur / base - 1) * 100
+
 # Blocks looked at on either side of a given block when computing its
 # "vs median" block time for display, distinct from (and much smaller
 # than) the consensus retarget window in get_vdf_iterations.

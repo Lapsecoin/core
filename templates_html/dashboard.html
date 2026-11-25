@@ -119,7 +119,7 @@
   <div class="panel">
     <div class="panel-head"><b>Network</b></div>
     <dl class="kv">
-      <div><dt>Age</dt><dd class="num"><span id="live-age">{{ fmt_duration(info.network_age_seconds) }}</span> <span class="side-sub">since genesis{% if info.retargets is defined %} <span id="live-retargets" title="{{ info.retargets }} difficulty window{{ '' if info.retargets == 1 else 's' }} closed, {{ info.retarget_raises }} raised the difficulty">({{ info.retargets }} retarget{{ '' if info.retargets == 1 else 's' }})</span>{% endif %}</span></dd></div>
+      <div><dt>Age</dt><dd class="num"><span id="live-age">{{ fmt_duration(info.network_age_seconds) }}</span> <span class="side-sub">since genesis{% if info.retargets is defined %} <span id="live-retargets" title="{{ info.retargets }} difficulty window{{ '' if info.retargets == 1 else 's' }} closed, {{ info.retarget_raises }} raised the difficulty, now {{ '%+.2f'|format(info.difficulty_gain_pct) }}% from the original">({{ info.retargets }} retarget{{ '' if info.retargets == 1 else 's' }}, {{ info.retarget_raises }} raised, {{ '%+.2f'|format(info.difficulty_gain_pct) }}%)</span>{% endif %}</span></dd></div>
     </dl>
   </div>
 {% if info.address %}
@@ -262,9 +262,12 @@
       const retargetEl = document.getElementById("live-retargets");
       if (retargetEl && info.retargets !== undefined) {
         const s = info.retargets === 1 ? "" : "s";
-        retargetEl.textContent = "(" + info.retargets + " retarget" + s + ")";
+        const gain = (info.difficulty_gain_pct || 0);
+        const pct = (gain >= 0 ? "+" : "") + gain.toFixed(2) + "%";
+        retargetEl.textContent = "(" + info.retargets + " retarget" + s + ", " +
+          info.retarget_raises + " raised, " + pct + ")";
         retargetEl.title = info.retargets + " difficulty window" + s + " closed, " +
-          info.retarget_raises + " raised the difficulty";
+          info.retarget_raises + " raised the difficulty, now " + pct + " from the original";
       }
 
       const txBody = document.getElementById("live-recent-txs");

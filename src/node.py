@@ -717,6 +717,7 @@ class Node:
             max_height = int(age_seconds / 120)
         sync_pct = calculate_sync_percent(v.height, max_height)
         retargets, retarget_raises = block_mod.retarget_count(v.chain)
+        difficulty_gain = block_mod.difficulty_gain_pct(v.chain)
         return {
             "height":       v.height,
             "sync_percent": sync_pct,
@@ -748,6 +749,7 @@ class Node:
             # raised the difficulty (block.retarget_count).
             "retargets":       retargets,
             "retarget_raises": retarget_raises,
+            "difficulty_gain_pct": difficulty_gain,
             "status":       self.status_line,
         }
 

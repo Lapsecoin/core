@@ -1634,6 +1634,19 @@ class TestRetargetCount:
         assert block_mod.retarget_count([]) == (0, 0)
 
 
+    def test_gain_is_zero_before_any_raise(self):
+        assert block_mod.difficulty_gain_pct(self._chain(12)) == 0.0
+
+    def test_gain_follows_the_latest_boundary_not_the_tip(self):
+        # Raises at 5 and 15: two steps of 2% by height 15, compounded.
+        gain = block_mod.difficulty_gain_pct(self._chain(18, raises_at={5, 15}))
+        assert abs(gain - ((1.02 ** 2) - 1) * 100) < 0.01
+        # A raise at 7 is not a boundary yet, so it does not count.
+        assert block_mod.difficulty_gain_pct(self._chain(8, raises_at={7})) == 0.0
+
+    def test_gain_of_an_empty_chain_is_zero(self):
+        assert block_mod.difficulty_gain_pct([]) == 0.0
+
 class TestRaceChartFloorRuns:
     """A stretch of blocks stamped at the floor is flagged so the chart can
     draw it as a neutral line with the builder on a dot, and nothing else is."""

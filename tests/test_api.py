@@ -218,17 +218,17 @@ class TestDashboardTxPaging:
     def test_the_age_line_counts_retargets_when_the_node_reports_them(self):
         node = self._DashNode(0)
         info = node.get_info()
-        node.get_info = lambda: dict(info, retargets=3, retarget_raises=2)
+        node.get_info = lambda: dict(info, retargets=3, retarget_raises=2, difficulty_gain_pct=4.04)
         html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/").get_data(as_text=True)
-        assert "(3 retargets)" in html
-        assert "3 difficulty windows closed, 2 raised the difficulty" in html
+        assert "(3 retargets, 2 raised, +4.04%)" in html
+        assert "3 difficulty windows closed, 2 raised the difficulty, now +4.04% from the original" in html
 
     def test_one_retarget_is_singular_and_none_reported_shows_nothing(self):
         node = self._DashNode(0)
         info = node.get_info()
-        node.get_info = lambda: dict(info, retargets=1, retarget_raises=0)
+        node.get_info = lambda: dict(info, retargets=1, retarget_raises=0, difficulty_gain_pct=0.0)
         html = api.create_private_app(node, peerpool_mod.PeerPool()).test_client().get("/").get_data(as_text=True)
-        assert "(1 retarget)" in html and "(1 retargets)" not in html
+        assert "(1 retarget, 0 raised, +0.00%)" in html and "(1 retargets" not in html
         assert "retarget)" not in self._client(0).get("/").get_data(as_text=True)
 
     def _client(self, tx_count):
