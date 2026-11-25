@@ -29,6 +29,7 @@ import crypto
 import evm
 import gas
 import gaslock
+import gas_receipt
 import relay
 from gas_io import ChainIO
 from gas_track import Tracker, claimers_in_order
@@ -55,6 +56,7 @@ class GasWorker:
         self._afford = None           # (height, bool): can this wallet pay for one request
         self._tip = 0
         self.claimed = set()          # request txids this process has claimed
+        self._receipt_sent = {}       # request txid -> tip when its receipt was last submitted
         self._stop = threading.Event()
         self._thread = None
 
@@ -182,8 +184,28 @@ class GasWorker:
                 if k in self.tracker.requests or k == txid}
         self.node.storage.set_meta(DONE_KEY, json.dumps(done, sort_keys=True))
 
+    def _maybe_receipt(self, r, rec, tip):
+        """Put a paid request's receipt on the chain, and again a few blocks
+        later if it did not make it, until it shows up there."""
+        if rec.get("state") != "paid" or not rec.get("tx"):
+            return
+        if any(x["lapse"] == self.node.addr for x in r.receipts):
+            return
+        if tip - self._receipt_sent.get(r.txid, -10 ** 9) < 3:
+            return
+        self._receipt_sent[r.txid] = tip
+        ok, err = self.io.receipt(r.txid, rec["tx"])
+        if ok:
+            log.info("[gas] posted the receipt for %s (%s)", r.txid[:12], rec["tx"])
+        else:
+            log.warning("[gas] receipt for %s failed, will retry: %s", r.txid[:12], err)
+
     def _maybe_pay(self, r, tip, view):
-        if r.txid in self._done() or tip < r.close:
+        done = self._done()
+        if r.txid in done:
+            self._maybe_receipt(r, done[r.txid], tip)
+            return
+        if tip < r.close:
             return
         order = claimers_in_order(r, view.chain[r.close]["hash"], self._claimer_funded)
         if self.node.addr not in order:
@@ -191,6 +213,11 @@ class GasWorker:
         if tip < gas.turn_start(r.close, order.index(self.node.addr)):
             return
         net = gas.network(r.req["network"])
+        grade, proof = gas_receipt.best(self.io, r, order)
+        if grade == gas_receipt.DELIVERED:
+            self._mark(r.txid, "funded", tx=proof)
+            log.info("[gas] %s was paid by %s, standing down", r.req["dest"], proof)
+            return
         try:
             if self.io.sanctioned(net, r.req["dest"]):
                 self._mark(r.txid, "refused")
@@ -220,6 +247,7 @@ class GasWorker:
             log.warning("[gas] paying %s on %s failed: %s", r.req["dest"], net.slug, e)
             return
         self._mark(r.txid, "paid", amount=amount, tx=tx_hash)
+        self._maybe_receipt(r, {"state": "paid", "tx": tx_hash}, tip)
         log.info("[gas] sent %s units to %s on %s (%s)", amount, r.req["dest"], net.slug, tx_hash)
 
     def _claimer_funded(self, base_addr):
@@ -249,8 +277,6 @@ class LiveIO(ChainIO):
         return self.balance_of_base(base_wallet.load_address(self.node.base_wallet_path))
 
     def claim(self, request_txid):
-        import wallet_ui
-        from local_reader import local_reader_for
         node = self.node
         secret = base_wallet.decrypt_secret(node.base_wallet_path, node._kek)
         try:
@@ -258,7 +284,15 @@ class LiveIO(ChainIO):
             sig = evm.sign_message(gas.claim_message(gas.request_ref(request_txid), node.addr), secret)
         finally:
             del secret
-        memo = gas.build_claim_memo(request_txid, base_addr, sig)
+        return self._post_memo(gas.build_claim_memo(request_txid, base_addr, sig))
+
+    def receipt(self, request_txid, tx_hash):
+        return self._post_memo(gas.build_receipt_memo(request_txid, tx_hash))
+
+    def _post_memo(self, memo):
+        import wallet_ui
+        from local_reader import local_reader_for
+        node = self.node
         outputs = [{"to": crypto.burn_address(), "amount": 1}]
         reader = local_reader_for(node)
         acct = reader.account(node.addr, fees=True, fresh=True)

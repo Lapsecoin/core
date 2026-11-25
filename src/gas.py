@@ -53,6 +53,9 @@ MAX_RANKS = 3
 
 REQUEST_TAG = gaslock.REQUEST_TAG
 CLAIM_TAG = gaslock.CLAIM_TAG
+# A receipt is node policy, not consensus: the chain stores it like any memo
+# and never reads it. Anyone can check its hash against the other network.
+RECEIPT_TAG = "[gas-paid] "
 REF_LEN = gaslock.REF_LEN
 
 
@@ -314,6 +317,23 @@ def parse_claim_memo(memo):
     if len(raw) != 65:
         return None
     return dict(ref=ref, base_addr=base_addr, signature=raw)
+
+
+def build_receipt_memo(request_txid: str, tx_hash: str) -> str:
+    return f"{RECEIPT_TAG}{request_ref(request_txid)} {tx_hash}"
+
+
+def parse_receipt_memo(memo):
+    """(ref, tx_hash) of a well-formed receipt memo, or None."""
+    if not isinstance(memo, str) or not memo.startswith(RECEIPT_TAG):
+        return None
+    parts = memo[len(RECEIPT_TAG):].split(" ")
+    if len(parts) != 2:
+        return None
+    ref, tx_hash = parts
+    if not re.fullmatch(r"[0-9a-f]{%d}" % REF_LEN, ref) or not re.fullmatch(r"0x[0-9a-f]{64}", tx_hash):
+        return None
+    return dict(ref=ref, tx_hash=tx_hash)
 
 
 def verify_claim_signature(claim: dict, lapse_from: str) -> bool:

@@ -28,6 +28,7 @@ DEST = evm.address_from_secret((21).to_bytes(32, "big"))
 TARGET = 5 * 10 ** 14                    # $1.25 at the fake price: under the ceiling
 PRICE = 2500.0
 RICH = 10 ** 18                          # a funded Base wallet: $2500 at the fake price
+PAID_TX = "0x" + "ab" * 32
 ASKER = 1
 ME = 2
 
@@ -55,6 +56,10 @@ class FakeIO:
         self.gas_price_value = 10 ** 9
         self.listed = set()              # destination addresses on a sanctions list
         self.screening_down = False
+        self.payments = {}               # tx hash -> what the other network says it did
+        self.rpc_down = False
+        self.receipts = []
+        self.receipt_ok = True
 
     def price(self, net):
         return PRICE
@@ -76,6 +81,15 @@ class FakeIO:
             raise evm.EVMUnreachable("oracle down")
         return addr in self.listed
 
+    def payment(self, net, tx_hash):
+        if self.rpc_down:
+            raise evm.EVMUnreachable("rpc down")
+        return self.payments.get(tx_hash)
+
+    def receipt(self, txid, tx_hash):
+        self.receipts.append((txid, tx_hash))
+        return (self.receipt_ok, "h" if self.receipt_ok else "mempool full")
+
     def claim(self, txid):
         self.claims.append(txid)
         return (self.claim_ok, "h" if self.claim_ok else "mempool full")
@@ -84,7 +98,7 @@ class FakeIO:
         if self.fail_pay:
             raise self.fail_pay
         self.paid.append((net.slug, dest, amount))
-        return "0xpaid"
+        return PAID_TX
 
 
 class World:
@@ -508,3 +522,157 @@ class TestLiveIO:
         monkeypatch.setattr(evm, "get_balance_wei", lambda url, a: seen.append(url) or 5)
         gas_worker.LiveIO(SimpleNamespace()).dest_balance(gas.NETWORKS["base"], "0x" + "1" * 40)
         assert seen == [evm.DEFAULT_BASE_RPC]
+
+
+BASE = gas.NETWORKS["base"]
+
+
+def _base_payment(w, payer_idx, **over):
+    """What Base says about a payout made by the node at payer_idx."""
+    p = {"sender": evm.address_from_secret(w.base_keys[payer_idx]) if payer_idx in w.base_keys
+         else "", "to": DEST, "value": TARGET, "ok": True}
+    p.update(over)
+    return p
+
+
+class TestReceipts:
+    def _paid(self, w):
+        txid = settled_world(w, [ME])
+        w.step()
+        close = w.worker.tracker.requests[txid].close
+        w.mine_until(close)
+        w.mine()
+        w.step()
+        return txid
+
+    def test_a_receipt_memo_round_trips(self):
+        memo = gas.build_receipt_memo("ab" * 32, PAID_TX)
+        assert gas.parse_receipt_memo(memo) == {"ref": "ab" * 12, "tx_hash": PAID_TX}
+
+    @pytest.mark.parametrize("memo", ["", "[gas-paid] x", "[gas-paid] " + "ab" * 12 + " 0xabc",
+                                      "[gas-paid] " + "AB" * 12 + " " + PAID_TX, None])
+    def test_a_malformed_receipt_is_not_one(self, memo):
+        assert gas.parse_receipt_memo(memo) is None
+
+    def test_the_node_posts_a_receipt_after_paying(self, w):
+        txid = self._paid(w)
+        assert w.io.receipts == [(txid, PAID_TX)]
+
+    def test_it_waits_a_few_blocks_before_retrying_a_receipt(self, w):
+        txid = self._paid(w)
+        w.mine(); w.step()
+        assert len(w.io.receipts) == 1
+        w.mine(); w.mine(); w.step()
+        assert len(w.io.receipts) == 2
+
+    def test_it_stops_retrying_once_the_receipt_is_on_the_chain(self, w):
+        txid = self._paid(w)
+        w.mine([make_tx(ME, 0, 1, None, fee=1000, nonce_override=w._nonce(ME),
+                        outputs_override=[{"to": crypto.burn_address(), "amount": 1}],
+                        memo=gas.build_receipt_memo(txid, PAID_TX))])
+        w.step()
+        for _ in range(6):
+            w.mine(); w.step()
+        assert len(w.io.receipts) == 1
+
+    def _post_receipt(self, w, txid, idx, tx_hash=PAID_TX):
+        w.mine([make_tx(idx, 0, 1, None, fee=1000, nonce_override=w._nonce(idx),
+                        outputs_override=[{"to": crypto.burn_address(), "amount": 1}],
+                        memo=gas.build_receipt_memo(txid, tx_hash))])
+
+    def test_a_receipt_from_a_ranked_base_payer_is_delivered(self, w):
+        import gas_receipt
+        txid = w.request(net=BASE)
+        w.claim_together(txid, [3])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        w.mine_until(r.close + 1)
+        self._post_receipt(w, txid, 3)
+        w.step()
+        gas_receipt._verdicts.clear()
+        w.io.payments = {PAID_TX: _base_payment(w, 3)}
+        order = gas_track_order(w, w.worker.tracker.requests[txid])
+        assert gas_receipt.best(w.io, w.worker.tracker.requests[txid], order) == \
+            (gas_receipt.DELIVERED, PAID_TX)
+
+    def test_a_receipt_from_someone_who_did_not_claim_is_never_looked_up(self, w):
+        import gas_receipt
+        txid = w.request(net=BASE)
+        w.claim_together(txid, [3])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        w.mine_until(r.close + 1)
+        self._post_receipt(w, txid, 4)                   # 4 never claimed
+        w.step()
+        looked = []
+        w.io.payment = lambda net, tx: looked.append(tx)
+        order = gas_track_order(w, w.worker.tracker.requests[txid])
+        assert gas_receipt.best(w.io, w.worker.tracker.requests[txid], order) == (None, None)
+        assert looked == []
+
+    def test_a_delivered_receipt_makes_the_next_node_stand_down(self, w, monkeypatch):
+        txid = w.request(net=BASE)
+        w.claim_together(txid, [3, ME])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        monkeypatch.setattr(gas, "order_claimers", lambda *a: [address(3), address(ME)])
+        w.mine_until(r.close + 1)
+        self._post_receipt(w, txid, 3)
+        w.io.dest = 0                                    # the balance alone would say "pay"
+        w.io.payments = {PAID_TX: _base_payment(w, 3)}
+        import gas_receipt
+        gas_receipt._verdicts.clear()
+        w.mine_until(gas.turn_start(r.close, 1))
+        w.step()
+        assert w.io.paid == []
+        assert w.done()[txid]["state"] == "funded" and w.done()[txid]["tx"] == PAID_TX
+
+    def test_a_relay_deposit_receipt_does_not_stop_the_next_node_from_topping_up(self, w, monkeypatch):
+        txid = w.request()                               # optimism, through Relay
+        w.claim_together(txid, [3, ME])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        monkeypatch.setattr(gas, "order_claimers", lambda *a: [address(3), address(ME)])
+        w.mine_until(r.close + 1)
+        self._post_receipt(w, txid, 3)
+        w.io.payments = {PAID_TX: _base_payment(w, 3, to="0x" + "11" * 20)}
+        import gas_receipt
+        gas_receipt._verdicts.clear()
+        w.mine_until(gas.turn_start(r.close, 1))
+        w.step()
+        assert w.io.paid == [("optimism", DEST, TARGET)]  # still short on the destination
+
+    def test_the_checks_a_receipt_must_pass(self, w):
+        import gas_receipt
+        base_payer = evm.address_from_secret(b"\x05" * 32)
+        good = {"sender": base_payer, "to": DEST, "value": TARGET, "ok": True}
+        w.io.payments = {PAID_TX: good}
+        gas_receipt._verdicts.clear()
+        assert gas_receipt.check(w.io, BASE, DEST, base_payer, PAID_TX) == gas_receipt.DELIVERED
+        for bad in (dict(good, ok=False), dict(good, sender=DEST), dict(good, to=base_payer),
+                    dict(good, value=0)):
+            gas_receipt._verdicts.clear()
+            w.io.payments = {PAID_TX: bad}
+            assert gas_receipt.check(w.io, BASE, DEST, base_payer, PAID_TX) is False
+
+    def test_a_relay_deposit_is_paid_not_delivered(self, w):
+        import gas_receipt
+        base_payer = evm.address_from_secret(b"\x05" * 32)
+        w.io.payments = {PAID_TX: {"sender": base_payer, "to": "0x" + "11" * 20,
+                                    "value": TARGET, "ok": True}}
+        gas_receipt._verdicts.clear()
+        assert gas_receipt.check(w.io, NET, DEST, base_payer, PAID_TX) == gas_receipt.PAID
+
+    def test_an_unknown_hash_or_a_dead_rpc_is_unknown_not_fake(self, w):
+        import gas_receipt
+        base_payer = evm.address_from_secret(b"\x05" * 32)
+        gas_receipt._verdicts.clear()
+        assert gas_receipt.check(w.io, BASE, DEST, base_payer, PAID_TX) is None
+        w.io.rpc_down = True
+        assert gas_receipt.check(w.io, BASE, DEST, base_payer, PAID_TX) is None
+        assert gas_receipt._verdicts == {}
+
+
+def gas_track_order(w, r):
+    import gas_track
+    return gas_track.claimers_in_order(r, w.chain[r.close]["hash"], lambda b: True)

@@ -369,6 +369,17 @@ def get_balance_wei(url: str, addr: str) -> int:
     return _hex_int(rpc(url, "eth_getBalance", [addr, "latest"]))
 
 
+def get_payment(url: str, tx_hash: str):
+    """What a mined transaction did: {"sender", "to", "value", "ok"}, or None
+    when the node does not know it yet or it is not mined."""
+    tx = rpc(url, "eth_getTransactionByHash", [tx_hash])
+    rc = rpc(url, "eth_getTransactionReceipt", [tx_hash])
+    if not isinstance(tx, dict) or not isinstance(rc, dict):
+        return None
+    return {"sender": tx.get("from") or "", "to": tx.get("to") or "",
+            "value": _hex_int(tx.get("value")), "ok": rc.get("status") == "0x1"}
+
+
 def get_nonce(url: str, addr: str) -> int:
     return _hex_int(rpc(url, "eth_getTransactionCount", [addr, "pending"]))
 

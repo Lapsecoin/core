@@ -9,7 +9,7 @@ import tx as tx_mod
 
 class Request:
     __slots__ = ("txid", "height", "lapse_from", "lock", "req",
-                 "first_claim", "claims")
+                 "first_claim", "claims", "receipts")
 
     def __init__(self, txid, height, lapse_from, lock, req):
         self.txid = txid
@@ -19,6 +19,7 @@ class Request:
         self.req = req                # gas.parse_request_memo()
         self.first_claim = None       # the chain's reading: any well-formed claim counts
         self.claims = []              # {"height", "lapse", "base"} with a verified signature
+        self.receipts = []            # {"height", "lapse", "tx"}: payers' claims of a payout, unchecked
 
     @property
     def close(self):
@@ -39,6 +40,8 @@ class Tracker:
             self._claim(t, height)
         for t in txs:
             self._request(t, height)
+        for t in txs:
+            self._receipt(t, height)
 
     def _request(self, t, height):
         if not gaslock.escrow_outputs(t) or not gaslock.active(height) \
@@ -65,6 +68,17 @@ class Tracker:
             if parsed and gas.verify_claim_signature(parsed, t["from"]):
                 r.claims.append({"height": height, "lapse": t["from"],
                                  "base": parsed["base_addr"]})
+
+    MAX_RECEIPTS = 12
+
+    def _receipt(self, t, height):
+        parsed = gas.parse_receipt_memo(t.get("memo"))
+        if parsed is None:
+            return
+        for r in self.requests.values():
+            if r.txid.startswith(parsed["ref"]) and r.height < height \
+                    and len(r.receipts) < self.MAX_RECEIPTS:
+                r.receipts.append({"height": height, "lapse": t["from"], "tx": parsed["tx_hash"]})
 
     def forget_before(self, height):
         for txid in [k for k, r in self.requests.items() if self.finished_at(r) < height]:

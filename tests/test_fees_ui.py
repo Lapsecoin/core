@@ -280,9 +280,9 @@ class TestStatus:
         w = World(tmp_path)
         return w
 
-    def status(self, w, txid, funded=False, claimer_funded=lambda b: True):
+    def status(self, w, txid, funded=False, claimer_funded=lambda b: True, receipt=None):
         return gas_status.request_status(w.chain, len(w.chain) - 1, txid, 1,
-                                         lambda: funded, claimer_funded)
+                                         lambda: funded, claimer_funded, receipt=receipt)
 
     def test_a_malformed_transaction_is_not_a_request(self, tmp_path):
         w = self.world(tmp_path)
@@ -330,6 +330,34 @@ class TestStatus:
         w.claim_together(txid, [3])
         w.mine_until(4)
         assert self.status(w, txid, funded=True)["stage"] == "funded"
+
+    def test_a_delivered_receipt_keeps_it_funded_after_the_gas_is_spent(self, tmp_path):
+        w = self.world(tmp_path)
+        txid = w.request()
+        w.claim_together(txid, [3])
+        w.mine_until(3 + 1 + 4 * gas.RANK_SLOT_BLOCKS)       # well past every turn
+        tx = "0x" + "cd" * 32
+        s = self.status(w, txid, funded=False, receipt=lambda r, order: ("delivered", tx))
+        assert s["stage"] == "funded" and s["receipt"]["tx"] == tx
+        assert s["receipt"]["url"].endswith(tx) and s["receipt"]["url"].startswith("https://basescan.org")
+
+    def test_a_relay_deposit_receipt_is_sent_not_gave_up(self, tmp_path):
+        w = self.world(tmp_path)
+        txid = w.request()
+        w.claim_together(txid, [3])
+        w.mine_until(3 + 1 + 4 * gas.RANK_SLOT_BLOCKS)
+        tx = "0x" + "cd" * 32
+        s = self.status(w, txid, funded=False, receipt=lambda r, order: ("paid", tx))
+        assert s["stage"] == "sent" and s["receipt"]["grade"] == "paid"
+        assert self.status(w, txid, funded=True, receipt=lambda r, order: ("paid", tx))["stage"] == "funded"
+
+    def test_no_receipt_keeps_the_old_reading(self, tmp_path):
+        w = self.world(tmp_path)
+        txid = w.request()
+        w.claim_together(txid, [3])
+        w.mine_until(3 + 1 + 4 * gas.RANK_SLOT_BLOCKS)
+        s = self.status(w, txid, receipt=lambda r, order: (None, None))
+        assert s["stage"] == "gave_up" and "receipt" not in s
 
     def test_everyone_having_had_a_turn_is_stated_honestly(self, tmp_path):
         w = self.world(tmp_path)

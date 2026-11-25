@@ -19,6 +19,7 @@
         <tr><td>Nodes that offered</td><td id="gas-claimers"></td></tr>
         <tr><td>Order</td><td id="gas-order"></td></tr>
         <tr><td>Your burn</td><td id="gas-lock"></td></tr>
+        <tr id="gas-receipt-row" style="display:none"><td>Payment</td><td class="hash-short"><a id="gas-receipt" target="_blank" rel="noopener"></a></td></tr>
       </table>
     </div>
   </div>
@@ -26,8 +27,8 @@
 <script>
 (function () {
   const $ = id => document.getElementById(id);
-  const FINAL = ["funded", "unclaimed", "no_eligible", "gave_up", "none"];
-  const STEP = {pending: 0, collecting: 1, paying: 2, funded: 3, unclaimed: 1, no_eligible: 2, gave_up: 2};
+  const FINAL = ["funded", "sent", "unclaimed", "no_eligible", "gave_up", "none"];
+  const STEP = {pending: 0, collecting: 1, paying: 2, funded: 3, sent: 3, unclaimed: 1, no_eligible: 2, gave_up: 2};
   let status = null, asOf = 0;
 
   const mins = s => { const m = Math.max(1, Math.round(s / 60)); return m + " min"; };
@@ -49,7 +50,12 @@
           "It has until block " + s.slot_end + " (" + eta + "). If your address is still short then" +
           (s.ranks_left ? ", the next node tries (" + s.ranks_left + " more)." : ", nobody is left.")];
       case "funded":
-        return ["Your address has its gas", "It now holds what it asked for."];
+        return ["Your address has its gas", s.receipt && s.receipt.grade === "delivered"
+          ? "A node paid it and the payment is confirmed on the network."
+          : "It now holds what it asked for."];
+      case "sent":
+        return ["A node paid for your gas", "Its payment is confirmed on Base. The gas no longer shows on your address, " +
+          "which is expected if you have already spent it."];
       case "unclaimed":
         return ["No node offered to help", "Nobody claimed it before block " + s.close + ". Your LAPSE was returned."];
       case "no_eligible":
@@ -73,7 +79,7 @@
     $("gas-why").textContent = why;
     const at = STEP[s.stage];
     document.querySelectorAll("#gas-steps li").forEach((li, i) => {
-      li.className = at === undefined ? "" : (i < at ? "done" : (i === at ? (s.stage === "funded" ? "done" : "now") : ""));
+      li.className = at === undefined ? "" : (i < at ? "done" : (i === at ? (s.stage === "funded" || s.stage === "sent" ? "done" : "now") : ""));
     });
     if (s.network_name) {
       $("gas-table").style.display = "";
@@ -84,6 +90,9 @@
         ? s.order.map(o => o.rank + ". " + o.id).join("   ") : "set when the window closes";
       $("gas-lock").textContent = (s.lock / 1e8) + " LAPSE, " +
         (s.lock_outcome === "refunded" ? "returned, nobody offered" : s.lock_outcome === "burned" ? "burned" : "burned unless nobody offers");
+      const rc = s.receipt;
+      $("gas-receipt-row").style.display = rc ? "" : "none";
+      if (rc) { $("gas-receipt").href = rc.url; $("gas-receipt").textContent = rc.tx; }
     }
   }
 

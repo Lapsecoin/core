@@ -19,11 +19,16 @@ def short(addr):
     return ".".join(addr.split(".")[:3])
 
 
-def request_status(chain, tip, txid, found_height, dest_funded, claimer_funded=lambda base: True):
+def request_status(chain, tip, txid, found_height, dest_funded, claimer_funded=lambda base: True,
+                   receipt=None):
     """A dict describing the request, or None when the transaction is not a
     well-formed, signed fee request.
 
     dest_funded(): whether the destination already holds what it asked for.
+    receipt(r, order): (grade, tx_hash) of the best payer receipt that checks
+    out against the other network, or (None, None). Paid out is read from
+    that, which stays true after the gas is spent; the balance is only a
+    fallback for requests nobody posted a receipt for.
     claimer_funded(base_addr): whether a claimer's Base address can pay; a
     node that cannot is not in the order, so it is not shown as one.
     """
@@ -56,8 +61,14 @@ def request_status(chain, tip, txid, found_height, dest_funded, claimer_funded=l
     if not order:
         out.update(stage="no_eligible")
         return out
-    if dest_funded():
+    grade, proof = receipt(r, order) if receipt else (None, None)
+    if proof:
+        out["receipt"] = {"tx": proof, "url": gas.NETWORKS["base"].explorer + proof, "grade": grade}
+    if grade == "delivered" or dest_funded():
         out.update(stage="funded")
+        return out
+    if grade == "paid":
+        out.update(stage="sent")
         return out
     started = tip - (r.close + 1)
     last_end = gas.turn_start(r.close, len(order))

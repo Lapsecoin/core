@@ -46,6 +46,12 @@ class ChainIO:
         resp = evm.rpc(net.rpc, "getBalance", [addr])
         return int(resp["value"]) if isinstance(resp, dict) else int(resp)
 
+    def payment(self, net, tx_hash):
+        """A mined EVM transaction's sender, recipient, value and success, or
+        None when the network does not know it (yet)."""
+        self._route()
+        return evm.get_payment(self._rpc_for(net), tx_hash)
+
     def sanctioned(self, net, addr):
         """Whether the destination is on a sanctions list (EVM only)."""
         self._route()

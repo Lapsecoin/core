@@ -23,6 +23,7 @@ import crypto
 import evm
 import forms as forms_mod
 import gas
+import gas_receipt
 import gas_status
 import relay
 import wallet_ui
@@ -228,7 +229,8 @@ def status_for(node, io, txid):
         except (evm.EVMError, relay.RelayError):
             return False
 
-    st = gas_status.request_status(view.chain, view.height, txid, height, dest_funded)
+    st = gas_status.request_status(view.chain, view.height, txid, height, dest_funded,
+                                   receipt=lambda r, order: gas_receipt.best(io, r, order))
     return st or {"stage": "none"}
 
 
