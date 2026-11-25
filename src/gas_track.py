@@ -19,7 +19,7 @@ class Request:
         self.req = req                # gas.parse_request_memo()
         self.first_claim = None       # the chain's reading: any well-formed claim counts
         self.claims = []              # {"height", "lapse", "base"} with a verified signature
-        self.receipts = []            # {"height", "lapse", "tx"}: payers' claims of a payout, unchecked
+        self.receipts = []            # {"height", "lapse", "tx", "req"}: payers' claims of a payout, unchecked
 
     @property
     def close(self):
@@ -78,7 +78,8 @@ class Tracker:
         for r in self.requests.values():
             if r.txid.startswith(parsed["ref"]) and r.height < height \
                     and len(r.receipts) < self.MAX_RECEIPTS:
-                r.receipts.append({"height": height, "lapse": t["from"], "tx": parsed["tx_hash"]})
+                r.receipts.append({"height": height, "lapse": t["from"], "tx": parsed["tx_hash"],
+                                   "req": parsed["request_id"]})
 
     def forget_before(self, height):
         for txid in [k for k, r in self.requests.items() if self.finished_at(r) < height]:

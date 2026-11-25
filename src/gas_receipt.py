@@ -10,10 +10,12 @@ Two grades, because the payer's own transaction is not always the delivery:
 
   delivered  a payout straight to the destination on Base: the transaction
              exists, succeeded, went to the destination and was sent by the
-             payer's Base address
-  paid       a payout through Relay: the transaction is the payer's deposit
-             on Base. It proves the node paid, not that Relay filled it, so
-             delivery is still read from the destination
+             payer's Base address. Or a payout through Relay: the payer's
+             deposit on Base checks out and Relay itself reports the request
+             it belongs to as a success to this network
+  paid       a Relay payout whose deposit checks out but whose request Relay
+             has not (yet) reported as done, or a receipt without the Relay
+             request id. It proves the node paid, not that anything arrived
 
 An unreachable or silent RPC is "unknown", never "no": a node that cannot
 tell must not call anything fake or failed.
@@ -29,9 +31,31 @@ PAID = "paid"
 _verdicts = {}                # (tx, dest, payer) -> grade or None, once settled
 
 
-def check(io, net, dest, payer_base, tx_hash):
+def _relay_verdict(io, net, tx_hash, request_id):
+    """What Relay says of the request a deposit started: DELIVERED, PAID
+    (not settled yet, or Relay cannot be asked), or False (it failed or was
+    refunded, or it is not about this deposit or this network)."""
+    try:
+        st = io.relay_status(request_id)
+    except (evm.EVMError, relay.RelayError):
+        return PAID, False
+    if not isinstance(st, dict):
+        return PAID, False
+    state = st.get("status")
+    if state == "success":
+        ins = [h.lower() for h in st.get("inTxHashes") or [] if isinstance(h, str)]
+        if tx_hash.lower() in ins and st.get("originChainId") == evm.BASE_CHAIN_ID \
+                and st.get("destinationChainId") == net.chain_id:
+            return DELIVERED, True
+        return False, True
+    if state in ("failure", "refund", "refunded"):
+        return False, True
+    return PAID, False
+
+
+def check(io, net, dest, payer_base, tx_hash, request_id=""):
     """DELIVERED, PAID, False (checked and wrong) or None (cannot tell)."""
-    key = (tx_hash, dest.lower(), payer_base.lower())
+    key = (tx_hash, dest.lower(), payer_base.lower(), request_id)
     if key in _verdicts:
         return _verdicts[key]
     base = gas.NETWORKS["base"]
@@ -47,7 +71,10 @@ def check(io, net, dest, payer_base, tx_hash):
     elif net.slug == "base":
         verdict = DELIVERED if p["to"].lower() == dest.lower() else False
     else:
-        verdict = PAID
+        verdict, final = (_relay_verdict(io, net, tx_hash, request_id) if request_id
+                          else (PAID, True))
+        if not final:
+            return verdict                 # Relay may still be working on it: ask again
     _verdicts[key] = verdict
     return verdict
 
@@ -62,7 +89,7 @@ def best(io, r, order):
     for rec in r.receipts:
         if rec["lapse"] not in order or rec["height"] <= r.close or rec["lapse"] not in bases:
             continue
-        grade = check(io, net, r.req["dest"], bases[rec["lapse"]], rec["tx"])
+        grade = check(io, net, r.req["dest"], bases[rec["lapse"]], rec["tx"], rec.get("req", ""))
         if grade == DELIVERED:
             return grade, rec["tx"]
         if grade == PAID and found[0] is None:

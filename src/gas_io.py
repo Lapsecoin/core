@@ -52,6 +52,11 @@ class ChainIO:
         self._route()
         return evm.get_payment(self._rpc_for(net), tx_hash)
 
+    def relay_status(self, request_id):
+        """Relay's own answer about a request it carried out."""
+        self._route()
+        return relay.status(request_id, self.relay_key())
+
     def sanctioned(self, net, addr):
         """Whether the destination is on a sanctions list (EVM only)."""
         self._route()

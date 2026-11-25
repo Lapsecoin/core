@@ -319,21 +319,27 @@ def parse_claim_memo(memo):
     return dict(ref=ref, base_addr=base_addr, signature=raw)
 
 
-def build_receipt_memo(request_txid: str, tx_hash: str) -> str:
-    return f"{RECEIPT_TAG}{request_ref(request_txid)} {tx_hash}"
+def build_receipt_memo(request_txid: str, tx_hash: str, relay_request_id: str = "") -> str:
+    memo = f"{RECEIPT_TAG}{request_ref(request_txid)} {tx_hash}"
+    return f"{memo} {relay_request_id}" if relay_request_id else memo
 
 
 def parse_receipt_memo(memo):
-    """(ref, tx_hash) of a well-formed receipt memo, or None."""
+    """ref, tx_hash and the optional Relay request id of a well-formed
+    receipt memo, or None. The request id is there for payouts made through
+    Relay, so a verifier can ask Relay what became of the deposit."""
     if not isinstance(memo, str) or not memo.startswith(RECEIPT_TAG):
         return None
     parts = memo[len(RECEIPT_TAG):].split(" ")
-    if len(parts) != 2:
+    if len(parts) not in (2, 3):
         return None
-    ref, tx_hash = parts
+    ref, tx_hash = parts[0], parts[1]
+    req_id = parts[2] if len(parts) == 3 else ""
     if not re.fullmatch(r"[0-9a-f]{%d}" % REF_LEN, ref) or not re.fullmatch(r"0x[0-9a-f]{64}", tx_hash):
         return None
-    return dict(ref=ref, tx_hash=tx_hash)
+    if req_id and not re.fullmatch(r"0x[0-9a-f]{64}", req_id):
+        return None
+    return dict(ref=ref, tx_hash=tx_hash, request_id=req_id)
 
 
 def verify_claim_signature(claim: dict, lapse_from: str) -> bool:

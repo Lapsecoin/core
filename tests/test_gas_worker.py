@@ -29,6 +29,7 @@ TARGET = 5 * 10 ** 14                    # $1.25 at the fake price: under the ce
 PRICE = 2500.0
 RICH = 10 ** 18                          # a funded Base wallet: $2500 at the fake price
 PAID_TX = "0x" + "ab" * 32
+REQ_ID = "0x" + "cd" * 32
 ASKER = 1
 ME = 2
 
@@ -60,6 +61,9 @@ class FakeIO:
         self.rpc_down = False
         self.receipts = []
         self.receipt_ok = True
+        self.relay = {}                  # relay request id -> Relay's status answer
+        self.relay_down = False
+        self.request_id = ""
 
     def price(self, net):
         return PRICE
@@ -86,8 +90,16 @@ class FakeIO:
             raise evm.EVMUnreachable("rpc down")
         return self.payments.get(tx_hash)
 
-    def receipt(self, txid, tx_hash):
-        self.receipts.append((txid, tx_hash))
+    def relay_status(self, request_id):
+        if self.relay_down:
+            raise relay.RelayUnreachable("relay down")
+        return self.relay.get(request_id, {"status": "unknown"})
+
+    def request_id_of(self, tx_hash):
+        return self.request_id
+
+    def receipt(self, txid, tx_hash, request_id=""):
+        self.receipts.append((txid, tx_hash) if not request_id else (txid, tx_hash, request_id))
         return (self.receipt_ok, "h" if self.receipt_ok else "mempool full")
 
     def claim(self, txid):
@@ -547,7 +559,7 @@ class TestReceipts:
 
     def test_a_receipt_memo_round_trips(self):
         memo = gas.build_receipt_memo("ab" * 32, PAID_TX)
-        assert gas.parse_receipt_memo(memo) == {"ref": "ab" * 12, "tx_hash": PAID_TX}
+        assert gas.parse_receipt_memo(memo) == {"ref": "ab" * 12, "tx_hash": PAID_TX, "request_id": ""}
 
     @pytest.mark.parametrize("memo", ["", "[gas-paid] x", "[gas-paid] " + "ab" * 12 + " 0xabc",
                                       "[gas-paid] " + "AB" * 12 + " " + PAID_TX, None])
@@ -642,6 +654,26 @@ class TestReceipts:
         w.step()
         assert w.io.paid == [("optimism", DEST, TARGET)]  # still short on the destination
 
+    def test_a_relay_receipt_confirmed_by_relay_makes_the_next_node_stand_down(self, w, monkeypatch):
+        txid = w.request()                               # optimism, through Relay
+        w.claim_together(txid, [3, ME])
+        w.step()
+        r = w.worker.tracker.requests[txid]
+        monkeypatch.setattr(gas, "order_claimers", lambda *a: [address(3), address(ME)])
+        w.mine_until(r.close + 1)
+        w.mine([make_tx(3, 0, 1, None, fee=1000, nonce_override=w._nonce(3),
+                        outputs_override=[{"to": crypto.burn_address(), "amount": 1}],
+                        memo=gas.build_receipt_memo(txid, PAID_TX, REQ_ID))])
+        w.io.payments = {PAID_TX: _base_payment(w, 3, to="0x" + "11" * 20)}
+        w.io.relay = {REQ_ID: {"status": "success", "inTxHashes": [PAID_TX], "originChainId": 8453,
+                               "destinationChainId": NET.chain_id}}
+        import gas_receipt
+        gas_receipt._verdicts.clear()
+        w.mine_until(gas.turn_start(r.close, 1))
+        w.step()
+        assert w.io.paid == []
+        assert w.done()[txid]["state"] == "funded"
+
     def test_the_checks_a_receipt_must_pass(self, w):
         import gas_receipt
         base_payer = evm.address_from_secret(b"\x05" * 32)
@@ -654,6 +686,51 @@ class TestReceipts:
             gas_receipt._verdicts.clear()
             w.io.payments = {PAID_TX: bad}
             assert gas_receipt.check(w.io, BASE, DEST, base_payer, PAID_TX) is False
+
+    def test_a_receipt_memo_may_carry_the_relay_request_id(self):
+        memo = gas.build_receipt_memo("ab" * 32, PAID_TX, REQ_ID)
+        assert gas.parse_receipt_memo(memo)["request_id"] == REQ_ID
+        assert gas.parse_receipt_memo(gas.build_receipt_memo("ab" * 32, PAID_TX))["request_id"] == ""
+        assert gas.parse_receipt_memo(memo + " extra") is None
+        assert gas.parse_receipt_memo(f"[gas-paid] {'ab' * 12} {PAID_TX} 0xnothex") is None
+
+    def test_the_request_id_goes_into_the_receipt_the_node_posts(self, w):
+        w.io.request_id = REQ_ID
+        txid = self._paid(w)
+        assert w.io.receipts == [(txid, PAID_TX, REQ_ID)]
+        assert w.done()[txid]["req"] == REQ_ID
+
+    def _relay_deposit(self, w, status):
+        import gas_receipt
+        payer = evm.address_from_secret(b"\x05" * 32)
+        w.io.payments = {PAID_TX: {"sender": payer, "to": "0x" + "11" * 20, "value": TARGET, "ok": True}}
+        w.io.relay = {REQ_ID: status}
+        gas_receipt._verdicts.clear()
+        return gas_receipt.check(w.io, NET, DEST, payer, PAID_TX, REQ_ID)
+
+    def test_relay_saying_success_to_this_network_makes_it_delivered(self, w):
+        import gas_receipt
+        ok = {"status": "success", "inTxHashes": [PAID_TX], "originChainId": 8453,
+              "destinationChainId": NET.chain_id}
+        assert self._relay_deposit(w, ok) == gas_receipt.DELIVERED
+
+    @pytest.mark.parametrize("answer", [
+        {"status": "success", "inTxHashes": ["0x" + "ee" * 32], "originChainId": 8453, "destinationChainId": 10},
+        {"status": "success", "inTxHashes": [PAID_TX], "originChainId": 8453, "destinationChainId": 1},
+        {"status": "failure"}, {"status": "refund"}])
+    def test_relay_reporting_another_deposit_network_or_a_failure_is_not_delivery(self, w, answer):
+        assert self._relay_deposit(w, answer) is False
+
+    @pytest.mark.parametrize("answer", [{"status": "pending"}, {"status": "waiting"}, {"status": "unknown"}])
+    def test_relay_still_working_is_paid_and_asked_again(self, w, answer):
+        import gas_receipt
+        assert self._relay_deposit(w, answer) == gas_receipt.PAID
+        assert gas_receipt._verdicts == {}
+
+    def test_relay_being_down_is_paid_not_failed(self, w):
+        import gas_receipt
+        w.io.relay_down = True
+        assert self._relay_deposit(w, {}) == gas_receipt.PAID
 
     def test_a_relay_deposit_is_paid_not_delivered(self, w):
         import gas_receipt

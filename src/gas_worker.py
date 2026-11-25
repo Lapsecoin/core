@@ -194,7 +194,7 @@ class GasWorker:
         if tip - self._receipt_sent.get(r.txid, -10 ** 9) < 3:
             return
         self._receipt_sent[r.txid] = tip
-        ok, err = self.io.receipt(r.txid, rec["tx"])
+        ok, err = self.io.receipt(r.txid, rec["tx"], rec.get("req", ""))
         if ok:
             log.info("[gas] posted the receipt for %s (%s)", r.txid[:12], rec["tx"])
         else:
@@ -246,8 +246,9 @@ class GasWorker:
             self._mark(r.txid, "failed", error=str(e))
             log.warning("[gas] paying %s on %s failed: %s", r.req["dest"], net.slug, e)
             return
-        self._mark(r.txid, "paid", amount=amount, tx=tx_hash)
-        self._maybe_receipt(r, {"state": "paid", "tx": tx_hash}, tip)
+        req_id = self.io.request_id_of(tx_hash)
+        self._mark(r.txid, "paid", amount=amount, tx=tx_hash, req=req_id)
+        self._maybe_receipt(r, {"state": "paid", "tx": tx_hash, "req": req_id}, tip)
         log.info("[gas] sent %s units to %s on %s (%s)", amount, r.req["dest"], net.slug, tx_hash)
 
     def _claimer_funded(self, base_addr):
@@ -269,6 +270,7 @@ class LiveIO(ChainIO):
     def __init__(self, node):
         super().__init__()
         self.node = node
+        self._relay_requests = {}     # deposit tx hash -> Relay request id
 
     def balance_of_base(self, addr):
         return evm.get_balance_wei(self.base_rpc(), addr)
@@ -286,8 +288,12 @@ class LiveIO(ChainIO):
             del secret
         return self._post_memo(gas.build_claim_memo(request_txid, base_addr, sig))
 
-    def receipt(self, request_txid, tx_hash):
-        return self._post_memo(gas.build_receipt_memo(request_txid, tx_hash))
+    def receipt(self, request_txid, tx_hash, relay_request_id=""):
+        return self._post_memo(gas.build_receipt_memo(request_txid, tx_hash, relay_request_id))
+
+    def request_id_of(self, tx_hash):
+        """The Relay request a payout went through, for its receipt."""
+        return self._relay_requests.get(tx_hash, "")
 
     def _post_memo(self, memo):
         import wallet_ui
@@ -309,6 +315,10 @@ class LiveIO(ChainIO):
         q = relay.quote(net, dest, amount, sender, self.relay_key())
         secret = base_wallet.decrypt_secret(node.base_wallet_path, node._kek)
         try:
-            return relay.deposit(q, secret, self.base_rpc())
+            tx_hash = relay.deposit(q, secret, self.base_rpc())
         finally:
             del secret
+        req_id = str(q.get("requestId") or q["steps"][0].get("requestId") or "").lower()
+        if len(req_id) == 66:
+            self._relay_requests[tx_hash] = req_id
+        return tx_hash
